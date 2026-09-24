@@ -11,7 +11,8 @@ from db import init_db, conn, row, rows, jdump, jload, setting
 from document_parser import save_uploads, parse_sources
 from ai_engine import generate_activity, generate_channel
 from ai_billing import ensure_credits, charge_credits
-from ai_gateway import gateway_status, AIGatewayError
+from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config,
+                        update_platform_provider_config, test_provider_connection)
 from clubos_domain.club_analytics import ClubBusinessIntelligence
 from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
@@ -1665,6 +1666,19 @@ def platform_ai_status():return gateway_status()
 @app.get('/api/platform/ai/usage')
 def platform_ai_usage():
     with conn() as c:return rows(c.execute('SELECT u.*,cl.name club_name FROM ai_usage_records u JOIN clubs cl ON cl.id=u.club_id ORDER BY u.id DESC LIMIT 300'))
+
+# 模型接入只允许总平台维护：平台配置 -> 折算 AI Credits -> 各端俱乐部按任务消耗。
+@app.get('/api/platform/ai/providers')
+def platform_ai_providers():return platform_provider_config()
+
+@app.patch('/api/platform/ai/providers')
+def platform_ai_providers_update(payload:dict=Body(...)):
+    try:return update_platform_provider_config(payload)
+    except ValueError as e: raise HTTPException(400,str(e))
+
+@app.post('/api/platform/ai/providers/test')
+async def platform_ai_providers_test(payload:dict=Body(...)):
+    return await test_provider_connection(str(payload.get('role') or 'primary'))
 @app.get('/api/platform/benefits')
 def platform_benefits():
     with conn() as c:return rows(c.execute("SELECT * FROM member_benefits WHERE owner_type='PLATFORM' ORDER BY id DESC"))
