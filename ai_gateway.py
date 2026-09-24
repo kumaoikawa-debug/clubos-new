@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import re
+import sys
 import time
 import uuid
 from dataclasses import dataclass
@@ -72,6 +73,52 @@ DEFAULT_PRIMARY_PRESET = 'deepseek'
 DEFAULT_SECONDARY_PRESET = 'qwen'
 AI_PROVIDERS_SETTING_KEY = 'ai_providers_json'
 
+# ---------------------------------------------------------------------------
+# 运行模式：总平台后台可控，填完 Key 即可真实调用，不需要改服务器环境变量。
+#
+#   auto（默认）  沿用环境变量 MOCK_AI —— 未接入时保持演示行为
+#   live          强制真实调用已配置的 Provider（总平台填了 Key 就选它）
+#   mock          强制演示模式（仅非生产环境可用，用于离线演示）
+#
+# 生产环境（CLUBOS_SECURITY_MODE=production）永远不接受 mock：
+# 后台把模式切回 mock 会被拒绝，且已存的 mock 会被忽略、回退到环境变量口径，
+# 保持 v0.25「生产必须 fail-closed」的安全边界。
+# ---------------------------------------------------------------------------
+AI_MODE_AUTO = 'auto'
+AI_MODE_LIVE = 'live'
+AI_MODE_MOCK = 'mock'
+AI_MODES = (AI_MODE_AUTO, AI_MODE_LIVE, AI_MODE_MOCK)
+
+
+def _is_prod() -> bool:
+    """是否生产模式。优先复用 security_v025 的判定，避免两处口径分叉；
+    独立脚本（未加载 app）时按同一环境变量判定。"""
+    mod = sys.modules.get('security_v025')
+    if mod is not None:
+        return bool(getattr(mod, 'IS_PROD', False))
+    return os.getenv('CLUBOS_SECURITY_MODE', 'demo').strip().lower() == 'production'
+
+
+def saved_gateway_mode() -> str:
+    """总平台后台保存的运行模式；未保存过则为 None。"""
+    mode = str(_db_ai_config().get('mode') or '').strip().lower()
+    return mode if mode in AI_MODES else None
+
+
+def effective_gateway_mode() -> tuple[str, str]:
+    """返回 (mode, source)，mode ∈ {'live','mock'}。
+
+    优先级：总平台后台配置 > 环境变量 MOCK_AI。
+    生产环境忽略后台的 mock，防止把线上切回演示模式。
+    """
+    saved = saved_gateway_mode()
+    if saved == AI_MODE_LIVE:
+        return 'live', 'platform'
+    if saved == AI_MODE_MOCK and not _is_prod():
+        return 'mock', 'platform'
+    env_mock = os.getenv('MOCK_AI', '1').strip() != '0'
+    return ('mock' if env_mock else 'live'), 'env'
+
 
 @dataclass
 class ProviderConfig:
@@ -140,6 +187,36 @@ def _truthy(value: Any, default: bool = True) -> bool:
     if value is None:
         return default
     return str(value).strip().lower() not in {'0', 'false', 'no', 'off', ''}
+
+
+def _httpx_client(timeout: float) -> httpx.AsyncClient:
+    """AI 调用专用 HTTP 客户端，默认忽略环境变量里的 HTTP_PROXY / HTTPS_PROXY。
+
+    服务器/本机残留的代理变量会把模型请求交给一个根本不认识该端点的代理，
+    症状是毫无信息量的 `ProxyError: 502 Bad Gateway`，运维极难定位。
+    确需经代理出网时显式设置 AI_TRUST_ENV=1，并确认代理真的能访问模型端点。
+
+    连接阶段单独限时（AI_CONNECT_TIMEOUT_SECONDS，默认 10 秒）：模型端点不可达时
+    应当快速失败并给出原因，而不是让俱乐部前台跟着挂满整个读取超时（默认 240 秒）。
+    """
+    total = float(timeout or 240)
+    connect = float(os.getenv('AI_CONNECT_TIMEOUT_SECONDS', '10') or 10)
+    limits = httpx.Timeout(total, connect=connect)
+    return httpx.AsyncClient(timeout=limits, trust_env=os.getenv('AI_TRUST_ENV', '0').strip() == '1')
+
+
+def _explain(exc: Exception) -> str:
+    """把底层网络异常翻译成运维看得懂的说明。"""
+    # httpx 的超时类异常 str() 常为空串，用类名兜底，别让日志只剩一条破折号。
+    detail = str(exc).strip() or type(exc).__name__
+    if isinstance(exc, httpx.ProxyError):
+        return (f'请求被环境变量里的代理接管了（{detail}）。AI 调用默认直连；'
+                f'若确实需要走代理，请设置 AI_TRUST_ENV=1 并确认代理可访问模型端点，'
+                f'否则请清掉服务器上的 HTTP_PROXY/HTTPS_PROXY。')
+    if isinstance(exc, (httpx.ConnectTimeout, httpx.ConnectError)):
+        return (f'无法连接模型端点（{detail}）。请依次检查：服务器出网是否放行该域名、'
+                f'防火墙/安全组、DNS 解析，以及 baseUrl 是否写对。')
+    return detail
 
 
 def _provider_from_spec(role: str, spec: dict[str, Any], *, env_prefix: str, default_preset: str) -> ProviderConfig:
@@ -236,12 +313,16 @@ def _candidates(*, has_images: bool) -> list[ProviderConfig]:
 
 
 def gateway_status() -> dict[str, Any]:
-    mock = os.getenv('MOCK_AI', '1') == '1'
+    mode, mode_source = effective_gateway_mode()
+    mock = mode == 'mock'
     providers = _providers()
     text_provider = providers[0] if providers else None
     vision_provider = next((p for p in providers if p.supports_vision), None)
     return {
         'mode': 'mock' if mock else 'live',
+        'modeSource': mode_source,
+        'modeLockedByProduction': _is_prod(),
+        'savedMode': saved_gateway_mode() or AI_MODE_AUTO,
         'region': 'cn',
         'owner': 'platform',
         'principle': 'platform_owned_models; credits_only_bill; never_reduce_model_quality',
@@ -322,6 +403,7 @@ def platform_provider_config() -> dict[str, Any]:
             'primary': _spec_view('primary', cfg.get('primary') or {}, effective.get('primary')),
             'secondary': _spec_view('secondary', cfg.get('secondary') or {}, effective.get('secondary')),
             'allowFailover': cfg.get('allowFailover'),
+            'mode': saved_gateway_mode() or AI_MODE_AUTO,
         },
         'effective': gateway_status(),
         'note': '大模型只由总平台接入并结算；俱乐部按任务消耗 AI Credits，不需要也无法配置模型或密钥。',
@@ -359,6 +441,13 @@ def update_platform_provider_config(payload: dict[str, Any]) -> dict[str, Any]:
         cfg[role] = current
     if 'allowFailover' in payload:
         cfg['allowFailover'] = _truthy(payload.get('allowFailover'), True)
+    if 'mode' in payload:
+        mode = str(payload.get('mode') or '').strip().lower()
+        if mode not in AI_MODES:
+            raise ValueError(f'mode 只能是 {"/".join(AI_MODES)}')
+        if mode == AI_MODE_MOCK and _is_prod():
+            raise ValueError('生产环境不允许切回 mock 演示模式')
+        cfg['mode'] = mode
     with conn() as c:
         c.execute(
             'INSERT INTO platform_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
@@ -372,11 +461,11 @@ async def test_provider_connection(role: str = 'primary') -> dict[str, Any]:
     role = str(role or 'primary')
     if role not in {'primary', 'secondary'}:
         return {'ok': False, 'error': 'role 只能是 primary 或 secondary'}
-    if os.getenv('MOCK_AI', '1') == '1':
+    if effective_gateway_mode()[0] == 'mock':
         return {
             'ok': False,
             'mode': 'mock',
-            'error': '当前为 mock 演示模式（MOCK_AI=1），不会真实调用模型；生产环境请设置 MOCK_AI=0 并配置密钥。',
+            'error': '当前为 mock 演示模式，不会真实调用模型；请在总平台「AI 模型接入」里切换到「真实调用」，或设置 MOCK_AI=0 并配置密钥。',
         }
     matched = [p for p in _providers() if p.role == role]
     if not matched:
@@ -384,7 +473,7 @@ async def test_provider_connection(role: str = 'primary') -> dict[str, Any]:
     provider = matched[0]
     model = _model_for_task(provider, 'ping')
     try:
-        async with httpx.AsyncClient(timeout=float(os.getenv('AI_TIMEOUT_SECONDS', '240'))) as client:
+        async with _httpx_client(float(os.getenv('AI_TIMEOUT_SECONDS', '240'))) as client:
             r = await client.post(
                 provider.base_url,
                 headers={'Authorization': f'Bearer {provider.api_key}', 'Content-Type': 'application/json'},
@@ -395,7 +484,7 @@ async def test_provider_connection(role: str = 'primary') -> dict[str, Any]:
         sample = ((raw.get('choices') or [{}])[0].get('message') or {}).get('content', '')
         return {'ok': True, 'role': role, 'preset': provider.preset, 'model': model, 'sample': str(sample)[:60]}
     except Exception as exc:
-        return {'ok': False, 'role': role, 'preset': provider.preset, 'model': model, 'error': str(exc)[:300]}
+        return {'ok': False, 'role': role, 'preset': provider.preset, 'model': model, 'error': _explain(exc)[:400]}
 
 
 # ---------------------------------------------------------------------------
@@ -466,7 +555,7 @@ async def generate_json(*, club_id: int, task_type: str, system_prompt: str, use
       - 带图任务必须走具备视觉能力的 Provider（默认通义千问 qwen-vl-max）；
       - 绝不根据 Credits 余额裁剪资料、减少图片、降低模型或套固定模板。
     """
-    if os.getenv('MOCK_AI', '1') == '1':
+    if effective_gateway_mode()[0] == 'mock':
         return None
 
     has_images = bool(images)
@@ -496,7 +585,7 @@ async def generate_json(*, club_id: int, task_type: str, system_prompt: str, use
                 ],
                 'temperature': float(os.getenv('AI_TEMPERATURE', '0.8')),
             }
-            async with httpx.AsyncClient(timeout=float(os.getenv('AI_TIMEOUT_SECONDS', '240'))) as client:
+            async with _httpx_client(float(os.getenv('AI_TIMEOUT_SECONDS', '240'))) as client:
                 r = await client.post(
                     provider.base_url,
                     headers={'Authorization': f'Bearer {provider.api_key}', 'Content-Type': 'application/json'},
@@ -521,10 +610,10 @@ async def generate_json(*, club_id: int, task_type: str, system_prompt: str, use
             last_error = exc
             _record_usage(
                 club_id=club_id, task_type=task_type, request_id=request_id,
-                provider=provider.preset or provider.name, model=model, status='failed', error=str(exc)[:1000],
+                provider=provider.preset or provider.name, model=model, status='failed', error=_explain(exc)[:1000],
             )
             # 只有平台显式允许 failover 才切换备用 Provider；绝不因 Credits 余额自动降级。
             if idx == len(providers) - 1:
                 break
 
-    raise AIGatewayError(f'AI Gateway 调用失败: {last_error}')
+    raise AIGatewayError(f'AI Gateway 调用失败: {_explain(last_error) if last_error else "未知错误"}')
