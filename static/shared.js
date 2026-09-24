@@ -52,3 +52,10 @@ document.addEventListener('DOMContentLoaded',()=>{
   button.onclick=async()=>{try{await api('/api/auth/logout',{method:'POST'})}finally{location.href='/login'}};
   document.body.appendChild(button);
 });
+
+/* ---- 骨架屏 skeleton（组件层 .skeleton 已定义在 ux/clubos-ux.css）---- */
+function skelRows(n=4,h=14){let o='';for(let i=0;i<n;i++)o+=`<div class="skeleton" style="height:${h}px;margin:9px 0"></div>`;return o}
+function skel(sel,n=4,h=14){const el=$(sel);if(!el)return;el.innerHTML=skelRows(n,h);clearTimeout(el.__skelT);
+  el.__skelT=setTimeout(()=>{const c=[...el.children];
+    if(c.length&&c.every(x=>x.classList&&x.classList.contains('skeleton')))
+      el.innerHTML='<div class="empty">加载超时，请刷新重试</div>'},10000)}
