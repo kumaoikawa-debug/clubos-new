@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ClubOS NEW｜AI 招募详情专项 Demo v0.4</title>
+<style>
+:root{
+  --ink:#1b211e;--muted:#66716c;--paper:#f4efe5;--paper2:#ebe3d4;--deep:#14201b;
+  --accent:#8b5a2b;--line:#d8cfbf;--white:#fff;--green:#355b49;--soft:#f8f6f1;
+}
+*{box-sizing:border-box} html{scroll-behavior:smooth} body{margin:0;background:#111513;color:var(--ink);font-family:Inter,-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+button{font:inherit}.shell{min-height:100vh}.demo-top{position:sticky;top:0;z-index:20;background:rgba(12,18,15,.88);backdrop-filter:blur(14px);color:#fff;border-bottom:1px solid #ffffff17}
+.demo-top-inner{max-width:1180px;margin:auto;padding:12px 18px;display:flex;align-items:center;justify-content:space-between;gap:16px}.brand{display:flex;align-items:center;gap:12px}.brand-badge{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#fff,#d8e6df);color:#19352a;display:grid;place-items:center;font-weight:900}.brand h1{font-size:14px;margin:0}.brand small{display:block;color:#aab9b2;margin-top:2px}.top-actions{display:flex;gap:8px}.ghost{border:1px solid #ffffff26;color:#fff;background:#ffffff0d;padding:8px 12px;border-radius:10px;cursor:pointer}.ghost:hover{background:#ffffff16}
+.stage{max-width:1180px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:26px;padding:30px 18px 70px}.preview-wrap{min-width:0}.side{position:sticky;top:78px;align-self:start;background:#171d1a;border:1px solid #ffffff12;border-radius:20px;padding:18px;color:#dfe9e4}.side h3{margin:0 0 8px;font-size:16px}.side p{font-size:13px;line-height:1.7;color:#9fb0a8;margin:0 0 14px}.side .mini{padding:12px;border-radius:14px;background:#ffffff08;margin:8px 0}.side .mini b{display:block;font-size:12px;color:#fff;margin-bottom:4px}.side .mini span{font-size:12px;color:#a9b9b1}.rule{font-size:12px;padding:10px 0;border-top:1px solid #ffffff10;color:#c8d3ce}.ok{color:#77d7aa;font-weight:800}
+.phone{max-width:760px;margin:auto;background:var(--paper);box-shadow:0 30px 90px #0008;overflow:hidden;border-radius:30px;border:1px solid #ffffff10}.browser-head{height:54px;background:#fff;display:flex;align-items:center;justify-content:space-between;padding:0 18px;border-bottom:1px solid #eee}.browser-head strong{font-size:14px}.browser-head span{font-size:12px;color:#76817c}
+.hero{position:relative;min-height:680px;display:flex;align-items:flex-end;background:#0c1713 url('assets/image11.png') center 40%/cover no-repeat;color:#fff}.hero:before{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(8,13,11,.08) 0%,rgba(8,13,11,.12) 34%,rgba(7,13,10,.82) 100%)}.hero-copy{position:relative;z-index:1;padding:48px 44px 42px;max-width:650px}.eyebrow{font-size:11px;letter-spacing:.22em;font-weight:800;text-transform:uppercase;color:#d6e8df}.hero h2{font-family:Georgia,"Songti SC","Noto Serif SC",serif;font-size:58px;line-height:1.02;margin:12px 0 16px;letter-spacing:-.025em}.hero p{font-size:18px;line-height:1.75;color:#eef5f1;margin:0;max-width:580px}.hero-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}.hero-meta span{padding:8px 11px;border-radius:999px;background:#ffffff1a;border:1px solid #ffffff29;font-size:12px}
+.lead{padding:62px 48px 42px}.lead p{font-family:Georgia,"Songti SC","Noto Serif SC",serif;font-size:29px;line-height:1.72;margin:0}.fact-strip{margin:0 48px 48px;display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid #bfb5a5;border-bottom:1px solid #bfb5a5}.fact{padding:20px 14px 20px 0}.fact small{display:block;color:#7a7065;font-size:10px;letter-spacing:.16em}.fact strong{display:block;margin-top:7px;font-size:20px}.fact+.fact{padding-left:18px;border-left:1px solid #cfc5b5}
+.gallery-3{padding:0 26px 24px;display:grid;grid-template-columns:1.18fr .82fr;grid-template-rows:265px 265px;gap:10px}.gallery-3 img{width:100%;height:100%;object-fit:cover;display:block}.gallery-3 img:first-child{grid-row:1/3}.caption{padding:0 48px 38px;color:#796f63;font-size:12px;line-height:1.7}
+.chapter{padding:62px 48px}.chapter.dark{background:var(--deep);color:#fff}.chapter .num{font-size:11px;letter-spacing:.18em;color:#8f9e96;font-weight:800}.chapter h3{font-family:Georgia,"Songti SC","Noto Serif SC",serif;font-size:40px;line-height:1.22;margin:10px 0 18px}.chapter p{font-size:16px;line-height:1.95;color:#4f5954;margin:0}.chapter.dark p{color:#cddbd4}.chapter-grid{display:grid;grid-template-columns:1.06fr .94fr;gap:30px;align-items:center}.chapter-img{min-height:440px;overflow:hidden}.chapter-img img{width:100%;height:100%;object-fit:cover;display:block}
+.pull{padding:64px 48px;background:#cbbca5;color:#1b211e}.pull blockquote{font-family:Georgia,"Songti SC","Noto Serif SC",serif;font-size:37px;line-height:1.52;margin:0}.pull small{display:block;margin-top:18px;color:#665d52;letter-spacing:.12em}
+.full-img{padding:0}.full-img img{width:100%;height:600px;object-fit:cover;display:block}.duo{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px}.duo img{width:100%;height:420px;object-fit:cover;display:block}.mosaic{padding:8px;display:grid;grid-template-columns:1.25fr .75fr;grid-template-rows:255px 255px;gap:8px}.mosaic img{width:100%;height:100%;object-fit:cover}.mosaic img:first-child{grid-row:1/3}
+.story{padding:58px 48px;background:#faf7f0}.story .k{font-size:11px;letter-spacing:.2em;color:#8b5a2b;font-weight:900}.story h3{font-family:Georgia,"Songti SC","Noto Serif SC",serif;font-size:38px;line-height:1.25;margin:10px 0 18px}.story p{font-size:16px;line-height:1.95;color:#4b5550;margin:0}.story p+p{margin-top:12px}
+.schedule{background:#e9e1d2;padding:58px 48px}.schedule h3,.info h3{font-family:Georgia,"Songti SC","Noto Serif SC",serif;font-size:34px;margin:8px 0 24px}.time-row{display:grid;grid-template-columns:100px 1fr;gap:20px;padding:15px 0;border-top:1px solid #c5baa9}.time-row:last-child{border-bottom:1px solid #c5baa9}.time-row b{font-size:14px}.time-row span{font-size:14px;line-height:1.7;color:#4d5852}
+.info{padding:58px 48px;background:#fff}.chips{display:grid;grid-template-columns:1fr 1fr;gap:10px}.chip{background:#f3efe7;padding:15px;border-radius:12px}.chip b{display:block;font-size:12px;margin-bottom:5px}.chip span{font-size:13px;color:#68726d;line-height:1.6}
+.booking{padding:52px 34px;background:#101a16;color:#fff}.booking h3{font-family:Georgia,"Songti SC","Noto Serif SC",serif;font-size:36px;margin:8px 0 10px}.booking>p{color:#b9c7c0;line-height:1.7;margin:0 0 24px}.date-card{background:#fff;color:#1c2420;border-radius:18px;padding:16px;margin:10px 0;display:flex;justify-content:space-between;align-items:center;gap:12px}.date-card.active{outline:2px solid #7bb395}.date-card small{display:block;color:#78847e;margin-top:3px}.price{font-size:20px;font-weight:900}.points{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0}.point{background:#ffffff0d;border:1px solid #ffffff13;padding:14px;border-radius:14px}.point b{display:block;font-size:13px}.point span{display:block;color:#a9b7b0;font-size:12px;margin-top:4px}.sum{border-top:1px solid #ffffff1d;margin-top:18px;padding-top:16px}.sum-row{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;color:#d2ddd7}.sum-row.total{font-size:19px;font-weight:900;color:#fff;padding-top:10px}.cta{margin-top:18px;width:100%;border:0;background:#f2e8d8;color:#17211c;padding:15px 18px;border-radius:14px;font-weight:900;cursor:pointer}.end{padding:42px 48px 54px;background:#f4efe5;text-align:center}.end .logo{font-size:18px;font-weight:900}.end p{font-size:12px;color:#7f776c;margin:6px 0 0}
+.input-panel{display:none;max-width:760px;margin:0 auto 18px;background:#fff;border-radius:18px;padding:18px}.input-panel.show{display:block}.input-panel pre{white-space:pre-wrap;font-size:12px;line-height:1.7;color:#49554f;margin:0;background:#f6f7f5;border-radius:12px;padding:14px}.badge{display:inline-flex;gap:6px;align-items:center;padding:7px 10px;border-radius:999px;background:#eaf5ef;color:#2d6d4f;font-size:11px;font-weight:800;margin-bottom:10px}
+@media(max-width:900px){.stage{grid-template-columns:1fr}.side{position:static;max-width:760px;margin:auto;width:100%}.phone{border-radius:18px}.hero h2{font-size:48px}}
+@media(max-width:640px){.stage{padding:12px 0 50px}.demo-top-inner{padding:10px 12px}.top-actions .ghost:nth-child(2){display:none}.phone{border-radius:0;border-left:0;border-right:0}.browser-head{height:48px}.hero{min-height:590px}.hero-copy{padding:36px 24px}.hero h2{font-size:43px}.hero p{font-size:16px}.lead,.chapter,.story,.schedule,.info{padding:42px 24px}.lead p{font-size:24px}.fact-strip{margin:0 24px 34px;grid-template-columns:1fr}.fact+.fact{border-left:0;border-top:1px solid #cfc5b5;padding-left:0}.gallery-3{padding:0 10px 14px;grid-template-columns:1fr 1fr;grid-template-rows:300px 210px}.gallery-3 img:first-child{grid-column:1/3;grid-row:auto}.caption{padding:0 24px 30px}.chapter-grid{grid-template-columns:1fr}.chapter h3,.story h3{font-size:32px}.chapter-img{min-height:360px}.pull{padding:46px 24px}.pull blockquote{font-size:30px}.full-img img{height:470px}.duo img{height:300px}.mosaic{grid-template-columns:1fr 1fr;grid-template-rows:280px 220px}.mosaic img:first-child{grid-column:1/3;grid-row:auto}.schedule h3,.info h3{font-size:30px}.chips{grid-template-columns:1fr}.booking{padding:42px 20px}.points{grid-template-columns:1fr}.side{margin:0 12px}.input-panel{margin:0 12px 12px}}
+</style>
+</head>
+<body>
+<div class="shell">
+  <header class="demo-top">
+    <div class="demo-top-inner">
+      <div class="brand"><div class="brand-badge">C</div><div><h1>ClubOS NEW · AI 招募详情专项 Demo v0.4</h1><small>目标：资料丢进去，AI直接做成能报名的完整详情页</small></div></div>
+      <div class="top-actions"><button class="ghost" onclick="toggleInput()">查看输入资料</button><button class="ghost" onclick="scrollToBooking()">直接看报名</button></div>
+    </div>
+  </header>
+
+  <main class="stage">
+    <section class="preview-wrap">
+      <div id="inputPanel" class="input-panel">
+        <span class="badge">老板只提供资料，不选择模板</span>
+        <pre>活动：NATURAL CLUB 徒步 × 瑜伽｜什邡蓥华山
+日期：2026/10/24
+路线：约 6km；轻户外
+核心体验：户外瑜伽 + 森林徒步
+参考日程：集合 → 车程 → 瑜伽 → 午餐 → 徒步 → 返程
+活动规模：约 30 人
+资料：活动方案 + 现场/路线照片
+
+系统行为：直接理解资料、筛选可公开事实、判断活动卖点、选图、安排图文节奏、生成报名详情。
+不会要求老板先选择“杂志风/品牌风/路线风”等模板。</pre>
+      </div>
+
+      <article class="phone">
+        <div class="browser-head"><strong>NATURAL CLUB</strong><span>活动详情 · 可直接报名</span></div>
+
+        <section class="hero">
+          <div class="hero-copy">
+            <div class="eyebrow">MOVE TO NATURAL · 24 OCT 2026</div>
+            <h2>先把身体打开，<br>再走进森林。</h2>
+            <p>一小时户外瑜伽，接一段约 6 公里的山野行走。不是把两个项目拼在一起，而是让一整天从呼吸、伸展，自然过渡到真正的森林徒步。</p>
+            <div class="hero-meta"><span>什邡 · 蓥华山</span><span>徒步约 6km</span><span>瑜伽 × 山野</span></div>
+          </div>
+        </section>
+
+        <section class="lead"><p>离开城市以后，不急着完成多少公里。先让身体慢下来，再让脚步跟上山里的节奏。</p></section>
+
+        <section class="fact-strip">
+          <div class="fact"><small>DATE</small><strong>10.24</strong></div>
+          <div class="fact"><small>HIKE</small><strong>约 6 KM</strong></div>
+          <div class="fact"><small>GROUP</small><strong>约 30 人</strong></div>
+        </section>
+
+        <section class="gallery-3">
+          <img src="assets/image13.png" alt="森林小径">
+          <img src="assets/image9.png" alt="林间步道">
+          <img src="assets/image14.png" alt="山林">
+        </section>
+        <div class="caption">蓥华山不是这次活动的“背景图”，森林本身就是当天体验的一部分。</div>
+
+        <section class="chapter dark">
+          <div class="chapter-grid">
+            <div>
+              <div class="num">01 / OPEN THE BODY</div>
+              <h3>上午，我们先不急着走。</h3>
+              <p>抵达以后，从呼吸和伸展开始。户外瑜伽不是热身任务，而是把身体从通勤、办公室和日常节奏里抽离出来。等身体真正打开，再进入午后的山野。</p>
+            </div>
+            <div class="chapter-img"><img src="assets/image31.png" alt="品牌活动氛围"></div>
+          </div>
+        </section>
+
+        <section class="pull"><blockquote>“先用一小时把身体打开，再用六公里把自己交给森林。”</blockquote><small>NATURAL CLUB · MOVE TO NATURAL</small></section>
+
+        <section class="full-img"><img src="assets/image19.png" alt="森林徒步"></section>
+
+        <section class="story">
+          <div class="k">02 / WALK INTO THE FOREST</div>
+          <h3>午后，不是去“打卡景区”，而是真正走进山里。</h3>
+          <p>午饭以后进入蓥华山步道。路线约 6 公里，重点不是用一堆景点名称填满页面，而是让你提前知道这段路的感觉：树影、石阶、林间光线，以及一段连续的行走时间。</p>
+          <p>对第一次参加的人，它不会被包装成“轻松无压力”；对有户外经验的人，也不会故意夸大难度。活动信息应该帮助你判断自己是否适合，而不是制造焦虑。</p>
+        </section>
+
+        <section class="duo"><img src="assets/image12.png" alt="步道"><img src="assets/image16.png" alt="森林"></section>
+
+        <section class="story" style="background:#f1e8da">
+          <div class="k">03 / A DAY, NOT A CHECKLIST</div>
+          <h3>一顿午饭，也是这一天的一部分。</h3>
+          <p>活动不是“瑜伽 + 徒步 + 午餐”的项目清单。吃饭、休息、聊天和真正停下来的时间，都应该被保留下来。它们共同决定了这一天是不是舒服。</p>
+        </section>
+
+        <section class="mosaic"><img src="assets/image23.png" alt="午餐"><img src="assets/image24.png" alt="餐食"><img src="assets/image10.png" alt="山景"></section>
+
+        <section class="schedule">
+          <div class="eyebrow" style="color:#7b6957">THE DAY</div>
+          <h3>这一天怎么走</h3>
+          <div class="time-row"><b>08:00–08:30</b><span>万象城 icebreaker 门店集合、签到</span></div>
+          <div class="time-row"><b>08:30–10:00</b><span>统一出发前往活动区域</span></div>
+          <div class="time-row"><b>10:00–11:00</b><span>户外瑜伽 · 呼吸、伸展、打开身体</span></div>
+          <div class="time-row"><b>11:00–12:00</b><span>午餐与休整</span></div>
+          <div class="time-row"><b>12:00–17:00</b><span>蓥华山徒步 · 约 6km</span></div>
+          <div class="time-row"><b>17:00–18:50</b><span>结束行程，统一返程</span></div>
+        </section>
+
+        <section class="info">
+          <div class="eyebrow" style="color:#8b5a2b">GOOD TO KNOW</div>
+          <h3>出发前，你真正需要知道的</h3>
+          <div class="chips">
+            <div class="chip"><b>活动日期</b><span>2026 年 10 月 24 日</span></div>
+            <div class="chip"><b>活动地点</b><span>四川什邡 · 蓥华山</span></div>
+            <div class="chip"><b>路线长度</b><span>徒步约 6 公里</span></div>
+            <div class="chip"><b>活动规模</b><span>约 30 人</span></div>
+            <div class="chip"><b>团队配置</b><span>户外领队、瑜伽老师、摄影与后勤</span></div>
+            <div class="chip"><b>参与条件</b><span>以最终发布的报名规则与活动通知为准</span></div>
+          </div>
+        </section>
+
+        <section class="booking" id="booking">
+          <div class="eyebrow">BOOK YOUR DAY</div>
+          <h3>选择团期，直接报名</h3>
+          <p>上面负责让用户“想去”，这里负责让用户“报得上”。活动详情与交易不再是两套割裂的页面。</p>
+          <div class="date-card active"><div><b>10 月 24 日 · 周六</b><small>剩余 12 / 30 · 成都集合</small></div><div class="price">¥498</div></div>
+          <div class="date-card"><div><b>11 月 07 日 · 周六</b><small>剩余 24 / 30 · 成都集合</small></div><div class="price">¥528</div></div>
+          <div class="points">
+            <div class="point"><b>活动积分可抵</b><span>当前 1,200 · 成本由本俱乐部承担</span></div>
+            <div class="point"><b>装备积分可抵</b><span>当前 2,860 · 补贴由 ClubOS 平台承担</span></div>
+          </div>
+          <div class="sum">
+            <div class="sum-row"><span>活动价格</span><span>¥498</span></div>
+            <div class="sum-row"><span>活动积分抵扣</span><span>-¥10</span></div>
+            <div class="sum-row"><span>装备积分抵扣</span><span>-¥20</span></div>
+            <div class="sum-row total"><span>实际支付</span><span>¥468</span></div>
+          </div>
+          <button class="cta" onclick="alert('Demo：进入报名信息填写 / 支付')">立即报名</button>
+        </section>
+
+        <footer class="end"><div class="logo">icebreaker · NATURAL CLUB</div><p>MOVE TO NATURAL</p></footer>
+      </article>
+    </section>
+
+    <aside class="side">
+      <h3>这版只验证一件事</h3>
+      <p>先把 AI 招募详情做到“像真正的内容主编在做活动”，而不是先继续堆商城、积分、CRM。</p>
+      <div class="mini"><b>输入</b><span>活动资料 + 图片，老板不选模板、不定版式。</span></div>
+      <div class="mini"><b>AI 应该自己做</b><span>卖点判断、叙事顺序、图片角色、图文节奏、标题和转化收束。</span></div>
+      <div class="mini"><b>系统只负责</b><span>事实边界、Block 渲染、交易、报名与数据。</span></div>
+      <div class="rule"><span class="ok">✓</span> 不设模板 A/B/C/D</div>
+      <div class="rule"><span class="ok">✓</span> 不要求先确认“风格/卖点/章节”</div>
+      <div class="rule"><span class="ok">✓</span> 同一套基础 Block，组合由 AI 自己决定</div>
+      <div class="rule"><span class="ok">✓</span> 页面最终接多团期、积分抵扣和报名</div>
+      <div class="rule"><span class="ok">✓</span> 后续再接 Medusa / 报名 / 积分成熟底座</div>
+    </aside>
+  </main>
+</div>
+<script>
+function toggleInput(){document.getElementById('inputPanel').classList.toggle('show');}
+function scrollToBooking(){document.getElementById('booking').scrollIntoView({behavior:'smooth',block:'start'});}
+</script>
+</body>
+</html>

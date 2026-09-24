@@ -1,0 +1,214 @@
+name: v0.16 Medusa Runtime + Current ClubOS Regression
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "services/medusa/**"
+      - "clubos_domain/**"
+      - "tests/runtime_v16_medusa_e2e.py"
+      - "tests/smoke*.py"
+      - "app.py"
+      - "commerce_adapter.py"
+      - "db.py"
+      - "schema.sql"
+      - ".github/workflows/v016-medusa-runtime.yml"
+  pull_request:
+    paths:
+      - "services/medusa/**"
+      - "clubos_domain/**"
+      - "tests/runtime_v16_medusa_e2e.py"
+      - "tests/smoke*.py"
+      - "app.py"
+      - "commerce_adapter.py"
+      - "db.py"
+      - "schema.sql"
+      - ".github/workflows/v016-medusa-runtime.yml"
+
+jobs:
+  medusa-runtime-v016:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: clubos_commerce
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d clubos_commerce"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/clubos_commerce
+      REDIS_URL: redis://127.0.0.1:6379
+      JWT_SECRET: v016-ci-jwt-secret-not-production
+      COOKIE_SECRET: v016-ci-cookie-secret-not-production
+      AUTH_MFA_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      STORE_CORS: http://127.0.0.1:8000
+      ADMIN_CORS: http://127.0.0.1:9000,http://127.0.0.1:8000
+      AUTH_CORS: http://127.0.0.1:9000,http://127.0.0.1:8000
+      CLUBOS_CALLBACK_URL: http://127.0.0.1:8000
+      CLUBOS_COMMERCE_WEBHOOK_SECRET: v016-runtime-ci-secret
+      MEDUSA_INTERNAL_PAYMENT_PROVIDER_ID: pp_system_default
+      MEDUSA_ADMIN_EMAIL: ci-admin@clubos.local
+      MEDUSA_ADMIN_PASSWORD: ClubOS-v016-CI-Only-Password-2026
+      MEDUSA_URL: http://127.0.0.1:9000
+      CLUBOS_URL: http://127.0.0.1:8000
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.16.0"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ClubOS Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Medusa dependencies
+        working-directory: services/medusa
+        run: npm install
+
+      - name: Migrate real PostgreSQL
+        working-directory: services/medusa
+        run: npm run db:migrate
+
+      - name: Seed Medusa v0.16 commerce infrastructure
+        working-directory: services/medusa
+        run: npm run seed:runtime
+
+      - name: Create Medusa admin user
+        working-directory: services/medusa
+        run: npx medusa user -e "$MEDUSA_ADMIN_EMAIL" -p "$MEDUSA_ADMIN_PASSWORD"
+
+      - name: Build Medusa production server
+        working-directory: services/medusa
+        run: npm run build
+
+      - name: Install built server dependencies
+        working-directory: services/medusa/.medusa/server
+        run: npm install --omit=dev
+
+      - name: Export runtime IDs from real Medusa seed
+        shell: bash
+        run: |
+          RUNTIME=services/medusa/.clubos-runtime.json
+          test -s "$RUNTIME"
+          echo "MEDUSA_REGION_ID=$(jq -r .region_id "$RUNTIME")" >> "$GITHUB_ENV"
+          echo "MEDUSA_SALES_CHANNEL_ID=$(jq -r .sales_channel_id "$RUNTIME")" >> "$GITHUB_ENV"
+          echo "MEDUSA_SHIPPING_PROFILE_ID=$(jq -r .shipping_profile_id "$RUNTIME")" >> "$GITHUB_ENV"
+          echo "MEDUSA_STOCK_LOCATION_ID=$(jq -r .stock_location_id "$RUNTIME")" >> "$GITHUB_ENV"
+          echo "MEDUSA_DEFAULT_SHIPPING_OPTION_ID=$(jq -r .shipping_option_id "$RUNTIME")" >> "$GITHUB_ENV"
+          echo "MEDUSA_PUBLISHABLE_KEY=$(jq -r .publishable_key_token "$RUNTIME")" >> "$GITHUB_ENV"
+          echo "MEDUSA_CURRENCY_CODE=cny" >> "$GITHUB_ENV"
+
+      - name: Start built Medusa server
+        working-directory: services/medusa/.medusa/server
+        shell: bash
+        run: |
+          NODE_ENV=production npx medusa start > /tmp/medusa-v016.log 2>&1 &
+          echo $! > /tmp/medusa-v016.pid
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:9000/health >/dev/null; then
+              echo "Medusa is healthy"
+              exit 0
+            fi
+            sleep 2
+          done
+          cat /tmp/medusa-v016.log
+          exit 1
+
+      - name: Login Medusa admin and export JWT
+        shell: bash
+        run: |
+          TOKEN=$(curl -fsS -X POST http://127.0.0.1:9000/auth/user/emailpass \
+            -H 'content-type: application/json' \
+            --data "{\"email\":\"$MEDUSA_ADMIN_EMAIL\",\"password\":\"$MEDUSA_ADMIN_PASSWORD\"}" | jq -r .token)
+          test -n "$TOKEN"
+          test "$TOKEN" != "null"
+          echo "MEDUSA_ADMIN_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+          echo "MEDUSA_ADMIN_AUTH_TYPE=bearer" >> "$GITHUB_ENV"
+
+      - name: Start ClubOS against real Medusa
+        shell: bash
+        env:
+          MOCK_AI: "1"
+          COMMERCE_PROVIDER: medusa
+          CLUBOS_DB_PATH: /tmp/clubos-v016-runtime.db
+          CLUBOS_PUBLIC_BASE_URL: http://127.0.0.1:8000
+        run: |
+          rm -f "$CLUBOS_DB_PATH"
+          uvicorn app:app --host 127.0.0.1 --port 8000 > /tmp/clubos-v016.log 2>&1 &
+          echo $! > /tmp/clubos-v016.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
+              echo "ClubOS is healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/clubos-v016.log
+          exit 1
+
+      - name: Run real Product-to-Refund Medusa E2E
+        env:
+          COMMERCE_PROVIDER: medusa
+          CLUBOS_DB_PATH: /tmp/clubos-v016-runtime.db
+        run: python tests/runtime_v16_medusa_e2e.py
+
+      - name: Run full ClubOS v0.8-v0.24 regression
+        shell: bash
+        run: |
+          export MOCK_AI=1
+          python tests/smoke.py
+          python tests/smoke_v08.py
+          python tests/smoke_v09.py
+          python tests/smoke_v10.py
+          python tests/smoke_v11.py
+          python tests/smoke_v12.py
+          python tests/smoke_v13.py
+          python tests/smoke_v14.py
+          python tests/smoke_v15.py
+          python tests/smoke_v16.py
+          python tests/smoke_v17.py
+          python tests/smoke_v18.py
+          python tests/smoke_v19.py
+          python tests/smoke_v20.py
+          python tests/smoke_v21.py
+          python tests/smoke_v22.py
+          python tests/smoke_v23.py
+          python tests/smoke_v24.py
+
+      - name: Print service logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo '===== Medusa ====='
+          cat /tmp/medusa-v016.log 2>/dev/null || true
+          echo '===== ClubOS ====='
+          cat /tmp/clubos-v016.log 2>/dev/null || true

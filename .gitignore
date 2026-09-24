@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.db
+*.sqlite*
+.env
+services/medusa/.env
+services/medusa/.clubos-runtime.json
+services/medusa/node_modules/
+services/medusa/.medusa/
+.DS_Store

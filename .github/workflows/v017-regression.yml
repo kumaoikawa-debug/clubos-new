@@ -1,0 +1,40 @@
+name: v0.17 Commission Settlement Regression
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "clubos_domain/**"
+      - "tests/**"
+      - "static/**"
+      - "app.py"
+      - "db.py"
+      - "schema.sql"
+      - "scripts/regression_v017.sh"
+      - ".github/workflows/v017-regression.yml"
+  pull_request:
+    paths:
+      - "clubos_domain/**"
+      - "tests/**"
+      - "static/**"
+      - "app.py"
+      - "db.py"
+      - "schema.sql"
+      - "scripts/regression_v017.sh"
+      - ".github/workflows/v017-regression.yml"
+
+jobs:
+  regression-v017:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Run v0.8-v0.17 regression
+        run: ./scripts/regression_v017.sh
