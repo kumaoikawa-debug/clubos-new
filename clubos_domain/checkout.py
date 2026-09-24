@@ -209,11 +209,15 @@ class CheckoutEngine:
         if self.membership:
             member=self.membership.refresh_member(c,club_id=int(activity['club_id']),user_id=int(intent['user_id']))
         c.execute('UPDATE checkout_intents SET result_id=? WHERE id=?',(str(rid),intent['id']))
-        return {'ok':True,'kind':'activity','checkoutId':intent['id'],'registrationId':rid,'clubPointsEarned':earned,
+        result={'ok':True,'kind':'activity','checkoutId':intent['id'],'registrationId':rid,'clubPointsEarned':earned,
                 'cashPaid':intent['cash_amount'],'commerceOrderId':commerce_order_id,'pointsPolicy':policy_snapshot,
                 'clubBenefitDiscount':float(intent.get('club_benefit_discount') or 0),
                 'platformBenefitSubsidy':float(intent.get('platform_benefit_subsidy') or 0),
                 'memberLevel':(member.level if member else None),'participantCount':participant_count,'participantIds':participant_ids}
+        # Persist the confirmed result so async payment polling (get_checkout) can hand back the
+        # same receipt shape the synchronous /pay path returns.
+        c.execute('UPDATE checkout_intents SET result_json=? WHERE id=?',(json.dumps(result,ensure_ascii=False),intent['id']))
+        return result
 
     def _finalize_gear(self,c,intent,payload,commerce_order_id):
         resolved=[]; commission=0.0
@@ -251,11 +255,15 @@ class CheckoutEngine:
                 c.execute('INSERT INTO ai_credit_ledger(club_id,type,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?)',
                           (intent['club_id'],'mall_reward',reward,'gear_order',str(oid),'装备商城销售奖励'))
         c.execute('UPDATE checkout_intents SET result_id=? WHERE id=?',(str(oid),intent['id']))
-        return {'ok':True,'kind':'gear','checkoutId':intent['id'],'orderId':oid,'gearPointsEarned':earned,
+        result={'ok':True,'kind':'gear','checkoutId':intent['id'],'orderId':oid,'gearPointsEarned':earned,
                 'clubCommission':round(commission,2),'clubAIReward':reward,'cashPaid':intent['cash_amount'],
                 'platformPointSubsidy':intent['platform_point_subsidy'],
                 'platformBenefitSubsidy':float(intent.get('platform_benefit_subsidy') or 0),
                 'commerceOrderId':commerce_order_id}
+        # Persist the confirmed result so async payment polling (get_checkout) can hand back the
+        # same receipt shape the synchronous /pay path returns.
+        c.execute('UPDATE checkout_intents SET result_json=? WHERE id=?',(json.dumps(result,ensure_ascii=False),intent['id']))
+        return result
 
     def _result_from_paid(self,c,intent):
         return {'ok':True,'checkoutId':intent['id'],'kind':intent['kind'],'status':'paid','resultId':intent.get('result_id'),

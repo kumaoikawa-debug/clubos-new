@@ -199,6 +199,7 @@ def _run_compat_migrations(c):
     _ensure_column(c,'checkout_intents','refunded_at','refunded_at TEXT')
     _ensure_column(c,'checkout_intents','participant_count','participant_count INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'checkout_intents','participant_policy_snapshot_json','participant_policy_snapshot_json TEXT')
+    _ensure_column(c,'checkout_intents','result_json','result_json TEXT')
     _ensure_column(c,'registrations','payment_status',"payment_status TEXT NOT NULL DEFAULT 'succeeded'")
     _ensure_column(c,'registrations','refund_status',"refund_status TEXT NOT NULL DEFAULT 'none'")
     _ensure_column(c,'registrations','refund_request_id','refund_request_id TEXT')

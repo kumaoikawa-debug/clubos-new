@@ -10,7 +10,7 @@ async function qrPayment(checkoutId,url){let closed=false,finished=false,finish;
  try{window.ClubOSQR.draw(canvas,url)}catch(err){canvas.hidden=true;status.textContent='此支付码暂无法显示为二维码，请复制支付链接并在支持的环境中打开。';}
  const dlg=sheet({title:'完成订单支付',desc:'订单号 '+checkoutId,body:box,actionLabel:'稍后到订单查看',onClose:()=>{closed=true;if(!finished)finish(null)}});
  copy.onclick=async()=>{try{await navigator.clipboard.writeText(url);status.textContent='已复制，请使用支付应用打开。'}catch{status.textContent='复制失败，请长按下方支付码手动复制。'}};
- const inspect=async()=>{if(closed||finished)return null;const d=await api('/api/public/checkouts/'+checkoutId);if(d.status==='paid'||d.payment_status==='succeeded'){finished=true;status.textContent='付款成功，订单已确认';finish(d);dlg.close();return d}if(d.payment_status==='failed'){status.textContent='付款未完成，可从订单重新发起或联系支付渠道。';return null}status.textContent='尚未查询到已付款记录。请勿重复付款。';return null};
+ const inspect=async()=>{if(closed||finished)return null;const d=await api('/api/public/checkouts/'+checkoutId);if(d.status==='paid'||d.payment_status==='succeeded'){finished=true;status.textContent='付款成功，订单已确认';const r=d.result||d;finish(r);dlg.close();return r}if(d.payment_status==='failed'){status.textContent='付款未完成，可从订单重新发起或联系支付渠道。';return null}status.textContent='尚未查询到已付款记录。请勿重复付款。';return null};
  check.onclick=async()=>{check.disabled=true;try{const r=await inspect();if(r)finish(r)}catch(e){status.textContent=e.message||'查询失败，请稍后重试'}finally{check.disabled=false}};
  // Avoid polling after user closes the dialog; no optimistic success state.
  for(let i=0;i<45&&!closed&&!finished;i++){await pause(2000);if(closed||finished)break;try{const r=await inspect();if(r)return r}catch(e){if(!closed)status.textContent='网络暂不可用：'+e.message+'。可以手动查询或稍后在订单查看。'}}

@@ -821,6 +821,13 @@ def get_checkout(checkout_id:str):
     x['payload']=jload(x.pop('payload_json'),{}); x['holds']=holds; x['vouchers']=vouchers; x['paymentAttempts']=attempts
     x['pointsPolicy']=jload(x.get('points_policy_snapshot_json'),{}) if x.get('points_policy_snapshot_json') else None
     x['participantPolicy']=jload(x.get('participant_policy_snapshot_json'),{}) if x.get('participant_policy_snapshot_json') else None
+    # Async payment (real WeChat JSAPI / QR) polls this endpoint after the provider confirms.
+    # Hand back the same confirmation receipt the synchronous /pay path returns so the C-end
+    # success screen works identically in both flows.
+    if x['status']=='paid' and x.get('result_json'):
+        x['result']=jload(x.pop('result_json'),{})
+    else:
+        x.pop('result_json',None)
     return x
 
 @app.post('/api/public/checkouts/{checkout_id}/pay')
@@ -1099,6 +1106,7 @@ def commerce_payment_failed(payload:dict=Body(...), x_clubos_commerce_secret:str
 
 @app.post('/api/public/activities/{activity_id}/signup')
 def signup(activity_id:int,payload:dict=Body(...)):
+    if IS_PROD: raise HTTPException(403,'demo-only endpoint disabled')
     name=payload.get('name','访客');phone=payload.get('phone','');occurrence_id=int(payload.get('occurrenceId') or 0)
     req_cp=max(0,int(payload.get('clubPoints',0)));req_gp=max(0,int(payload.get('gearPoints',0)))
     participant_input=payload.get('participants') if isinstance(payload.get('participants'),list) else None
@@ -1198,6 +1206,7 @@ def request_registration_refund(registration_id:int,payload:dict=Body(default={}
 
 @app.post('/api/public/registrations/{registration_id}/cancel')
 def cancel_registration(registration_id:int):
+    if IS_PROD: raise HTTPException(403,'demo-only endpoint disabled')
     # Legacy/demo-only shortcut retained for old regression tests. Formal v0.11 production
     # flow is refund-quote -> refund-request -> club approval -> provider refund callback.
     with conn() as c:
@@ -1353,6 +1362,7 @@ def public_products(club_id:int):
 
 @app.post('/api/public/clubs/{club_id}/gear-orders')
 def create_gear_order(club_id:int,payload:dict=Body(...)):
+    if IS_PROD: raise HTTPException(403,'demo-only endpoint disabled')
     user_id=int(payload.get('userId',1));items=payload.get('items',[])
     if not items:raise HTTPException(400,'items required')
     with conn() as c:
