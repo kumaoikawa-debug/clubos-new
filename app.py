@@ -245,7 +245,7 @@ def club_business_analytics(club_id:int,window_days:int=Query(30,alias='windowDa
 
 @app.get('/api/club/{club_id}/activities')
 def club_activities(club_id:int):
-    with conn() as c:return rows(c.execute('SELECT id,title,status,event_date,location,price,capacity,created_at FROM activities WHERE club_id=? ORDER BY id DESC',(club_id,)))
+    with conn() as c:return rows(c.execute('SELECT id,title,status,event_date,location,price,capacity,created_at,cover FROM activities WHERE club_id=? ORDER BY id DESC',(club_id,)))
 
 @app.post('/api/club/{club_id}/activities/ai-generate')
 async def ai_generate(club_id:int,prompt:str=Form(''),files:list[UploadFile]=File(default=[])):
@@ -365,6 +365,37 @@ def publish_activity(club_id:int,activity_id:int):
         if master.get('blocking_conflicts'): raise HTTPException(409,'存在必须解决的事实冲突，暂不能发布')
         c.execute('UPDATE activities SET status="published",updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',(activity_id,club_id))
     return {'ok':True}
+
+@app.post('/api/club/{club_id}/activities/{activity_id}/cover')
+async def upload_activity_cover(club_id:int, activity_id:int, file:UploadFile=File(...)):
+    # Club-scoped; ownership enforced by matching club_id on the row.
+    club_or_404(club_id)
+    with conn() as c:
+        a=row(c.execute('SELECT id,club_id FROM activities WHERE id=?',(activity_id,)))
+    if not a or a['club_id']!=club_id: raise HTTPException(404,'活动不存在')
+    ext=Path(file.filename or '').suffix.lower()
+    if ext not in _PUBLIC_IMAGE_EXT: raise HTTPException(400,'仅支持图片文件：png/jpg/jpeg/webp/gif')
+    data=await file.read()
+    if len(data) > 10*1024*1024: raise HTTPException(413,'图片过大（上限 10MB）')
+    batch=UPLOAD/str(club_id)/uuid.uuid4().hex
+    batch.mkdir(parents=True, exist_ok=True)
+    dest=batch/f'cover{ext}'
+    dest.write_bytes(data)
+    url=f'/static/uploads/{club_id}/{batch.name}/cover{ext}'
+    with conn() as c:
+        c.execute('UPDATE activities SET cover=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',(url,activity_id,club_id))
+    return {'cover':url}
+
+@app.get('/api/club/{club_id}/activities/{activity_id}/cover')
+def club_activity_cover(club_id:int, activity_id:int):
+    # Club-scoped, ownership-enforced; works for drafts and published alike.
+    club_or_404(club_id)
+    with conn() as c:
+        a=row(c.execute('SELECT club_id,cover FROM activities WHERE id=?',(activity_id,)))
+    if not a or a['club_id']!=club_id or not a['cover']: raise HTTPException(404,'not found')
+    fp=_safe_media_path(str(a['cover']))
+    if not fp or not fp.is_file(): raise HTTPException(404,'not found')
+    return FileResponse(fp)
 
 @app.post('/api/club/{club_id}/activities/{activity_id}/channel/{channel}')
 async def channel_generate(club_id:int,activity_id:int,channel:str):
@@ -666,7 +697,13 @@ def public_club(club_id:int):
 @app.get('/api/public/clubs/{club_id}/activities')
 def public_activities(club_id:int):
     if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
-    with conn() as c:return rows(c.execute('SELECT id,title,event_date,location,price,capacity FROM activities WHERE club_id=? AND status="published" ORDER BY id DESC',(club_id,)))
+    with conn() as c:
+        acts=rows(c.execute('SELECT id,title,event_date,location,price,capacity,cover FROM activities WHERE club_id=? AND status="published" ORDER BY id DESC',(club_id,)))
+    for a in acts:
+        cov=a.get('cover')
+        if cov and str(cov).startswith('/static/'):
+            a['cover']='/api/public/activities/%d/media/%s'%(a['id'],quote(str(cov)[len('/static/'):],safe='/'))
+    return acts
 
 @app.get('/api/public/activities/{activity_id}')
 def public_activity(activity_id:int):
@@ -676,12 +713,15 @@ def public_activity(activity_id:int):
     if not a: raise HTTPException(404,'活动不存在或未发布')
     if IS_PROD and club_or_404(int(a['club_id']))['status']!='active':raise HTTPException(404,'not found')
     a['activityMaster']=jload(a.pop('activity_master_json'),{});a['detail']=jload(a.pop('detail_json'),{});a['occurrences']=occ
+    cov=a.get('cover')
+    if cov and str(cov).startswith('/static/'):
+        a['cover']='/api/public/activities/%d/media/%s'%(activity_id,quote(str(cov)[len('/static/'):],safe='/'))
     a['pointsPolicy']=activity_points_policy.from_activity(a).as_dict()
     a['refundPolicy']=activity_refund_policy.from_activity(a).as_dict()
     a['participantPolicy']=participant_service.from_activity(a).as_dict()
     if IS_PROD:
         # Public activity is not a dump of private activity_master_json (internalData).
-        a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy')}
+        a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy')}
         master=a.get('activityMaster') or {}
         if isinstance(master,dict):
             public_keys={'title','date','location','price','capacity','itinerary','fees','checklist','services','media'}
@@ -723,7 +763,7 @@ def public_activity_media(activity_id:int,asset_path:str):
     # Published-activity allowlist, NOT general access to /static/uploads.
     # Only files explicitly referenced in the published editorial master are readable.
     with conn() as c:
-        a=row(c.execute("""SELECT a.activity_master_json,cl.status club_status
+        a=row(c.execute("""SELECT a.activity_master_json,a.cover,cl.status club_status
             FROM activities a JOIN clubs cl ON cl.id=a.club_id
             WHERE a.id=? AND a.status='published' """,(activity_id,)))
     if not a or a['club_status']!='active':raise HTTPException(404,'not found')
@@ -732,6 +772,8 @@ def public_activity_media(activity_id:int,asset_path:str):
     if not file_path:raise HTTPException(404,'not found')
     master=jload(a['activity_master_json'],{})
     allowed={str(m.get('url')) for m in master.get('media',[]) if isinstance(m,dict)}
+    cover=str(a.get('cover') or '')
+    if cover: allowed.add(cover)
     if original not in allowed or not file_path.is_file():raise HTTPException(404,'not found')
     response=FileResponse(file_path)
     response.headers['Cache-Control']='public, max-age=300'

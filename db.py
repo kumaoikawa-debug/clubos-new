@@ -108,6 +108,7 @@ def _run_compat_migrations(c):
     _ensure_column(c,'activities','refund_enabled','refund_enabled INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'activities','refund_policy_json','refund_policy_json TEXT')
     _ensure_column(c,'activities','participant_form_policy_json','participant_form_policy_json TEXT')
+    _ensure_column(c,'activities','cover','cover TEXT')
     _ensure_column(c,'club_members','current_tier_id','current_tier_id INTEGER')
     _ensure_column(c,'club_members','lifetime_activity_spend','lifetime_activity_spend REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'club_members','activity_count','activity_count INTEGER NOT NULL DEFAULT 0')

@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS activities (
   refund_enabled INTEGER NOT NULL DEFAULT 1,
   refund_policy_json TEXT,
   participant_form_policy_json TEXT,
+  cover TEXT,
   activity_master_json TEXT NOT NULL,
   detail_json TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
