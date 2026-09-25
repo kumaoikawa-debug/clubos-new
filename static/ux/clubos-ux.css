@@ -29,6 +29,9 @@ body{background:var(--bg);font-size:14px}a{color:var(--brand)}:focus-visible{out
 .act-card__cover::after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(7,20,15,.04) 30%,rgba(7,20,15,.66))}
 .act-card__coverInner{position:relative;z-index:1;width:100%}
 .act-card__loc{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:800;background:#ffffffcc;color:#1d3a2b;padding:4px 10px;border-radius:999px;backdrop-filter:blur(4px)}
+.cover-flag{position:absolute;top:10px;right:10px;z-index:2;font-size:11px;font-weight:800;padding:4px 9px;border-radius:999px;backdrop-filter:blur(4px);display:inline-flex;align-items:center;gap:3px;line-height:1}
+.cover-flag--ok{background:#2e7d4fee;color:#fff}
+.cover-flag--missing{background:#f4b942ee;color:#3a2a08}
 .act-card__title{font-size:19px;font-weight:850;line-height:1.24;margin:10px 0 0;text-shadow:0 1px 10px #0007;letter-spacing:-.3px}
 .act-card__body{padding:13px 15px 15px;display:flex;flex-direction:column;gap:10px}
 .act-card__meta{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12.5px;flex-wrap:wrap}
