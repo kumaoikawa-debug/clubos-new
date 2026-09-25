@@ -66,3 +66,10 @@ body{background:var(--bg);font-size:14px}a{color:var(--brand)}:focus-visible{out
 .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
 .btn.danger{background:var(--danger);color:#fff}
 .btn.danger:hover{filter:brightness(.96)}
+/* Write-action busy affordance: attached automatically by api() (see shared.js) to whichever control
+   triggered a real write request. Only write requests get it, so read-only clicks never flicker. */
+.is-busy{opacity:.6;cursor:progress;pointer-events:none}
+button.is-busy,.btn.is-busy{position:relative;overflow:hidden;filter:saturate(.85)}
+button.is-busy::after,.btn.is-busy::after{content:'';position:absolute;top:0;bottom:0;left:-45%;width:45%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent);animation:isBusySweep 1.05s linear infinite;pointer-events:none}
+@keyframes isBusySweep{from{transform:translateX(0)}to{transform:translateX(340%)}}
+@media(prefers-reduced-motion:reduce){button.is-busy::after,.btn.is-busy::after{animation:none;opacity:0}}

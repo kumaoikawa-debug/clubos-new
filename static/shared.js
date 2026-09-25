@@ -19,6 +19,66 @@ function _writeKey(url,opt){
   if(b!=null){if(typeof b==='string')bs=b;else{try{bs=JSON.stringify(b)}catch{return null}}}
   return m+' '+url+' '+bs;
 }
+/* ===== 写操作按钮可见反馈（busy / disabled）=====
+   api() 已能保证"不重复提交"，但用户点了写按钮仍看不出是否已响应。这里把「点击来源」与
+   「真正发出的写请求」关联起来：只有当写请求确实发出时，才给该控件加 .is-busy + disabled，
+   并记下原 disabled（业务上本就禁用的情况），请求结束（成功或失败）后原样恢复。
+   因为只在写请求发出时才附加，纯读操作（打开详情、切 tab）点下去不会闪一下 disabled。
+   覆盖全部 onclick 调用点，无需改调用方。 */
+let _clickTrigger=null,_clickTriggerAt=0;
+document.addEventListener('click',e=>{
+  const t=e.target&&e.target.closest?e.target.closest('button,.btn,[onclick]'):null;
+  if(!t||t.disabled){_clickTrigger=null;return}
+  _clickTrigger=t;_clickTriggerAt=Date.now();
+},true);   // 捕获阶段：先于元素自身的 onclick 记录点击来源
+function _claimWriteTrigger(){
+  const el=_clickTrigger;_clickTrigger=null;
+  if(!el)return null;
+  if(Date.now()-_clickTriggerAt>8000)return null;   // 旧点击（如填表单填太久）不再认领
+  return el;
+}
+function _busyOn(el){
+  if(!el||!el.isConnected)return null;
+  const st={el,disabled:el.disabled};
+  el.classList.add('is-busy');el.setAttribute('aria-busy','true');
+  if('disabled' in el)el.disabled=true;
+  return st;
+}
+function _busyOff(st){
+  if(!st)return;const el=st.el;
+  el.classList.remove('is-busy');el.removeAttribute('aria-busy');
+  if(!el.isConnected)return;                       // 已从 DOM 移除（如成功关弹窗）则不动
+  // 只回滚「由我们禁用」的情况。若按钮本来就 disabled（业务自己控的，如 payment-experience 的
+  // 报名按钮），它何时恢复由业务代码决定——我们一律不碰，避免把业务刚恢复的按钮又按回禁用。
+  if('disabled' in el&&!st.disabled)el.disabled=false;
+}
+/* ===== 写请求活跃计数：让「提交/确认」类弹窗把反馈保持到请求落定 =====
+   showForm / showConfirm 过去在被点击的同一帧就关掉弹窗，用户看不到任何"已提交"反馈；
+   而且弹窗一关，紧随其后的写请求就再没有可以挂 busy 的控件。现在改为：点提交/确认后保留
+   弹窗、把该按钮置 busy 并禁用取消，等写请求全部落定（或超时 cap）再撤。 */
+let _writesPending=0;const _idleWaiters=[];
+function _writeBegin(){_writesPending++}
+function _writeEnd(){
+  _writesPending=Math.max(0,_writesPending-1);
+  if(!_writesPending)_idleWaiters.splice(0).forEach(f=>f());
+}
+function _whenWritesIdle({grace=150,cap=8000}={}){
+  return new Promise(res=>{
+    let settled=false;const finish=()=>{if(settled)return;settled=true;res()};
+    const capT=setTimeout(finish,cap);const t0=Date.now();
+    const check=()=>{
+      if(Date.now()-t0<grace){setTimeout(check,Math.max(grace-(Date.now()-t0),20));return}  // 给调用方发起写请求留出时间
+      if(!_writesPending){clearTimeout(capT);return finish()}
+      _idleWaiters.push(()=>{clearTimeout(capT);finish()});
+    };
+    setTimeout(check,0);
+  });
+}
+function _holdDialogUntilIdle(ov,btn){
+  _busyOn(btn);
+  const cancel=ov.querySelector('[data-cancel]');if(cancel)cancel.disabled=true;
+  _whenWritesIdle().then(()=>{if(ov.isConnected)ov.remove()});
+}
 async function api(url,opt={}){
   const key=_writeKey(url,opt);
   if(key){
@@ -27,16 +87,22 @@ async function api(url,opt={}){
     const recent=_writeRecent.get(key);
     if(recent&&Date.now()-recent.at<WRITE_REPLAY_MS)return recent.value;  // 刚成功过 → 拦连击
   }
+  const isWrite=WRITE_METHODS.includes(String(opt.method||'GET').toUpperCase());
+  const busy=isWrite?_busyOn(_claimWriteTrigger()):null;
   const run=(async()=>{
-    opt.headers=new Headers(opt.headers||{});
-    if(!['GET','HEAD'].includes((opt.method||'GET').toUpperCase())){
-      const csrf=clubosCookie('clubos_csrf');if(csrf)opt.headers.set('X-ClubOS-CSRF',decodeURIComponent(csrf));
-    }
-    const r=await fetch(url,{credentials:'same-origin',...opt});
-    let d;try{d=await r.json()}catch{d={}}
-    if(r.status===401 && location.pathname!='/login'){location.href='/login';throw new Error('请先登录')}
-    if(!r.ok)throw new Error(d.detail||'请求失败');return d
+    if(isWrite)_writeBegin();
+    try{
+      opt.headers=new Headers(opt.headers||{});
+      if(!['GET','HEAD'].includes((opt.method||'GET').toUpperCase())){
+        const csrf=clubosCookie('clubos_csrf');if(csrf)opt.headers.set('X-ClubOS-CSRF',decodeURIComponent(csrf));
+      }
+      const r=await fetch(url,{credentials:'same-origin',...opt});
+      let d;try{d=await r.json()}catch{d={}}
+      if(r.status===401 && location.pathname!='/login'){location.href='/login';throw new Error('请先登录')}
+      if(!r.ok)throw new Error(d.detail||'请求失败');return d
+    }finally{if(isWrite)_writeEnd()}
   })();
+  if(busy)run.then(()=>_busyOff(busy),()=>_busyOff(busy));
   if(key){
     _writeInflight.set(key,run);
     run.then(v=>{_writeRecent.set(key,{at:Date.now(),value:v})},()=>{})   // 只缓存成功结果
@@ -111,7 +177,7 @@ function showConfirm({title='请确认',message='',confirmText='确认',cancelTe
     let done=false;const fin=v=>{if(done)return;done=true;res(v)};
     const ov=uxDialog({title,desc:message,onClose:()=>fin(false),foot:`<button class="btn ghost" type="button" data-cancel>${esc(cancelText)}</button><button class="btn ${danger?'danger':''}" type="button" data-ok>${esc(confirmText)}</button>`});
     ov.querySelector('[data-cancel]').onclick=()=>{ov.remove();fin(false)};
-    ov.querySelector('[data-ok]').onclick=()=>{ov.remove();fin(true)};
+    ov.querySelector('[data-ok]').onclick=()=>{_holdDialogUntilIdle(ov,ov.querySelector('[data-ok]'));fin(true)};
   });
 }
 function showAlert({title='提示',message='',okText='知道了',wide=false}={}){
@@ -148,7 +214,7 @@ function showForm({title='',desc='',fields=[],submitText='提交',validate=null,
       }
       if(!ok){let e=bodyEl.querySelector('.ux-inline-error');if(!e){e=document.createElement('div');e.className='ux-inline-error';e.textContent='请填写带 * 的必填项';bodyEl.insertBefore(e,bodyEl.firstChild)}return}
       if(validate&&!validate(vals,ov))return;
-      ov.remove();fin(vals);
+      _holdDialogUntilIdle(ov,ov.querySelector('[data-submit]'));fin(vals);
     };
   });
 }
