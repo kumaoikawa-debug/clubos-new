@@ -1,14 +1,48 @@
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
 function clubosCookie(name){return document.cookie.split('; ').find(x=>x.startsWith(name+'='))?.split('=').slice(1).join('=')||''}
+/* ===== 写操作防重复提交（在 api() 层统一兜底，覆盖全部调用点，无需改调用方）=====
+   - 在途去重：同一写请求（方法+URL+body）在途时复用同一 Promise，不会向服务端发第二次。
+   - 成功重放：成功后 WRITE_REPLAY_MS 内再次发起相同请求，直接返回上次结果 → 拦「快速连击」。
+   - 失败不缓存：请求失败后允许立即重试（不会把失败结果重放给用户）。
+   - 文件上传（FormData）不参与去重：其 body 无法稳定序列化，去重可能把 A 文件的结果串给 B 文件。
+   注意：唯一键不含 headers；如需绕过（同一请求确实要连着发两次）可在 opt 上传 allowRepeat:true。 */
+const WRITE_METHODS=['POST','PUT','PATCH','DELETE'];
+const WRITE_REPLAY_MS=700;
+const _writeInflight=new Map();   // key -> Promise
+const _writeRecent=new Map();     // key -> {at,value}
+function _writeKey(url,opt){
+  const m=String(opt.method||'GET').toUpperCase();
+  if(!WRITE_METHODS.includes(m)||opt.allowRepeat)return null;
+  const b=opt.body;
+  if(b instanceof FormData)return null;
+  let bs='';
+  if(b!=null){if(typeof b==='string')bs=b;else{try{bs=JSON.stringify(b)}catch{return null}}}
+  return m+' '+url+' '+bs;
+}
 async function api(url,opt={}){
-  opt.headers=new Headers(opt.headers||{});
-  if(!['GET','HEAD'].includes((opt.method||'GET').toUpperCase())){
-    const csrf=clubosCookie('clubos_csrf');if(csrf)opt.headers.set('X-ClubOS-CSRF',decodeURIComponent(csrf));
+  const key=_writeKey(url,opt);
+  if(key){
+    const inflight=_writeInflight.get(key);
+    if(inflight)return inflight;                                   // 在途 → 复用，不再发第二次
+    const recent=_writeRecent.get(key);
+    if(recent&&Date.now()-recent.at<WRITE_REPLAY_MS)return recent.value;  // 刚成功过 → 拦连击
   }
-  const r=await fetch(url,{credentials:'same-origin',...opt});
-  let d;try{d=await r.json()}catch{d={}}
-  if(r.status===401 && location.pathname!='/login'){location.href='/login';throw new Error('请先登录')}
-  if(!r.ok)throw new Error(d.detail||'请求失败');return d
+  const run=(async()=>{
+    opt.headers=new Headers(opt.headers||{});
+    if(!['GET','HEAD'].includes((opt.method||'GET').toUpperCase())){
+      const csrf=clubosCookie('clubos_csrf');if(csrf)opt.headers.set('X-ClubOS-CSRF',decodeURIComponent(csrf));
+    }
+    const r=await fetch(url,{credentials:'same-origin',...opt});
+    let d;try{d=await r.json()}catch{d={}}
+    if(r.status===401 && location.pathname!='/login'){location.href='/login';throw new Error('请先登录')}
+    if(!r.ok)throw new Error(d.detail||'请求失败');return d
+  })();
+  if(key){
+    _writeInflight.set(key,run);
+    run.then(v=>{_writeRecent.set(key,{at:Date.now(),value:v})},()=>{})   // 只缓存成功结果
+       .then(()=>{if(_writeInflight.get(key)===run)_writeInflight.delete(key)});
+  }
+  return run;
 }
 function money(n){return '¥'+Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2})}
 function dateText(s){return s||'待定'}
