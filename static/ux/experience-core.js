@@ -11,10 +11,14 @@
   const body=table.tBodies[0];if(!body)return;
   table.dataset.uxEnhanced='1';
   table.setAttribute('role','table');
-  const shell=table.closest('.card')||table.parentNode;
+  // table 外面可能还套着一层容器（如 club.js 的 <div style="overflow:auto">）：此时 table 不是
+  // .card 的直接子节点，shell.insertBefore(filter,table) 会抛 NotFoundError，筛选条与计数条会
+  // 一起丢失（且因为已置 uxEnhanced，之后不再重试）。改为插到「直接包含 table 的那层容器」之前，
+  // 该容器必然在 shell 之内，位置也仍是卡片标题与表格之间。
+  const host=table.parentNode,shell=table.closest('.card')||host;
   const filter=document.createElement('div');filter.className='ux-table-tools';
   filter.innerHTML='<label class="ux-table-search"><span aria-hidden="true">⌕</span><input type="search" placeholder="筛选当前列表" aria-label="筛选当前列表"></label><span class="ux-table-count" aria-live="polite"></span>';
-  shell.insertBefore(filter,table);
+  shell.insertBefore(filter,shell===host?table:host);
   const input=filter.querySelector('input'),counter=filter.querySelector('.ux-table-count');
   let noResults=null;
   const update=()=>{const rows=[...body.rows].filter(x=>!x.classList.contains('ux-filter-empty'));let shown=0,actual=0;const q=input.value.trim().toLocaleLowerCase();for(const row of rows){if(row.querySelector('.empty')&&row.cells.length===1){row.hidden=!!q;continue}actual++;const visible=row.textContent.toLocaleLowerCase().includes(q);row.hidden=!visible;if(visible)shown++}if(noResults&&(!q||shown)){noResults.remove();noResults=null}if(actual&&q&&!shown&&!noResults){noResults=document.createElement('tr');noResults.className='ux-filter-empty';const cell=document.createElement('td');cell.colSpan=Math.max(1,table.tHead?.rows?.[0]?.cells?.length||1);cell.appendChild(empty('未找到匹配结果'));noResults.appendChild(cell);body.appendChild(noResults)}counter.textContent=q?`显示 ${shown} / ${actual} 条`:`共 ${actual} 条`};
