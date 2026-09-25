@@ -404,7 +404,11 @@ async def channel_generate(club_id:int,activity_id:int,channel:str):
     with conn() as c:a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
     if not a: raise HTTPException(404,'活动不存在')
     master=jload(a['activity_master_json'],{});detail=jload(a['detail_json'],{})
-    try: content,usage=await generate_channel(club_id,master,detail,channel)
+    # Feed the uploaded cover into channel generation as the main visual.
+    # Use the club-scoped proxy URL (not the raw /static/uploads path, which is
+    # forbidden in prod) so it resolves inside the club session.
+    cover_url=f'/api/club/{club_id}/activities/{activity_id}/cover' if a.get('cover') else None
+    try: content,usage=await generate_channel(club_id,master,detail,channel,cover_url=cover_url)
     except AIGatewayError as e: raise HTTPException(502,str(e))
     charge_credits(club_id,channel,usage.usage_id)
     with conn() as c:c.execute('INSERT INTO content_assets(club_id,activity_id,channel,title,body_json) VALUES(?,?,?,?,?)',(

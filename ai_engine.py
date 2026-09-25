@@ -157,9 +157,11 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
     data=_mock_activity(source); return data,record_mock_usage(club_id,'detail',prompt,data)
 
 
-async def generate_channel(club_id:int,activity_master:dict[str,Any],detail:dict[str,Any],channel:str)->tuple[dict[str,Any],GatewayResponse]:
+async def generate_channel(club_id:int,activity_master:dict[str,Any],detail:dict[str,Any],channel:str,cover_url:str|None=None)->tuple[dict[str,Any],GatewayResponse]:
     labels={'wechat':'微信公众号','xhs':'小红书','poster':'活动招募海报','recap':'活动回顾'}
+    cover_note=f"活动官方封面（已上传的主视觉，优先用作首图 / 海报主图）：{cover_url}\n" if cover_url else ''
     prompt=f"""基于同一场活动，重新创作 {labels.get(channel,channel)} 原生内容。不是活动详情删减版。
+{cover_note}
 Activity Master（事实）：{json.dumps(activity_master,ensure_ascii=False)}
 招募详情的活动理解（可参考但不要照抄结构）：{json.dumps(detail,ensure_ascii=False)}
 
@@ -169,10 +171,14 @@ poster: 返回 headline, subheadline, facts[], sellingPoints[], cta, preferredMe
 recap: 只有提供真实 actualActivityData / 现场素材时才能叙述实际发生事件；资料不足时明确返回 needsActualData=true，不编造。
 严格 JSON。"""
     gw=await generate_json(club_id=club_id,task_type=channel,system_prompt=SYSTEM,user_prompt=prompt)
-    if gw:return gw.data,gw
+    if gw:
+        data=gw.data or {}
+        if cover_url: data['coverUrl']=cover_url
+        return data,gw
     title=activity_master.get('title','活动');idea=detail.get('coreSellingIdea','')
-    if channel=='wechat':data={'title':title,'summary':idea,'blocks':detail.get('blocks',[])[:6]+[{'type':'cta','headline':'查看活动详情并报名'}]}
-    elif channel=='xhs':data={'titleOptions':[title,f"周末去{activity_master.get('location','山里')}，这次不赶行程"],'hook':idea,'body':idea+'\n\n具体日期、费用和报名信息见活动详情。','tags':['户外','周末去哪儿','自然'],'imageSequence':[m.get('ref') for m in activity_master.get('media',[])[:9]]}
-    elif channel=='poster':data={'headline':title,'subheadline':idea,'facts':[activity_master.get('date',''),activity_master.get('location','')],'sellingPoints':[idea],'cta':'扫码查看详情与报名','preferredMediaRefs':[m.get('ref') for m in activity_master.get('media',[])[:2]]}
+    gallery=[m.get('ref') for m in activity_master.get('media',[]) if m.get('ref')]
+    if channel=='wechat':data={'title':title,'summary':idea,'coverUrl':cover_url,'blocks':detail.get('blocks',[])[:6]+[{'type':'cta','headline':'查看活动详情并报名'}]}
+    elif channel=='xhs':data={'titleOptions':[title,f"周末去{activity_master.get('location','山里')}，这次不赶行程"],'hook':idea,'body':idea+'\n\n具体日期、费用和报名信息见活动详情。','tags':['户外','周末去哪儿','自然'],'imageSequence':([cover_url] if cover_url else [])+gallery[:8],'coverUrl':cover_url}
+    elif channel=='poster':data={'headline':title,'subheadline':idea,'facts':[activity_master.get('date',''),activity_master.get('location','')],'sellingPoints':[idea],'cta':'扫码查看详情与报名','preferredMediaRefs':([cover_url] if cover_url else [])+gallery[:1],'coverUrl':cover_url}
     else:data={'needsActualData':True,'title':f'{title}｜活动回顾','message':'请上传现场照片或领队记录后再生成真实活动回顾。'}
     return data,record_mock_usage(club_id,channel,prompt,data)
