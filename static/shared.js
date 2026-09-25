@@ -65,7 +65,7 @@ function uxDialog({title='',desc='',body='',foot='',wide=false,onClose=null}={})
   const ov=document.createElement('div');ov.className='ux-overlay';
   ov.innerHTML=`<div class="ux-dialog${wide?' wide':''}" role="dialog" aria-modal="true">
     <div class="ux-dialog-head"><div><h2>${esc(title)}</h2>${desc?`<p>${esc(desc)}</p>`:''}</div><button class="ux-x" type="button" aria-label="关闭">×</button></div>
-    <div class="ux-dialog-body">${body}</div>${foot?`<div class="ux-dialog-foot">${foot}</div>`:''}</div>`;
+    ${body?`<div class="ux-dialog-body">${body}</div>`:''}${foot?`<div class="ux-dialog-foot">${foot}</div>`:''}</div>`;
   const close=()=>{ov.remove();if(onClose)onClose()};
   ov.querySelector('.ux-x').onclick=close;
   ov.onclick=e=>{if(e.target===ov)close()};
@@ -99,7 +99,7 @@ function showForm({title='',desc='',fields=[],submitText='提交',validate=null,
   return new Promise(resolve=>{
     let done=false;const fin=v=>{if(done)return;done=true;resolve(v)};
     const ov=uxDialog({title,desc,wide,body,onClose:()=>fin(null),foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-submit>${esc(submitText)}</button>`});
-    const bodyEl=ov.querySelector('.ux-dialog-body');
+    const bodyEl=ov.querySelector('.ux-dialog-body')||ov.querySelector('.ux-dialog');
     ov.querySelector('[data-cancel]').onclick=()=>{ov.remove();fin(null)};
     ov.querySelector('[data-submit]').onclick=()=>{
       let ok=true;const vals={};
@@ -109,7 +109,7 @@ function showForm({title='',desc='',fields=[],submitText='提交',validate=null,
         if(f.type==='number'){v=el.value===''?undefined:Number(el.value);
           if(f.required&&(v===undefined||isNaN(v))){el.classList.add('ux-invalid');ok=false;continue}
           if(v!==undefined&&!isNaN(v)&&f.min!==undefined&&v<f.min){el.classList.add('ux-invalid');ok=false;continue}}
-        if(f.required&&(v===undefined||v===''))el.classList.add('ux-invalid');else el.classList.remove('ux-invalid');
+        if(f.required&&(v===undefined||v==='')){el.classList.add('ux-invalid');ok=false}else el.classList.remove('ux-invalid');
         vals[f.name]=v;
       }
       if(!ok){let e=bodyEl.querySelector('.ux-inline-error');if(!e){e=document.createElement('div');e.className='ux-inline-error';e.textContent='请填写带 * 的必填项';bodyEl.insertBefore(e,bodyEl.firstChild)}return}
