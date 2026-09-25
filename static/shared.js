@@ -37,25 +37,26 @@ function _claimWriteTrigger(){
   if(Date.now()-_clickTriggerAt>8000)return null;   // 旧点击（如填表单填太久）不再认领
   return el;
 }
-function _busyOn(el){
+function uxBusyOn(el){
   if(!el||!el.isConnected)return null;
   const st={el,disabled:el.disabled};
   el.classList.add('is-busy');el.setAttribute('aria-busy','true');
   if('disabled' in el)el.disabled=true;
   return st;
 }
-function _busyOff(st){
+function uxBusyOff(st){
   if(!st)return;const el=st.el;
   el.classList.remove('is-busy');el.removeAttribute('aria-busy');
   if(!el.isConnected)return;                       // 已从 DOM 移除（如成功关弹窗）则不动
-  // 只回滚「由我们禁用」的情况。若按钮本来就 disabled（业务自己控的，如 payment-experience 的
-  // 报名按钮），它何时恢复由业务代码决定——我们一律不碰，避免把业务刚恢复的按钮又按回禁用。
+  // 只回滚「由我们禁用」的情况。若按钮本来就 disabled（业务按自己的条件禁用的，比如余额不足时
+  // 置灰的下单按钮），它何时恢复由业务代码决定——我们一律不碰，避免把业务刚恢复的按钮又按回禁用。
   if('disabled' in el&&!st.disabled)el.disabled=false;
 }
 /* ===== 写请求活跃计数：让「提交/确认」类弹窗把反馈保持到请求落定 =====
-   showForm / showConfirm 过去在被点击的同一帧就关掉弹窗，用户看不到任何"已提交"反馈；
-   而且弹窗一关，紧随其后的写请求就再没有可以挂 busy 的控件。现在改为：点提交/确认后保留
-   弹窗、把该按钮置 busy 并禁用取消，等写请求全部落定（或超时 cap）再撤。 */
+   提交类弹窗（shared.js 的 showForm/showConfirm、ux/clubos-ux.js 的 uxForm/uxConfirm）过去在
+   被点击的同一帧就关掉弹窗，用户看不到任何"已提交"反馈；而且弹窗一关，紧随其后的写请求就再没有
+   可以挂 busy 的控件。现在改为：点提交/确认后保留弹窗、把该按钮置 busy 并禁用取消，等写请求
+   全部落定（或超时 cap）再撤。 */
 let _writesPending=0;const _idleWaiters=[];
 function _writeBegin(){_writesPending++}
 function _writeEnd(){
@@ -74,10 +75,30 @@ function _whenWritesIdle({grace=150,cap=8000}={}){
     setTimeout(check,0);
   });
 }
-function _holdDialogUntilIdle(ov,btn){
-  _busyOn(btn);
-  const cancel=ov.querySelector('[data-cancel]');if(cancel)cancel.disabled=true;
-  _whenWritesIdle().then(()=>{if(ov.isConnected)ov.remove()});
+/* 保留弹窗直到写请求全部落定。after 用于「延迟拆除」的弹窗（如 uxForm 需要先恢复 body 滚动、
+   归还焦点），默认直接 remove。取消按钮的类名各弹窗实现不统一（data-cancel / .ux-cancel / .x），
+   这里一起禁用，避免请求在途时被关掉。 */
+function _holdDialogUntilIdle(ov,btn,after){
+  uxBusyOn(btn);
+  for(const c of ov.querySelectorAll('[data-cancel],.ux-cancel,.x'))c.disabled=true;
+  _whenWritesIdle().then(()=>{if(!ov.isConnected)return;(after||(()=>ov.remove()))()});
+}
+/* ===== 流程级锁：一个业务流程里连着发多条写请求时用 =====
+   api() 的去重只保证「单条请求」不重复；报名与装备下单是「建单 → 支付 → 查单 → 收据 → 刷新」
+   串起来的多请求流程。用户连点时，即便每条请求都被去重，流程本身仍会整跑两遍：弹出两个收款码、
+   两张收据、跳两次页面。uxFlow 兜住这一段，调用方不必再自建 boolean 锁：
+     · 同名流程在执行期间再次触发 → 立刻返回 null，不进入 fn；
+     · 复用写操作那套按钮反馈（.is-busy + disabled），从流程开始一直保持到流程结束，
+       而不是只在其中某一条请求在途时闪一下；
+     · 结束时按「只回滚自己禁用的」规则还原，不夺业务代码对按钮的控制权。
+   注意：它不计入 _writesPending —— 计数是给「弹窗保持到请求落定」用的，若把整个流程（含最长
+   90 秒的收款码轮询）算成未落定，会把上层弹窗拖到 8 秒上限才关。 */
+const _flowLocks=new Set();
+function uxFlow(name,fn){
+  if(_flowLocks.has(name))return Promise.resolve(null);
+  _flowLocks.add(name);
+  const busy=uxBusyOn(_claimWriteTrigger());
+  return (async()=>{try{return await fn()}finally{_flowLocks.delete(name);uxBusyOff(busy)}})();
 }
 async function api(url,opt={}){
   const key=_writeKey(url,opt);
@@ -88,7 +109,7 @@ async function api(url,opt={}){
     if(recent&&Date.now()-recent.at<WRITE_REPLAY_MS)return recent.value;  // 刚成功过 → 拦连击
   }
   const isWrite=WRITE_METHODS.includes(String(opt.method||'GET').toUpperCase());
-  const busy=isWrite?_busyOn(_claimWriteTrigger()):null;
+  const busy=isWrite?uxBusyOn(_claimWriteTrigger()):null;
   const run=(async()=>{
     if(isWrite)_writeBegin();
     try{
@@ -102,7 +123,7 @@ async function api(url,opt={}){
       if(!r.ok)throw new Error(d.detail||'请求失败');return d
     }finally{if(isWrite)_writeEnd()}
   })();
-  if(busy)run.then(()=>_busyOff(busy),()=>_busyOff(busy));
+  if(busy)run.then(()=>uxBusyOff(busy),()=>uxBusyOff(busy));
   if(key){
     _writeInflight.set(key,run);
     run.then(v=>{_writeRecent.set(key,{at:Date.now(),value:v})},()=>{})   // 只缓存成功结果
