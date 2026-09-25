@@ -59,3 +59,62 @@ function skel(sel,n=4,h=14){const el=$(sel);if(!el)return;el.innerHTML=skelRows(
   el.__skelT=setTimeout(()=>{const c=[...el.children];
     if(c.length&&c.every(x=>x.classList&&x.classList.contains('skeleton')))
       el.innerHTML='<div class="empty">加载超时，请刷新重试</div>'},10000)}
+
+/* ===== 原生弹窗替代层：结构化表单 / 确认弹窗 / 信息弹窗（替换 prompt/confirm/alert）===== */
+function uxDialog({title='',desc='',body='',foot='',wide=false,onClose=null}={}){
+  const ov=document.createElement('div');ov.className='ux-overlay';
+  ov.innerHTML=`<div class="ux-dialog${wide?' wide':''}" role="dialog" aria-modal="true">
+    <div class="ux-dialog-head"><div><h2>${esc(title)}</h2>${desc?`<p>${esc(desc)}</p>`:''}</div><button class="ux-x" type="button" aria-label="关闭">×</button></div>
+    <div class="ux-dialog-body">${body}</div>${foot?`<div class="ux-dialog-foot">${foot}</div>`:''}</div>`;
+  const close=()=>{ov.remove();if(onClose)onClose()};
+  ov.querySelector('.ux-x').onclick=close;
+  ov.onclick=e=>{if(e.target===ov)close()};
+  document.body.appendChild(ov);
+  return ov;
+}
+function showConfirm({title='请确认',message='',confirmText='确认',cancelText='取消',danger=false}={}){
+  return new Promise(res=>{
+    let done=false;const fin=v=>{if(done)return;done=true;res(v)};
+    const ov=uxDialog({title,desc:message,onClose:()=>fin(false),foot:`<button class="btn ghost" type="button" data-cancel>${esc(cancelText)}</button><button class="btn ${danger?'danger':''}" type="button" data-ok>${esc(confirmText)}</button>`});
+    ov.querySelector('[data-cancel]').onclick=()=>{ov.remove();fin(false)};
+    ov.querySelector('[data-ok]').onclick=()=>{ov.remove();fin(true)};
+  });
+}
+function showAlert({title='提示',message='',okText='知道了',wide=false}={}){
+  return new Promise(res=>{
+    let done=false;const fin=()=>{if(done)return;done=true;res()};
+    const ov=uxDialog({title,desc:message,wide,onClose:fin,foot:`<button class="btn" type="button" data-ok>${esc(okText)}</button>`});
+    ov.querySelector('[data-ok]').onclick=()=>{ov.remove();fin()};
+  });
+}
+function showForm({title='',desc='',fields=[],submitText='提交',validate=null,wide=false}={}){
+  const body=fields.map(f=>{
+    const id='uxf_'+f.name,val=esc(f.value??'');
+    let ctrl;
+    if(f.type==='textarea')ctrl=`<textarea id="${id}" name="${f.name}" placeholder="${esc(f.placeholder||'')}">${val}</textarea>`;
+    else if(f.type==='select')ctrl=`<select id="${id}" name="${f.name}">${(f.options||[]).map(o=>`<option value="${esc(o.value)}" ${String(o.value)===String(f.value)?'selected':''}>${esc(o.label??o.value)}</option>`).join('')}</select>`;
+    else ctrl=`<input id="${id}" name="${f.name}" type="${f.type||'text'}" value="${val}" placeholder="${esc(f.placeholder||'')}" ${f.required?'data-req=1':''} ${f.step!==undefined?`step="${f.step}"`:''} ${f.min!==undefined?`min="${f.min}"`:''}>`;
+    return `<div class="ux-field"><label for="${id}">${esc(f.label)}${f.required?' <em>*</em>':''}</label>${ctrl}${f.help?`<small>${esc(f.help)}</small>`:''}</div>`;
+  }).join('');
+  return new Promise(resolve=>{
+    let done=false;const fin=v=>{if(done)return;done=true;resolve(v)};
+    const ov=uxDialog({title,desc,wide,body,onClose:()=>fin(null),foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-submit>${esc(submitText)}</button>`});
+    const bodyEl=ov.querySelector('.ux-dialog-body');
+    ov.querySelector('[data-cancel]').onclick=()=>{ov.remove();fin(null)};
+    ov.querySelector('[data-submit]').onclick=()=>{
+      let ok=true;const vals={};
+      for(const f of fields){
+        const el=ov.querySelector('#uxf_'+f.name);if(!el){vals[f.name]=undefined;continue}
+        let v=el.value;
+        if(f.type==='number'){v=el.value===''?undefined:Number(el.value);
+          if(f.required&&(v===undefined||isNaN(v))){el.classList.add('ux-invalid');ok=false;continue}
+          if(v!==undefined&&!isNaN(v)&&f.min!==undefined&&v<f.min){el.classList.add('ux-invalid');ok=false;continue}}
+        if(f.required&&(v===undefined||v===''))el.classList.add('ux-invalid');else el.classList.remove('ux-invalid');
+        vals[f.name]=v;
+      }
+      if(!ok){let e=bodyEl.querySelector('.ux-inline-error');if(!e){e=document.createElement('div');e.className='ux-inline-error';e.textContent='请填写带 * 的必填项';bodyEl.insertBefore(e,bodyEl.firstChild)}return}
+      if(validate&&!validate(vals,ov))return;
+      ov.remove();fin(vals);
+    };
+  });
+}

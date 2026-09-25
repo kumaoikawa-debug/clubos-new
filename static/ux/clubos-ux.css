@@ -59,3 +59,10 @@ body{background:var(--bg);font-size:14px}a{color:var(--brand)}:focus-visible{out
 /* Make legacy .empty consistent everywhere. */
 .empty{color:var(--muted);font-size:13px;padding:18px 4px;text-align:center}
 @media(prefers-reduced-motion:reduce){.skeleton::after{animation:none}.act-card{transition:none}}
+/* Native-dialog replacement layer: confirm / alert / structured form dialogs reuse .ux-dialog. */
+.ux-dialog{position:relative}
+.ux-x{position:absolute;top:13px;right:15px;width:34px;height:34px;border:0;border-radius:50%;background:#eef3ee;color:#3a4d41;font-size:22px;line-height:1;cursor:pointer;display:grid;place-items:center}
+.ux-x:hover{background:#e1ebe1}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+.btn.danger{background:var(--danger);color:#fff}
+.btn.danger:hover{filter:brightness(.96)}
