@@ -255,15 +255,188 @@ function renderMall(){
    卡片换类名它就会判定「0 件在售」并把整个容器换成空态文案。外观由 .w-product 覆盖。 */
 function productCard(x){
   const out=Number(x.stock||0)<=0;
-  return `<div class="web-card w-product${out?' is-out':''}">
+  return `<div class="web-card w-product${out?' is-out':''}" role="button" tabindex="0" onclick="openProduct(${x.id})">
     <div class="w-product__media">${x.image_url?`<img src="${esc(x.image_url)}" alt="" loading="lazy">`:WI.bag}</div>
     <div class="w-product__inner">
       <div class="w-product__name">${esc(x.name)}</div>
       <div class="w-product__price">${money(x.price)}</div>
       <div class="w-product__meta">${esc(x.category||'装备')} · ${out?'暂时缺货':`库存 ${x.stock}`}</div>
-      <button class="w-product__buy" type="button"${out?' disabled':''} onclick="buy(${x.id})">${out?'暂时缺货':'立即购买'}</button>
+      <button class="w-product__buy" type="button" onclick="openProduct(${x.id})">${out?'暂时缺货':'查看详情'}</button>
     </div>
   </div>`;
+}
+
+/* ── 装备详情页 ───────────────────────────────────────────────────────────────
+   和 openAct 一个套路（列表区留在 DOM 里靠 display 切，返回不用重拉），但多一层状态：
+   图集滚到第几张、选了哪个规格、买几件。所以拆成「整块渲染一次 + 局部更新」。 */
+let P_CUR=null,P_VID=null,P_QTY=1;
+
+/* 图集只有一张时不画指示点：一排只有一个点是噪音。
+   商品没有图就返回空数组，由调用方画占位 —— 不拿占位图冒充商品照。 */
+function productImages(x){
+  const list=(x.images||[]).map(i=>typeof i==='string'?i:(i&&i.url)).filter(Boolean);
+  return list.length?list:(x.image_url?[x.image_url]:[]);
+}
+/* 只有一个规格时不显示规格选择区。迁移给无规格商品建的那个「默认」规格会混在
+   variants 里，画一排只有一个按钮的「选择规格」，顾客会以为还有别的没加载出来。 */
+function productVariants(x){
+  const vs=(x.variants||[]).filter(v=>v&&v.id!=null);
+  return vs.length>1?vs:[];
+}
+function productPrice(x,v){return v&&v.price!=null?Number(v.price):Number(x.price||0)}
+function productStock(x,v){return v?Number(v.stock||0):Number(x.stock||0)}
+function curVariant(){
+  if(!P_CUR)return null;
+  return productVariants(P_CUR).find(v=>String(v.id)===String(P_VID))||null;
+}
+function showProductPane(){
+  const shop=document.querySelector('#wmall .w-shop');if(shop)shop.style.display='none';
+  const d=$('#productDetail');if(d)d.style.display='block';
+}
+function showMallList(){
+  P_CUR=null;P_VID=null;P_QTY=1;
+  const d=$('#productDetail');if(d){d.innerHTML='';d.style.display='none'}
+  const shop=document.querySelector('#wmall .w-shop');if(shop)shop.style.display='';
+  if(MALL_ALL.length)renderMall();else loadMall();
+}
+async function openProduct(id){
+  const box=$('#productDetail');if(!box)return;
+  showProductPane();
+  box.innerHTML='<div class="w-pd__sk">'+wSkMini(1)+'</div>';
+  let p=MALL_ALL.find(x=>String(x.id)===String(id));
+  /* 详情页可能被直接打开或刷新（分享出去的链接），列表缓存里不一定有，
+     这时候回源拉一次；拉不到才降级。 */
+  if(!p){try{p=await api(`/api/public/clubs/${CLUB}/mall/products/${id}`)}catch(e){p=null}}
+  if(!p){
+    box.innerHTML=`<div class="w-pad"><div class="w-empty" style="padding:64px 0">${WI.empty}<div>这件装备暂时看不了</div><div style="margin-top:6px">可能已下架，或者链接失效。</div><button class="w-act" type="button" style="margin-top:14px" onclick="showMallList()">返回装备列表</button></div></div>`;
+    return;
+  }
+  P_CUR=p;
+  const vs=productVariants(p);
+  /* 默认选中第一个还有货的规格：和团期同理，默认落在售罄规格上，顾客点「立即购买」
+     会被后端拒，还看不出为什么。全缺货时留第一个，由按钮的 disabled 说明。 */
+  const first=vs.find(v=>Number(v.stock||0)>0)||vs[0]||null;
+  P_VID=first?first.id:null;P_QTY=1;
+  box.innerHTML=productDetailHtml();
+  window.scrollTo({top:0,behavior:'instant'});
+  bindProductGallery();
+}
+function productDetailHtml(){
+  const p=P_CUR;if(!p)return '';
+  const imgs=productImages(p),vs=productVariants(p),v=curVariant();
+  const price=productPrice(p,v),stock=productStock(p,v),out=stock<=0;
+  const sku=p.sku?String(p.sku):'';
+  return `<button class="w-back" type="button" onclick="showMallList()">${WI.back}返回装备</button>
+  <div class="w-pd__gal" id="pdGal">
+    ${imgs.length?`<div class="w-pd__track" id="pdTrack">${imgs.map((u,i)=>'<div class="w-pd__slide"><img src="'+esc(u)+'" alt="'+esc(p.name)+'"'+(i?' loading="lazy"':'')+'></div>').join('')}</div>`
+      :'<div class="w-pd__noimg">'+WI.bag+'<span>暂无商品图片</span></div>'}
+    ${imgs.length>1?`<div class="w-pd__dots" id="pdDots">${imgs.map((_,i)=>'<i'+(i===0?' class="on"':'')+'></i>').join('')}</div><div class="w-pd__count" id="pdCount">1/${imgs.length}</div>`:''}
+  </div>
+  <div class="w-pd__head">
+    <div class="w-pd__price">${money(price)}</div>
+    <h2 class="w-pd__name">${esc(p.name)}</h2>
+    <div class="w-pd__meta">${esc(p.category||'装备')}${sku?' · 货号 '+esc(sku):''}</div>
+  </div>
+  ${vs.length?`<div class="w-pd__block">
+    <div class="w-pd__label">选择规格${v?' <em>'+esc(v.name)+'</em>':''}</div>
+    <div class="w-pd__opts">${vs.map(x=>{
+      const o=Number(x.stock||0)<=0;
+      return '<button class="w-pd__opt'+(String(x.id)===String(P_VID)?' on':'')+(o?' is-out':'')+'" type="button"'+(o?' disabled':'')+' onclick="pickVariant('+x.id+')">'+esc(x.name)+(o?'<i>缺货</i>':(x.price!=null?'<i>'+money(x.price)+'</i>':''))+'</button>';
+    }).join('')}</div>
+  </div>`:''}
+  <div class="w-pd__block">
+    <div class="w-pd__label">数量<em>${out?'暂时缺货':'库存 '+stock+' 件'}</em></div>
+    <div class="w-pd__qty">
+      <button class="w-pd__qbtn" type="button" data-pstep="-1"${P_QTY<=1?' disabled':''} aria-label="减少数量">−</button>
+      <output id="pdQty">${P_QTY}</output>
+      <button class="w-pd__qbtn" type="button" data-pstep="1"${(out||P_QTY>=stock)?' disabled':''} aria-label="增加数量">+</button>
+    </div>
+  </div>
+  <div class="w-pd__block">
+    <div class="w-pd__label">服务</div>
+    <div class="w-pd__svc">
+      <div><b>平台统一发货</b><span>下单后由平台仓库统一出库，物流单号可在订单里查看。</span></div>
+      <div><b>会员折扣自动生效</b><span>结算时按你的会员等级自动计算，不需要先领券。</span></div>
+      <div><b>退换与售后</b><span>在「我的 · 装备订单与售后」里申请，审核进度可追踪。</span></div>
+    </div>
+  </div>
+  <div class="w-pd__cta">
+    <div class="w-pd__sum"><span>合计</span><b id="pdTotal">${money(price*P_QTY)}</b></div>
+    <button class="w-pd__buy" type="button"${out?' disabled':''} onclick="buyProduct()">${out?'暂时缺货':'立即购买'}</button>
+  </div>`;
+}
+/* 换规格只重画整块详情页：规格会同时影响价格、库存、数量上限和合计，
+   局部改三四处比整体重渲染更容易漏。重渲染会滚回顶部，所以先把滚动位置存回来。 */
+function pickVariant(vid){
+  if(!P_CUR)return;
+  const v=productVariants(P_CUR).find(x=>String(x.id)===String(vid));
+  if(!v||Number(v.stock||0)<=0)return;
+  P_VID=vid;P_QTY=1;
+  const y=window.scrollY;
+  const box=$('#productDetail');if(box)box.innerHTML=productDetailHtml();
+  bindProductGallery();window.scrollTo({top:y,behavior:'instant'});
+}
+function setProductQty(n){
+  if(!P_CUR)return;
+  const stock=productStock(P_CUR,curVariant());
+  P_QTY=Math.min(Math.max(1,Number(n)||1),Math.max(1,stock));
+  const v=curVariant(),price=productPrice(P_CUR,v);
+  const q=$('#pdQty');if(q)q.textContent=P_QTY;
+  const t=$('#pdTotal');if(t)t.textContent=money(price*P_QTY);
+  const box=$('#productDetail');
+  if(box){
+    const dec=box.querySelector('[data-pstep="-1"]'),inc=box.querySelector('[data-pstep="1"]');
+    if(dec)dec.disabled=P_QTY<=1;
+    if(inc)inc.disabled=P_QTY>=stock;
+  }
+}
+/* 数量步进器的两个按钮是 productDetailHtml() 现场生成的，bindWebEvents() 跑的时候
+   它们还不存在 —— 直接 addEventListener 会被静默跳过，按钮看着在、点了没反应
+   （报名区的人数步进器踩过同一个坑）。所以挂到 document 上做事件委托。 */
+document.addEventListener('click',e=>{
+  const b=e.target.closest&&e.target.closest('#productDetail [data-pstep]');
+  if(b)setProductQty(P_QTY+Number(b.dataset.pstep));
+});
+/* 图集用原生 scroll-snap 横滑，监听 scroll 更新指示点 —— 不自己写惯性滚动，
+   手机上的手感交给系统。 */
+function bindProductGallery(){
+  const track=$('#pdTrack');if(!track)return;
+  const dots=$('#pdDots'),count=$('#pdCount');
+  const upd=()=>{
+    const n=track.children.length;if(!n)return;
+    const i=Math.round(track.scrollLeft/(track.clientWidth||1));
+    if(dots)$$('i',dots).forEach((d,k)=>d.classList.toggle('on',k===i));
+    if(count)count.textContent=(i+1)+'/'+n;
+  };
+  track.addEventListener('scroll',upd,{passive:true});upd();
+}
+async function buyProduct(){
+  const p=P_CUR;if(!p)return;
+  const v=curVariant(),stock=productStock(p,v);
+  if(stock<=0){showAlert({title:'暂时缺货',message:'这件装备当前没有可售库存。'});return}
+  if(P_QTY>stock){showAlert({title:'库存不足',message:'当前规格只剩 '+stock+' 件。'});return}
+  const item={productId:p.id,quantity:P_QTY};
+  if(v)item.variantId=v.id;
+  let w;try{w=await api(`/api/public/users/${USER}/wallet?club_id=${CLUB}`)}catch(e){w={gearPoints:0}}
+  let vouchers=[];try{vouchers=await api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=gear`)}catch(e){}
+  const label=v?'已选 '+v.name+' × '+P_QTY:'已选 '+P_QTY+' 件';
+  let f=await showForm({title:'确认下单',desc:label+'，合计 '+money(productPrice(p,v)*P_QTY)+'。选择本单使用的装备积分与福利券。',submitText:'提交订单',
+    fields:[{name:'use',label:'使用装备积分',type:'number',value:0,min:0,help:`当前可用装备积分 ${Number(w.gearPoints||0)}`},
+            {name:'voucher',label:'装备福利券',type:'select',value:'',options:[{value:'',label:'不使用福利券'}].concat((vouchers||[]).map(x=>({value:x.voucher_code,label:`${x.title} · 抵 ${money(x.cash_value)}`})))}]});
+  if(!f)return;
+  try{
+    let d=await api(`/api/public/clubs/${CLUB}/gear-checkout`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({userId:USER,items:[item],gearPoints:Number(f.use||0),voucherCodes:f.voucher?[f.voucher]:[]})});
+    let paid=await payCheckout(d);if(!paid)return;
+    await showAlert({title:'下单成功',message:`实际支付 ${money(paid.cashPaid)}
+获得 ${paid.gearPointsEarned} 装备积分${paid.platformBenefitSubsidy?`
+平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}
+俱乐部获得 ${money(paid.clubCommission)} 佣金
+俱乐部获得 ${paid.clubAIReward} AI Credits奖励`});
+    loadWallet();loadMemberCenter();
+    /* 库存变了，回列表要重新拉一次，否则卡片上还是旧库存。 */
+    MALL_ALL=[];loadMall();showMallList();
+  }catch(e){showAlert({title:'下单失败',message:e.message})}
 }
 
 /* ── 我的：毛玻璃会员卡上的身份与升级进度 ─────────────────────────────────── */
@@ -420,7 +593,12 @@ function wv(id,b){
     else if($('#activityList'))$('#activityList').style.display='block';
     if(ACT_ALL.length)renderActivityList();else loadActivities();
   }
-  if(id==='wmall'){if(MALL_ALL.length)renderMall();else loadMall()}
+  /* 和「活动」tab 同一个道理：点「装备」是要看列表。详情页开着时不复位，
+     tab 已经高亮在装备上、内容却还是刚才那件商品，会被读成「点了没反应」。 */
+  if(id==='wmall'){
+    if($('#productDetail')&&$('#productDetail').innerHTML)showMallList();
+    else if(MALL_ALL.length)renderMall();else loadMall();
+  }
   if(id==='wme'){loadMemberCenter();loadOrders()}
 }
 async function openAct(id){let a=await api(`/api/public/activities/${id}`);currentAct=a;

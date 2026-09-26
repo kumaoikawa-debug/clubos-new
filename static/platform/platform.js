@@ -16,7 +16,7 @@ async function savePointPolicy(){let enabled=$('#platformGearActivity').checked;
 
 async function loadPlatformBenefits(){skel('#platformBenefits',3);let a=await api('/api/platform/benefits');$('#platformBenefits').innerHTML=a.map(x=>`<div class="card"><div class="panel-title"><strong>${esc(x.title)}</strong><span class="tag">Gear Points</span></div><div class="sub">${esc(x.description||'')}<br>${x.points_cost} 装备积分 · ${x.benefit_type==='activity_coupon'?'活动报名补贴':'装备商城抵扣'} · 平台承担成本${x.cash_value?` · 权益价值 ${money(x.cash_value)}`:''} · ${x.target_club_id?`仅俱乐部 #${x.target_club_id}`:'全部俱乐部'}</div><div style="margin-top:10px"><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></div></div>`).join('')||'<div class="empty">暂无平台福利</div>'}
 async function addPlatformBenefit(){const v=await showForm({title:'新增平台福利',submitText:'创建福利',fields:[{name:'kind',label:'福利用途',type:'select',value:'gear',options:[{value:'gear',label:'装备商城抵扣'},{value:'activity',label:'活动报名补贴'}]},{name:'title',label:'平台福利名称',value:'装备商城 ¥30 抵扣福利',required:true},{name:'cost',label:'需要多少装备积分',type:'number',value:3000,min:0},{name:'value',label:'权益价值（元）',type:'number',value:30,min:0}]});if(!v||!v.title)return;const kind=v.kind;await api('/api/platform/benefits',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:v.title,description:'ClubOS 平台会员福利',pointsType:'gear',pointsCost:Number(v.cost||0),cashValue:Number(v.value||0),benefitType:kind==='gear'?'gear_coupon':'activity_coupon',stock:200})});toast('平台福利已创建');loadPlatformBenefits()}
-async function loadProducts(){skel('#productRows',4);let a=await api('/api/platform/products');$('#productRows').innerHTML=a.map(x=>`<tr><td><strong>${esc(x.name)}</strong><div class="sub">${esc(x.category||'')}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.stock}</td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button></td></tr>`).join('')}
+async function loadProducts(){skel('#productRows',4);let a=await api('/api/platform/products');$('#productRows').innerHTML=a.map(x=>`<tr><td><strong>${esc(x.name)}</strong><div class="sub">${esc(x.category||'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.stock}</td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`).join('')}
 async function addProduct(){const v=await showForm({title:'新增商品',submitText:'上架商品',fields:[{name:'name',label:'商品名',required:true},{name:'price',label:'价格',type:'number',value:399,min:0,required:true}]});if(!v||!v.name)return;let sku='GEAR-'+Date.now();await api('/api/platform/products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v.name,price:Number(v.price||0),sku,stock:30,category:'户外装备',commission_rate:.08})});loadProducts();toast('商品已上架')}
 async function toggleProduct(id,status){await api(`/api/platform/products/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:status==='active'?'inactive':'active'})});loadProducts()}
 async function loadOrders(){skel('#orderRows',4);let a=await api('/api/platform/orders');$('#orderRows').innerHTML=a.map(x=>`<tr><td>#${x.id}</td><td>${esc(x.source_club)}</td><td>${esc(x.buyer)}</td><td>${money(x.total)}</td><td>${esc(enumCn(x.status))}</td><td>${esc(x.carrier||'')} ${esc(x.tracking_no||'待发货')}</td><td>${x.after_sales_status||'无'}</td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn secondary" onclick="ship(${x.id})">更新物流</button>${x.status!=='refunded'?`<button class="btn ghost" onclick="refundOrder(${x.id})">全额退款</button>`:''}</div></td></tr>`).join('')||'<tr><td colspan="8" class="empty">暂无订单</td></tr>'}
@@ -90,3 +90,92 @@ async function loadAnalytics(){
 }
 async function setReplenishmentPolicy(){let p=await api('/api/platform/replenishment/policy');const v=await showForm({title:'补货策略',submitText:'保存策略',fields:[{name:'windowDays',label:'销量计算窗口（7~180天）',type:'number',value:p.salesWindowDays,min:7,max:180,required:true},{name:'targetCoverDays',label:'到货后目标库存覆盖天数（7~120天）',type:'number',value:p.targetCoverDays,min:7,max:120,required:true},{name:'safetyDays',label:'安全库存天数（0~60天）',type:'number',value:p.safetyDays,min:0,max:60,required:true},{name:'slowMovingDays',label:'多少天无销售视为慢动销（30~365天）',type:'number',value:p.slowMovingDays,min:30,max:365,required:true}]});if(!v)return;await api('/api/platform/replenishment/policy',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({salesWindowDays:Number(v.windowDays),targetCoverDays:Number(v.targetCoverDays),safetyDays:Number(v.safetyDays),slowMovingDays:Number(v.slowMovingDays)})});toast('补货策略已更新');loadAnalytics()}
 async function createReplenishmentPO(productId,qty){const v=await showForm({title:'创建补货采购单',submitText:'创建采购草稿',fields:[{name:'q',label:'确认补货数量',type:'number',value:Number(qty||0),min:1,required:true}]});if(!v)return;let r=await api(`/api/platform/replenishment/products/${productId}/create-po`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quantity:Number(v.q||0)})});toast(`已创建采购草稿 ${r.purchaseOrder.id}`);loadAnalytics();if($('#supply').classList.contains('active'))loadSupplyChain()}
+
+/* ── 商品规格与图集管理 ────────────────────────────────────────────────────
+   库存真源已经下沉到规格（product_variants.stock），所以后台必须能维护规格，
+   否则多规格商品永远补不了货 —— 采购入库是按商品走的，规格库存只能在这里调。
+   图集同理：C 端详情页只读 product_images，不再读 products.image_url 单图。 */
+async function manageVariants(pid){
+  const list=async()=>await api(`/api/platform/products/${pid}/variants`);
+  const paint=async(dlg)=>{
+    const vs=await list();
+    dlg.querySelector('.pv-list').innerHTML=vs.length?vs.map(v=>`<div class="list-row" data-id="${v.id}">
+        <div class="list-row__main"><div class="list-row__title">${esc(v.name)}${v.is_default?' <span class="tag">占位</span>':''}</div>
+          <div class="list-row__sub">${v.price!=null?money(v.price):'跟随商品价'} · 库存 ${v.stock}${v.status!=='active'?' · 已停用':''}</div></div>
+        <div class="list-row__end"><button class="btn ghost" data-act="edit">编辑</button> <button class="btn ghost" data-act="del">删除</button></div>
+      </div>`).join(''):'<div class="empty">还没有规格。没有规格的商品在 C 端不显示规格选择。</div>';
+  };
+  const dlg=uxDialog({title:'商品规格',
+    desc:'库存已下沉到规格：这里的数量就是 C 端能买到的真实数量，改完商品汇总会自动重算。',
+    body:'<div class="pv-list"></div>',wide:true,
+    foot:'<button class="btn" data-act="add">新增规格</button>'});
+  await paint(dlg);
+  dlg.querySelector('[data-act="add"]').onclick=async()=>{
+    const v=await showForm({title:'新增规格',submitText:'保存',fields:[
+      {name:'name',label:'规格名',required:true,help:'例如 S / M / L，或 炭灰 / 深蓝'},
+      {name:'price',label:'规格价',type:'number',value:'',min:0,help:'留空则跟随商品价格'},
+      {name:'stock',label:'该规格库存',type:'number',value:0,min:0,required:true}]});
+    if(!v||!v.name)return;
+    try{
+      const r=await api(`/api/platform/products/${pid}/variants`,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name:v.name,price:(v.price===''||v.price==null)?null:Number(v.price),stock:Number(v.stock||0)})});
+      toast(r.movedStock?`规格已新增（占位规格的 ${r.movedStock} 件库存已转入）`:'规格已新增');
+      await paint(dlg);loadProducts();
+    }catch(e){showAlert({title:'新增失败',message:e.message})}
+  };
+  dlg.querySelector('.pv-list').onclick=async e=>{
+    const row=e.target.closest('.list-row[data-id]');if(!row)return;
+    const id=Number(row.dataset.id),act=e.target.dataset.act;
+    if(act==='del'){
+      const ok=await showConfirm({title:'删除这个规格？',message:'该规格的库存会从商品汇总里扣掉，已下单的订单不受影响。',confirmText:'删除',danger:true});
+      if(!ok)return;
+      try{await api(`/api/platform/products/${pid}/variants/${id}`,{method:'DELETE'});await paint(dlg);loadProducts();toast('规格已删除')}
+      catch(err){showAlert({title:'删除失败',message:err.message})}
+    }
+    if(act==='edit'){
+      const cur=(await list()).find(x=>x.id===id);if(!cur)return;
+      const v=await showForm({title:'编辑规格',submitText:'保存',fields:[
+        {name:'name',label:'规格名',value:cur.name,required:true},
+        {name:'price',label:'规格价',type:'number',value:cur.price==null?'':cur.price,min:0,help:'留空则跟随商品价格'},
+        {name:'stock',label:'库存',type:'number',value:cur.stock,min:0,required:true}]});
+      if(!v)return;
+      try{await api(`/api/platform/products/${pid}/variants/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({name:v.name,price:(v.price===''||v.price==null)?null:Number(v.price),stock:Number(v.stock||0)})});
+        await paint(dlg);loadProducts();toast('已保存')}
+      catch(err){showAlert({title:'保存失败',message:err.message})}
+    }
+  };
+}
+async function manageImages(pid){
+  const list=async()=>await api(`/api/platform/products/${pid}/images`);
+  const paint=async(dlg)=>{
+    const imgs=await list();
+    dlg.querySelector('.pi-list').innerHTML=imgs.length?imgs.map(i=>`<div class="list-row" data-id="${i.id}">
+        <div class="list-row__main"><div class="list-row__title" style="word-break:break-all;font-weight:400">${esc(i.url)}</div>
+          <div class="list-row__sub">${i.sort===0?'主图（同时作为列表封面）':'第 '+(i.sort+1)+' 张'}</div></div>
+        <div class="list-row__end"><button class="btn ghost" data-act="del">删除</button></div>
+      </div>`).join(''):'<div class="empty">还没有图片。没有图片的商品在 C 端详情页显示占位，不会显示轮播。</div>';
+  };
+  const dlg=uxDialog({title:'商品图集',
+    desc:'C 端详情页按这里的顺序轮播；第一张同时作为列表卡片封面。',
+    body:'<div class="pi-list"></div>',wide:true,
+    foot:'<button class="btn" data-act="add">添加图片</button>'});
+  await paint(dlg);
+  dlg.querySelector('[data-act="add"]').onclick=async()=>{
+    const v=await showForm({title:'添加图片',submitText:'保存',fields:[
+      {name:'url',label:'图片地址',required:true,help:'以 /static/uploads/… 或 https:// 开头的图片地址'}]});
+    if(!v||!v.url)return;
+    try{await api(`/api/platform/products/${pid}/images`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({url:String(v.url).trim()})});
+      await paint(dlg);loadProducts();toast('图片已添加')}
+    catch(e){showAlert({title:'添加失败',message:e.message})}
+  };
+  dlg.querySelector('.pi-list').onclick=async e=>{
+    const row=e.target.closest('.list-row[data-id]');if(!row)return;
+    if(e.target.dataset.act!=='del')return;
+    const ok=await showConfirm({title:'删除这张图片？',message:'删除后 C 端详情页就不再显示它。',confirmText:'删除',danger:true});
+    if(!ok)return;
+    try{await api(`/api/platform/products/${pid}/images/${row.dataset.id}`,{method:'DELETE'});await paint(dlg);loadProducts();toast('已删除')}
+    catch(err){showAlert({title:'删除失败',message:err.message})}
+  };
+}

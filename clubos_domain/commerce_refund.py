@@ -126,10 +126,10 @@ class CommerceRefundEngine:
 
         # Restore local inventory mirror. In Medusa production mode Medusa remains authoritative;
         # this keeps the ClubOS projection consistent after a confirmed refund.
-        items=c.execute('SELECT product_id,quantity FROM gear_order_items WHERE order_id=?',(order_id,)).fetchall()
+        items=c.execute('SELECT product_id,variant_id,quantity FROM gear_order_items WHERE order_id=?',(order_id,)).fetchall()
         for it in items:
             if self.inventory:
-                self.inventory.refund_restock(c,product_id=int(it['product_id']),quantity=int(it['quantity']),order_id=order_id,actor_type='refund')
+                self.inventory.refund_restock(c,product_id=int(it['product_id']),quantity=int(it['quantity']),order_id=order_id,actor_type='refund',variant_id=it['variant_id'] if 'variant_id' in it.keys() else None)
             else:
                 c.execute('UPDATE products SET stock=stock+? WHERE id=?',(int(it['quantity']),int(it['product_id'])))
 

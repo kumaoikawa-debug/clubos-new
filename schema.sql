@@ -1109,3 +1109,39 @@ CREATE TABLE IF NOT EXISTS ai_credit_orders (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_credit_subscription_period
   ON ai_credit_orders(club_id,order_type,period_key) WHERE order_type='subscription';
 CREATE INDEX IF NOT EXISTS idx_ai_credit_orders_club_status ON ai_credit_orders(club_id,status,created_at DESC);
+
+-- ── 商品规格与图集（v0.27）───────────────────────────────
+-- 两张表的语义刻意对齐 Medusa：product_variants ↔ product.variants、
+-- product_images ↔ product.images。将来 COMMERCE_PROVIDER 切到 medusa 时
+-- 只需要换数据源，前端字段名不用动。
+--
+-- 库存从此下沉到规格：product_variants.stock 是真源，
+-- products.stock 退化为 SUM(variant.stock) 的冗余值（列表排序、采购预警读它）。
+-- 没有规格的商品在迁移时会自动生成一个 is_default=1 的「默认」规格承接原库存，
+-- 所以旧代码里所有按 product_id 读库存的地方语义不变。
+
+CREATE TABLE IF NOT EXISTS product_variants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  sku TEXT,
+  price REAL,
+  stock INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  sort INTEGER NOT NULL DEFAULT 0,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  commerce_variant_id TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_product_variants_product ON product_variants(product_id,sort,id);
+
+CREATE TABLE IF NOT EXISTS product_images (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  product_id INTEGER NOT NULL,
+  url TEXT NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_product_images_product ON product_images(product_id,sort,id);

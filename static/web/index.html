@@ -66,6 +66,10 @@
           <div class="w-shop__note" id="mallNote">平台统一商品、库存、发货与售后；会员等级折扣在结算时自动生效。</div>
         </div>
       </div>
+      <!-- 装备详情页：与活动详情页同一个套路 —— 列表区留在 DOM 里靠 display 切换，
+           返回时不用重新拉数据。它不能放进 #publicProducts，否则会被
+           experience-consumer.js 当成又一件商品数进去。 -->
+      <div id="productDetail"></div>
     </section>
 
     <!-- ── 户外能力：暂未开放（做成有信息量的承诺页，而不是一块空白） ──── -->

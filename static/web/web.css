@@ -840,6 +840,53 @@
 .web-shell .timeline-list{border-top-color:var(--w-line)}
 .web-shell .timeline-item{border-bottom-color:var(--w-line)}
 
+/* ── 装备详情页 ───────────────────────────────────────────────────────────────
+   底部购买栏是 sticky 而不是 fixed：fixed 要自己算安全区、还要防住和 .web-nav 重叠，
+   sticky 停在视口底即可，用 --w-navh 把它抬到导航上方。 */
+.web-shell{--w-navh:calc(70px + env(safe-area-inset-bottom))}
+.w-pd__sk{padding:14px}
+.w-pd__gal{position:relative;background:#eceff0;overflow:hidden}
+.w-pd__track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.w-pd__track::-webkit-scrollbar{display:none}
+.w-pd__slide{flex:0 0 100%;scroll-snap-align:start;aspect-ratio:1/1;background:#eceff0}
+.w-pd__slide img{width:100%;height:100%;object-fit:cover;display:block}
+/* 没图就如实画占位，不拿占位图冒充商品照 */
+.w-pd__noimg{aspect-ratio:4/3;display:grid;place-items:center;gap:8px;color:var(--w-muted);font-size:12.5px}
+.w-pd__noimg svg{width:40px;height:40px;stroke:#b9c2bc;fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.w-pd__dots{position:absolute;left:50%;transform:translateX(-50%);bottom:12px;display:flex;gap:5px;padding:5px 9px;border-radius:99px;background:rgba(18,23,20,.34);-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.w-pd__dots i{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.5);transition:background .2s,width .2s}
+.w-pd__dots i.on{background:#fff;width:14px;border-radius:99px}
+.w-pd__count{position:absolute;right:12px;bottom:12px;padding:4px 9px;border-radius:99px;background:rgba(18,23,20,.34);color:#fff;font-size:11px;font-variant-numeric:tabular-nums;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.w-pd__head{padding:16px 16px 15px;background:#fff}
+.w-pd__price{font-size:27px;font-weight:750;color:var(--w-accent);letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
+.w-pd__name{margin:7px 0 5px;font-size:17px;font-weight:650;line-height:1.42}
+.w-pd__meta{font-size:12px;color:var(--w-muted)}
+.w-pd__block{margin-top:10px;padding:15px 16px;background:#fff}
+.w-pd__label{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px;font-weight:650;margin-bottom:11px}
+.w-pd__label em{font-style:normal;font-weight:400;font-size:12px;color:var(--w-muted)}
+.w-pd__opts{display:flex;flex-wrap:wrap;gap:9px}
+.w-pd__opt{min-height:40px;padding:9px 15px;border:1px solid var(--w-line);border-radius:11px;background:#fff;font-size:13.5px;font-weight:600;color:var(--w-ink);cursor:pointer;transition:border-color .18s,background .18s,color .18s;-webkit-tap-highlight-color:transparent}
+.w-pd__opt i{display:block;margin-top:2px;font-style:normal;font-size:11px;font-weight:400;color:var(--w-muted);font-variant-numeric:tabular-nums}
+.w-pd__opt.on{border-color:var(--w-brand);background:var(--w-brand-soft);color:var(--w-brand)}
+.w-pd__opt.on i{color:var(--w-brand)}
+/* 缺货规格置灰但保留可见：让顾客知道有这个规格只是暂时没货，
+   直接不显示会让人以为商品就这几个尺码。 */
+.w-pd__opt.is-out{opacity:.55;cursor:not-allowed;background:#f4f5f3}
+.w-pd__qty{display:inline-flex;align-items:center;gap:2px;padding:3px;border:1px solid var(--w-line);border-radius:99px;background:#fff}
+.w-pd__qbtn{width:36px;height:36px;border:0;border-radius:50%;background:#f3f5f2;color:var(--w-ink);font-size:17px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.w-pd__qbtn:disabled{opacity:.32;cursor:not-allowed}
+.w-pd__qty output{min-width:30px;text-align:center;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
+.w-pd__svc{display:grid;gap:12px}
+.w-pd__svc>div{display:grid;gap:3px}
+.w-pd__svc b{font-size:13px;font-weight:650}
+.w-pd__svc span{font-size:12px;color:var(--w-muted);line-height:1.6}
+.w-pd__cta{position:sticky;bottom:var(--w-navh);z-index:30;margin-top:14px;display:flex;align-items:center;gap:14px;padding:11px 14px;background:rgba(255,255,255,.96);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border-top:1px solid var(--w-line)}
+.w-pd__sum{display:grid;gap:1px}
+.w-pd__sum span{font-size:11px;color:var(--w-muted)}
+.w-pd__sum b{font-size:20px;font-weight:750;color:var(--w-accent);font-variant-numeric:tabular-nums}
+.w-pd__buy{flex:1;min-height:46px;border:0;border-radius:14px;background:var(--w-ink);color:#fff;font-size:15px;font-weight:650;cursor:pointer;box-shadow:0 10px 24px rgba(18,23,20,.18);-webkit-tap-highlight-color:transparent}
+.w-pd__buy:disabled{background:#c3c8c4;box-shadow:none;cursor:not-allowed}
+
 @media (max-width:380px){
   .w-shop{grid-template-columns:80px 1fr}
   .w-reel__card{flex:0 0 82%}

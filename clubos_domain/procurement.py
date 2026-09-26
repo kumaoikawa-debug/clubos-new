@@ -191,34 +191,66 @@ class ProcurementEngine:
         c.execute("UPDATE purchase_orders SET status='cancelled',cancelled_at=CURRENT_TIMESTAMP,note=CASE WHEN ?!='' THEN ? ELSE note END,updated_at=CURRENT_TIMESTAMP WHERE id=?",(note,note,po_id))
         return self.get_purchase_order(c,po_id)
 
+    def _variant_of(self,c,*,product_id:int,variant_id:int|None=None):
+        """确定这次库存变动要落到哪个规格。
+
+        库存真源在 product_variants。没传 variant_id 时取该商品的默认规格（迁移给每个
+        商品建的那个 is_default=1），这样单规格与存量商品的语义和原来完全一致。
+        多规格商品的调用方必须显式传 —— 否则「买 S 码扣 M 码库存」这种串账查不出来。
+        """
+        if variant_id:
+            r=c.execute('SELECT * FROM product_variants WHERE id=? AND product_id=?',(int(variant_id),int(product_id))).fetchone()
+            if not r: raise LookupError('规格不存在或不属于该商品')
+            return dict(r)
+        r=c.execute('SELECT * FROM product_variants WHERE product_id=? ORDER BY is_default DESC,sort,id LIMIT 1',(int(product_id),)).fetchone()
+        return dict(r) if r else None
+
+    def _write_variant_stock(self,c,*,product_id:int,variant_id:int,new_stock:int,sync_status:str|None=None) -> int:
+        """写规格层库存，并把 products.stock 重算成各规格之和。
+
+        products.stock 从真源降级为冗余字段（列表排序、采购预警读它），所以它必须
+        每次规格变动后跟着变，否则后台看到的汇总和详情页看到的规格明细会对不上。
+        """
+        v=c.execute('SELECT id,stock FROM product_variants WHERE id=?',(int(variant_id),)).fetchone()
+        if not v: raise LookupError('规格不存在')
+        before=int(v['stock'] or 0)
+        c.execute('UPDATE product_variants SET stock=? WHERE id=?',(int(new_stock),int(variant_id)))
+        total=c.execute('SELECT COALESCE(SUM(stock),0) s FROM product_variants WHERE product_id=? AND status=\'active\'',(int(product_id),)).fetchone()['s']
+        if sync_status: c.execute('UPDATE products SET stock=?,commerce_sync_status=? WHERE id=?',(int(total),sync_status,int(product_id)))
+        else: c.execute('UPDATE products SET stock=? WHERE id=?',(int(total),int(product_id)))
+        return before
+
     def _record_movement(self,c,*,product_id:int,movement_type:str,quantity_delta:int,stock_before:int,stock_after:int,
-                         unit_cost:float|None=0,total_cost:float|None=None,reference_type:str='',reference_id:str='',note:str='',actor_type:str='platform',idempotency_key:str|None=None):
+                         unit_cost:float|None=0,total_cost:float|None=None,reference_type:str='',reference_id:str='',note:str='',actor_type:str='platform',idempotency_key:str|None=None,variant_id:int|None=None):
         key=idempotency_key or self._movement_key(movement_type)
         existing=c.execute('SELECT * FROM inventory_movements WHERE idempotency_key=?',(key,)).fetchone()
         if existing: return dict(existing)
         total=float(total_cost if total_cost is not None else (float(unit_cost or 0)*abs(int(quantity_delta))))
-        c.execute('''INSERT INTO inventory_movements(product_id,movement_type,quantity_delta,stock_before,stock_after,unit_cost,total_cost,reference_type,reference_id,note,actor_type,idempotency_key)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(product_id,movement_type,int(quantity_delta),int(stock_before),int(stock_after),float(unit_cost or 0),round(total,2),reference_type,reference_id,note,actor_type,key))
+        c.execute('''INSERT INTO inventory_movements(product_id,variant_id,movement_type,quantity_delta,stock_before,stock_after,unit_cost,total_cost,reference_type,reference_id,note,actor_type,idempotency_key)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',(product_id,variant_id,movement_type,int(quantity_delta),int(stock_before),int(stock_after),float(unit_cost or 0),round(total,2),reference_type,reference_id,note,actor_type,key))
         return dict(c.execute('SELECT * FROM inventory_movements WHERE id=?',(c.execute('SELECT last_insert_rowid()').fetchone()[0],)).fetchone())
 
-    def adjust_stock(self,c,*,product_id:int,quantity_delta:int,reason:str,actor_type:str='platform',reference_type:str='manual_adjustment',reference_id:str='') -> dict[str,Any]:
+    def adjust_stock(self,c,*,product_id:int,quantity_delta:int,reason:str,actor_type:str='platform',reference_type:str='manual_adjustment',reference_id:str='',variant_id:int|None=None) -> dict[str,Any]:
         delta=int(quantity_delta)
         if delta==0: raise ValueError('库存调整数量不能为 0')
         p0=c.execute('SELECT * FROM products WHERE id=?',(product_id,)).fetchone()
         if not p0: raise LookupError('商品不存在')
-        p=dict(p0); before=int(p['stock'] or 0); after=before+delta
+        p=dict(p0); v=self._variant_of(c,product_id=product_id,variant_id=variant_id)
+        before=int(v['stock'] or 0) if v else int(p['stock'] or 0); after=before+delta
         if after<0: raise ValueError('库存不足，调整后库存不能小于 0')
+        vid=int(v['id']) if v else None
         sync='pending' if p.get('commerce_product_id') or p.get('commerce_inventory_item_id') else p.get('commerce_sync_status','local')
-        c.execute('UPDATE products SET stock=?,commerce_sync_status=? WHERE id=?',(after,sync,product_id))
+        if v: self._write_variant_stock(c,product_id=product_id,variant_id=vid,new_stock=after,sync_status=sync)
+        else: c.execute('UPDATE products SET stock=?,commerce_sync_status=? WHERE id=?',(after,sync,product_id))
         m=self._record_movement(c,product_id=product_id,movement_type='manual_in' if delta>0 else 'manual_out',quantity_delta=delta,
                                 stock_before=before,stock_after=after,unit_cost=float(p.get('average_cost') or 0),reference_type=reference_type,
-                                reference_id=reference_id,note=reason,actor_type=actor_type)
+                                reference_id=reference_id,note=reason,actor_type=actor_type,variant_id=vid)
         if self.warehouse:
             d=self.warehouse.ensure_defaults(c); lid=int(d['defaultLocation']['id']); wi=self.warehouse._row(c,product_id,lid)
             if delta<0 and int(wi['on_hand'])-int(wi['reserved']) < abs(delta): raise ValueError('仓库可售实物库存不足')
             self.warehouse._update(c,product_id,lid,int(wi['on_hand'])+delta,int(wi['reserved']))
             self.warehouse._move(c,product_id=product_id,movement_type='manual_adjustment',quantity=abs(delta),from_location_id=lid if delta<0 else None,to_location_id=lid if delta>0 else None,reference_type=reference_type,reference_id=reference_id or str(m['id']),note=reason,actor_type=actor_type,idempotency_key=f'wms-manual:{m["id"]}')
-        return {'ok':True,'productId':product_id,'stockBefore':before,'stockAfter':after,'quantityDelta':delta,'movementId':m['id'],'productIds':[product_id]}
+        return {'ok':True,'productId':product_id,'variantId':vid,'stockBefore':before,'stockAfter':after,'quantityDelta':delta,'movementId':m['id'],'productIds':[product_id]}
 
     def set_absolute_stock(self,c,*,product_id:int,new_stock:int,reason:str='平台手工修改库存',actor_type:str='platform') -> dict[str,Any]:
         p=c.execute('SELECT stock FROM products WHERE id=?',(product_id,)).fetchone()
@@ -227,48 +259,54 @@ class ProcurementEngine:
         if delta==0: return {'ok':True,'productId':product_id,'stockBefore':int(new_stock),'stockAfter':int(new_stock),'quantityDelta':0,'productIds':[],'idempotent':True}
         return self.adjust_stock(c,product_id=product_id,quantity_delta=delta,reason=reason,actor_type=actor_type)
 
-    def sale_outbound(self,c,*,product_id:int,quantity:int,order_id:int,actor_type:str='system') -> dict[str,Any]:
+    def sale_outbound(self,c,*,product_id:int,quantity:int,order_id:int,actor_type:str='system',variant_id:int|None=None) -> dict[str,Any]:
         q=max(1,int(quantity)); p0=c.execute('SELECT * FROM products WHERE id=?',(product_id,)).fetchone()
         if not p0: raise LookupError('商品不存在')
-        p=dict(p0); before=int(p['stock'] or 0)
+        p=dict(p0); v=self._variant_of(c,product_id=product_id,variant_id=variant_id)
+        before=int(v['stock'] or 0) if v else int(p['stock'] or 0)
         if before<q: raise ValueError('库存不足')
-        after=before-q
-        c.execute('UPDATE products SET stock=? WHERE id=?',(after,product_id))
+        after=before-q; vid=int(v['id']) if v else None
+        if v: self._write_variant_stock(c,product_id=product_id,variant_id=vid,new_stock=after)
+        else: c.execute('UPDATE products SET stock=? WHERE id=?',(after,product_id))
         m=self._record_movement(c,product_id=product_id,movement_type='sale_outbound',quantity_delta=-q,stock_before=before,stock_after=after,
                                 unit_cost=float(p.get('average_cost') or 0),reference_type='gear_order',reference_id=str(order_id),
-                                note=f'装备订单 #{order_id} 占用可售库存',actor_type=actor_type,)
+                                note=f'装备订单 #{order_id} 占用可售库存',actor_type=actor_type,variant_id=vid)
         if self.warehouse: self.warehouse.reserve_order(c,order_id=order_id,product_id=product_id,quantity=q,actor_type=actor_type)
-        return {'productId':product_id,'stockBefore':before,'stockAfter':after,'movementId':m['id']}
+        return {'productId':product_id,'variantId':vid,'stockBefore':before,'stockAfter':after,'movementId':m['id']}
 
-    def refund_restock(self,c,*,product_id:int,quantity:int,order_id:int,actor_type:str='system') -> dict[str,Any]:
+    def refund_restock(self,c,*,product_id:int,quantity:int,order_id:int,actor_type:str='system',variant_id:int|None=None) -> dict[str,Any]:
         q=max(1,int(quantity)); p0=c.execute('SELECT * FROM products WHERE id=?',(product_id,)).fetchone()
         if not p0: raise LookupError('商品不存在')
-        p=dict(p0); before=int(p['stock'] or 0); after=before+q
-        c.execute('UPDATE products SET stock=? WHERE id=?',(after,product_id))
+        p=dict(p0); v=self._variant_of(c,product_id=product_id,variant_id=variant_id)
+        before=int(v['stock'] or 0) if v else int(p['stock'] or 0); after=before+q; vid=int(v['id']) if v else None
+        if v: self._write_variant_stock(c,product_id=product_id,variant_id=vid,new_stock=after)
+        else: c.execute('UPDATE products SET stock=? WHERE id=?',(after,product_id))
         m=self._record_movement(c,product_id=product_id,movement_type='refund_restock',quantity_delta=q,stock_before=before,stock_after=after,
                                 unit_cost=float(p.get('average_cost') or 0),reference_type='gear_refund',reference_id=str(order_id),
-                                note=f'装备订单 #{order_id} 全额退款恢复可售库存',actor_type=actor_type,)
+                                note=f'装备订单 #{order_id} 全额退款恢复可售库存',actor_type=actor_type,variant_id=vid)
         if self.warehouse:
             released=self.warehouse.release_order(c,order_id=order_id,product_id=product_id,quantity=q,actor_type=actor_type)
             if int(released.get('released') or 0)<q:
                 self.warehouse.inbound(c,product_id=product_id,quantity=q-int(released.get('released') or 0),reference_type='gear_refund',reference_id=str(order_id),note=f'装备订单 #{order_id} 退款实物回库',actor_type=actor_type,idempotency_key=f'wms-refund-in:{order_id}:{product_id}')
-        return {'productId':product_id,'stockBefore':before,'stockAfter':after,'movementId':m['id']}
+        return {'productId':product_id,'variantId':vid,'stockBefore':before,'stockAfter':after,'movementId':m['id']}
 
-    def after_sales_restock(self,c,*,case_id:str,item_id:int,product_id:int,quantity:int,actor_type:str='platform') -> dict[str,Any]:
+    def after_sales_restock(self,c,*,case_id:str,item_id:int,product_id:int,quantity:int,actor_type:str='platform',variant_id:int|None=None) -> dict[str,Any]:
         key=f'after_sales:{case_id}:item:{item_id}'
         existing=c.execute('SELECT * FROM inventory_movements WHERE idempotency_key=?',(key,)).fetchone()
         if existing:return {'productId':product_id,'stockBefore':existing['stock_before'],'stockAfter':existing['stock_after'],'movementId':existing['id'],'idempotent':True}
         q=max(1,int(quantity)); p0=c.execute('SELECT * FROM products WHERE id=?',(product_id,)).fetchone()
         if not p0: raise LookupError('商品不存在')
-        p=dict(p0); before=int(p['stock'] or 0); after=before+q
-        c.execute('UPDATE products SET stock=?,commerce_sync_status=CASE WHEN commerce_inventory_item_id IS NOT NULL THEN \'pending\' ELSE commerce_sync_status END WHERE id=?',(after,product_id))
+        p=dict(p0); v=self._variant_of(c,product_id=product_id,variant_id=variant_id)
+        before=int(v['stock'] or 0) if v else int(p['stock'] or 0); after=before+q; vid=int(v['id']) if v else None
+        if v: self._write_variant_stock(c,product_id=product_id,variant_id=vid,new_stock=after,sync_status='pending' if p.get('commerce_inventory_item_id') else None)
+        else: c.execute('UPDATE products SET stock=?,commerce_sync_status=CASE WHEN commerce_inventory_item_id IS NOT NULL THEN \'pending\' ELSE commerce_sync_status END WHERE id=?',(after,product_id))
         m=self._record_movement(c,product_id=product_id,movement_type='after_sales_return',quantity_delta=q,stock_before=before,stock_after=after,
                                 unit_cost=float(p.get('average_cost') or 0),reference_type='after_sales',reference_id=case_id,
-                                note=f'售后单 {case_id} 退货入库',actor_type=actor_type,idempotency_key=key)
+                                note=f'售后单 {case_id} 退货入库',actor_type=actor_type,idempotency_key=key,variant_id=vid)
         if self.warehouse:
             d=self.warehouse.ensure_defaults(c)
             self.warehouse.inbound(c,product_id=product_id,quantity=q,reference_type='after_sales',reference_id=case_id,note=f'售后单 {case_id} 退货回库',location_id=int(d['returnLocation']['id']),actor_type=actor_type,idempotency_key=f'wms-after-sales:{case_id}:item:{item_id}')
-        return {'productId':product_id,'stockBefore':before,'stockAfter':after,'movementId':m['id']}
+        return {'productId':product_id,'variantId':vid,'stockBefore':before,'stockAfter':after,'movementId':m['id']}
 
     def receive_purchase_order(self,c,*,po_id:str,items:list[dict[str,Any]],received_by:str='platform',note:str='') -> dict[str,Any]:
         po=self.get_purchase_order(c,po_id)

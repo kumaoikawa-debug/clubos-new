@@ -101,6 +101,25 @@ def _backfill_v023_ai_credits(c):
                 c.execute('UPDATE ai_credit_accounts SET monthly_quota=? WHERE club_id=?',(int(pr['monthly_credits']),cid))
 
 
+def _backfill_v027_variants(c):
+    """给存量商品补一个「默认」规格承接原库存，并把 image_url 补进图集。
+
+    库存真源从 products.stock 下沉到 product_variants.stock 之后，存量商品从来没有
+    规格这个概念 —— 不回填的话，凡是新写的按规格读库存的链路都会读到 0，
+    商品会在 C 端集体变成「暂时缺货」。所以给每个还没有规格的商品建一个
+    is_default=1、stock 等于原 products.stock 的规格。按 product_id 判空，重复执行幂等。
+
+    图集同理：详情页只读 product_images，不回填的话存量商品一张图都没有
+    （它们只有 products.image_url 单图）。补进去后单图商品的轮播自然退化成一张。
+    """
+    for p in c.execute('SELECT id,sku,stock,image_url FROM products').fetchall():
+        pid=p['id']
+        if not c.execute('SELECT 1 FROM product_variants WHERE product_id=?',(pid,)).fetchone():
+            c.execute('INSERT INTO product_variants(product_id,name,sku,stock,is_default,sort,status) VALUES(?,?,?,?,?,?,?)',
+                      (pid,'默认',p['sku'],int(p['stock'] or 0),1,0,'active'))
+        if p['image_url'] and not c.execute('SELECT 1 FROM product_images WHERE product_id=?',(pid,)).fetchone():
+            c.execute('INSERT INTO product_images(product_id,url,sort) VALUES(?,?,?)',(pid,p['image_url'],0))
+
 def _run_compat_migrations(c):
     _ensure_column(c,'clubs','contact_name','contact_name TEXT')
     _ensure_column(c,'clubs','contact_phone','contact_phone TEXT')
@@ -163,6 +182,11 @@ def _run_compat_migrations(c):
     _ensure_column(c,'gear_orders','refunded_cash_total','refunded_cash_total REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'gear_orders','refunded_goods_total','refunded_goods_total REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'refund_requests','after_sales_case_id','after_sales_case_id TEXT')
+    # v0.27 库存下沉到规格：流水与订单明细要能指到具体规格。
+    # 都可空 —— 无规格商品（以及 v0.27 之前的历史流水）variant_id 为 NULL 仍然合法。
+    _ensure_column(c,'inventory_movements','variant_id','variant_id INTEGER')
+    _ensure_column(c,'gear_order_items','variant_id','variant_id INTEGER')
+    _ensure_column(c,'gear_order_items','variant_name','variant_name TEXT')
     c.execute('''CREATE TABLE IF NOT EXISTS after_sales_cases (
       id TEXT PRIMARY KEY, order_id INTEGER NOT NULL, user_id INTEGER NOT NULL, source_club_id INTEGER NOT NULL,
       case_type TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending_review', reason TEXT, evidence_json TEXT NOT NULL DEFAULT '[]',
@@ -503,6 +527,7 @@ def init_db():
             _backfill_v020_warehouse(c)
             _backfill_v021_finance(c)
             _backfill_v023_ai_credits(c)
+            _backfill_v027_variants(c)
             return
         if os.getenv('CLUBOS_SECURITY_MODE','demo')=='production':
             # Never provision sample clubs, consumers, catalog, payments or credits in production.

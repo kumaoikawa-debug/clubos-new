@@ -1202,10 +1202,43 @@ def club_ai_usage(club_id:int):
     club_or_404(club_id)
     with conn() as c:return rows(c.execute('SELECT id,task_type,provider,model,status,input_tokens,output_tokens,provider_cost,credits_charged,created_at FROM ai_usage_records WHERE club_id=? ORDER BY id DESC LIMIT 100',(club_id,)))
 
+def _product_extras(c, ids:list[int]):
+    """批量取商品的规格与图集，一次查完再按 product_id 分组。
+
+    抽出来是因为列表接口一次要带几十个商品，逐个查会退化成 N+1。
+    字段刻意压平（variants 直接给 price/stock 而不是 Medusa 那种 prices[] 嵌套）——
+    将来 COMMERCE_PROVIDER 切到 medusa 时由适配层负责转换，前端不用改。
+    """
+    images={}; variants={}
+    ids=[int(i) for i in ids if i]
+    if not ids: return images,variants
+    ph=','.join('?'*len(ids))
+    for r in c.execute(f'SELECT id,product_id,url FROM product_images WHERE product_id IN ({ph}) ORDER BY product_id,sort,id',ids).fetchall():
+        images.setdefault(int(r['product_id']),[]).append({'url':r['url']})
+    for r in c.execute(f"SELECT id,product_id,name,sku,price,stock,sort,is_default FROM product_variants WHERE product_id IN ({ph}) AND status='active' ORDER BY product_id,sort,id",ids).fetchall():
+        variants.setdefault(int(r['product_id']),[]).append({
+            'id':int(r['id']),'name':r['name'],'sku':r['sku'],
+            'price':float(r['price']) if r['price'] is not None else None,
+            'stock':int(r['stock'] or 0),'isDefault':int(r['is_default'] or 0)})
+    return images,variants
+
+def _with_extras(c, product_list:list[dict]):
+    if not product_list: return product_list
+    images,variants=_product_extras(c,[x['id'] for x in product_list])
+    out=[]
+    for x in product_list:
+        d=dict(x); pid=int(x['id'])
+        imgs=images.get(pid) or ([{'url':x['image_url']}] if x.get('image_url') else [])
+        d['images']=imgs; d['variants']=variants.get(pid) or []
+        out.append(d)
+    return out
+
 @app.get('/api/club/{club_id}/mall/products')
 def club_products(club_id:int):
     club_or_404(club_id)
-    with conn() as c:return rows(c.execute('SELECT id,name,sku,price,stock,status,image_url,category FROM products WHERE status="active" ORDER BY id DESC'))
+    with conn() as c:
+        items=rows(c.execute('SELECT id,name,sku,price,stock,status,image_url,category FROM products WHERE status="active" ORDER BY id DESC'))
+        return _with_extras(c,items)
 
 @app.get('/api/club/{club_id}/mall/orders')
 def club_orders(club_id:int):
@@ -1397,8 +1430,21 @@ def create_gear_checkout(club_id:int,payload:dict=Body(...)):
         for it in items:
             p=row(c.execute('SELECT * FROM products WHERE id=? AND status="active"',(int(it['productId']),)))
             if not p: raise HTTPException(400,'商品不可售')
-            q=max(1,int(it.get('quantity',1)))
-            if int(p['stock'])<q: raise HTTPException(409,f"{p['name']} 库存不足")
+            q=max(1,int(it.get('quantity',1))); p=dict(p)
+            # 规格：传了 variantId 就必须属于这个商品；没传就取默认规格。
+            # 库存已经下沉到规格层，所以库存校验一律读规格的 stock —— 继续读
+            # products.stock 会让「某个规格已售罄、商品汇总还有货」的商品被超卖。
+            vid=it.get('variantId')
+            v=row(c.execute('SELECT * FROM product_variants WHERE id=? AND product_id=? AND status="active"',(int(vid),int(it['productId'])))) if vid else \
+              row(c.execute('SELECT * FROM product_variants WHERE product_id=? AND status="active" ORDER BY is_default DESC,sort,id LIMIT 1',(int(it['productId']),)))
+            if vid and not v: raise HTTPException(400,'规格不存在或已下架')
+            if v:
+                p['_variantId']=int(v['id']); p['_variantName']=v['name']
+                if v['price'] is not None: p['price']=float(v['price'])
+                stock=int(v['stock'] or 0)
+            else:
+                stock=int(p['stock'] or 0)
+            if stock<q: raise HTTPException(409,f"{p['name']}{(' · '+p['_variantName']) if p.get('_variantName') else ''} 库存不足")
             resolved.append((p,q))
         try: intent_id,q,ipayload,benefits=checkout_engine.create_gear_intent(c,club_id=club_id,user_id=user_id,items=items,resolved_products=resolved,requested_gear_points=req_gp,voucher_codes=voucher_codes)
         except ValueError as e: raise HTTPException(409,str(e))
@@ -1971,6 +2017,15 @@ def public_products(club_id:int):
     if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
     return club_products(club_id)
 
+@app.get('/api/public/clubs/{club_id}/mall/products/{product_id}')
+def public_product(club_id:int, product_id:int):
+    # 详情页要能被单独打开（刷新、分享出去的链接），所以不能只靠列表缓存。
+    if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
+    with conn() as c:
+        p=row(c.execute('SELECT id,name,sku,price,stock,status,image_url,category FROM products WHERE id=? AND status="active"',(product_id,)))
+        if not p: raise HTTPException(404,'商品不存在')
+        return _with_extras(c,[p])[0]
+
 @app.post('/api/public/clubs/{club_id}/gear-orders')
 def create_gear_order(club_id:int,payload:dict=Body(...)):
     if IS_PROD: raise HTTPException(403,'demo-only endpoint disabled')
@@ -2319,7 +2374,116 @@ def platform_commerce_status():
 
 @app.get('/api/platform/products')
 def platform_products():
-    with conn() as c:return rows(c.execute('SELECT * FROM products ORDER BY id DESC'))
+    # 规格数与图数一起带出来：后台列表要能一眼看出哪些商品还没维护多图/规格，
+    # 逐个商品回查会退化成 N+1。
+    with conn() as c:return rows(c.execute('''SELECT p.*,
+        (SELECT COUNT(*) FROM product_variants v WHERE v.product_id=p.id AND v.status='active') variants_count,
+        (SELECT COUNT(*) FROM product_images i WHERE i.product_id=p.id) images_count
+      FROM products p ORDER BY p.id DESC'''))
+
+
+def _resync_product_stock(c, product_id:int):
+    """把 products.stock 重算成各在售规格库存之和。
+
+    它现在是冗余字段（真源在 product_variants），只要规格有任何增删改都要跟着变，
+    否则后台列表看到的汇总和 C 端详情页看到的规格明细会对不上。
+    """
+    total=c.execute("SELECT COALESCE(SUM(stock),0) s FROM product_variants WHERE product_id=? AND status='active'",(int(product_id),)).fetchone()['s']
+    c.execute('UPDATE products SET stock=? WHERE id=?',(int(total),int(product_id)))
+    return int(total)
+
+@app.get('/api/platform/products/{product_id}/variants')
+def platform_variants(product_id:int):
+    with conn() as c:
+        return rows(c.execute("SELECT id,product_id,name,sku,price,stock,status,sort,is_default FROM product_variants WHERE product_id=? ORDER BY sort,id",(product_id,)))
+
+@app.post('/api/platform/products/{product_id}/variants')
+def add_product_variant(product_id:int, payload:dict=Body(...)):
+    name=str(payload.get('name') or '').strip()
+    if not name: raise HTTPException(400,'规格名不能为空，例如 S / M / L')
+    with conn() as c:
+        if not c.execute('SELECT id FROM products WHERE id=?',(product_id,)).fetchone():
+            raise HTTPException(404,'商品不存在')
+        price=payload.get('price'); price=float(price) if price not in (None,'') else None
+        stock=max(0,int(payload.get('stock') or 0))
+        # 商品原本只有迁移时生成的那个「默认」规格：加了真实规格后它就该退场，
+        # 否则 C 端会把它和 S/M/L 并排显示成四个规格。它的库存转给第一个新规格，
+        # 不让库存凭空消失 —— 运营随后再按规格分配。
+        dflt=c.execute("SELECT id,stock FROM product_variants WHERE product_id=? AND is_default=1 AND status='active'",(product_id,)).fetchone()
+        others=c.execute("SELECT COUNT(*) n FROM product_variants WHERE product_id=? AND status='active' AND is_default=0",(product_id,)).fetchone()['n']
+        moved=0
+        if dflt and others==0:
+            moved=int(dflt['stock'] or 0)
+            c.execute("UPDATE product_variants SET status='inactive',stock=0 WHERE id=?",(dflt['id'],))
+            stock=stock or moved
+        mx=c.execute("SELECT COALESCE(MAX(sort),0) m FROM product_variants WHERE product_id=?",(product_id,)).fetchone()['m']
+        c.execute('INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status) VALUES(?,?,?,?,?,?,?)',
+                  (product_id,name,(payload.get('sku') or None),price,stock,int(mx)+1,'active'))
+        vid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        _resync_product_stock(c,product_id)
+        return {'ok':True,'id':vid,'movedStock':moved}
+
+@app.patch('/api/platform/products/{product_id}/variants/{variant_id}')
+def patch_product_variant(product_id:int, variant_id:int, payload:dict=Body(...)):
+    with conn() as c:
+        v=c.execute('SELECT * FROM product_variants WHERE id=? AND product_id=?',(variant_id,product_id)).fetchone()
+        if not v: raise HTTPException(404,'规格不存在')
+        sets=[];vals=[]
+        for k,col in (('name','name'),('sku','sku'),('sort','sort'),('status','status')):
+            if payload.get(k) is not None: sets.append(col+'=?');vals.append(payload[k])
+        if payload.get('price') is not None:
+            raw=payload['price']; sets.append('price=?');vals.append(float(raw) if raw!='' else None)
+        if payload.get('stock') is not None:
+            sets.append('stock=?');vals.append(max(0,int(payload['stock'])))
+        if not sets: raise HTTPException(400,'没有要修改的字段')
+        vals+= [variant_id]
+        c.execute('UPDATE product_variants SET '+(', '.join(sets))+' WHERE id=?',vals)
+        _resync_product_stock(c,product_id)
+        return {'ok':True}
+
+@app.delete('/api/platform/products/{product_id}/variants/{variant_id}')
+def delete_product_variant(product_id:int, variant_id:int):
+    with conn() as c:
+        v=c.execute('SELECT * FROM product_variants WHERE id=? AND product_id=?',(variant_id,product_id)).fetchone()
+        if not v: raise HTTPException(404,'规格不存在')
+        c.execute('DELETE FROM product_variants WHERE id=?',(variant_id,))
+        # 删到只剩 0 个规格时补回一个「默认」：库存真源在规格层，
+        # 一个规格都没有的商品在 C 端会读不到库存、直接变成缺货。
+        left=c.execute("SELECT COUNT(*) n FROM product_variants WHERE product_id=? AND status='active'",(product_id,)).fetchone()['n']
+        if left==0:
+            p=c.execute('SELECT sku,stock FROM products WHERE id=?',(product_id,)).fetchone()
+            c.execute("INSERT INTO product_variants(product_id,name,sku,stock,sort,status,is_default) VALUES(?,?,?,?,?,'active',1)",
+                      (product_id,'默认',p['sku'],int(p['stock'] or 0),0))
+        _resync_product_stock(c,product_id)
+        return {'ok':True,'restoredDefault':left==0}
+
+@app.get('/api/platform/products/{product_id}/images')
+def platform_product_images(product_id:int):
+    with conn() as c:
+        return rows(c.execute('SELECT id,product_id,url,sort FROM product_images WHERE product_id=? ORDER BY sort,id',(product_id,)))
+
+@app.post('/api/platform/products/{product_id}/images')
+def add_product_image(product_id:int, payload:dict=Body(...)):
+    url=str(payload.get('url') or '').strip()
+    if not url: raise HTTPException(400,'图片地址不能为空')
+    with conn() as c:
+        if not c.execute('SELECT id FROM products WHERE id=?',(product_id,)).fetchone():
+            raise HTTPException(404,'商品不存在')
+        n=c.execute('SELECT COUNT(*) n FROM product_images WHERE product_id=?',(product_id,)).fetchone()['n']
+        c.execute('INSERT INTO product_images(product_id,url,sort) VALUES(?,?,?)',(product_id,url,int(n)))
+        iid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        # 第一张图同时写回 products.image_url：老接口（列表卡、Medusa 同步）读的是它，
+        # 不回写的话后台卡片和 C 端详情会显示成两个不同的图。
+        if n==0: c.execute('UPDATE products SET image_url=? WHERE id=?',(url,product_id))
+        return {'ok':True,'id':iid}
+
+@app.delete('/api/platform/products/{product_id}/images/{image_id}')
+def delete_product_image(product_id:int, image_id:int):
+    with conn() as c:
+        c.execute('DELETE FROM product_images WHERE id=? AND product_id=?',(image_id,product_id))
+        first=c.execute('SELECT url FROM product_images WHERE product_id=? ORDER BY sort,id LIMIT 1',(product_id,)).fetchone()
+        c.execute('UPDATE products SET image_url=? WHERE id=?',(first['url'] if first else None,product_id))
+        return {'ok':True}
 
 
 def _sync_product_to_medusa(product_id:int, *, create_if_missing:bool=True):

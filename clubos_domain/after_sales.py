@@ -29,7 +29,7 @@ class AfterSalesEngine:
         r=c.execute('SELECT * FROM after_sales_cases WHERE id=?',(case_id,)).fetchone()
         if not r: raise LookupError('售后单不存在')
         out=dict(r)
-        out['items']=[dict(x) for x in c.execute('''SELECT ai.*,goi.product_id,goi.unit_price,p.name product_name,p.sku
+        out['items']=[dict(x) for x in c.execute('''SELECT ai.*,goi.product_id,goi.variant_id,goi.unit_price,p.name product_name,p.sku
             FROM after_sales_items ai JOIN gear_order_items goi ON goi.id=ai.order_item_id
             JOIN products p ON p.id=goi.product_id WHERE ai.case_id=? ORDER BY ai.id''',(case_id,)).fetchall()]
         try: out['evidenceUrls']=json.loads(out.get('evidence_json') or '[]')
@@ -131,7 +131,7 @@ class AfterSalesEngine:
             for it in case['items']:
                 if not int(it.get('restocked') or 0):
                     if self.inventory:
-                        self.inventory.after_sales_restock(c,case_id=case_id,item_id=int(it['id']),product_id=int(it['product_id']),quantity=int(it['quantity']),actor_type='platform_after_sales')
+                        self.inventory.after_sales_restock(c,case_id=case_id,item_id=int(it['id']),product_id=int(it['product_id']),quantity=int(it['quantity']),actor_type='platform_after_sales',variant_id=it.get('variant_id'))
                     else:
                         c.execute('UPDATE products SET stock=stock+? WHERE id=?',(int(it['quantity']),int(it['product_id'])))
                     restocked_products.append(int(it['product_id']))

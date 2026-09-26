@@ -106,6 +106,7 @@ class CheckoutEngine:
             raise ValueError('装备订单不能使用俱乐部承担的福利券')
         cash_amount=max(0.0,float(quote.payable)-float(benefit_quote['platformSubsidy']))
         payload={'items':[{'productId':int(p['id']),'quantity':int(q),'unitPrice':float(p['price']),
+                           'variantId':p.get('_variantId'),'variantName':p.get('_variantName'),
                            'commerceVariantId':p.get('commerce_variant_id')} for p,q in resolved_products]}
         redemption_ids=[x['redemptionId'] for x in benefit_quote['applied']]
         c.execute('''INSERT INTO checkout_intents(
@@ -225,7 +226,18 @@ class CheckoutEngine:
             p=c.execute('SELECT * FROM products WHERE id=? AND status="active"',(int(item['productId']),)).fetchone()
             if not p: raise ValueError('商品已不可售')
             p=dict(p); q=max(1,int(item['quantity']))
-            if int(p['stock'])<q: raise OverflowError(f"{p['name']} 库存不足")
+            # 下单时选定的规格要一路跟到落库：价格按规格价记，库存按规格扣。
+            # 不跟的话顾客选了贵一档的规格、订单和佣金却按商品基础价记账。
+            vid=item.get('variantId')
+            v=c.execute('SELECT * FROM product_variants WHERE id=? AND product_id=?',(int(vid),int(item['productId']))).fetchone() if vid else \
+              c.execute('SELECT * FROM product_variants WHERE product_id=? AND status="active" ORDER BY is_default DESC,sort,id LIMIT 1',(int(item['productId']),)).fetchone()
+            if v:
+                p['_variantId']=int(v['id']); p['_variantName']=v['name']
+                if v['price'] is not None: p['price']=float(v['price'])
+                stock=int(v['stock'] or 0)
+            else:
+                stock=int(p['stock'] or 0)
+            if stock<q: raise OverflowError(f"{p['name']}{(' · '+p['_variantName']) if p.get('_variantName') else ''} 库存不足")
             commission += float(p['price'])*q*float(p['commission_rate'])
             resolved.append((p,q))
         c.execute('''INSERT INTO gear_orders(user_id,source_club_id,total,cash_paid,platform_point_subsidy,
@@ -236,9 +248,9 @@ class CheckoutEngine:
                    'paid',commission,commerce_order_id,'succeeded'))
         oid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         for p,q in resolved:
-            c.execute('INSERT INTO gear_order_items(order_id,product_id,quantity,unit_price,unit_cost_snapshot) VALUES(?,?,?,?,?)',(oid,p['id'],q,p['price'],float(p.get('average_cost') or 0)))
+            c.execute('INSERT INTO gear_order_items(order_id,product_id,variant_id,variant_name,quantity,unit_price,unit_cost_snapshot) VALUES(?,?,?,?,?,?,?)',(oid,p['id'],p.get('_variantId'),p.get('_variantName'),q,p['price'],float(p.get('average_cost') or 0)))
             if self.inventory:
-                self.inventory.sale_outbound(c,product_id=int(p['id']),quantity=q,order_id=oid,actor_type='checkout')
+                self.inventory.sale_outbound(c,product_id=int(p['id']),quantity=q,order_id=oid,actor_type='checkout',variant_id=p.get('_variantId'))
             else:
                 c.execute('UPDATE products SET stock=stock-? WHERE id=?',(q,p['id']))
         self.points.materialize_redemptions(c,intent_id=intent['id'],order_kind='gear',order_id=oid,club_id=int(intent['club_id']))
