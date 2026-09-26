@@ -1,13 +1,20 @@
 let CLUB=Number(new URLSearchParams(location.search).get('club_id')||1),USER=1,PAYER_NAME='林野',PAYER_PHONE='13800000001';let currentAct=null,currentOcc=null,activityVouchers=[],bookingParticipants=[];
-function wv(id,b){$$('.wview').forEach(x=>x.style.display='none');$('#'+id).style.display='block';$$('.web-nav button').forEach(x=>x.classList.remove('active'));b?.classList.add('active');if(id==='wmall')loadMall();if(id==='wmember')loadMemberCenter();if(id==='worders')loadOrders()}
+/* 底部导航 4 板块：活动 / 装备 / 户外能力(暂未开放) / 我的。
+   「我的」把会员信息与全部订单（活动 + 装备）合到同一屏，所以两个 loader 一起跑；
+   原来的 wmember / worders 已降级为「我的」内部的两个块，不再是独立板块 —— 顾客的心智是
+   「我的」= 我的资产与我的单子，而不是分散在「会员」和「订单」两个入口里找。 */
+function wv(id,b){$$('.wview').forEach(x=>x.style.display='none');const view=$('#'+id);if(view)view.style.display='block';$$('.web-nav button').forEach(x=>x.classList.remove('active'));b?.classList.add('active');if(id==='wmall')loadMall();if(id==='wme'){loadMemberCenter();loadOrders()}}
 async function loadActivities(){let a=await api(`/api/public/clubs/${CLUB}/activities`);$('#publicActivities').innerHTML=a.length?`<div class="act-grid">`+a.map(x=>{const cov=x.id%6+1;const date=x.event_date?`<span>${esc(x.event_date)}</span>`:'';return `<div class="act-card" onclick="openAct(${x.id})"><div class="act-card__cover${x.cover?'':` cov-${cov}`}"${x.cover?` style="background-image:url('${esc(x.cover)}');background-size:cover;background-position:center"`:''}><div class="act-card__coverInner"><span class="act-card__loc">📍 ${esc(x.location||'户外')}</span><h3 class="act-card__title">${esc(x.title)}</h3></div></div><div class="act-card__body"><div class="act-card__meta">${date}<span class="badge badge--live badge--dot">报名中</span><span class="act-card__price">${money(x.price)}</span></div></div></div>`}).join('')+`</div>`:'<div class="web-card empty">俱乐部暂时没有已发布活动</div>';let q=new URLSearchParams(location.search).get('activity');if(q)openAct(Number(q))}
 async function openAct(id){let a=await api(`/api/public/activities/${id}`);currentAct=a;currentOcc=a.occurrences?.[0]||null;bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];$('#publicActivities').style.display='none';$('#publicDetail').innerHTML=`${a.cover?`<div style="height:200px;border-radius:16px;background:#edf3f1;background-size:cover;background-position:center;background-image:url('${esc(a.cover)}');margin-bottom:14px"></div>`:''}<button class="btn ghost" onclick="backList()">← 返回活动</button><div class="public-editorial" style="margin-top:10px">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail)})}${bookingHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
 function backList(){$('#publicActivities').style.display='block';$('#publicDetail').innerHTML='';history.replaceState({},'',location.pathname)}
 function bookingHtml(a){
   const p=a.pointsPolicy||{}; const e=p.effective||{};
-  const clubBox=e.acceptClubPoints?`<div class="point-box"><b>活动积分</b><div class="sub">本俱乐部资产 · 成本由俱乐部承担${p.clubPointsMaxDiscountPercent<100?` · 最多抵 ${p.clubPointsMaxDiscountPercent}%`:''}</div><input id="clubUse" type="number" min="0" value="0" oninput="refreshQuote()"></div>`:'';
-  const gearCap=p.gearPointsMaxDiscountAmount==null?'':` · 最多补贴 ${money(p.gearPointsMaxDiscountAmount)}`;
-  const gearBox=e.acceptGearPoints?`<div class="point-box"><b>装备积分</b><div class="sub">平台资产 · 抵扣由总平台补贴${gearCap}</div><input id="gearUse" type="number" min="0" value="0" oninput="refreshQuote()"></div>`:'';
+  /* 抵扣不该是顾客的算术题：额度由系统算好（后端 maxRedeemable），顾客只勾一下「用 / 不用」。
+     早前这里是两个空的 number 输入框，等于把「我该抵多少」甩给顾客；更糟的是顾客乱填也看不出
+     错在哪。数值一律来自同一套封顶规则，前端不自己算百分比 —— 否则会出现「页面说能抵 30、
+     结账只抵 0」这种对不上的账。 */
+  const clubBox=e.acceptClubPoints?pointBlock('club','活动积分','本俱乐部资产 · 成本由俱乐部承担',p.clubPointsMaxDiscountPercent<100?`本活动最多抵活动金额的 ${p.clubPointsMaxDiscountPercent}%`:''):'';
+  const gearBox=e.acceptGearPoints?pointBlock('gear','装备积分','平台资产 · 抵扣由总平台补贴',p.gearPointsMaxDiscountAmount==null?'':`本活动最多补贴 ${money(p.gearPointsMaxDiscountAmount)}`):'';
   let pointArea='';
   if(p.enabled && (clubBox||gearBox)){pointArea=`<div class="point-row">${clubBox}${gearBox}</div>`}
   else if(!p.enabled){pointArea='<div class="notice" style="margin-top:14px">本活动不参与积分抵扣。</div>'}
@@ -41,7 +48,39 @@ async function loadActivityVouchers(){
   box.innerHTML=`<div class="point-box"><b>会员福利券</b><div class="sub">积分兑换后的福利券可在交易中真正核销，成本归属保持不变。</div><select id="benefitUse" onchange="refreshQuote()" style="width:100%;margin-top:8px;padding:10px;border-radius:10px"><option value="">本单不使用福利券</option>${activityVouchers.map(v=>`<option value="${esc(v.voucher_code)}">${esc(v.title)} · 抵 ${money(v.cash_value)} · ${v.funding_owner==='CLUB'?'俱乐部承担':'平台承担'}</option>`).join('')}</select></div>`
 }
 function selectOcc(id,el){currentOcc=currentAct.occurrences.find(x=>x.id===id);$$('.occ').forEach(x=>x.classList.remove('active'));el.classList.add('active');refreshQuote()}
-async function refreshQuote(){if(!currentAct||!currentOcc||!$('#quoteBox'))return;let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';try{let q=await api(`/api/public/activities/${currentAct.id}/price-quote?occurrence_id=${currentOcc.id}&user_id=${USER}&club_points=${cp}&gear_points=${gp}&voucher_codes=${encodeURIComponent(voucher)}&participant_count=${bookingParticipants.length}`);if($('#clubUse'))$('#clubUse').max=q.wallet.clubPoints;if($('#gearUse'))$('#gearUse').max=q.wallet.gearPoints;let lines=`<div class="quote-line"><span>活动费用（${q.participantCount}人 × ${money(q.unitPrice)}）</span><span>${money(q.original)}</span></div>`;if(q.pointsPolicy?.effective?.acceptClubPoints)lines+=`<div class="quote-line"><span>活动积分抵扣（俱乐部承担）</span><span>- ${money(q.clubPointDiscount)}</span></div>`;if(q.pointsPolicy?.effective?.acceptGearPoints)lines+=`<div class="quote-line"><span>装备积分补贴（平台承担）</span><span>- ${money(q.platformPointSubsidy)}</span></div>`;(q.benefits?.applied||[]).forEach(v=>{lines+=`<div class="quote-line"><span>${esc(v.title)}（${v.fundingOwner==='CLUB'?'俱乐部承担':'平台承担'}）</span><span>- ${money(v.cashValue)}</span></div>`});lines+=`<div class="quote-line total"><span>需支付</span><span>${money(q.payable)}</span></div>`;let balances=[];if(q.pointsPolicy?.effective?.acceptClubPoints)balances.push(`活动积分 ${q.wallet.clubPoints}`);if(q.pointsPolicy?.effective?.acceptGearPoints)balances.push(`装备积分 ${q.wallet.gearPoints}`);if(balances.length)lines+=`<div class="sub" style="color:#a9bbb4;margin-top:8px">可用：${balances.join(' · ')}</div>`;$('#quoteBox').innerHTML=lines}catch(e){$('#quoteBox').textContent=e.message}}
+function pointBlock(kind,title,owner,capNote){
+  const club=kind==='club';
+  return `<div class="point-box"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><b>${title}</b><label class="point-toggle"><input type="checkbox" id="${club?'clubUseToggle':'gearUseToggle'}" onchange="togglePoints('${kind}',this.checked)">用积分抵扣</label></div><div class="sub">${owner}${capNote?` · ${capNote}`:''}</div><div class="point-cap" id="${club?'clubUseCap':'gearUseCap'}">正在计算本单最多可抵多少…</div><input type="hidden" id="${club?'clubUse':'gearUse'}" value="0"></div>`
+}
+/* 勾选 = 用系统算出的上限；取消 = 归零。顾客不需要、也没机会填任何数字。 */
+function togglePoints(kind,on){
+  const box=$(kind==='club'?'#clubUse':'#gearUse');if(!box)return;
+  box.value=on?String(Number(box.dataset.max||0)):0;
+  refreshQuote();
+}
+/* 把 maxRedeemable 落到界面上，并回答一个「本单能不能收敛」的问题：
+   返回 true 表示当前提交值与勾选状态不一致（已就地修正），调用方需要重算一次报价。 */
+function syncPointConfirm(kind,mx){
+  const club=kind==='club',cb=$(club?'#clubUseToggle':'#gearUseToggle'),capEl=$(club?'#clubUseCap':'#gearUseCap'),box=$(club?'#clubUse':'#gearUse');
+  if(!cb||!capEl||!box)return false;
+  const max=Number(mx?.points||0),cash=Number(mx?.cash||0),balance=Number(mx?.balance||0);
+  box.dataset.max=String(max);
+  cb.disabled=max<=0;
+  if(max<=0){
+    capEl.innerHTML=mx&&mx.allowed===false?'本活动不支持用这类积分抵扣。':(balance<=0?'当前没有可用积分。':'本单暂无可抵扣额度。');
+  }else{
+    /* 说清上限卡在哪：两种成因句式保持一致，都写成「（…上限）」。
+       早前 balance 侧写「你的可用积分已全部用上」，在顾客还没勾选时就出现「已用上」，
+       读起来像已经扣了；括号里只陈述上限来源，不描述已发生的事。 */
+    const why=mx.limiter==='policy'?'（本活动抵扣上限）':(mx.limiter==='balance'?'（你的积分余额上限）':'');
+    capEl.innerHTML=`最多可抵 <b>${money(cash)}</b> · 使用 ${max} 积分${why}<div class="sub">可用 ${balance} 积分</div>`;
+  }
+  const want=cb.checked?String(max):'0';
+  if(String(box.value||'0')!==want){box.value=want;return true}
+  return false;
+}
+async function refreshQuote(depth=0){if(!currentAct||!currentOcc||!$('#quoteBox'))return;let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';try{let q=await api(`/api/public/activities/${currentAct.id}/price-quote?occurrence_id=${currentOcc.id}&user_id=${USER}&club_points=${cp}&gear_points=${gp}&voucher_codes=${encodeURIComponent(voucher)}&participant_count=${bookingParticipants.length}`);/* 换团期/改人数/刚勾上都会让上限变化，这里把提交值收敛回系统算出的上限，
+   否则会出现「界面写着最多抵 ¥30、实际却按 0 抵扣下单」。depth 只是防呆上限，正常一到两次就稳定。 */let drifted=false;if(q.maxRedeemable){const a=syncPointConfirm('club',q.maxRedeemable.club);const b=syncPointConfirm('gear',q.maxRedeemable.gear);drifted=a||b}let lines=`<div class="quote-line"><span>活动费用（${q.participantCount}人 × ${money(q.unitPrice)}）</span><span>${money(q.original)}</span></div>`;if(q.pointsPolicy?.effective?.acceptClubPoints)lines+=`<div class="quote-line"><span>活动积分抵扣（俱乐部承担）</span><span>- ${money(q.clubPointDiscount)}</span></div>`;if(q.pointsPolicy?.effective?.acceptGearPoints)lines+=`<div class="quote-line"><span>装备积分补贴（平台承担）</span><span>- ${money(q.platformPointSubsidy)}</span></div>`;(q.benefits?.applied||[]).forEach(v=>{lines+=`<div class="quote-line"><span>${esc(v.title)}（${v.fundingOwner==='CLUB'?'俱乐部承担':'平台承担'}）</span><span>- ${money(v.cashValue)}</span></div>`});lines+=`<div class="quote-line total"><span>需支付</span><span>${money(q.payable)}</span></div>`;let balances=[];if(q.pointsPolicy?.effective?.acceptClubPoints)balances.push(`活动积分 ${q.wallet.clubPoints}`);if(q.pointsPolicy?.effective?.acceptGearPoints)balances.push(`装备积分 ${q.wallet.gearPoints}`);if(balances.length)lines+=`<div class="sub" style="color:#a9bbb4;margin-top:8px">可用：${balances.join(' · ')}</div>`;$('#quoteBox').innerHTML=lines;if(drifted&&depth<4)return refreshQuote(depth+1)}catch(e){$('#quoteBox').textContent=e.message}}
 async function waitForCheckoutPaid(checkoutId,attempts=45){for(let i=0;i<attempts;i++){await new Promise(r=>setTimeout(r,2000));let x=await api(`/api/public/checkouts/${checkoutId}`);if(x.status==='paid'||x.payment_status==='succeeded')return x.result||x;if(x.payment_status==='failed')throw new Error('支付失败，可重新发起支付')}throw new Error('支付状态仍在处理中，请稍后到“我的订单”查看')}
 async function payCheckout(checkout){let p=await api(`/api/public/checkouts/${checkout.checkoutId}/pay`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({simulateSuccess:!Boolean(clubosCookie('clubos_csrf')),returnUrl:location.href})});if(p.paymentStatus==='succeeded')return p.result;let a=p.paymentAction||{};if(a.type==='redirect'&&a.url){location.href=a.url;return null}if(a.type==='jsapi'&&a.params){if(window.WeixinJSBridge){await new Promise((resolve,reject)=>WeixinJSBridge.invoke('getBrandWCPayRequest',a.params,r=>String(r.err_msg||'').includes(':ok')?resolve(r):reject(new Error(r.err_msg||'微信支付未完成'))));return await waitForCheckoutPaid(checkout.checkoutId)}showAlert({title:'无法唤起微信支付',message:'当前页面不在微信 JSAPI 环境，请在微信内打开'});return null}if(a.type==='qrcode'&&a.url){await showAlert({title:'请扫码完成支付',message:'微信 Native 支付 code_url：'+a.url,wide:true});return await waitForCheckoutPaid(checkout.checkoutId,15)}return null}
 async function signupNow(){if(!currentOcc){showAlert({title:'请选择团期',message:'请先选择团期再报名。'});return}let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';try{let d=await api(`/api/public/activities/${currentAct.id}/checkout`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:PAYER_NAME,phone:PAYER_PHONE,occurrenceId:currentOcc.id,clubPoints:cp,gearPoints:gp,voucherCodes:voucher?[voucher]:[],participants:bookingParticipants})});let paid=await payCheckout(d);if(!paid)return;await showAlert({title:'报名成功',message:`${paid.participantCount||bookingParticipants.length} 人\n实际支付 ${money(paid.cashPaid)}\n本次获得 ${paid.clubPointsEarned} 活动积分${paid.clubBenefitDiscount?`\n俱乐部福利抵扣 ${money(paid.clubBenefitDiscount)}`:''}${paid.platformBenefitSubsidy?`\n平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}`});await loadWallet();openAct(currentAct.id)}catch(e){showAlert({title:'操作失败',message:e.message})}}

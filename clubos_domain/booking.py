@@ -8,6 +8,9 @@ class BookingQuote:
     wallet: dict
     points: dict
     points_policy: dict
+    # 用户不做任何输入时，这张钱包在本单能抵掉多少。让 C 端「确认式」抵扣有据可依，
+    # 而不是把「该抵多少」当成用户的算术题。
+    max_redeemable: dict | None = None
 
 class BookingEngine:
     """ClubOS activity-booking domain layer.
@@ -27,18 +30,28 @@ class BookingEngine:
     def _quote_with_policy(self, *, activity: dict, amount: float, wallet: dict,
                            requested_club_points: int, requested_gear_points: int):
         policy = self.activity_points_policy.from_activity(activity)
+        caps = dict(
+            allow_club_points=policy.effective_accept_club_points,
+            club_points_max_discount_percent=policy.club_points_max_discount_percent,
+            allow_gear_points=policy.effective_accept_gear_points,
+            gear_points_max_discount_amount=policy.gear_points_max_discount_amount,
+        )
         q = self.points.quote(
             amount=amount,
             club_points_balance=wallet['clubPoints'],
             gear_points_balance=wallet['gearPoints'],
             requested_club_points=requested_club_points,
             requested_gear_points=requested_gear_points,
-            allow_club_points=policy.effective_accept_club_points,
-            club_points_max_discount_percent=policy.club_points_max_discount_percent,
-            allow_gear_points=policy.effective_accept_gear_points,
-            gear_points_max_discount_amount=policy.gear_points_max_discount_amount,
+            **caps,
         )
-        return q, policy
+        # Same caps, unbounded request → the ceiling the C-end offers the customer to confirm.
+        max_redeemable = self.points.max_redeemable(
+            amount=amount,
+            club_points_balance=wallet['clubPoints'],
+            gear_points_balance=wallet['gearPoints'],
+            **caps,
+        )
+        return q, policy, max_redeemable
 
     def quote(self, c, *, activity_id:int, occurrence_id:int, user_id:int,
               requested_club_points:int=0, requested_gear_points:int=0, participant_count:int=1) -> BookingQuote:
@@ -54,14 +67,15 @@ class BookingEngine:
         if int(occ['sold']) + participant_count > int(occ['capacity']):
             raise ValueError('该团期剩余名额不足')
         wallet=self.wallet_snapshot(c,user_id,int(occ['club_id']))
-        q, policy = self._quote_with_policy(
+        q, policy, max_redeemable = self._quote_with_policy(
             activity=activity,
             amount=float(occ['price'])*participant_count,
             wallet=wallet,
             requested_club_points=requested_club_points,
             requested_gear_points=requested_gear_points,
         )
-        return BookingQuote(occurrence=occ,wallet=wallet,points=q.as_dict(),points_policy=policy.as_dict())
+        return BookingQuote(occurrence=occ,wallet=wallet,points=q.as_dict(),points_policy=policy.as_dict(),
+                            max_redeemable=max_redeemable)
 
     def book(self, c, *, activity:dict, occurrence:dict, user_id:int,
              requested_club_points:int=0, requested_gear_points:int=0,
@@ -73,7 +87,7 @@ class BookingEngine:
         if int(occurrence['sold']) + participant_count > int(occurrence['capacity']):
             raise OverflowError('该团期剩余名额不足')
         wallet=self.wallet_snapshot(c,user_id,int(activity['club_id']))
-        q, policy = self._quote_with_policy(
+        q, policy, _ = self._quote_with_policy(
             activity=activity,
             amount=float(occurrence['price'])*participant_count,
             wallet=wallet,

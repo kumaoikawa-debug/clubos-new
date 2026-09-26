@@ -90,6 +90,55 @@ class ClubOSPointsEngine:
             platform_funding_cost=gear_subsidy,
         )
 
+    def max_redeemable(self, *, amount: float, club_points_balance: int, gear_points_balance: int,
+                       allow_club_points: bool = True, club_points_max_discount_percent: float = 100.0,
+                       allow_gear_points: bool = True, gear_points_max_discount_amount: float | None = None) -> dict:
+        """What this wallet can actually deduct on this order, without the user typing anything.
+
+        Implemented by asking the very same `quote()` with an unbounded request. The capping
+        rules (activity percentage cap, gear subsidy cap, balance, redeem rate) therefore live
+        in exactly one place, so the "本单最多可抵" figure the C-end shows can never drift from
+        what checkout will really honour — the failure mode this avoids is a customer seeing
+        "最多抵 ¥30" and then being charged as if they had redeemed nothing.
+        """
+        unbounded = 10 ** 9
+        q = self.quote(
+            amount=amount,
+            club_points_balance=club_points_balance,
+            gear_points_balance=gear_points_balance,
+            requested_club_points=unbounded,
+            requested_gear_points=unbounded,
+            allow_club_points=allow_club_points,
+            club_points_max_discount_percent=club_points_max_discount_percent,
+            allow_gear_points=allow_gear_points,
+            gear_points_max_discount_amount=gear_points_max_discount_amount,
+        )
+        club_rate = max(1, int(self.setting('club_points_redeem_rate', 100)))
+        gear_rate = max(1, int(self.setting('gear_points_redeem_rate', 100)))
+
+        def side(allowed: bool, points: int, cash: float, balance: int, rate: int) -> dict:
+            """Say *why* the ceiling is where it is, so the C-end can explain it instead of
+            showing a number the customer cannot account for."""
+            if not allowed:
+                limiter = 'off'
+            elif points <= 0:
+                limiter = 'empty'
+            elif points >= max(0, int(balance or 0)):
+                limiter = 'balance'
+            else:
+                limiter = 'policy'
+            return {'allowed': bool(allowed), 'points': int(points), 'cash': round(float(cash), 2),
+                    'balance': max(0, int(balance or 0)), 'rate': int(rate), 'limiter': limiter}
+
+        return {
+            'club': side(allow_club_points, q.club_points_used, q.club_point_discount,
+                         int(club_points_balance or 0), club_rate),
+            'gear': side(allow_gear_points, q.gear_points_used, q.platform_point_subsidy,
+                         int(gear_points_balance or 0), gear_rate),
+            'cashAfterPoints': round(q.payable, 2),
+            'cashFromPoints': round(q.club_point_discount + q.platform_point_subsidy, 2),
+        }
+
     def club_points_earned_from_activity(self, cash_paid: float, rate_override: float | None = None) -> int:
         rate = float(self.setting('club_points_rate', 1)) if rate_override is None else max(0.0, float(rate_override))
         return max(0, int(float(cash_paid) * rate))

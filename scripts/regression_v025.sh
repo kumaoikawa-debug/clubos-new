@@ -12,3 +12,6 @@ for t in tests/smoke.py tests/smoke_v0[89].py tests/smoke_v1[0-9].py tests/smoke
 done
 # Uses a fresh temp SQLite, production mode and synthetic roles; no third-party provider is faked as deployed.
 python tests/smoke_v25.py
+# 积分抵扣的「报价上限」与「下单实扣」必须同源（C 端报名页由顾客填写改为系统算好上限 + 顾客确认）。
+# 该测试自带临时库隔离，不需要 CLUBOS_DB_PATH。
+python tests/points_max_redeemable_smoke.py

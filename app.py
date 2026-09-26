@@ -1354,6 +1354,9 @@ def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_
         except ValueError as e:
             raise HTTPException(409,str(e))
     out=q.points; out['wallet']=q.wallet; out['occurrence']=q.occurrence; out['pointsPolicy']=q.points_policy
+    # C 端不再让顾客自己填要抵多少积分：把「这张钱包在本单最多能抵多少」直接算好交给前端，
+    # 顾客只做「用/不用」的确认。算法与真正下单时的封顶逻辑同源（points_engine.max_redeemable）。
+    out['maxRedeemable']=q.max_redeemable
     out['benefits']=benefits
     out['participantCount']=max(1,int(participant_count or 1))
     out['unitPrice']=float(q.occurrence['price'])
