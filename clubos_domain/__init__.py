@@ -27,3 +27,5 @@ from .merchandise_finance import MerchandiseFinanceEngine
 from .commerce_analytics import CommerceAnalyticsEngine
 
 from .ai_credits import AICreditEngine
+
+from .gear_recommend import GearRecommendService, GearPlan

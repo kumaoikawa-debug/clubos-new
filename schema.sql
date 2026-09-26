@@ -101,10 +101,37 @@ CREATE TABLE IF NOT EXISTS activities (
   cover TEXT,
   activity_master_json TEXT NOT NULL,
   detail_json TEXT NOT NULL,
+  source_json TEXT,
+  detail_version_id INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (club_id) REFERENCES clubs(id)
 );
+
+-- 活动详情的版本历史：每次 AI 生成 / 重新生成都留一份不可变快照，
+-- detail_version_id 指向当前生效的那一版，因此「恢复上一版」只是换指针，不调用 AI、不扣 Credits。
+CREATE TABLE IF NOT EXISTS activity_detail_versions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  activity_id INTEGER NOT NULL,
+  version_no INTEGER NOT NULL,
+  origin TEXT NOT NULL DEFAULT 'ai-generate',
+  direction TEXT,
+  facts_refreshed INTEGER NOT NULL DEFAULT 0,
+  narrative TEXT,
+  outline TEXT,
+  detail_json TEXT NOT NULL,
+  master_json TEXT,
+  credits_charged INTEGER NOT NULL DEFAULT 0,
+  gateway_mode TEXT,
+  gateway_model TEXT,
+  status TEXT NOT NULL DEFAULT 'ready',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (activity_id) REFERENCES activities(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_detail_versions_no ON activity_detail_versions(activity_id,version_no);
+-- 一场活动同时只允许有一版在生成中：并发再次触发换一版会插入失败而不是各扣一次 AI Credits。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_detail_pending ON activity_detail_versions(activity_id) WHERE status='pending';
 
 CREATE TABLE IF NOT EXISTS content_assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

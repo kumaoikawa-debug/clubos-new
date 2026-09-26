@@ -137,24 +137,38 @@ function navInit(){$$('.nav button[data-view]').forEach(b=>b.onclick=()=>{$$('.n
 function modal(id,on=true){$('#'+id)?.classList.toggle('show',on)}
 function toast(msg){let el=document.createElement('div');el.textContent=msg;el.className='toast';document.body.appendChild(el);setTimeout(()=>el.remove(),2400)}
 function esc(v=''){return String(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
-function mediaMap(master){let m={};for(const x of master?.media||[])if(x?.ref)m[x.ref]=x;return m}
+function mediaMap(master){let m={};for(const x of master?.media||[]){if(typeof x==='string'){if(x)m[x]=m[x]||{ref:x};continue}if(x?.ref)m[x.ref]=x}return m}
+function resolvedRefs(refs,map){return (refs||[]).filter(r=>r&&map[r]&&map[r].url)}
 function mediaHtml(ref,map,cls=''){const x=map[ref];if(!x?.url)return `<div class="editorial-media missing ${cls}"><span>${esc(ref||'image')}</span></div>`;return `<figure class="editorial-media ${cls}"><img src="${esc(x.url)}" alt="" loading="lazy"></figure>`}
 function renderPromo(detail,master={},opts={}){
   const mm=mediaMap(master);let h='<article class="editorial">';
+  // 头图兜底：block 自己没写 ref（或 ref 解析不到 url）时，用媒体清单里第一张真实存在的照片。
+  // 头图必须是照片打底，而不是一块纯色——live 模式下模型常常只给 hero 文案、不给 mediaRefs。
+  const fallbackPhoto=Object.keys(mm).find(r=>mm[r]&&mm[r].url)||'';
   for(const b of detail?.blocks||[]){const refs=b.mediaRefs||[];
     if(b.type==='hero'){
-      const bg=refs[0]&&mm[refs[0]]?.url?` style="background-image:linear-gradient(180deg,rgba(7,17,14,.10),rgba(7,17,14,.72)),url('${esc(mm[refs[0]].url)}')"`:'';
-      h+=`<section class="ed-hero"${bg}><div class="ed-hero-copy"><div class="ed-kicker">${esc(b.kicker||master.location||'OUTDOOR EXPERIENCE')}</div><h1>${esc(b.headline||master.title||'活动')}</h1><p>${esc(b.subtitle||'')}</p></div></section>`;
+      const heroRef=resolvedRefs(refs,mm)[0]||fallbackPhoto;
+      const url=heroRef&&mm[heroRef]?mm[heroRef].url:'';
+      const bg=url?` style="background-image:linear-gradient(180deg,rgba(7,17,14,.12),rgba(7,17,14,.74)),url('${esc(url)}')"`:'';
+      h+=`<section class="ed-hero${url?' has-photo':''}"${bg}><div class="ed-hero-copy"><div class="ed-kicker">${esc(b.kicker||master.location||'OUTDOOR EXPERIENCE')}</div><h1>${esc(b.headline||master.title||'活动')}</h1><p>${esc(b.subtitle||'')}</p></div></section>`;
     }else if(b.type==='lead')h+=`<section class="ed-lead"><p>${esc(b.text||b.body||'')}</p></section>`;
     else if(b.type==='statement')h+=`<section class="ed-statement"><span>${esc(b.text||'')}</span></section>`;
     else if(b.type==='facts')h+=`<section class="ed-facts">${(b.items||[]).map(x=>`<div><small>${esc(x.label||'')}</small><strong>${esc(x.value||x)}</strong></div>`).join('')}</section>`;
     else if(b.type==='narrative'){
-      const media=refs.length?`<div class="ed-narrative-media">${refs.map(r=>mediaHtml(r,mm)).join('')}</div>`:'';
-      h+=`<section class="ed-narrative ${refs.length?'has-media':''}"><div class="ed-copy">${b.eyebrow?`<div class="ed-kicker">${esc(b.eyebrow)}</div>`:''}<h2>${esc(b.headline||'')}</h2><p>${esc(b.body||b.text||'')}</p></div>${media}</section>`;
+      const ok=resolvedRefs(refs,mm);
+      const media=ok.length?`<div class="ed-narrative-media">${ok.map(r=>mediaHtml(r,mm)).join('')}</div>`:'';
+      h+=`<section class="ed-narrative ${ok.length?'has-media':''}"><div class="ed-copy">${b.eyebrow?`<div class="ed-kicker">${esc(b.eyebrow)}</div>`:''}<h2>${esc(b.headline||'')}</h2><p>${esc(b.body||b.text||'')}</p></div>${media}</section>`;
     }else if(b.type==='media'){
-      const layout=b.layout==='mosaic'?'mosaic':refs.length===2?'pair':refs.length>=3?'grid':'single';
-      h+=`<section class="ed-media ${layout}">${refs.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
-    }else if(b.type==='gallery')h+=`<section class="ed-gallery count-${Math.min(refs.length,4)}">${refs.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
+      // 解析不到 url 的 ref 直接不排版：宁可少一张图，也不要满屏灰色占位块。
+      const ok=resolvedRefs(refs,mm);
+      if(ok.length||b.caption){
+        const layout=b.layout==='mosaic'?'mosaic':ok.length===2?'pair':ok.length>=3?'grid':'single';
+        h+=`<section class="ed-media ${layout}">${ok.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
+      }
+    }else if(b.type==='gallery'){
+      const ok=resolvedRefs(refs,mm);
+      if(ok.length)h+=`<section class="ed-gallery count-${Math.min(ok.length,4)}">${ok.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
+    }
     else if(b.type==='timeline')h+=`<section class="ed-section ed-timeline"><div class="ed-section-head"><div class="ed-kicker">SCHEDULE</div><h2>${esc(b.title||'行程')}</h2></div><div class="timeline-list">${(b.items||[]).map(x=>`<div class="timeline-item"><time>${esc(x.time||'')}</time><p>${esc(x.text||x.content||'')}</p></div>`).join('')}</div></section>`;
     else if(b.type==='info')h+=`<section class="ed-section ed-info"><div class="ed-section-head"><div class="ed-kicker">GOOD TO KNOW</div><h2>${esc(b.title||'出发前知道')}</h2></div><div class="info-chips">${(b.items||[]).map(x=>`<div>${esc(x)}</div>`).join('')}</div></section>`;
     else if(b.type==='quote')h+=`<section class="ed-quote">“${esc(b.text||'')}”</section>`;
@@ -163,7 +177,64 @@ function renderPromo(detail,master={},opts={}){
   }
   return h+'</article>';
 }
-function renderInfoStack(master){return `<div class="info-stack polished"><details open><summary>详细行程 <span>ITINERARY</span></summary><div class="detail-list">${(master.itinerary||[]).map(x=>`<div><b>${esc(x.time||'')}</b><p>${esc(x.content||x.text||'')}</p></div>`).join('')||'<p class="sub">以最终活动通知为准</p>'}</div></details><details><summary>费用说明 <span>PRICE</span></summary><div class="json-pretty">${esc(JSON.stringify(master.fees||{},null,2))}</div></details><details><summary>出行清单 <span>PACKING</span></summary><div class="info-chips">${(master.checklist||[]).map(x=>`<div>${esc(x)}</div>`).join('')||'<div>出发前由俱乐部通知</div>'}</div></details></div>`}
+function gearRow(p,opts){
+  // 价格走第二行：窄栏（C 端 560px 容器）下右挂价格会把商品名挤成两三行
+  const inner='<span class="gear-emoji">'+esc(p.emoji||'🧰')+'</span>'
+    +'<span class="gear-main"><b>'+esc(p.name)+'</b>'
+    +'<small><i class="gear-price">'+esc('¥'+Number(p.price||0).toFixed(0))+'</i>'
+    +esc(p.reason||'')+(p.inStock?'':' · 暂时缺货')+'</small></span>'
+    +(opts.canBuy?'<span class="gear-go">›</span>':'');
+  // 只有 C 端才给下单入口：后台管理员看的是"将如何展示"，不该由他下单
+  return opts.canBuy
+    ? '<button type="button" class="gear-row buyable" onclick="buy('+Number(p.id||0)+')">'+inner+'</button>'
+    : '<div class="gear-row">'+inner+'</div>';
+}
+function renderPacking(master,opts){
+  opts=opts||{};
+  const list=master.checklist||[];
+  const chips='<div class="info-chips">'+(list.map(x=>'<div>'+esc(x)+'</div>').join('')||'<div>出发前由俱乐部通知</div>')+'</div>';
+  const g=opts.gear;
+  if(!g||!g.available)return chips;                       // 商城没有在售装备：不编造推荐，保持原样
+  const items=g.items||[],extras=g.extras||[];
+  if(!items.length&&!extras.length)return chips;
+  const o={canBuy:!!opts.canBuy&&typeof window.buy==='function',manage:!!opts.manage};
+  const slots=items.map(it=>{
+    const ms=(it.matches||[]).map(p=>gearRow(p,o)).join('');
+    // 清单项本身认不出装备品类时（如"身份证"）不该说"商城没有"，那是两回事
+    const body=ms||((it.tags||[]).length?'<div class="gear-none">商城暂无对应装备</div>':'');
+    return '<div class="pack-slot"><div class="pack-need">'+esc(it.text)+'</div>'
+      +'<div class="pack-gear">'+body+'</div></div>';
+  }).join('');
+  const cov=g.coverage||{};
+  const miss=[];
+  items.forEach(it=>{
+    if((it.tags||[]).length&&!(it.matches||[]).length){
+      const l=(it.tagLabels||[])[0];
+      if(l&&miss.indexOf(l)<0)miss.push(l);
+    }
+  });
+  let head='<div class="gear-head"><span class="eyebrow">按清单搭配</span><span class="gear-summary">清单 '
+    +Number(cov.needs||0)+' 项 · 商城可配 '+Number(cov.matched||0)+' 项</span></div>';
+  const missLine=miss.length
+    ? '<div class="gear-missing">商城暂无对应装备：'+esc(miss.join('、'))+(o.manage?'（可在商城上架补全）':'')+'</div>'
+    : '';
+  const extraRows=extras.map(p=>gearRow(p,o)).join('');
+  const extra=extraRows
+    ? '<div class="gear-extras"><div class="gear-extras-title">本场活动其他在售装备</div><div class="pack-gear">'+extraRows+'</div></div>'
+    : '';
+  return head+'<div class="pack-plan">'+slots+'</div>'+missLine+extra;
+}
+/* 费用说明：把 fees 对象渲染成可读的键值行，而不是一整块 JSON 代码。数组走 chips。 */
+function feeListHtml(fees){
+  fees=fees||{};const keys=Object.keys(fees).filter(k=>fees[k]!=null&&fees[k]!=='');
+  if(!keys.length)return '<p class="sub">费用以活动通知与最终确认为准</p>';
+  return '<div class="fee-list">'+keys.map(k=>{const v=fees[k];
+    if(Array.isArray(v))return '<div class="fee-row"><b>'+esc(k)+'</b><div class="info-chips">'+v.map(x=>'<div>'+esc(String(x))+'</div>').join('')+'</div></div>';
+    if(typeof v==='object')return '<div class="fee-row"><b>'+esc(k)+'</b><p>'+esc(JSON.stringify(v))+'</p></div>';
+    return '<div class="fee-row"><b>'+esc(k)+'</b><p>'+esc(String(v))+'</p></div>';
+  }).join('')+'</div>';
+}
+function renderInfoStack(master,opts={}){return `<div class="info-stack polished"><details open><summary>详细行程 <span>ITINERARY</span></summary><div class="detail-list">${(master.itinerary||[]).map(x=>`<div><b>${esc(x.time||'')}</b><p>${esc(x.content||x.text||'')}</p></div>`).join('')||'<p class="sub">以最终活动通知为准</p>'}</div></details><details><summary>费用说明 <span>PRICE</span></summary>${feeListHtml(master.fees)}</details><details open><summary>出行清单 <span>PACKING</span></summary>${renderPacking(master,opts)}</details></div>`}
 
 // Logout must revoke the session on the server, not just hide the current UI.
 document.addEventListener('DOMContentLoaded',()=>{

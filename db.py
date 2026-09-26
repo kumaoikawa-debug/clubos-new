@@ -315,10 +315,131 @@ def _run_compat_migrations(c):
               VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(rd['id'],pr['id'],parts['original'][i],parts['cash'][i],parts['cp'][i],parts['cpd'][i],parts['gp'][i],parts['gps'][i],parts['cbd'][i],parts['pbs'][i],parts['earned'][i]))
     c.execute('INSERT OR IGNORE INTO platform_settings(key,value) VALUES(?,?)',('gear_points_activity_redeem_enabled','1'))
     c.execute('INSERT OR IGNORE INTO platform_settings(key,value) VALUES(?,?)',('commission_after_sales_days','7'))
+    # 活动详情的「重新生成 / 换一版」需要两样东西：生成时的原始资料（没有它就无法重做），
+    # 以及当前指向的版本（用于回退）。原始资料只存库内，任何对外接口都必须 pop 掉。
+    _ensure_column(c,'activities','source_json','source_json TEXT')
+    _ensure_column(c,'activities','detail_version_id','detail_version_id INTEGER')
+    c.executescript('''
+    CREATE TABLE IF NOT EXISTS activity_detail_versions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id INTEGER NOT NULL,
+      activity_id INTEGER NOT NULL,
+      version_no INTEGER NOT NULL,
+      origin TEXT NOT NULL DEFAULT 'ai-generate',
+      direction TEXT,
+      facts_refreshed INTEGER NOT NULL DEFAULT 0,
+      narrative TEXT,
+      outline TEXT,
+      detail_json TEXT NOT NULL,
+      master_json TEXT,
+      credits_charged INTEGER NOT NULL DEFAULT 0,
+      gateway_mode TEXT,
+      gateway_model TEXT,
+      status TEXT NOT NULL DEFAULT 'ready',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (activity_id) REFERENCES activities(id)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_detail_versions_no ON activity_detail_versions(activity_id,version_no);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_detail_pending ON activity_detail_versions(activity_id) WHERE status='pending';
+    ''')
+    _ensure_column(c,'activity_detail_versions','status',"status TEXT NOT NULL DEFAULT 'ready'")
+    _backfill_detail_versions(c)
     _backfill_v019_opening_inventory(c)
     _backfill_v020_warehouse(c)
     _backfill_v021_finance(c)
     _backfill_v023_ai_credits(c)
+    _backfill_media_urls(c)
+
+
+def _backfill_media_urls(c):
+    """修复 live 模式下丢失 url 的媒体清单。
+
+    ai_engine 的 live 分支曾把模型输出的 media（["img_01",...] 这种纯 ref）直接当作 master 落库，
+    导致 ref→url 映射表为空：A 端预览与 C 端详情里所有图片都渲染成灰色占位块，头图退化成纯色。
+    这里以 activities.source_json 的媒体清单为准补回 url；没有原始资料可依据的行保持原样
+    （宁可不改，也不凭空编造一个 url）。幂等：内容没有任何变化就不写库。
+    """
+    def catalog_of(source):
+        catalog={}
+        if not isinstance(source,dict):return catalog
+        for key in ('media_manifest','images'):
+            for x in source.get(key) or []:
+                if not isinstance(x,dict):continue
+                ref=str(x.get('ref') or ''); url=str(x.get('url') or '')
+                if ref and url and ref not in catalog:catalog[ref]=x
+        return catalog
+
+    def merge(rows,catalog):
+        """返回修好的列表；没有可修的地方返回 None（=不动这一行）。"""
+        if not isinstance(rows,list) or not rows:return None
+        out=[];changed=False
+        for x in rows:
+            if isinstance(x,dict):
+                ref=str(x.get('ref') or '')
+                if str(x.get('url') or ''):out.append(x);continue
+                base=catalog.get(ref)
+                if not base:out.append(x);continue
+                item=dict(x)
+                item.update({k:base.get(k) for k in ('url','name','width','height','orientation','source','page') if base.get(k) is not None})
+                out.append(item);changed=True
+            else:
+                base=catalog.get(str(x or ''))
+                out.append(dict(base) if base else {'ref':str(x or '')})
+                changed=changed or bool(base)
+        return out if changed else None
+
+    def repair(blob,catalog):
+        try:data=json.loads(blob) if isinstance(blob,str) else blob
+        except (TypeError,ValueError):return None
+        if not isinstance(data,dict):return None
+        rows=data.get('media')
+        if not isinstance(rows,list) or not rows:return None
+        if all(isinstance(x,dict) and str(x.get('url') or '') for x in rows):return None   # 已经完好，不必动
+        fixed=merge(rows,catalog)
+        if not fixed:return None
+        data['media']=fixed
+        return data
+
+    for a in c.execute('SELECT id,source_json,activity_master_json FROM activities').fetchall():
+        try:source=json.loads(a['source_json']) if a['source_json'] else None
+        except (TypeError,ValueError):source=None
+        data=repair(a['activity_master_json'],catalog_of(source))
+        if data:c.execute('UPDATE activities SET activity_master_json=? WHERE id=?',(json.dumps(data,ensure_ascii=False),a['id']))
+    # 版本快照里的 master 同样要修，否则恢复某一版会把坏的媒体清单又写回当前活动。
+    rows=c.execute('SELECT v.id,v.activity_id,v.master_json,a.source_json FROM activity_detail_versions v '
+                   'JOIN activities a ON a.id=v.activity_id WHERE v.master_json IS NOT NULL').fetchall()
+    for v in rows:
+        try:source=json.loads(v['source_json']) if v['source_json'] else None
+        except (TypeError,ValueError):source=None
+        data=repair(v['master_json'],catalog_of(source))
+        if data:c.execute('UPDATE activity_detail_versions SET master_json=? WHERE id=?',(json.dumps(data,ensure_ascii=False),v['id']))
+
+
+def _backfill_detail_versions(c):
+    """把升级前就已经存在的活动详情，回填成「第 1 版」快照。
+
+    这次升级之前生成的活动只有 activities.detail_json，没有版本快照。如果不回填，
+    老板点一次「换一版」之后，最初那一版就被覆盖、再也回不去了——正好和「版本历史」的
+    承诺相反。origin='legacy' 标明这一版来自升级回填，不是真的有调用过 AI。
+    整个过程幂等：只处理「一行版本都没有」的活动，重复启动不会重复插入。
+    """
+    c.execute('''INSERT INTO activity_detail_versions(
+                   club_id,activity_id,version_no,origin,direction,facts_refreshed,
+                   detail_json,master_json,credits_charged,status,created_at)
+                 SELECT a.club_id,a.id,1,'legacy','',0,a.detail_json,a.activity_master_json,0,
+                        'ready',COALESCE(NULLIF(a.created_at,''),CURRENT_TIMESTAMP)
+                 FROM activities a
+                 WHERE a.detail_json IS NOT NULL AND a.detail_json NOT IN ('','{}')
+                   AND NOT EXISTS(SELECT 1 FROM activity_detail_versions v WHERE v.activity_id=a.id)''')
+    # 版本指针没指到任何一版的，指到当前最新的一版，保证「当前版本」永远存在。
+    c.execute('''UPDATE activities SET detail_version_id=(
+                   SELECT v.id FROM activity_detail_versions v
+                   WHERE v.activity_id=activities.id AND v.status='ready'
+                   ORDER BY v.version_no DESC LIMIT 1)
+                 WHERE detail_version_id IS NULL
+                   AND EXISTS(SELECT 1 FROM activity_detail_versions v
+                              WHERE v.activity_id=activities.id AND v.status='ready')''')
+
 
 def _seed_v08_defaults(c):
     clubs=c.execute('SELECT id FROM clubs').fetchall()

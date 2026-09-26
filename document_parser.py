@@ -59,18 +59,33 @@ def image_meta(path: Path, public_url: str | None = None, source: str | None = N
         return None
 
 
+def _natural_key(name: str):
+    """按数字自然序排序（image2 排在 image10 前面），保证幻灯片里的图片顺序不乱。"""
+    return [int(part) if part.isdigit() else part.lower() for part in re.split(r'(\d+)', name)]
+
+
 def _extract_office_media(path: Path, out_dir: Path) -> list[Path]:
     """Extract embedded PPTX/DOCX media without re-rendering the document.
     The model still receives the full original text and the original embedded visual assets.
+
+    不同工具导出的 PPTX 包结构并不统一：Office 默认放在 `ppt/media/`，
+    而 Keynote / 在线设计工具「另存为 pptx」会放在 `ppt/slides/media/`。
+    以前这里写死 `ppt/media/`，设计稿式方案（每页一张大图 + 少量文字）会一张图都提不出来——
+    直接把这种资料交给模型，等于只给了它几行文字，成品自然「不按资料来」。
+    所以这里不再依赖固定前缀：先取任意 `/media/` 目录下的图片，取不到再兜底扫全包图片。
     """
     media=[]
-    prefix='ppt/media/' if path.suffix.lower()=='.pptx' else 'word/media/'
     try:
         with zipfile.ZipFile(path) as z:
-            for name in z.namelist():
-                if not name.startswith(prefix): continue
-                ext=Path(name).suffix.lower()
-                if ext not in IMAGE_EXTS: continue
+            entries=[n for n in z.namelist() if not n.endswith('/') and not n.startswith('docProps/')]
+            def is_image(n: str) -> bool:
+                return Path(n).suffix.lower() in IMAGE_EXTS
+            # 优先命中「媒体目录」（ppt/media/、ppt/slides/media/、word/media/ ...），
+            # 避免把图标、缩略图之类的零散图片当成幻灯片正文图。
+            names=[n for n in entries if is_image(n) and '/media/' in n]
+            if not names:
+                names=[n for n in entries if is_image(n)]
+            for name in sorted(names,key=_natural_key):
                 dest=out_dir/f"{path.stem}_{Path(name).name}"
                 dest.parent.mkdir(parents=True,exist_ok=True)
                 dest.write_bytes(z.read(name))

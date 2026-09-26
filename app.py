@@ -1,5 +1,6 @@
 from __future__ import annotations
 import uuid, os, io, csv, zipfile, shutil
+from sqlite3 import IntegrityError
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote, quote, urlsplit
@@ -9,12 +10,12 @@ from fastapi.staticfiles import StaticFiles
 
 from db import init_db, conn, row, rows, jdump, jload, setting
 from document_parser import save_uploads, parse_sources
-from ai_engine import generate_activity, generate_channel
-from ai_billing import ensure_credits, charge_credits
+from ai_engine import generate_activity, generate_channel, regenerate_detail, detail_outline
+from ai_billing import ensure_credits, charge_credits, credit_cost
 from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config,
-                        update_platform_provider_config, test_provider_connection)
+                        update_platform_provider_config, test_provider_connection, effective_gateway_mode)
 from clubos_domain.club_analytics import ClubBusinessIntelligence
-from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine
+from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine, GearRecommendService
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
 
@@ -130,6 +131,7 @@ warehouse_engine=WarehouseEngine()
 finance_engine=MerchandiseFinanceEngine()
 analytics_engine=CommerceAnalyticsEngine(finance_engine,warehouse_engine)
 ai_credit_engine=AICreditEngine()
+gear_recommend=GearRecommendService()
 club_bi=ClubBusinessIntelligence()
 inventory_engine=ProcurementEngine(warehouse_engine,finance_engine)
 booking_engine=BookingEngine(points_engine,wallet_snapshot,activity_points_policy,membership_engine,benefit_engine,participant_service)
@@ -247,6 +249,131 @@ def club_business_analytics(club_id:int,window_days:int=Query(30,alias='windowDa
 def club_activities(club_id:int):
     with conn() as c:return rows(c.execute('SELECT id,title,status,event_date,location,price,capacity,created_at,cover FROM activities WHERE club_id=? ORDER BY id DESC',(club_id,)))
 
+# ===== 活动详情版本：生成 / 重新生成 / 恢复上一版 =====
+# 老板对第一版不满意时必须能「换一版」，而换一版的前提是原始资料还在。
+# 因此生成时把 source 落进 activities.source_json，并为每一版留一份不可变快照；
+# detail_version_id 指向当前生效的那一版，「恢复」只换指针，不调 AI、不扣 Credits。
+def _source_for_storage(source:dict)->dict:
+    """落盘用的原始资料。不存本机绝对路径（换工作区/换机器就失效），读取时按 /static 反查磁盘。"""
+    images=[{k:x.get(k) for k in ('ref','name','url','width','height','orientation','source','page')}
+            for x in source.get('images') or []]
+    return {'text':source.get('text',''),'files':source.get('files') or [],'images':images,
+            'media_manifest':source.get('media_manifest') or []}
+
+
+def _source_from_storage(stored:dict|None)->dict|None:
+    if not isinstance(stored,dict): return None
+    images=[];missing=0
+    for x in stored.get('images') or []:
+        url=str(x.get('url') or '')
+        path=None
+        if url.startswith('/static/'):
+            candidate=STATIC/url[len('/static/'):]
+            if candidate.exists(): path=str(candidate)
+        if not path: missing+=1; continue          # 图片已不在磁盘：不送视觉模型，但 ref 仍可被排版引用
+        item=dict(x); item['path']=path; images.append(item)
+    out=dict(stored); out['images']=images; out['_resolved']=len(images); out['_missing']=missing
+    return out
+
+
+def _activity_source(a:dict)->tuple[dict|None,str]:
+    """重新生成要用的原始资料：(source, 来源)。
+    老活动（本次升级前生成）没有落盘 source，退回用 Activity Master 里的资料摘要与媒体清单反推。"""
+    stored=_source_from_storage(jload(a.get('source_json'),None))
+    if stored and (str(stored.get('text') or '').strip() or stored.get('media_manifest')): return stored,'stored'
+    master=jload(a.get('activity_master_json'),{}) or {}
+    media=master.get('media') or []
+    text=str(master.get('sourceSummary') or '')
+    if not text.strip() and not media: return None,'missing'
+    return ({'text':text,'images':[],'files':[],'media_manifest':media,
+             '_resolved':0,'_missing':len(media)},'master_fallback')
+
+
+def _repair_master_media(master:dict,source:dict|None)->dict:
+    """把 master.media 归一成「ref → url 齐全」的清单再下发。
+
+    模型只被允许「引用」ref，媒体条目本身必须以真实资料为准。live 模式曾把模型输出的
+    ["img_01",...] 直接落库，于是前端 ref→url 映射为空：所有图片渲染成灰色占位块、头图变纯色。
+    读取时按 source 的清单补齐 url，并把拿不到 url 的条目剔掉（留着只会变成灰块）；
+    source 里没有被引用的图片也一并带上，头图才有可回退的照片。
+    """
+    if not isinstance(master,dict):return master
+    catalog={}
+    for key in ('media_manifest','images'):
+        for x in (source or {}).get(key) or []:
+            if not isinstance(x,dict) or not x.get('ref'):continue
+            ref=str(x['ref']);cur=catalog.get(ref)
+            if cur is None:
+                if x.get('url'):catalog[ref]=dict(x)      # 没有 url 的条目进了清单也渲染不出来
+                continue
+            for k,v in x.items():
+                if cur.get(k) in (None,'') and v not in (None,''):cur[k]=v
+    out=[];seen=set()
+    for x in master.get('media') or []:
+        ref=str((x.get('ref') if isinstance(x,dict) else x) or '')
+        if not ref or ref in seen:continue
+        base=catalog.get(ref)
+        if isinstance(x,dict):
+            merged=dict(base) if base else {}
+            merged.update({k:v for k,v in x.items() if v not in (None,'')})
+            if not str(merged.get('url') or ''):continue
+            out.append(merged);seen.add(ref)
+        else:
+            if not base:continue
+            out.append(dict(base));seen.add(ref)
+    for ref,x in catalog.items():
+        if ref not in seen:out.append(dict(x));seen.add(ref)
+    master['media']=out
+    return master
+
+
+def _gear_plan_for(c,master:dict)->dict:
+    """出行清单 × 商城在售装备。
+
+    候选集合只含商城里 status='active' 的真实商品，推荐引擎不做任何商品条目的生成或补全；
+    清单里没有对应装备时如实标注，不凑一个相近的顶上（与媒体清单同一条纪律）。
+    """
+    prods=rows(c.execute('SELECT id,name,price,stock,category,image_url FROM products WHERE status="active" ORDER BY id'))
+    return gear_recommend.plan(prods,master).as_dict()
+
+
+def _next_version_no(c,activity_id:int)->int:
+    return int(c.execute('SELECT COALESCE(MAX(version_no),0)+1 FROM activity_detail_versions WHERE activity_id=?',(activity_id,)).fetchone()[0])
+
+
+def _reserve_detail_version(c,*,club_id:int,activity_id:int,origin:str,direction:str|None=None,
+                            facts_refreshed:bool=False)->tuple[int,int]:
+    """先占位、再生成：这是服务端的防重与防重复扣费闸门。
+
+    并发对同一场活动触发「换一版」时，第二条请求会撞上 status='pending' 的偏索引而失败，
+    于是不会真的再调一次 AI、也不会再扣一次 Credits（前端锁只挡得住同一个页面）。
+    进程被中断留下的 pending 占位超过 10 分钟会在下次占位时被清掉。"""
+    c.execute("DELETE FROM activity_detail_versions WHERE activity_id=? AND status='pending' AND created_at<datetime('now','-10 minutes')",(activity_id,))
+    version_no=_next_version_no(c,activity_id)
+    try:
+        c.execute('''INSERT INTO activity_detail_versions(club_id,activity_id,version_no,origin,direction,facts_refreshed,
+                     narrative,outline,detail_json,status) VALUES(?,?,?,?,?,?,?,?,?,?)''',(
+            club_id,activity_id,version_no,origin,(direction or '').strip() or None,
+            1 if facts_refreshed else 0,'','',"{}",'pending'))
+    except IntegrityError:
+        raise HTTPException(409,'这场活动正在生成新的一版，请等它出来后再换。')
+    return int(c.execute('SELECT last_insert_rowid()').fetchone()[0]),version_no
+
+
+def _finalize_detail_version(c,*,version_id:int,activity_id:int,detail:dict,master:dict,credits:int=0,
+                             gateway:str|None=None,model:str|None=None)->None:
+    c.execute('''UPDATE activity_detail_versions SET narrative=?,outline=?,detail_json=?,master_json=?,credits_charged=?,
+                 gateway_mode=?,gateway_model=?,status='ready' WHERE id=?''',(
+        str(detail.get('coreSellingIdea') or ''),detail_outline(detail),jdump(detail),jdump(master),credits,
+        gateway,model,version_id))
+    c.execute('UPDATE activities SET detail_version_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(version_id,activity_id))
+
+
+def _release_detail_version(c,version_id:int)->None:
+    """生成失败时撤掉占位：没扣费、没落库，版本号也还给下一次。"""
+    c.execute('DELETE FROM activity_detail_versions WHERE id=? AND status=\'pending\'',(version_id,))
+
+
 @app.post('/api/club/{club_id}/activities/ai-generate')
 async def ai_generate(club_id:int,prompt:str=Form(''),files:list[UploadFile]=File(default=[])):
     club_or_404(club_id); ensure_credits(club_id,'detail')
@@ -275,26 +402,170 @@ async def ai_generate(club_id:int,prompt:str=Form(''),files:list[UploadFile]=Fil
     charge_credits(club_id,'detail',usage.usage_id)
     title=master.get('title') or 'AI生成活动'
     with conn() as c:
-        c.execute('INSERT INTO activities(club_id,title,status,event_date,location,price,capacity,activity_master_json,detail_json) VALUES(?,?,?,?,?,?,?,?,?)',(
-            club_id,title,'draft',master.get('date',''),master.get('location',''),float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail)))
+        c.execute('INSERT INTO activities(club_id,title,status,event_date,location,price,capacity,activity_master_json,detail_json,source_json) VALUES(?,?,?,?,?,?,?,?,?,?)',(
+            club_id,title,'draft',master.get('date',''),master.get('location',''),float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source))))
         aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        # 第一版也进版本历史，之后任何一版都能被恢复，而不只是「上一版」。
+        vid,_n=_reserve_detail_version(c,club_id=club_id,activity_id=aid,origin='ai-generate')
+        _finalize_detail_version(c,version_id=vid,activity_id=aid,detail=detail,master=master,
+                                 credits=credit_cost('detail'),gateway=usage.provider,model=usage.model)
         # If the source has one clear date/price, create an initial sellable occurrence automatically.
         if master.get('date') and master.get('date')!='待发布':
             c.execute('INSERT INTO activity_occurrences(activity_id,club_id,start_at,price,capacity,status,label) VALUES(?,?,?,?,?,?,?)',(
                 aid,club_id,str(master.get('date')),float(master.get('price') or 0),int(master.get('capacity') or 0),'open','首发团期'))
-    return {'activityId':aid,'activityMaster':master,'detail':detail,'source':{'files':source['files'],'imageCount':len(source['images']),'media':source['media_manifest']}}
+    return {'activityId':aid,'activityMaster':master,'detail':detail,'gatewayMode':effective_gateway_mode()[0],'source':{'files':source['files'],'imageCount':len(source['images']),'media':source['media_manifest']}}
+
+@app.get('/api/club/{club_id}/ai-mode')
+def club_ai_mode(club_id:int):
+    """俱乐部端只读：当前 AI 生成走真实大模型还是演示引擎。
+    创建弹窗用它明示，避免老板误以为演示模板就是真实模型生成的内容。"""
+    club_or_404(club_id)
+    mode,origin=effective_gateway_mode()
+    return {'mode':mode,'origin':origin}
 
 @app.get('/api/club/{club_id}/activities/{activity_id}')
 def get_activity(club_id:int,activity_id:int):
     with conn() as c:
         a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+        if not a: raise HTTPException(404,'活动不存在')
         occ=rows(c.execute('SELECT * FROM activity_occurrences WHERE activity_id=? AND club_id=? ORDER BY start_at',(activity_id,club_id)))
-    if not a: raise HTTPException(404,'活动不存在')
-    a['activityMaster']=jload(a.pop('activity_master_json'),{});a['detail']=jload(a.pop('detail_json'),{});a['occurrences']=occ
+        # 能否「换一版」不只看有没有落盘 source：升级前生成的老活动可以用 Activity Master
+        # 反推出一份最小原始资料，同样能换叙事/排版，所以判定必须与 _activity_source 一致。
+        _src,_origin=_activity_source(a)
+        has_source=_origin!='missing'
+        versions=rows(c.execute('''SELECT id,version_no,origin,direction,facts_refreshed,created_at,credits_charged,gateway_mode,gateway_model,outline
+                                   FROM activity_detail_versions WHERE activity_id=? AND club_id=? AND status='ready' ORDER BY version_no DESC''',(activity_id,club_id)))
+        _master=_repair_master_media(jload(a.get('activity_master_json'),{}),_src)
+        # detail 必须是排版 JSON（detail_json，含 blocks[]），不是 Activity Master。
+        # 早期这里错写成读 activity_master_json：后台预览拿到的是没有 blocks 的 Master，
+        # 于是头图 / 正文图片 / 出行清单全渲染不出来（C 端 public_activity 一直是对的）。
+        _detail=jload(a.pop('detail_json',None),{}) or {}
+        if not [b for b in (_detail.get('blocks') or []) if isinstance(b,dict) and b.get('type')] and a.get('detail_version_id'):
+            # activities.detail_json 正常情况下与当前版本同步；万一不同步（老数据 / 中断的写入），
+            # 退回当前版本快照，保证后台预览永远不会是空的。
+            _dv=row(c.execute("SELECT detail_json FROM activity_detail_versions WHERE id=? AND activity_id=? AND club_id=? AND status='ready'",
+                              (a['detail_version_id'],activity_id,club_id)))
+            if _dv: _detail=jload(_dv['detail_json'],{}) or {}
+        _gear=_gear_plan_for(c,_master)   # 清单×商城推荐要在连接关闭前把在售商品查出来
+    # source_json 是内部原始资料（可能含成本、供应商报价），绝不出接口。
+    a.pop('source_json',None)
+    a.pop('activity_master_json',None)
+    a['activityMaster']=_master;a['detail']=_detail;a['occurrences']=occ
+    a['gearRecommendations']=_gear
+    current=a.get('detail_version_id')
+    for v in versions: v['isCurrent']=v['id']==current
+    cur=next((v for v in versions if v['isCurrent']),None)
+    a['detailVersion']={'currentId':current,'versionNo':(cur or {}).get('version_no'),'count':len(versions),
+        'latestNo':versions[0]['version_no'] if versions else 0,'createdAt':(cur or {}).get('created_at'),
+        'origin':(cur or {}).get('origin'),'versions':versions,'canRegenerate':has_source,
+        'cost':credit_cost('detail'),'gatewayMode':effective_gateway_mode()[0]}
     a['pointsPolicy']=activity_points_policy.from_activity(a).as_dict()
     a['refundPolicy']=activity_refund_policy.from_activity(a).as_dict()
     a['participantPolicy']=participant_service.from_activity(a).as_dict()
     return a
+
+
+@app.get('/api/club/{club_id}/activities/{activity_id}/detail-versions')
+def activity_detail_versions(club_id:int,activity_id:int):
+    with conn() as c:
+        a=row(c.execute('SELECT id,detail_version_id,source_json,activity_master_json FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+        if not a: raise HTTPException(404,'活动不存在')
+        vs=rows(c.execute('''SELECT id,version_no,origin,direction,facts_refreshed,narrative,outline,credits_charged,
+                                    gateway_mode,gateway_model,created_at,detail_json
+                             FROM activity_detail_versions WHERE activity_id=? AND club_id=? AND status='ready' ORDER BY version_no DESC''',(activity_id,club_id)))
+        can_regen=_activity_source(a)[1]!='missing'
+    for v in vs:
+        detail=jload(v.pop('detail_json'),{}) or {}
+        blocks=detail.get('blocks') or []
+        v['isCurrent']=v['id']==a.get('detail_version_id')
+        v['blockCount']=len([b for b in blocks if isinstance(b,dict) and b.get('type')])
+        v['blockTypes']=[str(b.get('type')) for b in blocks if isinstance(b,dict) and b.get('type')]
+    return {'currentId':a.get('detail_version_id'),'versions':vs,'cost':credit_cost('detail'),
+            'gatewayMode':effective_gateway_mode()[0],'canRegenerate':can_regen,
+            'nextVersionNo':(vs[0]['version_no']+1 if vs else 1)}
+
+
+@app.post('/api/club/{club_id}/activities/{activity_id}/detail-regenerate')
+async def activity_detail_regenerate(club_id:int,activity_id:int,payload:dict=Body(default={})):
+    """重新生成活动详情（老板对第一版不满意时的「换一版」）。
+
+    与 AI 宣发同一套计费：先校验额度，生成成功才扣 Credits（失败一律不扣）。
+    默认只重做叙事与排版——事实冻结，因此团期、价格政策、报名数据都不会被 AI 改写；
+    refreshFacts=true 时才允许用同一份原始资料复核标题/日期/地点/价格/人数。
+    """
+    club_or_404(club_id); ensure_credits(club_id,'detail')
+    direction=str(payload.get('direction') or '')[:800]
+    refresh=bool(payload.get('refreshFacts'))
+    with conn() as c:
+        a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+        if not a: raise HTTPException(404,'活动不存在')
+        # 先占位：并发的第二条请求会在这里被挡下，而不是各调一次 AI、各扣一次 Credits。
+        version_id,version_no=_reserve_detail_version(c,club_id=club_id,activity_id=activity_id,
+                                                      origin='ai-regenerate',direction=direction,facts_refreshed=refresh)
+    source,origin=_activity_source(a)
+    if not source:
+        with conn() as c: _release_detail_version(c,version_id)
+        raise HTTPException(409,'这场活动没有留下可复用的原始资料，无法重新生成；请用「AI 发活动」重新上传资料。')
+    master=_repair_master_media(jload(a['activity_master_json'],{}) or {},source)
+    previous=jload(a['detail_json'],{}) or {}
+    try:
+        result,usage=await regenerate_detail(club_id,source,master,direction=direction,
+                                             previous_detail=previous,version_no=version_no,refresh_facts=refresh)
+    except AIGatewayError as e:
+        with conn() as c: _release_detail_version(c,version_id)
+        raise HTTPException(502,str(e))
+    except Exception:
+        with conn() as c: _release_detail_version(c,version_id)
+        raise
+    detail=result.get('detail') or {}
+    blocks=[b for b in detail.get('blocks') or [] if isinstance(b,dict) and b.get('type')]
+    if not blocks:
+        # 没扣费、没落库：宁可保留上一版，也不要让 C 端详情页变空。
+        with conn() as c: _release_detail_version(c,version_id)
+        raise HTTPException(502,'AI 这一版没有返回可用的内容结构，已保留上一版；换个方向再试一次。')
+    detail['blocks']=blocks
+    new_master=result.get('activity_master') if refresh else master
+    new_master=new_master if isinstance(new_master,dict) and new_master else master
+    try:
+        cost=charge_credits(club_id,'detail',usage.usage_id)
+    except Exception:
+        with conn() as c: _release_detail_version(c,version_id)
+        raise
+    with conn() as c:
+        if refresh:
+            c.execute('UPDATE activities SET activity_master_json=?,title=?,event_date=?,location=?,price=?,capacity=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(
+                jdump(new_master),new_master.get('title') or a['title'],new_master.get('date') or a['event_date'],
+                new_master.get('location') or a['location'],float(new_master.get('price') or 0),int(new_master.get('capacity') or 0),activity_id))
+        c.execute('UPDATE activities SET detail_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(jdump(detail),activity_id))
+        _finalize_detail_version(c,version_id=version_id,activity_id=activity_id,detail=detail,master=new_master,
+                                 credits=cost,gateway=usage.provider,model=usage.model)
+    return {'activityId':activity_id,'versionId':version_id,'versionNo':version_no,'activityMaster':new_master,'detail':detail,
+            'source':origin,'factsRefreshed':refresh,
+            'ai':{'mode':effective_gateway_mode()[0],'provider':usage.provider,'model':usage.model},
+            'usage':{'creditsCharged':cost}}
+
+
+@app.post('/api/club/{club_id}/activities/{activity_id}/detail-versions/{version_id}/restore')
+def activity_detail_version_restore(club_id:int,activity_id:int,version_id:int):
+    """恢复到指定版本：只挪指针，不调用 AI，因此不消耗 Credits。"""
+    with conn() as c:
+        a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+        if not a: raise HTTPException(404,'活动不存在')
+        v=row(c.execute("SELECT * FROM activity_detail_versions WHERE id=? AND activity_id=? AND club_id=? AND status='ready'",(version_id,activity_id,club_id)))
+        if not v: raise HTTPException(404,'版本不存在')
+        detail=jload(v['detail_json'],{}) or {}
+        if not [b for b in detail.get('blocks') or [] if isinstance(b,dict) and b.get('type')]:
+            raise HTTPException(409,'这一版没有可用的内容结构，不能恢复。')
+        master=_repair_master_media(jload(v['master_json'],None) or jload(a['activity_master_json'],{}) or {},_activity_source(a)[0])
+        facts_changed=jdump(master)!=jdump(jload(a['activity_master_json'],{}) or {})
+        c.execute('UPDATE activities SET detail_json=?,activity_master_json=?,detail_version_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(
+            jdump(detail),jdump(master),version_id,activity_id))
+        if facts_changed:
+            c.execute('UPDATE activities SET title=?,event_date=?,location=?,price=?,capacity=? WHERE id=?',(
+                master.get('title') or a['title'],master.get('date') or a['event_date'],master.get('location') or a['location'],
+                float(master.get('price') or 0),int(master.get('capacity') or 0),activity_id))
+    return {'activityId':activity_id,'versionId':version_id,'versionNo':v['version_no'],
+            'factsRestored':facts_changed,'activityMaster':master,'detail':detail}
 
 @app.get('/api/club/{club_id}/activities/{activity_id}/points-policy')
 def get_activity_points_policy(club_id:int,activity_id:int):
@@ -418,6 +689,16 @@ async def channel_generate(club_id:int,activity_id:int,channel:str):
 @app.get('/api/club/{club_id}/content')
 def content_list(club_id:int):
     with conn() as c:return rows(c.execute('SELECT id,activity_id,channel,title,created_at FROM content_assets WHERE club_id=? ORDER BY id DESC',(club_id,)))
+
+@app.get('/api/club/{club_id}/content/{asset_id}')
+def content_detail(club_id:int,asset_id:int):
+    """已生成渠道内容的完整正文。没有这个接口，内容中心列表只能是死记录——
+    老板想再看一眼上周生成的公众号图文时无内容可渲染。严格按 club 归属过滤。"""
+    with conn() as c:
+        a=row(c.execute('SELECT id,activity_id,channel,title,body_json,created_at FROM content_assets WHERE id=? AND club_id=?',(asset_id,club_id)))
+    if not a: raise HTTPException(404,'内容不存在')
+    a['content']=jload(a.pop('body_json'),{})
+    return a
 
 @app.get('/api/club/{club_id}/registrations')
 def registrations(club_id:int):
@@ -716,7 +997,11 @@ def public_activity(activity_id:int):
         occ=rows(c.execute('SELECT *,MAX(capacity-sold,0) remaining FROM activity_occurrences WHERE activity_id=? AND status="open" ORDER BY start_at',(activity_id,)))
     if not a: raise HTTPException(404,'活动不存在或未发布')
     if IS_PROD and club_or_404(int(a['club_id']))['status']!='active':raise HTTPException(404,'not found')
-    a['activityMaster']=jload(a.pop('activity_master_json'),{});a['detail']=jload(a.pop('detail_json'),{});a['occurrences']=occ
+    _pub_src,_pub_origin=_activity_source(a)
+    a.pop('source_json',None)   # 原始资料属俱乐部内部资料，C 端一律不下发
+    a['activityMaster']=_repair_master_media(jload(a.pop('activity_master_json'),{}),_pub_src);a['detail']=jload(a.pop('detail_json'),{});a['occurrences']=occ
+    # 出行清单 × 商城在售装备：让 C 端报名页能直接把清单变成可下单的装备推荐
+    with conn() as _gc:a['gearRecommendations']=_gear_plan_for(_gc,a['activityMaster'])
     cov=a.get('cover')
     if cov and str(cov).startswith('/static/'):
         a['cover']='/api/public/activities/%d/media/%s'%(activity_id,quote(str(cov)[len('/static/'):],safe='/'))
@@ -725,7 +1010,7 @@ def public_activity(activity_id:int):
     a['participantPolicy']=participant_service.from_activity(a).as_dict()
     if IS_PROD:
         # Public activity is not a dump of private activity_master_json (internalData).
-        a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy')}
+        a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy','gearRecommendations')}
         master=a.get('activityMaster') or {}
         if isinstance(master,dict):
             public_keys={'title','date','location','price','capacity','itinerary','fees','checklist','services','media'}
@@ -767,14 +1052,15 @@ def public_activity_media(activity_id:int,asset_path:str):
     # Published-activity allowlist, NOT general access to /static/uploads.
     # Only files explicitly referenced in the published editorial master are readable.
     with conn() as c:
-        a=row(c.execute("""SELECT a.activity_master_json,a.cover,cl.status club_status
+        a=row(c.execute("""SELECT a.activity_master_json,a.source_json,a.cover,cl.status club_status
             FROM activities a JOIN clubs cl ON cl.id=a.club_id
             WHERE a.id=? AND a.status='published' """,(activity_id,)))
     if not a or a['club_status']!='active':raise HTTPException(404,'not found')
     original='/static/'+unquote(asset_path)
     file_path=_safe_media_path(original)
     if not file_path:raise HTTPException(404,'not found')
-    master=jload(a['activity_master_json'],{})
+    # 白名单必须与详情页看到的同一份清单：媒体 url 缺失时这里会误判 404，C 端整页图片打不开。
+    master=_repair_master_media(jload(a['activity_master_json'],{}),_activity_source(a)[0])
     allowed={str(m.get('url')) for m in master.get('media',[]) if isinstance(m,dict)}
     cover=str(a.get('cover') or '')
     if cover: allowed.add(cover)

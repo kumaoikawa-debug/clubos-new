@@ -2,8 +2,53 @@ let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
 window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='credits')await loadCredits();if(v==='analytics')await loadClubBI()};
 async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`AI Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>'}
-async function loadActivities(){skel('#activityRows',6);let a=await api(`/api/club/${CLUB}/activities`);$('#activityRows').innerHTML=a.length?`<div class="act-grid">`+a.map(x=>{const cov=x.id%6+1;const draft=x.status==='draft';const date=x.event_date?`<span>${esc(dateText(x.event_date))}</span>`:'';return `<div class="act-card" onclick="openActivity(${x.id})"><div class="act-card__cover${x.cover?'':` cov-${cov}`}"${x.cover?` style="background-image:url('/api/club/${CLUB}/activities/${x.id}/cover');background-size:cover;background-position:center"`:''}>${x.cover?'<span class="cover-flag cover-flag--ok">🖼 封面</span>':'<span class="cover-flag cover-flag--missing">未设封面</span>'}<div class="act-card__coverInner"><span class="act-card__loc">📍 ${esc(x.location||'户外')}</span><h3 class="act-card__title">${esc(x.title)}</h3></div></div><div class="act-card__body"><div class="act-card__meta">${date}<span class="badge ${draft?'badge--soon':'badge--published'} badge--dot">${draft?'草稿':'已发布'}</span></div><div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:4px"><span class="act-card__price">${money(x.price)}</span><button class="btn secondary" onclick="event.stopPropagation();openActivity(${x.id})">查看成品</button></div></div></div>`}).join('')+`</div>`:'<div class="empty">还没有活动，先让 AI 做一场。</div>'}
-async function openActivity(id){let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];$('#activityDetail').innerHTML=`<div class="panel-title"><div><div class="eyebrow">AI EDITORIAL PREVIEW</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期</div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:'<span class="tag">已发布</span>'}<a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}" target="_blank" style="text-decoration:none">打开C端</a></div></div><div class="card section"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button></div></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="notice" style="margin:10px 0 18px">AI 自己决定页面叙事、图片节奏和区块顺序；这里没有模板 A/B/C。</div>${renderPromo(a.detail,a.activityMaster,{hideButton:true})}${renderInfoStack(a.activityMaster)}${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}<div class="card section"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(o.label||o.start_at)}</div><div class="list-row__sub">${money(o.price)} · 已售 ${o.sold}/${o.capacity}</div></div>`).join('')||'<div class="empty">暂无团期</div>'}</div>`;setTimeout(()=>$('#activityDetail')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}
+/* ===== 活动中心：可搜索的活动栏 + 右侧成品预览（2026-09-26）=====
+   过去 #activityRows 里又套了一层 .act-grid：外层网格只给内层一个格子宽，
+   于是卡片被压成一列、右边永远空一大片。现在去掉嵌套，改成「左栏活动 + 右栏预览」。 */
+let _acts=[],_actOpenId=null;
+async function loadActivities(){
+  skel('#activityRows',6);
+  const s=$('#activitySearch'); if(s&&!s.__wired){s.__wired=true;s.oninput=()=>renderActivityList()}
+  const so=$('#activitySort'); if(so&&!so.__wired){so.__wired=true;so.onchange=()=>renderActivityList()}
+  _acts=await api(`/api/club/${CLUB}/activities`);
+  renderActivityList();
+}
+function actDateKey(a){const m=String(a.event_date||'').match(/(\d{4})\D{1,3}(\d{1,2})\D{1,3}(\d{1,2})/);if(!m)return '';return m[1]+'-'+String(m[2]).padStart(2,'0')+'-'+String(m[3]).padStart(2,'0')}
+function actSorter(sort){
+  return {'date-asc':(x,y)=>(x.k||'9999').localeCompare(y.k||'9999')||(x.a.id-y.a.id),
+          'date-desc':(x,y)=>(y.k||'0000').localeCompare(x.k||'0000')||(y.a.id-x.a.id),
+          'new':(x,y)=>y.a.id-x.a.id,
+          'title':(x,y)=>String(x.a.title||'').localeCompare(String(y.a.title||''),'zh'),
+          'status':(x,y)=>(x.a.status==='published'?0:1)-(y.a.status==='published'?0:1)||(y.a.id-x.a.id)}[sort]
+    ||((x,y)=>(x.k||'9999').localeCompare(y.k||'9999')||(x.a.id-y.a.id));
+}
+function syncActRail(){$$('.act-mini').forEach(el=>el.classList.toggle('active',Number(el.dataset.id)===_actOpenId))}
+function activityMini(a,k){
+  const draft=a.status==='draft';
+  const thumb=a.cover?` style="background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')"`:` cov-${a.id%6+1}`;
+  return `<button type="button" class="act-mini${_actOpenId===a.id?' active':''}" data-id="${a.id}" onclick="openActivity(${a.id})">`
+    +`<span class="act-mini__thumb"${thumb}>${a.cover?'':(draft?'✎':'⛰')}<span class="cover-flag ${a.cover?'cover-flag--ok':'cover-flag--missing'}">${a.cover?'封面':'未设封面'}</span></span>`
+    +`<span class="act-mini__body"><span class="act-mini__title">${esc(a.title)}</span>`
+    +`<span class="act-mini__meta"><span>${esc(dateText(k||a.event_date))}</span><span class="badge ${draft?'badge--soon':'badge--published'} badge--dot">${draft?'草稿':'已发布'}</span><span class="act-mini__price">${money(a.price)}</span></span></span>`
+    +`</button>`;
+}
+function renderActivityList(){
+  const box=$('#activityRows'); if(!box)return;
+  const q=($('#activitySearch')?.value||'').trim().toLowerCase();
+  const sort=$('#activitySort')?.value||'date-asc';
+  const rows=_acts.map(a=>({a,k:actDateKey(a)})).filter(({a})=>{
+    if(!q)return true;
+    return [a.title,a.location,a.event_date,a.status,String(a.price)].filter(Boolean).join(' ').toLowerCase().includes(q);
+  });
+  rows.sort(actSorter(sort));
+  const cnt=$('#actRailCount'); if(cnt)cnt.textContent=(q?`${rows.length} / ${_acts.length}`:`${rows.length}`)+' 场活动';
+  box.innerHTML=rows.map(({a,k})=>activityMini(a,k)).join('')
+    ||`<div class="reg-none">${q?'没有匹配的活动，换个关键词或清空搜索。':'还没有活动，点右上角「＋ AI 发活动」。'}</div>`;
+  syncActRail();
+}
+function goActivity(id){_actOpenId=Number(id);go('activities');openActivity(Number(id))}
+function goContentForActivity(id){window.__contentActId=Number(id);go('content')}
+async function openActivity(id){try{_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`<div class="panel-title"><div><div class="eyebrow">AI EDITORIAL PREVIEW</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期</div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:'<span class="tag">已发布</span>'}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}" target="_blank" style="text-decoration:none">打开C端</a>${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}</div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="notice" style="margin:10px 0 18px">AI 自己决定页面叙事、图片节奏和区块顺序；这里没有模板 A/B/C。</div>${renderPromo(a.detail,a.activityMaster,{hideButton:true})}${renderDetailVersions(a.detailVersion,id)}<div class="card section"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button></div></div></div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true})}${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}<div class="card section"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(o.label||o.start_at)}</div><div class="list-row__sub">${money(o.price)} · 已售 ${o.sold}/${o.capacity}</div></div>`).join('')||'<div class="empty">暂无团期</div>'}</div>`;if(window.matchMedia&&matchMedia('(max-width:1180px)').matches)setTimeout(()=>pane.scrollIntoView({behavior:'smooth',block:'start'}),60);syncActRail()}catch(e){showAlert({title:'打开活动失败',message:e.message})}}
 
 function pointsPolicyCard(a){
   const p=a.pointsPolicy||{}; const e=p.effective||{};
@@ -61,36 +106,152 @@ async function saveRefundPolicy(id){
   const payload={enabled:$('#rpEnabled').checked,rules,afterStartCashRefundPercent:Number($('#rpAfter').value||0),note:$('#rpNote').value.trim()};
   try{await api(`/api/club/${CLUB}/activities/${id}/refund-policy`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('活动退款规则已保存');await openActivity(id)}catch(e){showAlert({title:'操作失败',message:e.message})}
 }
-async function quickAddOccurrence(id){const v=await showForm({title:'新增团期',submitText:'添加团期',fields:[{name:'startAt',label:'团期日期/时间',value:'2026-11-07 08:00',required:true,help:'格式：YYYY-MM-DD HH:MM'},{name:'price',label:'价格（元）',type:'number',value:498,min:0},{name:'capacity',label:'名额',type:'number',value:30,min:1}]});if(!v||!v.startAt)return;try{await api(`/api/club/${CLUB}/activities/${id}/occurrences`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({startAt:v.startAt,price:Number(v.price||0),capacity:Number(v.capacity||0),label:String(v.startAt).slice(0,10)+' 团期'})});toast('团期已添加');openActivity(id)}catch(e){showAlert({title:'添加失败',message:e.message})}}
-async function publishActivity(id){try{await api(`/api/club/${CLUB}/activities/${id}/publish`,{method:'POST'});toast('活动已发布到 C 端');await openActivity(id);await loadActivities()}catch(e){showAlert({title:'操作失败',message:e.message})}}
-async function uploadCover(id){let f=$('#coverFile')?.files?.[0];if(!f){toast('请先选择一张图片');return}let fd=new FormData();fd.append('file',f);try{await api(`/api/club/${CLUB}/activities/${id}/cover`,{method:'POST',body:fd});toast('封面已更新');await openActivity(id);await loadActivities()}catch(e){showAlert({title:'操作失败',message:e.message})}}
+/* ===== 活动详情：重新生成 / 换一版 / 版本历史 / 恢复 ===== */
+function renderDetailVersions(dv,actId){
+  if(!dv) return '';
+  const cost=dv.cost||0;
+  const mode=dv.gatewayMode==='live'?'真实大模型':'演示(mock)';
+  const items=(dv.versions||[]).map(v=>{
+    const isCur=!!v.isCurrent;
+    const origin=v.origin==='ai-regenerate'?'换版':(v.origin==='ai-generate'?'首版':(v.origin==='legacy'?'初始版':'版本'));
+    const dir=v.direction?`<div class="sub" style="margin-top:2px">方向：${esc(v.direction)}</div>`:'';
+    const refresh=v.facts_refreshed?'<span class="tag warn" style="margin-left:6px">已复核事实</span>':'';
+    const restore=isCur?'<span class="tag">当前版本</span>':`<button class="btn ghost" onclick="restoreDetailVersion(${actId},${v.id})">恢复这一版</button>`;
+    return `<div style="display:flex;gap:12px;align-items:center;justify-content:space-between;padding:10px 0;border-top:1px solid var(--line,#eee)" class="list-row"><div class="list-row__main" style="flex:1"><div class="list-row__title">第 ${v.version_no} 版 · ${origin} ${refresh}</div><div class="sub">${esc(v.created_at||'')} · 消耗 ${v.credits_charged||0} Credits</div>${dir}</div><div>${restore}</div></div>`;
+  }).join('');
+  const hint=dv.canRegenerate?'':`<div class="notice warn" style="margin-bottom:10px">这场活动没有留下可复用的原始资料，无法换一版；请用「AI 发活动」重新上传资料。</div>`;
+  const addBtn=dv.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${actId})">＋ 换一版</button>`:'';
+  return `<div class="card section"><div class="panel-title"><div><h3>版本历史</h3><div class="sub">第 ${dv.versionNo||1} 版 / 共 ${dv.count||1} 版 · ${mode} · 每版 ${cost} Credits</div></div>${addBtn}</div>${hint}${items||'<div class="empty">暂无版本</div>'}</div>`;
+}
+let _regenDetailBusy=false;
+async function openRegenerateModal(id){
+  try{
+    const r=await showForm({title:'重新生成 / 换一版',desc:'对当前这一版不满意？给个方向，AI 重新做叙事和排版。默认只换叙事/排版、保留全部事实（价格、日期、地点、人数、团期、政策都不会变）。',wide:true,fields:[
+      {name:'direction',label:'换版方向 / 要求（可选）',type:'textarea',placeholder:'例如：更年轻化一点、多放实拍图、换个更有冲击力的开场……不填则 AI 自己换一个角度。'},
+      {name:'mode',label:'换版方式',type:'select',value:'freeze',options:[
+        {value:'freeze',label:'只换叙事/排版（保留所有事实，推荐）'},
+        {value:'refresh',label:'连事实一起复核（仅当首版把日期/价格等读错了才用）'}
+      ]}
+    ],submitText:'生成新的一版'});
+    if(!r) return;
+    await regenerateDetail(id,r.direction||'',r.mode==='refresh');
+  }catch(e){ showAlert({title:'换版未开始',message:e.message}) }
+}
+async function regenerateDetail(id,direction,refreshFacts){
+  if(_regenDetailBusy){ toast('正在生成新的一版，请稍候…'); return; }
+  _regenDetailBusy=true;
+  try{
+    const r=await api(`/api/club/${CLUB}/activities/${id}/detail-regenerate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({direction:direction||'',refreshFacts:!!refreshFacts})});
+    toast(`已生成第 ${r.versionNo} 版`);
+    await openActivity(id);
+  }catch(e){ showAlert({title:'换版失败',message:e.message}); }
+  finally{ _regenDetailBusy=false; }
+}
+async function restoreDetailVersion(id,versionId){
+  try{
+    const ok=await showConfirm({title:'恢复到这一版？',message:'恢复不消耗 Credits，也不会重新调用 AI；只是把当前展示的详情切回这一版。',confirmText:'恢复这一版'});
+    if(!ok) return;
+    await api(`/api/club/${CLUB}/activities/${id}/detail-versions/${versionId}/restore`,{method:'POST'});
+    toast('已恢复到该版本');
+    await openActivity(id);
+  }catch(e){ showAlert({title:'恢复失败',message:e.message}) }
+}
+async function uploadCover(id){let f=$('#coverFile')?.files?.[0];if(!f){toast('请先选择一张图片');return}let fd=new FormData();fd.append('file',f);try{await api(`/api/club/${CLUB}/activities/${id}/cover`,{method:'POST',body:fd});toast('封面已更新');window.channelRenderResetCtx&&channelRenderResetCtx(Number(id));await openActivity(id);await loadActivities()}catch(e){showAlert({title:'操作失败',message:e.message})}}
 $('#createForm').onsubmit=async e=>{e.preventDefault();let b=$('#genBtn');b.disabled=true;b.textContent='AI正在读资料、选图并排版…';try{let fd=new FormData(e.target);let r=await api(`/api/club/${CLUB}/activities/ai-generate`,{method:'POST',body:fd});modal('createModal',false);toast(`活动详情已完成 · 识别 ${r.source.imageCount} 张图片`);await loadDash();go('activities');await openActivity(r.activityId)}catch(err){showAlert({title:'AI 生成失败',message:err.message})}finally{b.disabled=false;b.textContent='AI直接生成详情'}};
-async function loadContent(){skel('#contentList',4);let acts=await api(`/api/club/${CLUB}/activities`);let a=acts[0];if(!a){$('#channelArea').innerHTML='<div class="empty">先创建一场活动。</div>';return}currentActivity=a;$('#channelArea').innerHTML=[['wechat','微信公众号','基于同一活动重新编排公众号阅读节奏'],['xhs','小红书','独立标题、Hook、正文、图片顺序'],['poster','活动海报','自动提炼事实与视觉主图建议'],['recap','活动回顾','只有真实现场素材后才生成']].map(x=>`<div class="card channel-card"><div><strong>${x[1]}</strong><p>${x[2]}</p></div><button class="btn secondary" onclick="genChannel('${x[0]}',${a.id})">AI生成</button></div>`).join('');let list=await api(`/api/club/${CLUB}/content`);$('#contentList').innerHTML=list.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title||x.channel)}</div><div class="list-row__sub">活动 #${x.activity_id} · ${x.created_at}</div></div><div class="list-row__end"><span class="tag">${x.channel}</span></div></div>`).join('')||'<div class="empty">还没有渠道内容</div>'}
-async function genChannel(ch,id){try{let d=await api(`/api/club/${CLUB}/activities/${id}/channel/${ch}`,{method:'POST'});showJson(ch,d);await loadContent();await loadCredits();toast('内容已生成')}catch(e){showAlert({title:'操作失败',message:e.message})}}
-function showJson(title,data){let cover='';if(data&&data.coverUrl)cover=`<div class="channel-cover"><div class="eyebrow">主视觉封面（已接入真实封面）</div><img src="${esc(data.coverUrl)}" alt="cover" style="max-width:100%;max-height:340px;border-radius:14px;margin-top:8px;object-fit:cover;display:block"></div>`;let el=document.createElement('div');el.className='modal show';el.innerHTML=`<div class="modal-box"><div class="modal-head"><div><div class="eyebrow">AI CHANNEL OUTPUT</div><h2 style="margin:4px 0">${esc(title)}</h2></div><button class="x">×</button></div>${cover}<pre style="white-space:pre-wrap;line-height:1.7;background:#f6f7f6;padding:16px;border-radius:14px">${esc(JSON.stringify(data,null,2))}</pre></div>`;el.querySelector('.x').onclick=()=>el.remove();el.onclick=e=>{if(e.target===el)el.remove()};document.body.appendChild(el)}
-async function loadRegs(){skel('#regRows',5);
+/* ===== AI 内容中心：生成 → 直接出成品（公众号图文 / 小红书卡片 / 海报）=====
+   过去 genChannel 把接口返回的 JSON 塞进 <pre>，老板拿到的是一堆代码。
+   现在交给 static/channel-render.js 渲染成能直接用的成品，并可复制 / 下载。 */
+async function loadContent(){
+  skel('#channelArea',2);
+  const acts=await api(`/api/club/${CLUB}/activities`);
+  const sel=$('#contentActivity');
+  if(!acts.length){
+    if(sel)sel.innerHTML='<option value="">还没有活动</option>';
+    $('#channelArea').innerHTML='<div class="empty">先创建一场活动，再让 AI 做内容。</div>';
+    $('#contentList').innerHTML='<div class="empty">还没有渠道内容</div>';
+    return;
+  }
+  if(sel){
+    const want=Number(window.__contentActId||0);
+    const keep=acts.some(a=>a.id===want)?want:acts[0].id;
+    sel.innerHTML=acts.map(a=>`<option value="${a.id}"${a.id===keep?' selected':''}>${esc(a.title)}${a.status==='draft'?'（草稿）':''}</option>`).join('');
+    sel.onchange=()=>{window.__contentActId=Number(sel.value)||null;loadContent()};
+    window.__contentActId=keep;
+  }
+  const a=acts.find(x=>x.id===Number(window.__contentActId))||acts[0];
+  currentActivity=a;
+  const cards=[
+    ['wechat','微信公众号图文','AI 重排公众号阅读节奏；生成后可直接预览，并一键复制带格式图文到公众号编辑器'],
+    ['xhs','小红书图文','独立标题、Hook、正文和图片顺序；输出 3:4 卡片图，可整组下载'],
+    ['poster','活动招募海报','用活动真实封面 + AI 文案在本地合成 1080×1440 海报，可直接下载'],
+    ['recap','活动回顾','只在有真实现场素材时才写；素材不足会明确告诉你缺什么，不编造']
+  ];
+  $('#channelArea').innerHTML=cards.map(x=>`<div class="card channel-card"><div><strong>${x[1]}</strong><p>${x[2]}</p><div class="sub">当前活动：${esc(a.title)}</div></div><button class="btn secondary" onclick="genChannel('${x[0]}',${a.id})">AI 生成${x[1]}</button></div>`).join('');
+  const list=await api(`/api/club/${CLUB}/content`);
+  $('#contentList').innerHTML=list.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title||channelLabel(x.channel))}</div><div class="list-row__sub">活动 #${x.activity_id} · ${esc(x.created_at||'')}</div></div><div class="list-row__end"><span class="tag">${esc(channelLabel(x.channel))}</span><button class="btn secondary" onclick="openContentAsset(${x.id})">查看成品</button></div></div>`).join('')
+    ||'<div class="empty">还没有渠道内容</div>';
+}
+function channelLabel(c){return (window.ChannelRender&&ChannelRender.label(c))||c}
+async function genChannel(ch,id){
+  try{
+    // 生成会真花 AI Credits，动手前必须讲清楚。本地渲染成品（复制 / 下载）不再另计费。
+    if(window.uxConfirm&&!await uxConfirm({title:'生成'+channelLabel(ch)+'内容',
+      message:'系统会读取这场活动的真实资料并调用一次 AI，产生一次 AI Credits 计费。生成后直接给成品，可以复制 / 下载。',
+      confirmText:'开始生成'}))return;
+    const d=await api(`/api/club/${CLUB}/activities/${id}/channel/${ch}`,{method:'POST'});
+    toast('内容已生成，正在渲染成品…');
+    await openChannelOutput(ch,d,{activityId:Number(id)});
+    await loadContent();
+    if(window.loadCredits)await loadCredits();
+  }catch(e){showAlert({title:'生成失败',message:e.message})}
+}
+async function openContentAsset(assetId){
+  try{
+    const d=await api(`/api/club/${CLUB}/content/${assetId}`);
+    await openChannelOutput(d.channel,d.content||{},{activityId:Number(d.activity_id)});
+  }catch(e){showAlert({title:'打开失败',message:e.message})}
+}
+/* ===== 报名与执行：以单个活动为基础，再按档期（团期）拆开 =====
+   老板的原话：把所有档期汇总到一起，后台就分不清哪些人是 9 号的、哪些人是 10 号的。
+   所以第一层是活动，点进去后每个档期一块：这块只列它自己的报名人 + 它自己的执行准备。 */
+let _regData=null;
+async function loadRegs(){
+  skel('#regRows',6);
   let [acts,regs,occs,refunds]=await Promise.all([
     api(`/api/club/${CLUB}/activities`),
     api(`/api/club/${CLUB}/registrations`),
     api(`/api/club/${CLUB}/execution/occurrences`),
     api(`/api/club/${CLUB}/refunds`)
   ]);
+  _regData={acts,regs,occs,refunds};
   window.__regsActs=acts; window.__regsRegs=regs; window.__regsOccs=occs;
-  const regByAct={}, occByAct={};
+  const s=$('#regSearch'); if(s&&!s.__wired){s.__wired=true;s.oninput=()=>renderRegRows()}
+  renderRegRows();
+  renderRefundReview(refunds);
+}
+function regPcount(x){return Number(x.active_participants||x.participant_count||1)}
+function regCash(rl){return rl.filter(x=>x.status==='paid'||x.status==='completed').reduce((s,x)=>s+Number(x.amount||0),0)}
+function renderRegRows(){
+  const box=$('#regRows'); if(!box||!_regData)return;
+  const {acts,regs,occs}=_regData;
+  const q=($('#regSearch')?.value||'').trim().toLowerCase();
+  const regByAct={},occByAct={};
   regs.forEach(x=>{(regByAct[x.activity_id]=regByAct[x.activity_id]||[]).push(x)});
   occs.forEach(o=>{(occByAct[o.activity_id]=occByAct[o.activity_id]||[]).push(o)});
-  $('#regRows').innerHTML=acts.map(a=>{
-    const rs=regByAct[a.id]||[];
-    const parts=rs.reduce((s,x)=>s+(x.active_participants||x.participant_count||1),0);
-    const amt=rs.reduce((s,x)=>s+(x.amount||0),0);
-    const pInfo=rs.reduce((s,x)=>s+Math.max(0,(x.active_participants||x.participant_count||1)-(x.complete_participants||0)),0);
-    const ins=rs.reduce((s,x)=>s+(x.insurance_pending||0),0);
+  const list=acts.filter(a=>!q||[a.title,a.location,a.event_date].filter(Boolean).join(' ').toLowerCase().includes(q));
+  const cnt=$('#regCount'); if(cnt)cnt.textContent=`${list.length} 场活动 · ${regs.length} 笔报名`;
+  box.innerHTML=list.map(a=>{
+    const rs=regByAct[a.id]||[], os=occByAct[a.id]||[];
+    const parts=rs.reduce((s,x)=>s+regPcount(x),0);
+    const pInfo=rs.reduce((s,x)=>s+Math.max(0,regPcount(x)-Number(x.complete_participants||0)),0);
+    const ins=rs.reduce((s,x)=>s+Number(x.insurance_pending||0),0);
     const rf=rs.filter(x=>x.refund_status==='requested').length;
-    const os=occByAct[a.id]||[];
     const exec=os.length?os.map(o=>execStateLabel[o.execution_status||'preparing']||o.execution_status).join(' / '):'未排期';
     const execChip=os.length?`<span class="tag ${os.every(o=>o.execution_status==='completed')?'':'orange'}">执行：${esc(exec)}</span>`:`<span class="tag">未排期</span>`;
-    return `<div class="list-row" style="cursor:pointer" onclick="openActivityRegs(${a.id})"><div class="list-row__main"><div class="list-row__title">${esc(a.title)}</div><div class="list-row__sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)}</div><div class="list-row__sub">报名 ${rs.length} 笔 · ${parts} 人参加 · 收款 ${money(amt)}${pInfo?` · 资料待补 ${pInfo}`:''}${ins?` · 保险 ${ins}`:''}${rf?` · 退款 ${rf}`:''}</div></div><div class="list-row__end"><span class="tag ${a.status==='draft'?'orange':''}">${esc(a.status)}</span>${execChip}</div></div>`
-  }).join('')||'<div class="empty">还没有活动，先让 AI 发一场。</div>';
+    return `<div class="list-row" style="cursor:pointer" onclick="openActivityRegs(${a.id})"><div class="list-row__main"><div class="list-row__title">${esc(a.title)}</div><div class="list-row__sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)}</div><div class="list-row__sub"><b>${os.length} 个档期</b> · 报名 ${rs.length} 笔 / ${parts} 人参加 · 实收 ${money(regCash(rs))}${pInfo?` · 资料待补 ${pInfo}`:''}${ins?` · 保险 ${ins}`:''}${rf?` · 待审退款 ${rf}`:''}</div></div><div class="list-row__end"><span class="tag ${a.status==='draft'?'orange':''}">${esc(a.status)}</span>${execChip}<span class="sub">按档期 ›</span></div></div>`;
+  }).join('')||`<div class="empty">${q?'没有匹配的活动':'还没有活动，先让 AI 发一场。'}</div>`;
+}
+function renderRefundReview(refunds){
   const box=$('#refundReviewList'); if(!box)return;
   box.innerHTML=refunds.map(r=>`<div class="notice" style="margin-bottom:10px"><div class="panel-title"><div><strong>${esc(r.activity_title)}</strong> · ${r.refund_scope==='participant'?`参加人 ${esc(r.participant_name||'')}`:`付款人 ${esc(r.user_name)}`}<div class="sub">${esc(r.occurrence_label||r.start_at||'')} · ${r.refund_scope==='participant'?'单人退款':'整单退款'} · 原现金 ${money(r.original_cash_amount||r.paid_cash)} · 本次退 ${money(r.cash_amount)}${r.refund_percent!=null?`（${Number(r.refund_percent)}%）`:''}${Number(r.retained_cash_amount||0)>0?` · 取消费 ${money(r.retained_cash_amount)}`:''}</div></div><span class="tag ${r.status==='requested'?'orange':''}">${esc(r.status)}</span></div><div class="sub">规则：${esc(r.policy_label||'—')} · 原因：${esc(r.reason||'')}${r.refund_scope==='participant'?` · 分摊活动积分 ${r.allocated_club_points||0} / 装备积分 ${r.allocated_gear_points||0}`:''}</div>${r.status==='requested'?`<div style="display:flex;gap:8px;margin-top:10px"><button class="btn secondary" onclick="approveRefund('${r.id}')">同意退款</button><button class="btn ghost" onclick="rejectRefund('${r.id}')">拒绝</button></div>`:''}${r.status==='processing'?`<div class="sub" style="margin-top:8px">已审核通过，等待支付渠道退款。</div>`:''}${r.status==='rejected'&&r.decision_note?`<div class="sub" style="margin-top:8px">审核说明：${esc(r.decision_note)}</div>`:''}</div>`).join('')||'<div class="empty">暂无退款申请</div>'
 }
@@ -98,10 +259,7 @@ async function showParticipants(regId){
   try{let d=await api(`/api/club/${CLUB}/registrations/${regId}/participants`);let el=document.createElement('div');el.className='modal show';el.innerHTML=`<div class="modal-box"><div class="modal-head"><div><div class="eyebrow">PARTICIPANTS</div><h2 style="margin:4px 0">参加人名单</h2></div><button class="x">×</button></div>${(d.participants||[]).map(p=>`<div class="notice" style="margin-bottom:10px;${p.status==='refunded'?'opacity:.6':''}"><strong>${esc(p.name)}</strong> · ${esc(p.phone||'')} <span class="tag">${p.status==='refunded'?'已退出':`资料${p.form_status==='complete'?'完整':'待补'}`}</span><div class="sub">证件 ${esc(p.id_type||'—')} ${esc(p.id_number||'—')} · 紧急联系人 ${esc(p.emergency_contact_name||'—')} ${esc(p.emergency_contact_phone||'')}</div><div class="sub">保险：${esc(p.insurance_status||'pending')} ${esc(p.insurance_provider||'')} ${esc(p.insurance_policy_no||'')} · 退款 ${esc(p.refund_status||'none')}</div>${p.status!=='refunded'?`<button class="btn ghost" style="margin-top:7px" onclick="clubInsurance(${p.id},${regId})">更新保险</button>`:''}</div>`).join('')||'<div class="empty">暂无参加人</div>'}</div>`;el.querySelector('.x').onclick=()=>el.remove();el.onclick=e=>{if(e.target===el)el.remove()};document.body.appendChild(el)}catch(e){showAlert({title:'操作失败',message:e.message})}
 }
 
-async function clubInsurance(pid,regId){const v=await showForm({title:'更新保险信息',submitText:'保存',fields:[{name:'status',label:'保险状态',type:'select',value:'insured',options:[{value:'pending',label:'待处理'},{value:'submitted',label:'已提交'},{value:'insured',label:'已投保'},{value:'failed',label:'失败'},{value:'not_required',label:'无需保险'}]},{name:'provider',label:'保险公司',value:''},{name:'policyNo',label:'保单号',value:''}]});if(!v)return;try{await api(`/api/club/${CLUB}/participants/${pid}/insurance`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:v.status,provider:v.provider,policyNo:v.policyNo})});toast('保险状态已更新');document.querySelector('.modal.show')?.remove();showParticipants(regId);loadRegs()}catch(e){showAlert({title:'保存失败',message:e.message})}}
 
-async function approveRefund(id){try{let r=await api(`/api/club/${CLUB}/refunds/${id}/approve`,{method:'POST'});toast(r.status==='succeeded'?'退款已完成':'已同意，等待支付渠道退款');loadRegs()}catch(e){showAlert({title:'操作失败',message:e.message})}}
-async function rejectRefund(id){const v=await showForm({title:'拒绝退款',submitText:'确认拒绝',fields:[{name:'note',label:'拒绝原因',type:'textarea',value:'不符合本活动退款规则',required:true}]});if(!v)return;try{await api(`/api/club/${CLUB}/refunds/${id}/reject`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:v.note})});toast('已拒绝退款');loadRegs()}catch(e){showAlert({title:'操作失败',message:e.message})}}
 async function loadMembers(){skel('#tierList',3);
   let [a,tiers,benefits,reds]=await Promise.all([
     api(`/api/club/${CLUB}/members`),api(`/api/club/${CLUB}/membership/tiers`),
@@ -113,8 +271,6 @@ async function loadMembers(){skel('#tierList',3);
   $('#clubBenefitRedemptions').innerHTML=reds.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name)}</div> · ${esc(x.title)}<div class="list-row__sub">${x.points_spent} ${x.point_type==='club'?'活动积分':'装备积分'} · ${x.funding_owner==='CLUB'?'俱乐部承担':'平台承担'} · ${esc(x.voucher_code||'')}</div></div></div>`).join('')||'<div class="empty">暂无兑换记录</div>';
 }
 async function recalcMembership(){await api(`/api/club/${CLUB}/membership/recalculate`,{method:'POST'});toast('会员等级已重新计算');loadMembers()}
-async function addTier(){const v=await showForm({title:'新增会员等级',submitText:'创建',fields:[{name:'name',label:'等级名称',value:'钻石会员',required:true},{name:'spend',label:'累计活动消费门槛（元）',type:'number',value:5000,min:0},{name:'count',label:'累计活动次数门槛',type:'number',value:10,min:0},{name:'rank',label:'等级排序 Rank',type:'number',value:30,min:0}]});if(!v||!v.name)return;try{await api(`/api/club/${CLUB}/membership/tiers`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v.name,rank:Number(v.rank||0),minActivitySpend:Number(v.spend||0),minActivityCount:Number(v.count||0),qualificationMode:'ANY',benefits:['专属会员权益']})});toast('会员等级已新增');loadMembers()}catch(e){showAlert({title:'创建失败',message:e.message})}}
-async function addClubBenefit(){const v=await showForm({title:'新增俱乐部福利',submitText:'创建福利',fields:[{name:'title',label:'福利名称',value:'活动 ¥30 抵扣券',required:true},{name:'cost',label:'需要多少活动积分',type:'number',value:3000,min:0},{name:'kind',label:'福利类型',type:'select',value:'coupon',options:[{value:'coupon',label:'活动现金抵扣券（结算直接抵现）'},{value:'service',label:'服务类福利'}]},{name:'value',label:'抵扣金额（元，仅抵扣券）',type:'number',value:30,min:0,help:'选择“服务类福利”时可留 0'}]});if(!v||!v.title)return;const coupon=v.kind==='coupon';try{await api(`/api/club/${CLUB}/benefits`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:v.title,description:'本俱乐部会员专属福利',pointsType:'club',pointsCost:Number(v.cost||0),benefitType:coupon?'activity_coupon':'service',cashValue:coupon?Number(v.value||0):0,stock:50})});toast('俱乐部福利已创建');loadMembers()}catch(e){showAlert({title:'创建失败',message:e.message})}}
 
 async function loadMall(){skel('#clubOrders',4);let [p,o,cs,sett,aftersales]=await Promise.all([api(`/api/club/${CLUB}/mall/products`),api(`/api/club/${CLUB}/mall/orders`),api(`/api/club/${CLUB}/mall/commission-summary`),api(`/api/club/${CLUB}/mall/settlements`),api(`/api/club/${CLUB}/mall/after-sales`)]);$('#clubCommissionSummary').innerHTML=[['待签收',money(cs.pending)],['售后冻结',money(cs.frozen)],['可结算',money(cs.payableNow)],['已结算',money(cs.settled)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">${cs.carryDebt&&x[0]==='可结算'?`退款待冲抵 ${money(cs.carryDebt)}`:`售后期 ${cs.policy.afterSalesDays} 天`}</div></div>`).join('');$('#clubProducts').innerHTML=p.map(x=>`<div class="product"><div class="ph">🎒</div><h4>${esc(x.name)}</h4><div class="sub">${esc(x.category||'户外装备')}</div><div class="price">${money(x.price)}</div><div class="sub">库存 ${x.stock} · 平台统一履约</div></div>`).join('');$('#clubOrders').innerHTML=o.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">订单 #${x.id}</div> · ${money(x.total)} · 佣金 ${money(x.club_commission)}<div class="list-row__sub">${x.status} · ${x.carrier||'待发货'} ${x.tracking_no||''} · 售后 ${x.after_sales_status||'无'}</div></div></div>`).join('')||'<div class="empty">暂无商城订单</div>';$('#clubAfterSales').innerHTML=aftersales.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.case_type)}</div> · 订单 #${x.order_id} <span class="tag">${esc(x.status)}</span><div class="list-row__sub">平台售后处理 · ${esc(x.reason||'')} · 申请退款 ${money(x.requested_refund_amount||0)}</div></div></div>`).join('')||'<div class="empty">暂无商城售后</div>';$('#clubSettlements').innerHTML=sett.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${money(x.net_amount)}</div> · ${esc(x.payment_ref)} <span class="tag">${x.status}</span><div class="list-row__sub">佣金 ${money(x.gross_amount)} · 退款冲抵 ${money(x.deduction_amount)} · ${esc(x.paid_at||x.created_at)}</div></div></div>`).join('')||'<div class="empty">暂无结算记录</div>'}
 async function loadCredits(){skel('#creditLedger',5);let d=await api(`/api/club/${CLUB}/credits`),sub=d.subscription||{};$('#creditAccount').innerHTML=`<div class="grid g4"><div class="stat-tile"><div class="k">当前可用</div><div class="v">${d.account?.balance||0}</div><div class="hint">AI Credits</div></div><div class="stat-tile"><div class="k">当前套餐</div><div class="v" style="font-size:22px">${esc(sub.plan_name||sub.plan_code||'未开通')}</div><div class="hint">月额度 ${d.account?.monthly_quota||0}</div></div><div class="stat-tile"><div class="k">本月已用</div><div class="v">${d.creditsConsumed||0}</div><div class="hint">成功调用 ${d.successfulCalls||0} 次</div></div><div class="stat-tile"><div class="k">待偿欠账</div><div class="v">${d.unresolvedDebt||0}</div><div class="hint">后续获得 Credits 自动优先抵扣</div></div></div><div class="notice section">大模型由<b>总平台统一接入并结算</b>，俱乐部不需要也无法配置模型或密钥；Credits 只决定计费，不决定模型质量——平台不会因为余额或套餐降低模型、减少图片或截断资料。</div>`;$('#creditTopups').innerHTML=(d.topupPackages||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}</div> · ${money(x.amount)}<div class="list-row__sub">${x.credits} Credits</div><button class="btn secondary" style="margin-top:6px" onclick="buyCredits('${x.code}')">创建充值订单</button></div></div>`).join('')||'<div class="empty">暂无充值包</div>';$('#creditPendingOrders').innerHTML=(d.pendingOrders||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.order_type==='subscription'?'套餐':'充值'} ${x.credits} Credits</div><div class="list-row__sub">${money(x.amount)} · 待付款确认 · ${esc(x.period_key||x.package_code||'')}</div></div></div>`).join('')||'<div class="empty">暂无待付款账单</div>';$('#creditLedger').innerHTML=d.ledger.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.amount>0?'+':''}${x.amount}</div> · ${esc(x.note||x.type)}<div class="list-row__sub">${esc(x.type)} · ${x.created_at}</div></div></div>`).join('')}
@@ -123,6 +279,18 @@ async function startClub(){
   if(clubosCookie('clubos_csrf')){const me=await api('/api/auth/me');if(me.role!=='club')throw new Error('请使用俱乐部账号登录');CLUB=Number(me.clubId);}
   try{const club=await api('/api/public/clubs/'+CLUB);if(club?.name){document.querySelector('.topbar .title').textContent=club.name;document.title=club.name+' · ClubOS 俱乐部经营';}}catch(e){}
   await loadDash();
+  loadCreateEngine();
+}
+/* 创建弹窗明示当前 AI 引擎：真实大模型 or 演示模式。避免老板把「演示模板内容」误判成 AI 没看资料。 */
+async function loadCreateEngine(){
+  const box=document.getElementById('createEngine');if(!box)return;
+  try{
+    const m=await api('/api/club/'+CLUB+'/ai-mode');const live=m.mode==='live';
+    box.className='ux-create-engine '+(live?'live':'mock');
+    box.innerHTML=live
+      ?'<b>AI 引擎：真实大模型</b> · 会真实理解你上传的方案与照片，并按内容生成活动详情与宣发素材。'
+      :'<b>AI 引擎：演示模式</b> · 当前未接通大模型：系统仅按上传资料<b>抽取真实事实</b>（行程、费用、人数、照片）并套用通用文案，内容可用但表达为示例；由总平台接通模型后即为真实创作。';
+  }catch(e){box.style.display='none'}
 }
 startClub().catch(err=>{showAlert({title:'无法进入俱乐部后台',message:err.message});setTimeout(()=>location.href='/login',1800)});
 
@@ -151,15 +319,6 @@ async function openExecution(oid){
   <div style="overflow:auto"><table class="table"><thead><tr><th>参加人</th><th>资料</th><th>保险</th><th>车辆</th><th>签到</th><th>操作</th></tr></thead><tbody>${parts.map(p=>`<tr><td><strong>${esc(p.name)}</strong><div class="sub">${esc(p.phone||'')} · 付款人 ${esc(p.payer_name||'')}</div></td><td><span class="tag ${p.form_status==='complete'?'':'orange'}">${p.form_status==='complete'?'完整':'待补'}</span></td><td>${esc(p.insurance_status||'pending')}<div class="sub">${esc(p.insurance_provider||'')} ${esc(p.insurance_policy_no||'')}</div></td><td>${esc(p.vehicle_group||'未分配')}</td><td><span class="tag ${p.checkin_status==='checked_in'?'':'orange'}">${esc(p.checkin_status||'pending')}</span></td><td><button class="btn ghost" onclick="assignVehicle(${oid},${p.id})">分车</button> <button class="btn ghost" onclick="quickCheckin(${oid},${p.id},'${p.checkin_status||'pending'}')">签到</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">暂无实名参加人</td></tr>'}</tbody></table></div></div>`;
   $('#executionDetail').scrollIntoView({behavior:'smooth',block:'start'});
 }
-async function editExecutionSettings(oid){const v=await showForm({title:'编辑执行信息',submitText:'保存',fields:[{name:'meetingTime',label:'集合时间',value:'07:50'},{name:'meetingLocation',label:'集合地点',value:'万象城 icebreaker 门店'},{name:'emergencyPhone',label:'活动应急电话',value:''},{name:'leaderNote',label:'给领队的执行备注',type:'textarea',value:''}]});if(!v)return;try{await api(`/api/club/${CLUB}/occurrences/${oid}/execution/settings`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({meetingTime:v.meetingTime,meetingLocation:v.meetingLocation,emergencyPhone:v.emergencyPhone,leaderNote:v.leaderNote})});toast('执行信息已更新');openExecution(oid)}catch(e){showAlert({title:'保存失败',message:e.message})}}
-async function addExecutionLeader(oid){const v=await showForm({title:'添加领队',submitText:'添加',fields:[{name:'name',label:'领队姓名',required:true},{name:'phone',label:'领队手机号',value:''},{name:'role',label:'角色',value:'领队'}]});if(!v||!v.name)return;try{await api(`/api/club/${CLUB}/occurrences/${oid}/leaders`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v.name,phone:v.phone||'',role:v.role||'领队'})});toast('领队已添加');openExecution(oid)}catch(e){showAlert({title:'添加失败',message:e.message})}}
-async function addExecutionGroup(oid){const v=await showForm({title:'新建分组',submitText:'创建',fields:[{name:'type',label:'分组类型',type:'select',value:'vehicle',options:[{value:'vehicle',label:'车辆'},{value:'leader',label:'领队'},{value:'room',label:'房间'},{value:'custom',label:'自定义'}]},{name:'name',label:'分组名称',value:'1号车',required:true},{name:'capacity',label:'容量（0 表示不限）',type:'number',value:20,min:0}]});if(!v||!v.name)return;try{await api(`/api/club/${CLUB}/occurrences/${oid}/groups`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({groupType:v.type||'vehicle',name:v.name,capacity:Number(v.capacity||0)||null})});toast('分组已创建');openExecution(oid)}catch(e){showAlert({title:'创建失败',message:e.message})}}
-async function assignVehicle(oid,pid){let d=await api(`/api/club/${CLUB}/occurrences/${oid}/execution`);let gs=(d.groups||[]).filter(g=>g.group_type==='vehicle');if(!gs.length){showAlert({title:'暂无车辆分组',message:'请先创建车辆分组。'});return}const v=await showForm({title:'分配车辆',submitText:'确认分配',fields:[{name:'gid',label:'车辆分组',type:'select',value:String(gs[0].id),options:gs.map(g=>({value:String(g.id),label:g.name}))}]});if(!v)return;const gid=Number(v.gid);try{await api(`/api/club/${CLUB}/execution-groups/${gid}/assign`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({participantId:pid})});toast('已分配车辆');openExecution(oid)}catch(e){showAlert({title:'分配失败',message:e.message})}}
-async function quickCheckin(oid,pid,current){const v=await showForm({title:'更新签到状态',submitText:'保存',fields:[{name:'status',label:'签到状态',type:'select',value:current||'checked_in',options:[{value:'checked_in',label:'已签到'},{value:'no_show',label:'未到'},{value:'cancelled',label:'临时取消'},{value:'pending',label:'待签到'}]}]});if(!v)return;try{await api(`/api/club/${CLUB}/occurrences/${oid}/participants/${pid}/checkin`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:v.status})});toast('签到状态已更新');openExecution(oid)}catch(e){showAlert({title:'操作失败',message:e.message})}}
-async function batchInsurance(oid){const v=await showForm({title:'批量标记已提交保险',desc:'将本团期所有待办参加人标记为「已提交」。',submitText:'确认批量提交',fields:[{name:'provider',label:'保险公司/渠道（可空）',value:''}]});if(!v)return;try{let r=await api(`/api/club/${CLUB}/occurrences/${oid}/insurance/batch-submit`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:v.provider||''})});toast(`已更新 ${r.updated} 人`);openExecution(oid)}catch(e){showAlert({title:'操作失败',message:e.message})}}
-async function addExecutionNotice(oid){const v=await showForm({title:'发送执行通知',submitText:'创建通知',fields:[{name:'title',label:'通知标题',value:'出发前集合通知'},{name:'content',label:'通知内容',type:'textarea',value:'请按时到达集合点，并携带活动所需装备。',required:true},{name:'channel',label:'渠道',type:'select',value:'manual',options:[{value:'manual',label:'手动'},{value:'sms',label:'短信'},{value:'wechat',label:'微信'}]}]});if(!v||!v.content)return;try{await api(`/api/club/${CLUB}/occurrences/${oid}/notices`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:v.title||'活动通知',content:v.content,channel:v.channel||'manual',audience:'all'})});toast('通知已创建');openExecution(oid)}catch(e){showAlert({title:'创建失败',message:e.message})}}
-async function sendExecutionNotice(oid,nid){await api(`/api/club/${CLUB}/occurrences/${oid}/notices/${nid}/send`,{method:'POST'});toast('已记录发送');openExecution(oid)}
-async function advanceExecution(oid){let d=await api(`/api/club/${CLUB}/occurrences/${oid}/execution`);let cur=d.occurrence.execution_status||'preparing';let seq=['preparing','departed','in_progress','completed'];let next=seq[Math.min(seq.indexOf(cur)+1,seq.length-1)];if(cur==='completed'){toast('活动已经完成');return}if(!(await showConfirm({title:'推进执行状态',message:`执行状态：${execStateLabel[cur]} → ${execStateLabel[next]}？`,confirmText:'确认推进'})))return;await api(`/api/club/${CLUB}/occurrences/${oid}/execution/status`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:next})});toast('执行状态已推进');openExecution(oid);loadExecution()}
 
 
 // v0.24: strictly club-scoped read-only intelligence; no platform-cost data.
@@ -195,23 +354,70 @@ async function loadClubBI(){
  }catch(e){ $('#analyticsMetrics').innerHTML=`<div class="notice warn">经营数据读取失败：${esc(e.message)}</div>`; }
 }
 
-/* ---- 报名与执行：按活动维度钻取 ---- */
-function regCard(x){
-  return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.occurrence_label||x.start_at||'团期')}</div><div class="list-row__sub">付款人 ${esc(x.name)}${x.phone?` · ${esc(x.phone)}`:''} · ${x.active_participants||x.participant_count||1} 位参加人</div><div class="list-row__sub">资料完整 ${x.complete_participants||0}/${x.active_participants||x.participant_count||1} · 待处理保险 ${x.insurance_pending||0} · 退款 ${esc(x.refund_status||'none')} · 积分抵 ${money(x.club_point_discount)} / 补贴 ${money(x.platform_point_subsidy)}</div></div><div class="list-row__end"><span class="act-card__price">${money(x.amount)}</span><span class="tag">${esc(x.status)}</span><button class="btn ghost" onclick="showParticipants(${x.id})">参加人</button></div></div>`
+/* ---- 报名与执行：按活动 → 按档期钻取（9 号团与 10 号团必须分开看）---- */
+function statTile(k,v,warn){return `<div class="reg-occ__stat${warn?' warn':''}"><div class="k">${esc(k)}</div><div class="v">${esc(String(v))}</div></div>`}
+function regRow(x){
+  const n=regPcount(x);
+  const rf=x.refund_status&&x.refund_status!=='none';
+  return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">付款人 ${esc(x.name)}${x.phone?` · ${esc(x.phone)}`:''}</div><div class="list-row__sub">${n} 位参加人 · 资料完整 ${Number(x.complete_participants||0)}/${n} · 待处理保险 ${Number(x.insurance_pending||0)} · 活动积分抵 ${money(x.club_point_discount)} / 平台补贴 ${money(x.platform_point_subsidy)}</div><div class="list-row__sub">报名时间 ${esc(x.created_at||'')}${rf?` · 退款状态 ${esc(x.refund_status)}`:''}</div></div><div class="list-row__end"><span class="act-card__price">${money(x.amount)}</span><span class="tag ${x.status==='paid'?'':'orange'}">${esc(x.status)}</span><button class="btn ghost" onclick="event.stopPropagation();showParticipants(${x.id})">参加人名单</button></div></div>`;
 }
-function occCard(o){
-  const ex=execStateLabel[o.execution_status||'preparing']||esc(o.execution_status);
-  return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(o.label||o.start_at)}</div><div class="list-row__sub">${esc(o.activity_location||'')} · 售出 ${o.sold}/${o.capacity} · 实名 ${o.named_participants||0} · 资料待补 ${o.incomplete_participants||0} · 保险 ${o.insurance_pending||0} · 已签到 ${o.checked_in||0}</div></div><div class="list-row__end"><span class="tag ${o.execution_status==='completed'?'':'orange'}">${ex}</span><button class="btn ghost" onclick="go('execution');openExecution(${o.id})">执行详情</button></div></div>`
+function occPrepBlock(o){
+  const ex=execStateLabel[o.execution_status||'preparing']||o.execution_status||'准备中';
+  const full=Number(o.capacity||0)>0&&Number(o.sold||0)>=Number(o.capacity||0);
+  const todo=Number(o.incomplete_participants||0)+Number(o.insurance_pending||0);
+  return `<div class="reg-occ__block"><div class="reg-occ__label">这个档期的执行准备</div>
+    <div class="reg-occ__stats">
+      ${statTile('实名参加人',o.named_participants||0)}
+      ${statTile('资料待补',o.incomplete_participants||0,Number(o.incomplete_participants||0)>0)}
+      ${statTile('保险待处理',o.insurance_pending||0,Number(o.insurance_pending||0)>0)}
+      ${statTile('已签到',o.checked_in||0)}
+    </div>
+    <div class="sub" style="margin-top:8px">执行状态 ${esc(ex)} · 名额 ${Number(o.sold||0)}/${Number(o.capacity||0)}${full?'（已满）':''}${todo?' · 出发前还有 '+todo+' 项要处理':''}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn secondary" onclick="go('execution');openExecution(${o.id})">打开执行详情（分车 / 签到 / 通知）</button><a class="btn ghost" href="/api/club/${CLUB}/occurrences/${o.id}/insurance/export.csv">导出保险名单</a></div></div>`;
+}
+function occBlock(g){
+  const o=g.occ, rl=g.regs;
+  const parts=rl.reduce((s,x)=>s+regPcount(x),0);
+  const req=rl.filter(x=>x.refund_status==='requested').length;
+  const refd=rl.filter(x=>x.status==='refunded').length;
+  const ex=execStateLabel[o.execution_status||'preparing']||o.execution_status||'准备中';
+  return `<section class="reg-occ">
+    <div class="reg-occ__head">
+      <div><h4 class="reg-occ__title">${esc(o.label||o.start_at||'团期')}</h4>
+      <div class="reg-occ__sub">${esc(o.start_at||'')}${o.activity_location?` · ${esc(o.activity_location)}`:''} · ${money(o.price)} · 名额 ${Number(o.sold||0)}/${Number(o.capacity||0)}</div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="tag ${(o.execution_status||'preparing')==='completed'?'':'orange'}">执行：${esc(ex)}</span></div>
+    </div>
+    <div class="reg-occ__block"><div class="reg-occ__label">这个档期的报名</div>
+      <div class="reg-occ__stats">
+        ${statTile('报名笔数',rl.length+' 笔')}
+        ${statTile('参加人数',parts+' 人')}
+        ${statTile('实收现金',money(regCash(rl)))}
+        ${statTile('待审退款',req,req>0)}
+        ${refd?statTile('已退款',refd+' 笔'):''}
+      </div>
+      <div style="margin-top:4px">${rl.map(regRow).join('')||'<div class="reg-none">这个档期还没有报名。</div>'}</div>
+    </div>
+    ${occPrepBlock(o)}
+  </section>`;
 }
 function openActivityRegs(id){
   const a=(window.__regsActs||[]).find(x=>x.id===id); if(!a)return;
+  const box=$('#activityRegDetail'); if(!box)return;
   const rs=(window.__regsRegs||[]).filter(x=>x.activity_id===id);
-  const os=(window.__regsOccs||[]).filter(x=>x.activity_id===id);
-  $('#activityRegDetail').innerHTML=`<div class="card"><div class="panel-title"><div><div class="eyebrow">ACTIVITY · 报名与执行</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · 状态 ${esc(a.status)} · ${rs.length} 笔报名</div></div><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${a.id}" target="_blank" style="text-decoration:none">打开C端</a></div>
-  <h3 style="margin:16px 0 8px">报名情况（${rs.length}）</h3>
-  <div>${rs.map(regCard).join('')||'<div class="empty">本活动暂无报名</div>'}</div>
-  <h3 style="margin:18px 0 8px">执行情况</h3>
-  <div>${os.map(occCard).join('')||'<div class="empty">本活动暂无团期执行</div>'}</div>
+  const os=(window.__regsOccs||[]).filter(x=>x.activity_id===id).slice().sort((p,q)=>String(p.start_at||'').localeCompare(String(q.start_at||'')));
+  const ids=os.map(o=>o.id);
+  const groups=os.map(o=>({occ:o,regs:rs.filter(r=>r.occurrence_id===o.id)}));
+  const orphan=rs.filter(r=>!r.occurrence_id||ids.indexOf(Number(r.occurrence_id))<0);
+  const parts=rs.reduce((s,x)=>s+regPcount(x),0);
+  box.innerHTML=`<div class="card">
+    <div class="reg-activity-head">
+      <div><div class="eyebrow">ACTIVITY · 报名与执行</div><h2 style="margin:4px 0">${esc(a.title)}</h2>
+      <div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · <b>${os.length} 个档期</b> · 合计 ${rs.length} 笔报名 / ${parts} 人</div></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost" onclick="goActivity(${a.id})">看活动成品</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${a.id}" target="_blank" style="text-decoration:none">打开C端</a></div>
+    </div>
+    <div class="notice" style="margin:12px 0 16px">下面按档期分开列：每个档期只出现它自己的报名人和准备情况，9 号团和 10 号团不会混在一起。</div>
+    ${groups.length?groups.map(occBlock).join(''):'<div class="reg-none">这场活动还没有团期。先到「活动中心」的活动详情里添加团期，报名和执行才能按档期分开统计。</div>'}
+    ${orphan.length?`<section class="reg-occ"><div class="reg-occ__head"><div><h4 class="reg-occ__title">未绑定档期的报名</h4><div class="reg-occ__sub">这些报名没有关联团期，无法参与按档期的准备统计。</div></div></div><div class="reg-occ__block"><div class="reg-occ__label">报名（${orphan.length} 笔）</div>${orphan.map(regRow).join('')}</div></section>`:''}
   </div>`;
-  $('#activityRegDetail').scrollIntoView({behavior:'smooth',block:'start'});
+  box.scrollIntoView({behavior:'smooth',block:'start'});
 }
