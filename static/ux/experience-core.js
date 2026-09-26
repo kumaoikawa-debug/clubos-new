@@ -34,9 +34,14 @@
   if(typeof onView!=='function')return;
   window.onView=async function(view){
    currentView=view;const token=++seq;const target=document.getElementById(view);if(!target)return onView(view);
-   const header=target.querySelector('.panel-title')||target;
-   let status=target.querySelector(':scope > .ux-view-feedback');
-   if(!status){status=document.createElement('div');status.className='ux-view-feedback';status.setAttribute('role','status');status.setAttribute('aria-live','polite');header.after(status)}
+   const header=target.querySelector('.panel-title');
+   /* 状态行要在整条视图里找，不能用 `:scope > .ux-view-feedback`：绝大多数视图的
+      panel-title 在 .card 内部，插入的状态行因此是「卡片里」而非「视图直接子节点」，
+      带 :scope 的查询永远找不到上一次那条 → 每进一次视图就多插一条「数据已更新」
+      （实测切三次就并排三条）。改成全局查找 + 每次把节点移回标题之后（after 会移动节点）。 */
+   let status=target.querySelector('.ux-view-feedback');
+   if(!status){status=document.createElement('div');status.className='ux-view-feedback';status.setAttribute('role','status');status.setAttribute('aria-live','polite')}
+   if(header)header.after(status);else target.prepend(status);
    status.classList.remove('error');status.innerHTML='<span class="ux-spinner" aria-hidden="true"></span> 正在读取最新数据';target.setAttribute('aria-busy','true');
    try{await onView(view);if(token!==seq)return;status.textContent='数据已更新 · '+new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});target.removeAttribute('aria-busy');scheduleTables()}
    catch(err){if(token!==seq)return;target.removeAttribute('aria-busy');status.classList.add('error');status.replaceChildren();const msg=document.createElement('span');msg.textContent='读取失败：'+(err?.message||'网络异常');const retry=document.createElement('button');retry.type='button';retry.className='btn ghost';retry.textContent='重试';retry.onclick=()=>window.onView(view);status.append(msg,retry)}
