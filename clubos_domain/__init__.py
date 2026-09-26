@@ -29,3 +29,4 @@ from .commerce_analytics import CommerceAnalyticsEngine
 from .ai_credits import AICreditEngine
 
 from .gear_recommend import GearRecommendService, GearPlan
+from .leader_recommend import LeaderRecommendService

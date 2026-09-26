@@ -80,15 +80,45 @@ class ActivityExecutionService:
 
     def add_leader(self, c, *, club_id: int, occurrence_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         self._occurrence(c, club_id=club_id, occurrence_id=occurrence_id)
+        raw_id = payload.get("leaderId")
+        leader_id = int(raw_id) if raw_id not in (None, "") else None
         name = str(payload.get("name") or "").strip()
+        phone = str(payload.get("phone") or "").strip() or None
+        role = str(payload.get("role") or "领队").strip() or "领队"
+        if leader_id:
+            # 从领队资源库挑人：姓名/电话以名册为准，否则同一个人每次手打都会变成"新领队"，
+            # 历史带队记录就再也对不上，自动推荐也就无从谈起。
+            roster = c.execute("SELECT * FROM club_leaders WHERE id=? AND club_id=?",
+                               (leader_id, club_id)).fetchone()
+            if not roster:
+                raise LookupError("领队资源库里没有这个人")
+            if c.execute("SELECT id FROM occurrence_leaders WHERE occurrence_id=? AND leader_id=?",
+                         (occurrence_id, leader_id)).fetchone():
+                raise ValueError("这位领队已经安排在本团期了")
+            name = name or str(roster["name"] or "").strip()
+            phone = phone or (str(roster["phone"]).strip() or None if roster["phone"] else None)
+            role = str(payload.get("role") or roster["role"] or role).strip() or role
         if not name:
             raise ValueError("领队姓名不能为空")
-        c.execute('''INSERT INTO occurrence_leaders(occurrence_id,club_id,name,phone,role,note)
-                     VALUES(?,?,?,?,?,?)''', (occurrence_id, club_id, name, str(payload.get("phone") or "").strip() or None,
-                     str(payload.get("role") or "领队").strip(), str(payload.get("note") or "").strip() or None))
+        c.execute('''INSERT INTO occurrence_leaders(occurrence_id,club_id,leader_id,name,phone,role,note)
+                     VALUES(?,?,?,?,?,?,?)''', (occurrence_id, club_id, leader_id, name, phone, role,
+                     str(payload.get("note") or "").strip() or None))
         lid = int(c.execute("SELECT last_insert_rowid()").fetchone()[0])
-        self._log(c, occurrence_id, "leader_added", f"club:{club_id}", {"leaderId": lid, "name": name})
+        self._log(c, occurrence_id, "leader_added", f"club:{club_id}",
+                  {"leaderId": lid, "rosterId": leader_id, "name": name})
         return dict(c.execute("SELECT * FROM occurrence_leaders WHERE id=?", (lid,)).fetchone())
+
+    def remove_leader(self, c, *, club_id: int, occurrence_id: int, assignment_id: int) -> dict[str, Any]:
+        """把某位领队从这一场撤下来。撤下即不再计入该人的带队历史，但事件日志留痕。"""
+        self._occurrence(c, club_id=club_id, occurrence_id=occurrence_id)
+        found = c.execute("SELECT id,name FROM occurrence_leaders WHERE id=? AND occurrence_id=? AND club_id=?",
+                          (assignment_id, occurrence_id, club_id)).fetchone()
+        if not found:
+            raise LookupError("这条领队安排不存在")
+        c.execute("DELETE FROM occurrence_leaders WHERE id=?", (assignment_id,))
+        self._log(c, occurrence_id, "leader_removed", f"club:{club_id}",
+                  {"assignmentId": assignment_id, "name": found["name"]})
+        return {"ok": True, "removed": assignment_id}
 
     def list_leaders(self, c, occurrence_id: int) -> list[dict[str, Any]]:
         return [dict(r) for r in c.execute("SELECT * FROM occurrence_leaders WHERE occurrence_id=? ORDER BY id", (occurrence_id,)).fetchall()]

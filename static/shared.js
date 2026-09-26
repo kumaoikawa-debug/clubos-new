@@ -179,15 +179,25 @@ function renderPromo(detail,master={},opts={}){
 }
 function gearRow(p,opts){
   // 价格走第二行：窄栏（C 端 560px 容器）下右挂价格会把商品名挤成两三行
+  const base=Number(p.price||0),mp=Number(p.memberPrice||0);
+  const hasMember=mp>0&&mp<base;
+  const fmt=n=>'¥'+Number(n||0).toFixed(2).replace(/\.00$/,'');
+  // 会员价直接替代原价显示、原价划线保留：让"加入会员更便宜"一眼可见
+  const priceHtml=hasMember
+    ? '<i class="gear-price">'+esc(fmt(mp))+'</i><span class="gear-was">'+esc(fmt(base))+'</span>'
+    : '<i class="gear-price">'+esc(fmt(base))+'</i>';
+  const memberNote=hasMember
+    ? ' · '+esc(p.memberTierName||'会员')+'价 省 '+esc(fmt(p.memberSavings||0))
+    : '';
   const inner='<span class="gear-emoji">'+esc(p.emoji||'🧰')+'</span>'
     +'<span class="gear-main"><b>'+esc(p.name)+'</b>'
-    +'<small><i class="gear-price">'+esc('¥'+Number(p.price||0).toFixed(0))+'</i>'
-    +esc(p.reason||'')+(p.inStock?'':' · 暂时缺货')+'</small></span>'
-    +(opts.canBuy?'<span class="gear-go">›</span>':'');
-  // 只有 C 端才给下单入口：后台管理员看的是"将如何展示"，不该由他下单
+    +'<small>'+priceHtml+esc(p.reason||'')+(p.inStock?'':' · 暂时缺货')+memberNote+'</small></span>'
+    +'<span class="gear-go">›</span>';
+  // C 端 = 下单入口；俱乐部后台点进去是「本俱乐部商城里的这件商品」——
+  // 推荐只能看不能买等于没落地，配上会员价才有意义。
   return opts.canBuy
-    ? '<button type="button" class="gear-row buyable" onclick="buy('+Number(p.id||0)+')">'+inner+'</button>'
-    : '<div class="gear-row">'+inner+'</div>';
+    ? '<button type="button" class="gear-row buyable" onclick="buy('+Number(p.id||0)+')" title="下单购买">'+inner+'</button>'
+    : '<button type="button" class="gear-row buyable" onclick="openGearProduct('+Number(p.id||0)+')" title="在装备商城里查看这件商品">'+inner+'</button>';
 }
 function renderPacking(master,opts){
   opts=opts||{};
@@ -213,8 +223,11 @@ function renderPacking(master,opts){
       if(l&&miss.indexOf(l)<0)miss.push(l);
     }
   });
+  const md=g.memberDiscount||null;
   let head='<div class="gear-head"><span class="eyebrow">按清单搭配</span><span class="gear-summary">清单 '
-    +Number(cov.needs||0)+' 项 · 商城可配 '+Number(cov.matched||0)+' 项</span></div>';
+    +Number(cov.needs||0)+' 项 · 商城可配 '+Number(cov.matched||0)+' 项'
+    +(md?' · <b>'+esc(md.tierName)+' '+esc(String(md.discountZhe))+' 折</b>':'')
+    +'</span></div>';
   const missLine=miss.length
     ? '<div class="gear-missing">商城暂无对应装备：'+esc(miss.join('、'))+(o.manage?'（可在商城上架补全）':'')+'</div>'
     : '';
@@ -234,7 +247,26 @@ function feeListHtml(fees){
     return '<div class="fee-row"><b>'+esc(k)+'</b><p>'+esc(String(v))+'</p></div>';
   }).join('')+'</div>';
 }
-function renderInfoStack(master,opts={}){return `<div class="info-stack polished"><details open><summary>详细行程 <span>ITINERARY</span></summary><div class="detail-list">${(master.itinerary||[]).map(x=>`<div><b>${esc(x.time||'')}</b><p>${esc(x.content||x.text||'')}</p></div>`).join('')||'<p class="sub">以最终活动通知为准</p>'}</div></details><details><summary>费用说明 <span>PRICE</span></summary>${feeListHtml(master.fees)}</details><details open><summary>出行清单 <span>PACKING</span></summary>${renderPacking(master,opts)}</details></div>`}
+/* detail.blocks 里已经排过行程时，结构化区不再重复渲染同一份 master.itinerary——
+   此前「把一天安排得刚刚好」(promo timeline) 与「详细行程 ITINERARY」是同一份数据渲染两遍，
+   同一页出现两次行程，是用户看到的"详情重复出现"。 */
+function promoHasItinerary(detail){return ((detail||{}).blocks||[]).some(b=>b&&b.type==='timeline'&&(b.items||[]).length)}
+function infoStackSkip(detail){return promoHasItinerary(detail)?['itinerary']:[]}
+/* 详情页很长，给一条页内跳转，避免"不知道下面还有什么"。用 scrollIntoView 而不是 <a href="#…">，
+   避免和可能存在的 hash 路由打架。 */
+function jumpTo(id){const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}
+function detailNavHtml(items){
+  if(!items||!items.length)return '';
+  return '<div class="detail-nav">'+items.map(([id,label])=>`<button type="button" class="detail-nav__item" onclick="jumpTo('${id}')">${esc(label)}</button>`).join('')+'</div>';
+}
+function renderInfoStack(master,opts={}){
+  const skip=opts.skip||[],has=k=>skip.indexOf(k)<0;
+  let h='<div class="info-stack polished">';
+  if(has('itinerary'))h+=`<details open><summary>详细行程 <span>ITINERARY</span></summary><div class="detail-list">${(master.itinerary||[]).map(x=>`<div><b>${esc(x.time||'')}</b><p>${esc(x.content||x.text||'')}</p></div>`).join('')||'<p class="sub">以最终活动通知为准</p>'}</div></details>`;
+  if(has('fees'))h+=`<details${has('itinerary')?'':' open'}><summary>费用说明 <span>PRICE</span></summary>${feeListHtml(master.fees)}</details>`;
+  if(has('packing'))h+=`<details open><summary>出行清单 <span>PACKING</span></summary>${renderPacking(master,opts)}</details>`;
+  return h+'</div>';
+}
 
 // Logout must revoke the session on the server, not just hide the current UI.
 document.addEventListener('DOMContentLoaded',()=>{

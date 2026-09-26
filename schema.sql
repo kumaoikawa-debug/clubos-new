@@ -544,6 +544,8 @@ CREATE TABLE IF NOT EXISTS club_member_tiers (
   min_activity_count INTEGER NOT NULL DEFAULT 0,
   qualification_mode TEXT NOT NULL DEFAULT 'ANY',
   benefits_json TEXT NOT NULL DEFAULT '[]',
+  -- 装备商城会员折扣率：1.0 = 无折扣，0.9 = 九折。NULL = 尚未配置（由迁移按等级回填）。
+  gear_discount REAL,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -738,6 +740,26 @@ CREATE TABLE IF NOT EXISTS occurrence_leaders (
   FOREIGN KEY(club_id) REFERENCES clubs(id)
 );
 CREATE INDEX IF NOT EXISTS idx_occurrence_leaders ON occurrence_leaders(occurrence_id);
+
+-- v0.27 领队资源库
+-- 此前每场活动只能手打领队「姓名 + 电话」，俱乐部没有自己的领队名册：
+-- 既无法复用同一个人，也无法回答「这条线路以前是谁带的」。名册是推荐与排班的前提。
+CREATE TABLE IF NOT EXISTS club_leaders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  phone TEXT,
+  role TEXT NOT NULL DEFAULT '领队',
+  -- 擅长方向（活动类型标签，JSON 字符串数组），用于按活动自动推荐领队
+  specialties TEXT NOT NULL DEFAULT '[]',
+  base_city TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_club_leaders ON club_leaders(club_id,status);
 
 CREATE TABLE IF NOT EXISTS execution_groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

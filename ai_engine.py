@@ -94,8 +94,18 @@ def _extract_structured(source:dict[str,Any])->dict[str,Any]:
 
     # ---- 人数 / 人均价格 / 合计 / 地点 / 日期 / 标题 ----
     cap=re.search(r'活动人数\s*(\d{1,3})\s*人',raw) or re.search(r'(\d{1,3})\s*人\s*(?:整车成行|成行|规模)',raw)
+    if not cap:
+        # 口语化写法兜底：「带 12 个会员去…」「限 20 人」——只认 2~3 位、且后缀明确是人，
+        # 避免把「6 公里」「人均 288 元」误当人数，也排除「10 人一桌 / 4 人一车」这类计量单位。
+        for m in re.finditer(r'(\d{2,3})\s*(?:个|位|名)?\s*(?:会员|人)(?!均|民|数|一?\s*(?:桌|围|锅|份|车|排|房))',raw):
+            n=int(m.group(1))
+            if 2<=n<=500: cap=m; break
     if cap: out['capacity']=int(cap.group(1))
-    per=re.search(r'人均费用\s*[¥￥]?\s*([0-9][0-9,]*(?:\.\d+)?)',raw) or re.search(r'人均[^\n]{0,6}?[¥￥]\s*([0-9][0-9,]*(?:\.\d+)?)',raw)
+    per=(re.search(r'人均费用\s*[¥￥]?\s*([0-9][0-9,]*(?:\.\d+)?)',raw)
+         or re.search(r'人均[^\n]{0,6}?[¥￥]\s*([0-9][0-9,]*(?:\.\d+)?)',raw)
+         # 无货币符号的口语写法：「人均288元」「每人 288」「人均价格 288」
+         or re.search(r'(?:人均(?:费用|价格)?|每人)\s*[¥￥]?\s*([0-9][0-9,]*(?:\.\d+)?)\s*元?',raw)
+         or re.search(r'([0-9][0-9,]*(?:\.\d+)?)\s*元\s*/\s*人',raw))
     total=re.search(r'未含税\s*[¥￥]\s*([0-9][0-9,]*(?:\.\d+)?)',raw) or re.search(r'合计[^\n]{0,20}?[¥￥]\s*([0-9][0-9,]*(?:\.\d+)?)',raw)
     if per:
         try: out['price']=float(per.group(1).replace(',',''))

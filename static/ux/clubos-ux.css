@@ -114,6 +114,47 @@ button.is-busy::after,.btn.is-busy::after{content:'';position:absolute;top:0;bot
 .act-mini__title{font-size:13px;font-weight:800;line-height:1.35;margin:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .act-mini__meta{display:flex;align-items:center;gap:7px;margin-top:5px;font-size:11px;color:var(--muted);flex-wrap:wrap}
 .act-mini__price{font-weight:850;color:#224c38;margin-left:auto}
+/* 卡片上的「编辑 / 删除」：活动生成后必须有可修改、可删除的入口，所以常显而不是 hover 才出。 */
+.act-mini__ops{grid-column:1/-1;display:flex;gap:6px;justify-content:flex-end;margin-top:2px}
+.act-op{font-size:11px;font-weight:700;line-height:1.2;padding:4px 10px;border-radius:8px;border:1px solid var(--line);background:#fff;color:#3c674c;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
+.act-op:hover{border-color:#8fbd9a;background:#f4f8f2}
+.act-op--danger{color:#a33b2c;border-color:#eed6d0}
+.act-op--danger:hover{background:#fdf3f1;border-color:#ddab9f}
+/* 详情页页内跳转：详情页很长，给一条不占位的锚点条，避免"不知道下面还有什么"。 */
+.detail-nav{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 2px}
+.detail-nav__item{font-size:12px;font-weight:700;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:#fff;color:#3c674c;cursor:pointer;transition:background .15s,border-color .15s}
+.detail-nav__item:hover{border-color:#8fbd9a;background:#f4f8f2}
+/* 会员价：把「加入会员更便宜」直接写在商品行上（原价划线保留）。 */
+.gear-was{text-decoration:line-through;color:#9aa8a0;font-weight:600;margin:0 5px 0 2px;font-size:11px}
+/* 从出行清单跳到商城后，把对应的那件商品高亮出来，否则用户不知道跳到了哪。 */
+.product.flash{box-shadow:0 0 0 3px #cfe3cf,0 10px 24px #1025171f;animation:flashPulse 1.6s ease-out 1}
+@keyframes flashPulse{0%{box-shadow:0 0 0 3px #9fd0a6,0 10px 28px #10251733}100%{box-shadow:0 0 0 3px #cfe3cf,0 10px 24px #1025171f}}
+@media (prefers-reduced-motion:reduce){.product.flash{animation:none}}
+/* ---- 带队领队 / 领队资源库 ---- */
+.leader-summary{font-size:12px;color:var(--muted);margin:2px 0 10px}
+.leader-summary b{color:#224c38;font-size:14px}
+.leader-occs{display:grid;gap:10px}
+.leader-occ{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:#fbfdfa}
+.leader-occ__head{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+.leader-occ__head>b{font-size:13px}
+.leader-occ__head>span{font-size:11px;color:var(--muted);margin-right:auto}
+.leader-chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+.leader-chip{display:inline-flex;align-items:center;gap:6px;background:#eef5ec;border:1px solid #dcebdc;border-radius:999px;padding:4px 6px 4px 11px;font-size:12px}
+.leader-chip b{font-weight:800;color:#224c38}
+.leader-chip i{font-style:normal;font-size:10px;color:#6b8a7b}
+.leader-chip u{text-decoration:none;font-size:10px;color:#6b8a7b}
+.leader-chip__x{border:0;background:#dbe8da;color:#3c674c;width:17px;height:17px;line-height:1;border-radius:50%;cursor:pointer;font-size:12px;font-weight:800;padding:0}
+.leader-chip__x:hover{background:#c7dcc5}
+.leader-empty{font-size:12px;color:#8a9a91}
+.leader-recs{display:flex;flex-wrap:wrap;gap:7px;align-items:center;margin-top:9px}
+.leader-recs__t{font-size:11px;font-weight:800;color:#6b8a7b;letter-spacing:.04em}
+.leader-rec{display:inline-flex;align-items:center;gap:7px;border:1px dashed #cfe0cf;background:#fff;border-radius:999px;padding:4px 11px;cursor:pointer;font-size:12px;color:#224c38;transition:border-color .15s,background .15s}
+.leader-rec:hover{border-style:solid;border-color:#8fbd9a;background:#f4f8f2}
+.leader-rec b{font-weight:800}
+.leader-rec i{font-style:normal;font-size:11px;color:#6b8a7b}
+.leader-rec span{font-size:11px;font-weight:800;color:#2f6b48}
+.leader-roster{margin-top:12px;border-top:1px dashed var(--line);padding-top:10px}
+.leader-roster>summary{font-size:12px;font-weight:800;color:#3c674c;cursor:pointer}
 .act-pane{min-width:0}
 .act-pane__empty{background:var(--panel);border:1px dashed #d5e0d6;border-radius:18px;padding:52px 22px;text-align:center;color:var(--muted);line-height:1.8}
 /* 预览被压进右栏后，编辑画册的排版按容器收一档，否则 58px 大标题会在窄栏里散架 */

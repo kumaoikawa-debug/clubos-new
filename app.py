@@ -15,7 +15,7 @@ from ai_billing import ensure_credits, charge_credits, credit_cost
 from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config,
                         update_platform_provider_config, test_provider_connection, effective_gateway_mode)
 from clubos_domain.club_analytics import ClubBusinessIntelligence
-from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine, GearRecommendService
+from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine, GearRecommendService, LeaderRecommendService
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
 
@@ -132,6 +132,7 @@ finance_engine=MerchandiseFinanceEngine()
 analytics_engine=CommerceAnalyticsEngine(finance_engine,warehouse_engine)
 ai_credit_engine=AICreditEngine()
 gear_recommend=GearRecommendService()
+leader_recommend=LeaderRecommendService()
 club_bi=ClubBusinessIntelligence()
 inventory_engine=ProcurementEngine(warehouse_engine,finance_engine)
 booking_engine=BookingEngine(points_engine,wallet_snapshot,activity_points_policy,membership_engine,benefit_engine,participant_service)
@@ -327,14 +328,85 @@ def _repair_master_media(master:dict,source:dict|None)->dict:
     return master
 
 
-def _gear_plan_for(c,master:dict)->dict:
-    """出行清单 × 商城在售装备。
+from clubos_domain.leader_recommend import ACTIVITY_TYPES as _LEADER_ACTIVITY_TYPES
+_LEADER_SPECIALTIES = tuple(_LEADER_ACTIVITY_TYPES.keys())
+
+
+def _leader_roster(c,club_id:int)->list[dict]:
+    """领队资源库名册，附带累计带队次数——判断"谁在真正带队"要看这个数。"""
+    out=[]
+    for r in rows(c.execute('SELECT * FROM club_leaders WHERE club_id=? ORDER BY (status!="active"),id',(club_id,))):
+        d=dict(r)
+        specs=jload(d.get('specialties'),[])
+        d['specialties']=[str(x) for x in specs] if isinstance(specs,list) else []
+        d['assignedCount']=int(c.execute('SELECT COUNT(*) FROM occurrence_leaders WHERE club_id=? AND leader_id=?',
+                                         (club_id,r['id'])).fetchone()[0])
+        out.append(d)
+    return out
+
+
+def _leader_history(c,club_id:int)->list[dict]:
+    """历史带队记录：谁带过哪一场、那场活动在哪、叫什么。只统计仍挂在团期上的人。"""
+    return rows(c.execute('''SELECT ol.leader_id, ol.occurrence_id, a.id AS activity_id, a.title, a.location
+                             FROM occurrence_leaders ol
+                             JOIN activity_occurrences o ON o.id=ol.occurrence_id
+                             JOIN activities a ON a.id=o.activity_id
+                             WHERE ol.club_id=? AND ol.leader_id IS NOT NULL''',(club_id,)))
+
+
+def _leader_plan_for(c,club_id:int,activity:dict)->dict:
+    """活动详情页的「带队领队」：每个团期已派谁，以及该派谁（带理由）。"""
+    roster=_leader_roster(c,club_id)
+    history=_leader_history(c,club_id)
+    aid=activity.get('id')
+    occ=rows(c.execute('SELECT id,label,start_at,status FROM activity_occurrences WHERE activity_id=? AND club_id=? ORDER BY start_at',(aid,club_id)))
+    assigned={}
+    for r in rows(c.execute('''SELECT ol.* FROM occurrence_leaders ol
+                               JOIN activity_occurrences o ON o.id=ol.occurrence_id
+                               WHERE o.activity_id=? AND ol.club_id=? ORDER BY ol.id''',(aid,club_id))):
+        assigned.setdefault(int(r['occurrence_id']),[]).append(r)
+    out=[]
+    for o in occ:
+        oid=int(o['id'])
+        here=assigned.get(oid,[])
+        out.append({
+            'occurrenceId':oid,'label':o.get('label') or o.get('start_at'),'startAt':o.get('start_at'),
+            'leaders':[{'assignmentId':x['id'],'leaderId':x.get('leader_id'),'name':x.get('name'),
+                        'phone':x.get('phone'),'role':x.get('role')} for x in here],
+            'recommendations':leader_recommend.recommend(
+                roster,history,activity,
+                assigned_leader_ids=[x.get('leader_id') for x in here if x.get('leader_id')],limit=3),
+        })
+    return {'roster':roster,'rosterCount':len(roster),
+            'activeCount':sum(1 for r in roster if r.get('status')=='active'),
+            'specialties':list(_LEADER_SPECIALTIES),'occurrences':out}
+
+
+def _gear_plan_for(c,master:dict,club_id:int)->dict:
+    """出行清单 × 商城在售装备 + 会员折扣。
 
     候选集合只含商城里 status='active' 的真实商品，推荐引擎不做任何商品条目的生成或补全；
     清单里没有对应装备时如实标注，不凑一个相近的顶上（与媒体清单同一条纪律）。
+
+    会员价按本俱乐部在用的「最高档」会员折扣计算并随商品一起下发，让「加入会员更便宜」
+    这件事在出行清单上直接看得见，而不是藏在会员中心里。
     """
     prods=rows(c.execute('SELECT id,name,price,stock,category,image_url FROM products WHERE status="active" ORDER BY id'))
-    return gear_recommend.plan(prods,master).as_dict()
+    plan=gear_recommend.plan(prods,master).as_dict()
+    tier=row(c.execute("""SELECT name,gear_discount FROM club_member_tiers
+                          WHERE club_id=? AND status="active" AND gear_discount IS NOT NULL AND gear_discount<1
+                          ORDER BY rank DESC,id DESC LIMIT 1""",(club_id,)))
+    if tier:
+        rate=float(tier['gear_discount']); tier_name=str(tier['name'])
+        plan['memberDiscount']={'rate':round(rate,4),'discountZhe':round(rate*10,2),'tierName':tier_name,
+                                'label':f'{tier_name} {rate*10:g} 折'}
+        picks=[p for it in (plan.get('items') or []) for p in (it.get('matches') or [])]
+        picks+=list(plan.get('extras') or [])
+        for p in picks:
+            base=round(float(p.get('price') or 0),2); mp=round(base*rate,2)
+            p['memberPrice']=mp; p['memberSavings']=round(base-mp,2)
+            p['memberDiscount']=round(rate,4); p['memberTierName']=tier_name
+    return plan
 
 
 def _next_version_no(c,activity_id:int)->int:
@@ -446,12 +518,14 @@ def get_activity(club_id:int,activity_id:int):
             _dv=row(c.execute("SELECT detail_json FROM activity_detail_versions WHERE id=? AND activity_id=? AND club_id=? AND status='ready'",
                               (a['detail_version_id'],activity_id,club_id)))
             if _dv: _detail=jload(_dv['detail_json'],{}) or {}
-        _gear=_gear_plan_for(c,_master)   # 清单×商城推荐要在连接关闭前把在售商品查出来
+        _gear=_gear_plan_for(c,_master,club_id)   # 清单×商城推荐要在连接关闭前把在售商品与会员折扣查出来
+        _leaders=_leader_plan_for(c,club_id,{**a,'id':activity_id})   # 领队排班建议（同样在连接关闭前取）
     # source_json 是内部原始资料（可能含成本、供应商报价），绝不出接口。
     a.pop('source_json',None)
     a.pop('activity_master_json',None)
     a['activityMaster']=_master;a['detail']=_detail;a['occurrences']=occ
     a['gearRecommendations']=_gear
+    a['leaderPlan']=_leaders
     current=a.get('detail_version_id')
     for v in versions: v['isCurrent']=v['id']==current
     cur=next((v for v in versions if v['isCurrent']),None)
@@ -637,6 +711,117 @@ def publish_activity(club_id:int,activity_id:int):
         c.execute('UPDATE activities SET status="published",updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',(activity_id,club_id))
     return {'ok':True}
 
+# ---------------------------------------------------------------------------
+# 活动基本信息的编辑 / 删除
+#
+# 纪律：这里只改「运营事实字段」（名称 / 日期 / 地点 / 价格 / 名额）。
+# AI 生成的叙事与版式属于 detail，不在这里手改——要换文案请走「换一版」。
+# 事实改了之后，detail.blocks 里 facts 区块上的同名字段一并同步，避免预览页
+# 出现「页头写着 10月24日、facts 里还是 11月2日」这种自相矛盾。
+# ---------------------------------------------------------------------------
+_FACT_LABELS = {
+    'date': ('DATE', '日期', '时间', '出发'),
+    'location': ('PLACE', '地点', '目的地', '位置'),
+    'price': ('PRICE', 'FEE', '费用', '价格', '人均'),
+}
+
+
+def _sync_detail_facts(detail: dict, a: dict) -> bool:
+    """把活动事实（日期/地点/价格）同步进 detail.blocks 的 facts 区块。
+
+    只认 facts 区块里语义明确的标签，其余区块（叙事、图集、行程）不动——
+    那些是 AI 的内容，事实同步不该顺手把它们改掉。返回是否有改动。
+    """
+    want = {
+        'date': str(a.get('event_date') or '').strip(),
+        'location': str(a.get('location') or '').strip(),
+        'price': (f'¥{float(a.get("price") or 0):g}' if a.get('price') else ''),
+    }
+    changed = False
+    for b in (detail or {}).get('blocks') or []:
+        if not isinstance(b, dict) or b.get('type') != 'facts':
+            continue
+        for it in b.get('items') or []:
+            if not isinstance(it, dict):
+                continue
+            label = str(it.get('label') or '')
+            for key, names in _FACT_LABELS.items():
+                if not want[key] or not any(n in label for n in names):
+                    continue
+                if str(it.get('value') or '') != want[key]:
+                    it['value'] = want[key]
+                    changed = True
+                break
+    return changed
+
+
+@app.patch('/api/club/{club_id}/activities/{activity_id}')
+def update_activity(club_id:int,activity_id:int,payload:dict=Body(...)):
+    """编辑活动运营字段：名称 / 日期 / 地点 / 价格 / 名额。"""
+    with conn() as c:
+        a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+        if not a: raise HTTPException(404,'活动不存在')
+        fields={}
+        if 'title' in payload:
+            t=str(payload.get('title') or '').strip()
+            if not t: raise HTTPException(400,'活动名称不能为空')
+            fields['title']=t[:80]
+        if 'eventDate' in payload: fields['event_date']=str(payload.get('eventDate') or '').strip() or None
+        if 'location' in payload: fields['location']=str(payload.get('location') or '').strip() or None
+        if 'price' in payload:
+            try: v=float(payload.get('price'))
+            except (TypeError,ValueError): raise HTTPException(400,'价格必须是数字')
+            if v<0: raise HTTPException(400,'价格不能为负数')
+            fields['price']=v
+        if 'capacity' in payload:
+            try: v=int(payload.get('capacity'))
+            except (TypeError,ValueError): raise HTTPException(400,'名额必须是整数')
+            if v<0: raise HTTPException(400,'名额不能为负数')
+            fields['capacity']=v
+        if not fields: raise HTTPException(400,'没有需要更新的字段')
+        merged={**a,**fields}
+        # Activity Master 是「事实」的权威载体，改了活动行就要一并对齐；
+        # 否则 C 端详情与后台预览会出现两套日期/价格。
+        master=jload(a.get('activity_master_json'),{}) or {}
+        if 'title' in fields: master['title']=fields['title']
+        if 'event_date' in fields: master['date']=fields['event_date'] or ''
+        if 'location' in fields: master['location']=fields['location'] or ''
+        if 'price' in fields: master['price']=fields['price']
+        if 'capacity' in fields: master['capacity']=fields['capacity']
+        # 只更新「当前工作副本」；历史版本快照保持不可变（恢复某一版时会随之恢复其文案）。
+        detail=jload(a.get('detail_json'),{}) or {}
+        _sync_detail_facts(detail,merged)
+        sets=','.join(f'{k}=?' for k in fields)
+        c.execute(f'UPDATE activities SET {sets},activity_master_json=?,detail_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
+                  (*fields.values(),jdump(master),jdump(detail),activity_id,club_id))
+    return {'ok':True,'updated':sorted(fields.keys())}
+
+
+@app.delete('/api/club/{club_id}/activities/{activity_id}')
+def delete_activity(club_id:int,activity_id:int):
+    """删除活动（连同其团期与执行数据）。
+
+    资金/履约护栏：只要还有一笔「未取消」的报名就拒绝删除——那些报名关联着
+    支付、保险与退款流程，不能随活动一起消失。这类活动应当先处理完报名记录。
+    """
+    with conn() as c:
+        a=row(c.execute('SELECT id,title FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+        if not a: raise HTTPException(404,'活动不存在')
+        live=int(c.execute('SELECT COUNT(*) FROM registrations WHERE activity_id=? AND club_id=? AND status!="cancelled"',(activity_id,club_id)).fetchone()[0])
+        if live: raise HTTPException(409,f'该活动还有 {live} 笔未取消的报名，不能删除。请先在报名管理里处理（取消 / 退款）后再删。')
+        occ=[int(r['id']) for r in c.execute('SELECT id FROM activity_occurrences WHERE activity_id=? AND club_id=?',(activity_id,club_id)).fetchall()]
+        if occ:
+            marks=','.join('?'*len(occ))
+            for t in ('participant_checkins','participant_group_assignments','execution_event_logs',
+                      'activity_notices','execution_groups','occurrence_leaders','occurrence_execution_settings'):
+                c.execute(f'DELETE FROM {t} WHERE occurrence_id IN ({marks})',occ)
+        for t in ('registration_participants','registrations','content_assets','activity_detail_versions'):
+            c.execute(f'DELETE FROM {t} WHERE activity_id=? AND club_id=?',(activity_id,club_id))
+        c.execute('DELETE FROM activity_occurrences WHERE activity_id=? AND club_id=?',(activity_id,club_id))
+        c.execute('DELETE FROM activities WHERE id=? AND club_id=?',(activity_id,club_id))
+    return {'ok':True,'deleted':activity_id}
+
+
 @app.post('/api/club/{club_id}/activities/{activity_id}/cover')
 async def upload_activity_cover(club_id:int, activity_id:int, file:UploadFile=File(...)):
     # Club-scoped; ownership enforced by matching club_id on the row.
@@ -765,6 +950,96 @@ def add_occurrence_leader(club_id:int,occurrence_id:int,payload:dict=Body(...)):
         try:return execution_service.add_leader(c,club_id=club_id,occurrence_id=occurrence_id,payload=payload)
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(400,str(e))
+
+@app.delete('/api/club/{club_id}/occurrences/{occurrence_id}/leaders/{assignment_id}')
+def remove_occurrence_leader(club_id:int,occurrence_id:int,assignment_id:int):
+    with conn() as c:
+        try:return execution_service.remove_leader(c,club_id=club_id,occurrence_id=occurrence_id,assignment_id=assignment_id)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+
+
+# ---------------------------------------------------------------------------
+# 领队资源库：俱乐部自己的领队名册
+#
+# 此前每场活动只能手打「姓名 + 电话」，没有名册就既无法复用同一个人，
+# 也回答不了「这条线路以前是谁带的」——而这正是"按活动自动推荐领队"的前提。
+# ---------------------------------------------------------------------------
+def _leader_specs(raw)->list[str]:
+    if isinstance(raw,str): raw=[x.strip() for x in raw.replace('，',',').replace('、',',').split(',')]
+    if not isinstance(raw,(list,tuple)): return []
+    seen=[]; 
+    for x in raw:
+        t=str(x or '').strip()
+        if t and t not in seen: seen.append(t)
+    return seen
+
+
+@app.get('/api/club/{club_id}/leaders')
+def club_leaders_list(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return {'leaders':_leader_roster(c,club_id),'specialties':list(_LEADER_SPECIALTIES)}
+
+
+@app.post('/api/club/{club_id}/leaders')
+def club_leader_add(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    name=str(payload.get('name') or '').strip()
+    if not name: raise HTTPException(400,'领队姓名不能为空')
+    with conn() as c:
+        dup=c.execute('SELECT id FROM club_leaders WHERE club_id=? AND name=?',(club_id,name)).fetchone()
+        if dup: raise HTTPException(409,f'资源库里已经有「{name}」了')
+        lid=c.execute('''INSERT INTO club_leaders(club_id,name,phone,role,specialties,base_city,status,note)
+                        VALUES(?,?,?,?,?,?,?,?)''',(
+            club_id,name,str(payload.get('phone') or '').strip() or None,
+            str(payload.get('role') or '').strip() or '领队',
+            jdump(_leader_specs(payload.get('specialties'))),
+            str(payload.get('baseCity') or '').strip() or None,
+            str(payload.get('status') or 'active'),str(payload.get('note') or '').strip() or None)).lastrowid
+    return {'id':int(lid)}
+
+
+@app.patch('/api/club/{club_id}/leaders/{leader_id}')
+def club_leader_update(club_id:int,leader_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        r=row(c.execute('SELECT * FROM club_leaders WHERE id=? AND club_id=?',(leader_id,club_id)))
+        if not r: raise HTTPException(404,'领队不存在')
+        fields={}
+        if 'name' in payload:
+            n=str(payload.get('name') or '').strip()
+            if not n: raise HTTPException(400,'领队姓名不能为空')
+            if c.execute('SELECT id FROM club_leaders WHERE club_id=? AND name=? AND id!=?',(club_id,n,leader_id)).fetchone():
+                raise HTTPException(409,f'资源库里已经有「{n}」了')
+            fields['name']=n
+        if 'phone' in payload: fields['phone']=str(payload.get('phone') or '').strip() or None
+        if 'role' in payload: fields['role']=str(payload.get('role') or '').strip() or '领队'
+        if 'baseCity' in payload: fields['base_city']=str(payload.get('baseCity') or '').strip() or None
+        if 'status' in payload: fields['status']=str(payload.get('status') or 'active')
+        if 'note' in payload: fields['note']=str(payload.get('note') or '').strip() or None
+        if 'specialties' in payload: fields['specialties']=jdump(_leader_specs(payload.get('specialties')))
+        if not fields: raise HTTPException(400,'没有需要更新的字段')
+        sets=','.join(f'{k}=?' for k in fields)
+        c.execute(f'UPDATE club_leaders SET {sets},updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
+                  (*fields.values(),leader_id,club_id))
+    return {'ok':True,'updated':sorted(fields.keys())}
+
+
+@app.delete('/api/club/{club_id}/leaders/{leader_id}')
+def club_leader_delete(club_id:int,leader_id:int):
+    """删除领队。带过队的只停用（带队历史要留痕），从没带过队的才真删。"""
+    club_or_404(club_id)
+    with conn() as c:
+        r=row(c.execute('SELECT id,name FROM club_leaders WHERE id=? AND club_id=?',(leader_id,club_id)))
+        if not r: raise HTTPException(404,'领队不存在')
+        used=int(c.execute('SELECT COUNT(*) FROM occurrence_leaders WHERE club_id=? AND leader_id=?',(club_id,leader_id)).fetchone()[0])
+        if used:
+            c.execute('UPDATE club_leaders SET status="inactive",updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',(leader_id,club_id))
+            return {'ok':True,'mode':'deactivated','assignments':used}
+        c.execute('DELETE FROM club_leaders WHERE id=? AND club_id=?',(leader_id,club_id))
+    return {'ok':True,'mode':'deleted'}
+
 
 @app.post('/api/club/{club_id}/occurrences/{occurrence_id}/groups')
 def add_execution_group(club_id:int,occurrence_id:int,payload:dict=Body(...)):
@@ -1001,7 +1276,7 @@ def public_activity(activity_id:int):
     a.pop('source_json',None)   # 原始资料属俱乐部内部资料，C 端一律不下发
     a['activityMaster']=_repair_master_media(jload(a.pop('activity_master_json'),{}),_pub_src);a['detail']=jload(a.pop('detail_json'),{});a['occurrences']=occ
     # 出行清单 × 商城在售装备：让 C 端报名页能直接把清单变成可下单的装备推荐
-    with conn() as _gc:a['gearRecommendations']=_gear_plan_for(_gc,a['activityMaster'])
+    with conn() as _gc:a['gearRecommendations']=_gear_plan_for(_gc,a['activityMaster'],int(a['club_id']))
     cov=a.get('cover')
     if cov and str(cov).startswith('/static/'):
         a['cover']='/api/public/activities/%d/media/%s'%(activity_id,quote(str(cov)[len('/static/'):],safe='/'))

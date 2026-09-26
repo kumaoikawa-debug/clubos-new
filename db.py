@@ -61,6 +61,26 @@ def _backfill_v021_finance(c):
     for r in c.execute('SELECT id FROM purchase_receipts ORDER BY received_at,id').fetchall():
         finance.register_receipt_payable(c,receipt_id=str(r['id']))
 
+def _backfill_gear_discount(c):
+    """给存量会员等级补一个「装备商城会员折扣」兜底值：等级越高折扣越低。
+
+    按俱乐部分组、**按 rank 排序取档位**（最低档无折扣、第二档 95 折、第三档及以后 9 折），
+    而不是拿 rank 的绝对值当档位——本项目 rank 用的是 0/10/20 这种量级，
+    用绝对值判断会把银卡也算成 9 折（实测踩过这个坑）。
+
+    只补 NULL（= 从未配置过）的行，所以重复执行幂等，也绝不会覆盖俱乐部自己调过的比例。
+    """
+    ladder=(1.0,0.95,0.90)
+    for row in c.execute('SELECT DISTINCT club_id FROM club_member_tiers').fetchall():
+        cid=row[0]
+        tiers=c.execute('SELECT id,gear_discount FROM club_member_tiers WHERE club_id=? ORDER BY rank,id',(cid,)).fetchall()
+        for pos,t in enumerate(tiers):
+            if t['gear_discount'] is not None:
+                continue
+            rate=ladder[pos] if pos<len(ladder) else ladder[-1]
+            c.execute('UPDATE club_member_tiers SET gear_discount=? WHERE id=?',(rate,t['id']))
+
+
 def _backfill_v023_ai_credits(c):
     from clubos_domain.ai_credits import AICreditEngine
     eng=AICreditEngine(); eng.seed_defaults(c)
@@ -343,6 +363,10 @@ def _run_compat_migrations(c):
     CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_detail_pending ON activity_detail_versions(activity_id) WHERE status='pending';
     ''')
     _ensure_column(c,'activity_detail_versions','status',"status TEXT NOT NULL DEFAULT 'ready'")
+    # v0.27：装备商城的会员折扣率、领队资源库与团期领队的关联列
+    _ensure_column(c,'club_member_tiers','gear_discount','gear_discount REAL')
+    _ensure_column(c,'occurrence_leaders','leader_id','leader_id INTEGER')
+    _backfill_gear_discount(c)
     _backfill_detail_versions(c)
     _backfill_v019_opening_inventory(c)
     _backfill_v020_warehouse(c)
