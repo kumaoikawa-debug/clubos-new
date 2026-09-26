@@ -134,7 +134,22 @@ async function api(url,opt={}){
 function money(n){return '¥'+Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2})}
 function dateText(s){return s||'待定'}
 function navInit(){$$('.nav button[data-view]').forEach(b=>b.onclick=()=>{$$('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');$$('.view').forEach(v=>v.classList.remove('active'));$('#'+b.dataset.view)?.classList.add('active');if(window.onView)window.onView(b.dataset.view)});}
-function modal(id,on=true){$('#'+id)?.classList.toggle('show',on)}
+/* 页面内 .modal（如 club 端 AI 发活动）也接同一套会话：Esc 关闭、焦点进入并圈闭、
+   关闭后归还焦点、锁背景滚动。之前 modal() 只是 classList.toggle，键盘用户打开后
+   焦点仍留在页面上、Esc 也关不掉。 */
+const _uxModalSessions=new Map();
+function modal(id,on=true){
+  const el=$('#'+id);if(!el)return;
+  const show=on!==false;
+  el.classList.toggle('show',show);
+  const live=_uxModalSessions.get(id);
+  if(!show){if(live){live.release();_uxModalSessions.delete(id)}return}
+  if(live)return;
+  const head=el.querySelector('h2');
+  if(head&&!head.id){head.id='uxm-title-'+id;el.setAttribute('aria-labelledby',head.id)}
+  if(!el.hasAttribute('tabindex'))el.tabIndex=-1;
+  _uxModalSessions.set(id,uxDialogSession(el,{onEscape:()=>modal(id,false),initialFocus:'textarea,input:not([type=file]),select'}));
+}
 function toast(msg){let el=document.createElement('div');el.textContent=msg;el.className='toast';document.body.appendChild(el);setTimeout(()=>el.remove(),2400)}
 function esc(v=''){return String(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function mediaMap(master){let m={};for(const x of master?.media||[]){if(typeof x==='string'){if(x)m[x]=m[x]||{ref:x};continue}if(x?.ref)m[x.ref]=x}return m}
@@ -319,31 +334,91 @@ function skel(sel,n=4,h=14){const el=$(sel);if(!el)return;el.innerHTML=skelRows(
     if(c.length&&c.every(x=>x.classList&&x.classList.contains('skeleton')))
       el.innerHTML='<div class="empty">加载超时，请刷新重试</div>'},10000)}
 
+/* ===== 弹窗可访问性会话：焦点进入 / Tab 圈闭 / Esc 逐层关闭 / 背景滚动锁 =====
+   全站有三套 overlay（本文件的 uxDialog、clubos-ux.js 的 uxForm、payment-experience.js 的
+   支付 sheet）。改之前只有 uxForm 这一套自带键盘与焦点行为，uxDialog（= showConfirm /
+   showAlert / showForm，全站 70+ 个调用点，删除确认、报名确认、提示都走它）与 club 端的
+   .modal 什么都没有 —— 实测：打开后焦点仍在 <body>、背景能滚、Tab 直接跑到弹窗背后的页面上、
+   Esc 关不掉、也没有 aria-labelledby。这里把同一套能力抽成一个可复用的「会话」，
+   三套 overlay 共用一份实现，行为不再分叉。
+
+   实现要点：
+     · 弹窗可以叠（uxForm 里再开一个确认框）：用栈，Esc 只关最上层那一层；
+     · 背景滚动锁用引用计数，叠了多层时只在最后一层关闭后解锁；
+     · 关闭后把焦点还给「打开它的那个元素」，键盘用户不会掉到页面顶部；
+     · 聚焦键用捕获阶段并在消费掉 Esc/Tab 时 stopPropagation，避免同时关掉下层的弹窗
+       或移动端导航抽屉。 */
+const _uxDlgStack=[];let _uxScrollLocks=0,_uxDlgSeq=0;
+const _UX_FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+function _uxFocusables(root){return [...root.querySelectorAll(_UX_FOCUSABLE)].filter(el=>el.getClientRects().length>0)}
+function uxDialogSession(root,{onEscape=null,initialFocus=null}={}){
+  const prior=document.activeElement;
+  const session={root};
+  const onKey=e=>{
+    if(_uxDlgStack[_uxDlgStack.length-1]!==session)return;      /* 只由最上层响应 */
+    if(e.key==='Escape'){e.stopPropagation();if(onEscape)onEscape();return}
+    if(e.key!=='Tab')return;
+    const f=_uxFocusables(root);
+    if(!f.length){e.preventDefault();root.focus?.();return}
+    const first=f[0],last=f[f.length-1];
+    const here=root.contains(document.activeElement)?document.activeElement:null;
+    if(e.shiftKey&&(!here||here===first)){e.preventDefault();last.focus()}
+    else if(!e.shiftKey&&(!here||here===last)){e.preventDefault();first.focus()}
+  };
+  session.release=()=>{
+    const i=_uxDlgStack.indexOf(session);if(i<0)return;
+    _uxDlgStack.splice(i,1);document.removeEventListener('keydown',onKey,true);
+    /* 解锁前再看一眼「层里还有没有别的 overlay」：uxForm、渠道预览等各自管理 body 滚动
+       （不参与这里的引用计数），只按计数解锁会把它们的锁一起解掉；同时必须把「正在释放的
+       这一层自己」排除掉，否则关掉最后一层弹窗后滚动会永久锁住。 */
+    if(--_uxScrollLocks<=0){
+      _uxScrollLocks=0;
+      const others=[...document.querySelectorAll('.ux-overlay,.modal.show')].filter(el=>el!==root);
+      if(!others.length)document.body.style.overflow='';
+    }
+    if(prior&&prior.isConnected&&typeof prior.focus==='function'){try{prior.focus({preventScroll:true})}catch(_){prior.focus()}}
+  };
+  _uxDlgStack.push(session);
+  if(_uxScrollLocks++===0)document.body.style.overflow='hidden';
+  document.addEventListener('keydown',onKey,true);
+  const pick=typeof initialFocus==='string'?root.querySelector(initialFocus):initialFocus;
+  const target=pick||_uxFocusables(root)[0]||root;
+  try{target.focus({preventScroll:true})}catch(_){target?.focus?.()}
+  return session;
+}
+window.uxDialogSession=uxDialogSession;
+
 /* ===== 原生弹窗替代层：结构化表单 / 确认弹窗 / 信息弹窗（替换 prompt/confirm/alert）===== */
-function uxDialog({title='',desc='',body='',foot='',wide=false,onClose=null}={}){
+function uxDialog({title='',desc='',body='',foot='',wide=false,onClose=null,initialFocus=null}={}){
   const ov=document.createElement('div');ov.className='ux-overlay';
-  ov.innerHTML=`<div class="ux-dialog${wide?' wide':''}" role="dialog" aria-modal="true">
-    <div class="ux-dialog-head"><div><h2>${esc(title)}</h2>${desc?`<p>${esc(desc)}</p>`:''}</div><button class="ux-x" type="button" aria-label="关闭">×</button></div>
+  const titleId='uxdlg-title-'+(++_uxDlgSeq);
+  ov.innerHTML=`<div class="ux-dialog${wide?' wide':''}" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1">
+    <div class="ux-dialog-head"><div><h2 id="${titleId}">${esc(title)}</h2>${desc?`<p>${esc(desc)}</p>`:''}</div><button class="ux-x" type="button" aria-label="关闭">×</button></div>
     ${body?`<div class="ux-dialog-body">${body}</div>`:''}${foot?`<div class="ux-dialog-foot">${foot}</div>`:''}</div>`;
-  const close=()=>{ov.remove();if(onClose)onClose()};
+  document.body.appendChild(ov);
+  let closed=false,session=null;
+  /* uxClose 幂等：取消/×/点遮罩/写请求落定后的持有回调都走它，只会真正释放一次。 */
+  const close=()=>{if(closed)return;closed=true;session&&session.release();ov.remove();if(onClose)onClose()};
+  ov.uxClose=close;
   ov.querySelector('.ux-x').onclick=close;
   ov.onclick=e=>{if(e.target===ov)close()};
-  document.body.appendChild(ov);
+  session=uxDialogSession(ov,{onEscape:close,initialFocus:initialFocus||ov.querySelector('.ux-dialog')});
   return ov;
 }
 function showConfirm({title='请确认',message='',confirmText='确认',cancelText='取消',danger=false}={}){
   return new Promise(res=>{
     let done=false;const fin=v=>{if(done)return;done=true;res(v)};
-    const ov=uxDialog({title,desc:message,onClose:()=>fin(false),foot:`<button class="btn ghost" type="button" data-cancel>${esc(cancelText)}</button><button class="btn ${danger?'danger':''}" type="button" data-ok>${esc(confirmText)}</button>`});
-    ov.querySelector('[data-cancel]').onclick=()=>{ov.remove();fin(false)};
-    ov.querySelector('[data-ok]').onclick=()=>{_holdDialogUntilIdle(ov,ov.querySelector('[data-ok]'));fin(true)};
+    /* 破坏性确认默认聚焦「取消」，回车/空格不会误触发删除；普通确认才聚焦主按钮。 */
+    const ov=uxDialog({title,desc:message,onClose:()=>fin(false),initialFocus:danger?'[data-cancel]':'[data-ok]',foot:`<button class="btn ghost" type="button" data-cancel>${esc(cancelText)}</button><button class="btn ${danger?'danger':''}" type="button" data-ok>${esc(confirmText)}</button>`});
+    ov.querySelector('[data-cancel]').onclick=()=>{ov.uxClose();fin(false)};
+    ov.querySelector('[data-ok]').onclick=()=>{_holdDialogUntilIdle(ov,ov.querySelector('[data-ok]'),()=>ov.uxClose());fin(true)};
   });
 }
 function showAlert({title='提示',message='',okText='知道了',wide=false}={}){
   return new Promise(res=>{
     let done=false;const fin=()=>{if(done)return;done=true;res()};
-    const ov=uxDialog({title,desc:message,wide,onClose:fin,foot:`<button class="btn" type="button" data-ok>${esc(okText)}</button>`});
-    ov.querySelector('[data-ok]').onclick=()=>{ov.remove();fin()};
+    const ov=uxDialog({title,desc:message,wide,onClose:fin,initialFocus:'[data-ok]',foot:`<button class="btn" type="button" data-ok>${esc(okText)}</button>`});
+    ov.querySelector('[data-ok]').onclick=()=>{ov.uxClose();fin()};
   });
 }
 function showForm({title='',desc='',fields=[],submitText='提交',validate=null,wide=false}={}){
@@ -357,9 +432,9 @@ function showForm({title='',desc='',fields=[],submitText='提交',validate=null,
   }).join('');
   return new Promise(resolve=>{
     let done=false;const fin=v=>{if(done)return;done=true;resolve(v)};
-    const ov=uxDialog({title,desc,wide,body,onClose:()=>fin(null),foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-submit>${esc(submitText)}</button>`});
+    const ov=uxDialog({title,desc,wide,body,onClose:()=>fin(null),initialFocus:'input:not([type=file]),select,textarea',foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-submit>${esc(submitText)}</button>`});
     const bodyEl=ov.querySelector('.ux-dialog-body')||ov.querySelector('.ux-dialog');
-    ov.querySelector('[data-cancel]').onclick=()=>{ov.remove();fin(null)};
+    ov.querySelector('[data-cancel]').onclick=()=>{ov.uxClose();fin(null)};
     ov.querySelector('[data-submit]').onclick=()=>{
       let ok=true;const vals={};
       for(const f of fields){
@@ -373,7 +448,7 @@ function showForm({title='',desc='',fields=[],submitText='提交',validate=null,
       }
       if(!ok){let e=bodyEl.querySelector('.ux-inline-error');if(!e){e=document.createElement('div');e.className='ux-inline-error';e.textContent='请填写带 * 的必填项';bodyEl.insertBefore(e,bodyEl.firstChild)}return}
       if(validate&&!validate(vals,ov))return;
-      _holdDialogUntilIdle(ov,ov.querySelector('[data-submit]'));fin(vals);
+      _holdDialogUntilIdle(ov,ov.querySelector('[data-submit]'),()=>ov.uxClose());fin(vals);
     };
   });
 }

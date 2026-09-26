@@ -295,7 +295,8 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .product .price-was{font-size:12px;color:#9aa8a0;text-decoration:line-through;font-weight:600;margin-left:6px}
 .product .price-member{font-size:11px;font-weight:800;color:#2f6b48;margin-top:3px}
 /* 命中区下限：卡片上的「编辑 / 删除」原为 44×23，低于 24px 的可点最小高度，容易点空。 */
-.act-op{padding:5px 10px;min-height:24px}
+.act-op{padding:6px 11px;min-height:28px;display:inline-flex;align-items:center}
+.act-op:focus-visible{outline:2px solid #70a279;outline-offset:2px}
 .gear-row--dup+.gear-row--dup{margin-top:0}
 /* 表格筛选框：输入框本体只有 19px 高，点起来太窄，给一点纵向内边距。 */
 .ux-table-search input{padding:3px 0;min-height:22px}
