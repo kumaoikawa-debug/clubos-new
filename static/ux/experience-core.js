@@ -51,7 +51,16 @@
  function initWeb(){
   if(!isWeb)return;
   const nav=document.querySelector('.web-nav');if(!nav)return;
-  nav.querySelectorAll('button').forEach((b,i)=>{b.type='button';b.setAttribute('aria-label',['查看活动','浏览装备','查看会员','查看订单'][i]);b.setAttribute('aria-current',b.classList.contains('active')?'page':'false')});
+  /* aria-label 原来按 nav 下标记硬编码一个 4 元数组 —— 导航一旦不是 4 格，
+     多出来的格子会把字面量 "undefined" 写进无障碍标签（读屏念出「未定义」）。
+     改成按 data-wv 映射，与按钮数量解耦；没有 data-wv 时退回用可见文字。 */
+  const NAV_LABELS={whome:'首页',wactivities:'活动',wmall:'装备',wability:'户外能力',wme:'我的'};
+  nav.querySelectorAll('button').forEach(b=>{
+    b.type='button';
+    const key=NAV_LABELS[b.dataset.wv];
+    b.setAttribute('aria-label',key||(b.textContent||'').trim()||'导航');
+    b.setAttribute('aria-current',b.classList.contains('active')?'page':'false');
+  });
   const native=window.wv;
   if(typeof native==='function')window.wv=function(id,b){native(id,b);nav.querySelectorAll('button').forEach(x=>x.setAttribute('aria-current',x===b?'page':'false'));window.scrollTo({top:0,behavior:'instant'})};
   const body=document.querySelector('.web-content');body?.addEventListener('click',e=>{const target=e.target.closest('.web-card[onclick]');if(target&&e.target.closest('button,a,input'))e.stopPropagation()});

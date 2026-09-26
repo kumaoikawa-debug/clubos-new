@@ -1,3 +1,151 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>远拓户外</title><link rel="stylesheet" href="/static/shared.css"><link rel="stylesheet" href="/static/ux/clubos-ux.css"></head><body><div class="web-shell"><div class="web-top"><strong>远拓户外</strong><span class="tag">ClubOS</span></div><div class="web-content"><section id="wactivities" class="wview"><div class="web-card"><div class="eyebrow">OUTDOOR CLUB</div><h2>去户外，找到下一场。</h2><div class="sub">活动由俱乐部独立经营，装备由 ClubOS 平台统一履约。</div></div><div id="publicActivities"></div><div id="publicDetail"></div></section><section id="wmall" class="wview" style="display:none"><div class="web-card"><h2>装备商城</h2><div class="sub">平台统一商品、库存、发货与售后。</div></div><div id="publicProducts"></div></section><section id="wability" class="wview" style="display:none"><div class="web-card"><div class="eyebrow">OUTDOOR SKILLS</div><h2>户外能力</h2><div class="sub">记录你走过的线路与掌握的技能，帮俱乐部给你匹配更合适的活动。</div></div><div class="web-card"><div class="empty">户外能力体系正在建设中，暂未开放。<div class="sub" style="margin-top:6px">开放后这里会显示你的能力标签、线路履历，以及可挑战的下一档活动。</div></div></div></section><!-- 「我的」= 会员信息 + 全部订单（活动 + 装备）。原来「会员」「订单」两个底部入口合并到这里，
-     wmember / worders 降级为内部两个块：保留原 id 让既有 loader 继续写入，但不带 .wview，
-     否则会被 wv() 的 display:none 连带藏掉。 --><section id="wme" class="wview" style="display:none"><div id="worders"><div class="web-card"><div class="eyebrow">MY ORDERS</div><h2>我的订单</h2><div class="sub">活动报名和装备订单统一查看；活动退款由俱乐部处理，装备售后由 ClubOS 平台处理。</div></div><div class="web-card"><h3>活动订单</h3><div id="activityOrders"></div></div><div class="web-card"><h3>装备订单</h3><div id="gearOrders"></div></div></div><div id="wmember"><div class="web-card"><div class="eyebrow">MY MEMBERSHIP</div><h2>我的会员中心</h2><div id="memberLevel" class="sub">—</div><div id="memberTierPerks" class="sub" style="margin-top:6px"></div><div class="wallet"><div><span class="sub">活动积分</span><strong id="clubPts">—</strong><small>俱乐部承担 · 仅本俱乐部</small></div><div><span class="sub">装备积分</span><strong id="gearPts">—</strong><small>平台承担 · 全平台权益</small></div></div></div><div class="web-card"><h3>可兑换福利</h3><div class="sub">同一个会员中心里展示两类福利，但底层成本分开：活动积分福利由俱乐部承担；装备积分福利由总平台承担。</div><div id="memberBenefits" class="section"></div></div><div class="web-card"><h3>我的兑换</h3><div id="memberRedemptions"></div></div></div></section></div><nav class="web-nav" aria-label="主要导航"><button class="active" data-wv="wactivities" onclick="wv('wactivities',this)">活动</button><button data-wv="wmall" onclick="wv('wmall',this)">装备</button><button data-wv="wability" onclick="wv('wability',this)">户外能力</button><button data-wv="wme" onclick="wv('wme',this)">我的</button></nav></div><script src="/static/shared.js"></script><script src="/static/web/web.js"></script><script src="/static/ux/clubos-ux.js"></script><script src="/static/ux/workflows-web.js"></script><script src="/static/ux/qr-local.js"></script><script src="/static/ux/experience-core.js"></script><script src="/static/ux/payment-experience.js"></script><script src="/static/ux/experience-consumer.js"></script></body></html>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>远拓户外</title>
+<link rel="stylesheet" href="/static/shared.css"><link rel="stylesheet" href="/static/ux/clubos-ux.css"><link rel="stylesheet" href="/static/web/web.css"></head><body>
+
+<!-- C 端骨架：5 视图（首页 / 活动 / 装备 / 户外能力 / 我的）。
+     结构类 .web-shell / .web-top / .web-content / .wview / .web-nav 全部保留 ——
+     experience-core.js 与 experience-consumer.js 靠 .web-nav、.web-content、#publicActivities、
+     #publicProducts 定位，换掉它们等于让这两个装饰层静默失效。
+     视觉全部在 /static/web/web.css（C 端专属），四端共用的 shared.css / clubos-ux.css 一个字节没动。 -->
+<div class="web-shell is-home">
+
+  <header class="web-top">
+    <button class="web-top__btn" type="button" onclick="wv('wactivities')" aria-label="搜索活动"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.4"/><path d="m16 16 4.2 4.2"/></svg></button>
+    <strong>远拓户外</strong>
+    <button class="web-top__btn" type="button" onclick="wv('wme')" aria-label="我的"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20.2a7.2 7.2 0 0 1 14.4 0"/></svg></button>
+  </header>
+
+  <div class="web-content">
+
+    <!-- ── 首页：全屏照片 hero 轮播 + 精选横滑 ────────────────────────────
+         #homeHero 由 loadHome() 填充（取主推活动的封面图）；没有封面时 hero 走深色渐变兜底。 -->
+    <section id="whome" class="wview">
+      <div class="w-hero" id="homeHero"><div class="w-sk" style="padding:0"><div class="w-sk__bar" style="height:min(84vh,660px);border-radius:0"></div></div></div>
+      <div class="w-sec">
+        <div class="w-pad w-sec__head"><div><h2>本月精选</h2><p>俱乐部正在招募的活动</p></div><button class="w-more" type="button" onclick="wv('wactivities')">全部活动<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13"/><path d="m12.4 6 6 6-6 6"/></svg></button></div>
+        <div class="w-hscroll" id="homeFeatured"></div>
+      </div>
+      <div class="w-sec">
+        <div class="w-pad w-sec__head"><div><h2>装备精选</h2><p>平台统一发货与售后</p></div><button class="w-more" type="button" onclick="wv('wmall')">全部装备<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13"/><path d="m12.4 6 6 6-6 6"/></svg></button></div>
+        <div class="w-hscroll" id="homeGear"></div>
+      </div>
+      <div style="height:10px"></div>
+    </section>
+
+    <!-- ── 活动：搜索 + 时间胶囊 + 竖向长卡横滑 ──────────────────────────
+         #activityList 是列表区整体（含头部与胶囊），详情打开时整块让位给 #publicDetail，
+         否则会出现「标题还在、reel 不见了」的半截页面。 -->
+    <section id="wactivities" class="wview" style="display:none">
+      <div id="activityList">
+        <div class="w-pad w-sec">
+          <div class="w-sec__head"><div><h2>活动</h2><p id="actCount">正在读取活动…</p></div></div>
+          <label class="w-field"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.4"/><path d="m16 16 4.2 4.2"/></svg><input id="actSearch" type="search" placeholder="搜索活动名称或地点" aria-label="搜索活动"></label>
+        </div>
+        <div class="w-chips" id="activityChips"></div>
+        <div class="w-reel" id="publicActivities"></div>
+        <div id="activityEmpty"></div>
+      </div>
+      <div id="publicDetail"></div>
+    </section>
+
+    <!-- ── 装备：左侧分类 + 右侧双列网格 ───────────────────────────────
+         #publicProducts 带 .w-grid：experience-consumer.js 是按 `#publicProducts .web-card`
+         数商品张数的，卡片类名必须保留 .web-card（额外挂 .w-product 做外观重置）。 -->
+    <section id="wmall" class="wview" style="display:none">
+      <div class="w-shop">
+        <aside class="w-shop__side" id="mallCats"></aside>
+        <div class="w-shop__main">
+          <div class="w-shop__tabs" id="mallTabs"></div>
+          <div class="w-grid" id="publicProducts"></div>
+          <div class="w-shop__note">平台统一商品、库存、发货与售后；会员等级折扣在结算时自动生效。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 户外能力：暂未开放（做成有信息量的承诺页，而不是一块空白） ──── -->
+    <section id="wability" class="wview" style="display:none">
+      <div class="w-ability">
+        <div class="w-ability__hero">
+          <span class="w-ability__badge">BUILDING · 建设中</span>
+          <h2>你的户外履历，值得被记录</h2>
+          <p>走过的线路、掌握的技能、能挑战的难度 —— 开放后这里会形成你的户外能力档案，俱乐部据此给你匹配更合适的活动。</p>
+        </div>
+        <div class="w-ability__list">
+          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.6"/><circle cx="17.5" cy="17.5" r="2.6"/><path d="M9.1 6.5h5.4a3 3 0 0 1 0 6H9.5a3 3 0 0 0 0 6h5.4"/></svg><div><b>线路履历</b><span>按里程、爬升与海拔记录你走过的每一条线。</span></div></div>
+          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="5"/><path d="m8.6 13.4-1.3 7 4.7-2.6 4.7 2.6-1.3-7"/></svg><div><b>技能标签</b><span>徒步 / 溯溪 / 攀岩 / 急救，标签决定你能进入哪一档活动。</span></div></div>
+          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0v11H6z"/><path d="M6 13h12"/><path d="M10.4 3.4h3.2"/></svg><div><b>装备掌握</b><span>把你实际用过的装备经验与商城商品关联起来。</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 我的：深色照片底 + 毛玻璃会员卡，下滑接订单与福利 ──────────────
+         #clubPts / #gearPts / #memberLevel / #memberTierPerks 必须保留原 id：
+         loadMemberCenter() 与 loadWallet() 是直接按 id 写这两个积分与等级文案的。
+         #worders 与 #wmember 同样保留（loadOrders / loadMemberCenter 的写入目标），
+         顺序按上轮确认的「订单在前、会员福利在后」。 -->
+    <section id="wme" class="wview" style="display:none">
+      <div class="w-me__stage">
+        <div class="w-me__bg" id="meBg"></div>
+        <div class="w-me__bgtint"></div>
+        <div class="w-me__card">
+          <div class="w-me__id">
+            <div class="w-me__avatar" id="meAvatar">远</div>
+            <div class="w-me__who">
+              <div class="w-me__name"><span id="meName">户外会员</span><span class="w-me__tier" id="meTier">普通会员</span></div>
+              <div class="w-me__sub w-me__legacy" id="memberLevel">正在读取会员信息…</div>
+            </div>
+            <button class="w-me__qr" type="button" data-me="qr" aria-label="出示会员码"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="6.4" height="6.4" rx="1.2"/><rect x="14.1" y="3.5" width="6.4" height="6.4" rx="1.2"/><rect x="3.5" y="14.1" width="6.4" height="6.4" rx="1.2"/><path d="M14.1 14.1h2.8v2.8h-2.8z"/><path d="M20.5 14.1v6.4h-6.4"/></svg></button>
+          </div>
+          <div class="w-me__up">
+            <div class="w-me__uphead"><span>升级条件</span><span id="meUpTip">—</span></div>
+            <div class="w-me__bar"><i id="meUpBar" style="width:0%"></i></div>
+            <div class="w-me__legacy" id="memberTierPerks" style="margin-top:9px"></div>
+          </div>
+          <div class="w-me__pts">
+            <span>可用积分</span><b id="clubPts">—</b><em>活动积分</em>
+            <span aria-hidden="true" style="margin:0 2px 0 10px;color:rgba(255,255,255,.34)">|</span>
+            <b id="gearPts" style="font-size:20px">—</b><em>装备积分</em>
+          </div>
+          <div class="w-me__grid" id="meGrid"></div>
+          <div class="w-me__svc">
+            <div class="w-me__svctitle">我的服务</div>
+            <div class="w-me__grid" id="meService"></div>
+          </div>
+          <button class="w-me__more" type="button" onclick="document.getElementById('memberBenefits')?.scrollIntoView({behavior:'smooth',block:'center'})">查看更多权益</button>
+        </div>
+      </div>
+      <div class="w-me__body">
+        <div id="worders">
+          <div class="w-sec__head"><div><h2>我的订单</h2><p>活动报名与装备订单都在这里，退款与售后分开处理</p></div></div>
+          <div class="web-card"><h3>活动订单</h3><div id="activityOrders"></div></div>
+          <div class="web-card"><h3>装备订单</h3><div id="gearOrders"></div></div>
+        </div>
+        <div id="wmember">
+          <div class="web-card"><h3>可兑换福利</h3><div id="memberBenefits"></div></div>
+          <div class="web-card"><h3>我的兑换</h3><div id="memberRedemptions"></div></div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <!-- 底部导航 5 格：首页 / 活动 / 装备 / 户外能力 / 我的。
+       图标做成内联 SVG —— 旧版是 clubos-ux.css 里 :nth-child(n):before 的字符图标，
+       只有 4 个，加到第 5 格会没有图标可用；字符字形在不同系统上也不可控。 -->
+  <nav class="web-nav" aria-label="主要导航">
+    <button class="active" data-wv="whome" onclick="wv('whome',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.2 12 3l9 7.2"/><path d="M5.4 9.4V20h13.2V9.4"/><path d="M9.6 20v-5.6h4.8V20"/></svg><span>首页</span><i class="w-navdot" aria-hidden="true"></i></button>
+    <button data-wv="wactivities" onclick="wv('wactivities',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 19.5 9.5 7l4 6.6 2.4-3.9 5.6 9.8z"/></svg><span>活动</span><i class="w-navdot" aria-hidden="true"></i></button>
+    <button data-wv="wmall" onclick="wv('wmall',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/></svg><span>装备</span><i class="w-navdot" aria-hidden="true"></i></button>
+    <button data-wv="wability" onclick="wv('wability',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15.6 8.4 10.8 10.8 8.4 15.6l4.8-2.4z"/></svg><span>户外能力</span><i class="w-navdot" aria-hidden="true"></i></button>
+    <button data-wv="wme" onclick="wv('wme',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20.2a7.2 7.2 0 0 1 14.4 0"/></svg><span>我的</span><i class="w-navdot" aria-hidden="true"></i></button>
+  </nav>
+</div>
+
+<script src="/static/shared.js"></script>
+<script src="/static/web/web.js"></script>
+<script src="/static/ux/clubos-ux.js"></script>
+<script src="/static/ux/workflows-web.js"></script>
+<script src="/static/ux/qr-local.js"></script>
+<script src="/static/ux/experience-core.js"></script>
+<script src="/static/ux/payment-experience.js"></script>
+<script src="/static/ux/experience-consumer.js"></script>
+</body></html>

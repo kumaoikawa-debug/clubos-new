@@ -1,0 +1,480 @@
+/* ===========================================================================
+   ClubOS · C 端（消费者端）专属设计层
+   ---------------------------------------------------------------------------
+   为什么单独一个文件：static/shared.css 与 static/ux/clubos-ux.css 是四端共用的，
+   改它们等于同时改俱乐部端、总平台端、领队端。C 端这次是整体视觉重做（全屏 hero /
+   竖向大卡横滑 / 左侧分类商城 / 毛玻璃会员卡），不该让另外三端承担回归风险，
+   所以视觉全部收在这里，只在 static/web/index.html 里引用。影响面 = C 端一个页面。
+
+   设计取向（对齐参考图）：
+   - 首页 = 照片铺满、白色细线框按钮、文案克制（始祖鸟）
+   - 活动 = 竖向长卡横滑、卡内居中排版、卡底品牌行（松赞）
+   - 装备 = 左侧竖向分类 + 右侧双列商品网格（可隆）
+   - 我的 = 深色照片底 + 毛玻璃浮层卡、积分与入口一屏收齐（可隆会员中心）
+
+   约定：**本文件里的规则一律带 .web-shell 前缀**。既为了提权稳压 shared.css /
+   clubos-ux.css 里的同名类（避免依赖加载顺序），也为了让所有覆盖都能一眼看出
+   是被限定在 C 端容器内的。
+   =========================================================================== */
+
+/* ── 设计 token ─────────────────────────────────────────────────────────────
+   定义在 .web-shell 而不是 :root —— 项目里的 :root 唯一权威在 clubos-ux.css，
+   C 端不该去改全局 token 影响其他端。 */
+.web-shell{
+  --w-ink:#121714;--w-ink2:#39443d;--w-muted:#7e8a84;--w-line:#e6e9e4;
+  --w-bg:#f5f6f3;--w-card:#fff;--w-brand:#156243;--w-brand-soft:#e9f1ec;
+  --w-accent:#c4552b;--w-navy:#1b2b33;
+  --w-lg:22px;--w-r:16px;--w-sm:11px;
+  --w-shadow:0 10px 30px rgba(18,23,20,.07);
+  --w-shadow-lg:0 22px 56px rgba(18,23,20,.18);
+}
+.web-shell,.web-shell *,.web-shell *:before,.web-shell *:after{box-sizing:border-box}
+.web-shell{
+  background:var(--w-bg);color:var(--w-ink);position:relative;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+}
+.web-shell button{font-family:inherit}
+
+/* ── 顶栏 ───────────────────────────────────────────────────────────────────
+   三栏：左搜索 / 中品牌 / 右我的。首页时整条浮在 hero 照片上（透明 + 白字），
+   因为参考图里顶栏是压在照片上的，一旦做成白底就把 hero 的沉浸感切断了。 */
+.web-shell .web-top{
+  position:sticky;top:0;z-index:30;padding:12px 14px;
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  background:rgba(255,255,255,.86);
+  -webkit-backdrop-filter:saturate(1.7) blur(18px);backdrop-filter:saturate(1.7) blur(18px);
+  border-bottom:1px solid var(--w-line);transition:color .25s,background .25s,border-color .25s;
+}
+.web-shell .web-top strong{
+  flex:1;text-align:center;font-size:15px;font-weight:600;letter-spacing:.04em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.web-shell .web-top .tag{display:none}
+.web-top__btn{
+  width:36px;height:36px;flex:0 0 36px;display:grid;place-items:center;
+  border:0;background:none;color:inherit;cursor:pointer;border-radius:50%;
+  transition:background .2s;
+}
+.web-top__btn:active{background:rgba(127,138,131,.18)}
+.web-top__btn svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+/* 首页沉浸态：顶栏绝对定位压在 hero 上 */
+.web-shell.is-home .web-top{
+  position:absolute;left:0;right:0;top:0;background:transparent;border-bottom-color:transparent;
+  color:#fff;-webkit-backdrop-filter:none;backdrop-filter:none;
+  text-shadow:0 1px 12px rgba(0,0,0,.34);
+}
+
+/* ── 内容区 ─────────────────────────────────────────────────────────────────
+   左右 padding 收成 0，交给各区块自己控制宽度：这样首页 hero 与活动 reel 能真正
+   通栏出血（照片顶到屏幕边），而文字区块自己留边距。 */
+.web-shell .web-content{padding:0 0 calc(74px + env(safe-area-inset-bottom));min-height:100vh}
+.web-shell .wview{animation:wFade .3s ease both}
+@keyframes wFade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.web-shell .wview{animation:none}}
+.w-pad{padding-left:16px;padding-right:16px}
+
+/* ── 底部导航（5 格，深色） ──────────────────────────────────────────────────
+   旧的字符图标来自 clubos-ux.css 的 .web-nav button:nth-child(n):before，这里一次性
+   作废掉改用内联 SVG：字符图标在 5 格下没有第 5 个，且字形在不同系统上不可控。
+   这两条 !important 是「替换契约」——旧图标必须消失，不是可调的样式偏好。 */
+.web-shell .web-nav{
+  position:fixed;bottom:0;left:50%;transform:translateX(-50%);
+  width:min(560px,100%);z-index:40;
+  display:grid;grid-template-columns:repeat(5,1fr);
+  padding:7px 4px calc(7px + env(safe-area-inset-bottom));
+  background:rgba(15,19,17,.95);
+  -webkit-backdrop-filter:blur(22px) saturate(1.5);backdrop-filter:blur(22px) saturate(1.5);
+  border-top:0;border-radius:0;box-shadow:0 -10px 34px rgba(10,14,12,.3);
+}
+.web-shell .web-nav button{
+  position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:4px;min-height:52px;padding:0;border:0;border-radius:14px;background:none;
+  color:rgba(255,255,255,.54);font-size:10.5px;font-weight:600;letter-spacing:.03em;
+  cursor:pointer;transition:color .2s,background .2s;-webkit-tap-highlight-color:transparent;
+}
+.web-shell .web-nav button:before,.web-shell .web-nav button:after{content:none!important;display:none!important}
+.web-shell .web-nav button svg{
+  width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.65;
+  stroke-linecap:round;stroke-linejoin:round;transition:transform .24s cubic-bezier(.3,1.4,.5,1);
+}
+.web-shell .web-nav button.active{color:#fff;background:rgba(255,255,255,.1)}
+.web-shell .web-nav button.active svg{stroke-width:2.1;transform:translateY(-1px)}
+.web-shell .web-nav button .w-navdot{
+  position:absolute;bottom:3px;width:4px;height:4px;border-radius:99px;background:#7fd0a4;
+  opacity:0;transform:scale(.4);transition:.24s;
+}
+.web-shell .web-nav button.active .w-navdot{opacity:1;transform:none}
+
+/* ── 首页 hero：全屏照片轮播 ─────────────────────────────────────────────────
+   底部细线是「第几场 / 共几场」，参考图里那根白线就是这个作用，不是装饰。 */
+.w-hero{position:relative;background:var(--w-ink)}
+.w-hero__track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch}
+.w-hero__track::-webkit-scrollbar{display:none}
+.w-hero__slide{
+  position:relative;flex:0 0 100%;scroll-snap-align:start;
+  min-height:min(84vh,660px);display:flex;align-items:flex-end;overflow:hidden;
+}
+.w-hero__media{position:absolute;inset:0;background-size:cover;background-position:center;background-color:#1d2a24}
+.w-hero__scrim{
+  position:absolute;inset:0;
+  background:linear-gradient(180deg,rgba(8,12,10,.62) 0%,rgba(8,12,10,.14) 32%,rgba(8,12,10,.58) 72%,rgba(8,12,10,.93) 100%);
+}
+/* 没封面的活动：用深色渐变兜底，而不是留一块灰 —— 空图比"没有图"更难看 */
+.w-hero__slide.is-fallback .w-hero__media{
+  background-image:
+    radial-gradient(120% 90% at 18% 8%,rgba(31,107,74,.55),transparent 58%),
+    radial-gradient(90% 80% at 88% 96%,rgba(196,85,43,.42),transparent 60%),
+    linear-gradient(158deg,#16201b,#232f28 52%,#101713);
+}
+.w-hero__copy{position:relative;z-index:2;width:100%;padding:0 24px 74px;color:#fff}
+.w-hero__eyebrow{font-size:10px;letter-spacing:.26em;text-transform:uppercase;color:rgba(255,255,255,.7)}
+/* 断行规则见文件末尾「中文标题断行」那一段（keep-all + balance 统一在那里声明）。 */
+.w-hero h1{margin:13px 0 0;font-size:30px;line-height:1.16;letter-spacing:-.028em;font-weight:600;text-shadow:0 2px 18px rgba(0,0,0,.3)}
+.w-hero__sub{margin-top:11px;font-size:13.5px;line-height:1.62;color:rgba(255,255,255,.84);max-width:21em}
+.w-hero__facts{display:flex;flex-wrap:wrap;gap:7px;margin-top:15px}
+.w-hero__fact{
+  padding:5px 11px;border-radius:99px;font-size:11.5px;letter-spacing:.02em;
+  background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.2);color:rgba(255,255,255,.94);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+}
+.w-hero__cta{
+  display:inline-flex;align-items:center;gap:10px;margin-top:22px;padding:13px 27px;
+  border:1px solid rgba(255,255,255,.64);border-radius:2px;background:rgba(255,255,255,.05);
+  color:#fff;font-size:13.5px;font-weight:600;letter-spacing:.08em;cursor:pointer;
+  transition:background .26s,color .26s,border-color .26s;
+}
+.w-hero__cta:hover,.w-hero__cta:focus-visible{background:#fff;border-color:#fff;color:var(--w-ink)}
+.w-hero__cta svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+/* 轮播指示：一根细线，进度段按当前页码走 */
+.w-hero__meter{position:absolute;left:24px;right:24px;bottom:26px;height:1px;background:rgba(255,255,255,.24);z-index:3}
+.w-hero__meter i{display:block;height:100%;background:#fff;width:0;transition:width .45s cubic-bezier(.3,.8,.3,1)}
+.w-hero__count{
+  position:absolute;right:24px;bottom:36px;z-index:3;font-size:10.5px;letter-spacing:.16em;
+  color:rgba(255,255,255,.62);
+}
+
+/* ── 通用区块 ───────────────────────────────────────────────────────────── */
+.w-sec{padding-top:26px}
+.w-sec__head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;margin-bottom:14px}
+.w-sec__head h2{margin:0;font-size:17px;font-weight:700;letter-spacing:-.012em}
+.w-sec__head p{margin:4px 0 0;font-size:12px;color:var(--w-muted);line-height:1.5}
+.w-more{
+  flex:0 0 auto;display:inline-flex;align-items:center;gap:4px;padding:5px 0;border:0;
+  background:none;color:var(--w-muted);font-size:12px;cursor:pointer;
+}
+.w-more svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+
+/* 横滑容器：负 margin 通栏 + 内 padding 留边，滑到边缘时卡片不会贴死屏幕 */
+.w-hscroll{margin:0;padding:2px 16px 6px;display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x proximity;-webkit-overflow-scrolling:touch}
+.w-hscroll::-webkit-scrollbar{display:none}
+
+/* ── 首页小卡（横滑） ─────────────────────────────────────────────────── */
+.w-mini{
+  flex:0 0 68%;max-width:250px;scroll-snap-align:start;border:0;padding:0;background:none;
+  text-align:left;cursor:pointer;
+}
+.w-mini__media{
+  position:relative;aspect-ratio:4/3.1;border-radius:var(--w-r);overflow:hidden;background:#e9ece7;
+  display:grid;place-items:center;box-shadow:var(--w-shadow);
+}
+.w-mini__media img{width:100%;height:100%;object-fit:cover;display:block}
+.w-mini__media .w-cov{position:absolute;inset:0}
+.w-mini__date{
+  position:absolute;left:11px;top:11px;padding:5px 10px;border-radius:99px;
+  background:rgba(255,255,255,.92);color:var(--w-ink);font-size:11px;font-weight:700;letter-spacing:.01em;
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+}
+.w-mini__title{margin:10px 2px 0;font-size:13.5px;font-weight:600;line-height:1.45;color:var(--w-ink)}
+.w-mini__meta{margin:5px 2px 0;font-size:11.5px;color:var(--w-muted);display:flex;align-items:center;gap:7px}
+.w-mini__price{color:var(--w-accent);font-weight:700;font-size:12.5px}
+
+/* 商品横滑小卡 */
+.w-mini--gear{flex:0 0 42%;max-width:160px}
+.w-mini--gear .w-mini__media{aspect-ratio:1/1.08;border-radius:var(--w-r)}
+
+/* ── 活动 reel：竖向长卡横滑（松赞） ─────────────────────────────────────
+   不要用「50% - 卡宽一半」做居中 padding：flex-basis 的百分比基准是**容器的内容盒**，
+   而 padding 的百分比基准是**容器的宽度**。两者一旦同用，卡宽会被 padding 二次削掉
+   （实测卡宽只有视口的 61%、整条列表歪在左边、右侧空一大片）。
+   左对齐 + 右侧露一张半张是更稳的形态：基准统一、只有一张卡时也不会悬空。 */
+.w-reel{
+  display:flex;gap:14px;overflow-x:auto;scroll-snap-type:x mandatory;
+  padding:4px var(--w-lg) 20px;margin:0;-webkit-overflow-scrolling:touch;
+  scroll-padding-left:var(--w-lg);
+}
+/* 只有一场活动时左对齐会让右边空掉三分之一个屏 —— 独苗撑满，
+   多卡时维持「露下一张」的横滑形态。 */
+.w-reel__card:only-child{flex:1 1 auto}
+.w-reel::-webkit-scrollbar{display:none}
+.w-reel__card{
+  position:relative;flex:0 0 76%;aspect-ratio:3/4.15;border-radius:20px;overflow:hidden;
+  scroll-snap-align:start;background:var(--w-ink);cursor:pointer;
+  box-shadow:var(--w-shadow-lg);transition:transform .4s cubic-bezier(.3,.8,.3,1);
+}
+.w-reel__card.is-fallback{background-image:
+  radial-gradient(120% 90% at 20% 6%,rgba(31,107,74,.5),transparent 58%),
+  radial-gradient(90% 80% at 86% 96%,rgba(196,85,43,.38),transparent 62%),
+  linear-gradient(158deg,#16201b,#232f28 52%,#101713)}
+.w-reel__media{position:absolute;inset:0;background-size:cover;background-position:center;transition:transform .6s}
+.w-reel__card:hover .w-reel__media{transform:scale(1.045)}
+.w-reel__scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(8,12,10,.4),rgba(8,12,10,.1) 38%,rgba(8,12,10,.72) 76%,rgba(8,12,10,.9))}
+.w-reel__copy{position:absolute;left:0;right:0;bottom:0;padding:0 22px 58px;text-align:center;color:#fff}
+.w-reel__copy h3{margin:0;font-size:19px;font-weight:600;line-height:1.38;letter-spacing:-.01em;text-shadow:0 2px 14px rgba(0,0,0,.42)}
+.w-reel__meta{margin-top:9px;font-size:12.5px;letter-spacing:.1em;color:rgba(255,255,255,.8)}
+.w-reel__cta{
+  display:inline-block;margin-top:19px;padding:10px 24px;border:1px solid rgba(255,255,255,.58);
+  border-radius:2px;background:rgba(255,255,255,.06);color:#fff;font-size:12px;letter-spacing:.1em;
+}
+.w-reel__brand{
+  position:absolute;left:0;right:0;bottom:20px;text-align:center;
+  font-size:9.5px;letter-spacing:.32em;text-transform:uppercase;color:rgba(255,255,255,.58);
+}
+.w-reel__price{
+  position:absolute;left:50%;top:18px;transform:translateX(-50%);
+  padding:6px 14px;border-radius:99px;background:rgba(255,255,255,.93);color:var(--w-ink);
+  font-size:12.5px;font-weight:700;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+}
+.w-reel__seat{
+  position:absolute;left:16px;top:18px;padding:5px 11px;border-radius:99px;
+  background:rgba(18,23,20,.42);border:1px solid rgba(255,255,255,.22);
+  font-size:11px;color:rgba(255,255,255,.94);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+}
+.w-dots{display:flex;justify-content:center;gap:6px;padding:2px 0 4px}
+.w-dots i{width:5px;height:5px;border-radius:99px;background:#ccd4ce;transition:width .3s,background .3s}
+.w-dots i.on{width:16px;background:var(--w-ink)}
+
+/* ── 胶囊标签 ───────────────────────────────────────────────────────────── */
+.w-chips{display:flex;gap:8px;overflow-x:auto;padding:2px 16px 4px;margin:0;-webkit-overflow-scrolling:touch}
+.w-chips::-webkit-scrollbar{display:none}
+.w-chip{
+  flex:0 0 auto;padding:9px 16px;border-radius:99px;border:1px solid var(--w-line);
+  background:#fff;color:var(--w-ink2);font-size:12.5px;font-weight:600;cursor:pointer;
+  transition:background .2s,color .2s,border-color .2s;
+}
+.w-chip.on{background:var(--w-ink);border-color:var(--w-ink);color:#fff}
+.w-chip:disabled{opacity:.4;cursor:not-allowed}
+
+/* ── 全站白卡统一（订单 / 福利 / 详情） ───────────────────────────────── */
+.web-shell .web-card{
+  background:#fff;border:1px solid var(--w-line);border-radius:18px;padding:16px;
+  margin-bottom:12px;box-shadow:0 2px 10px rgba(18,23,20,.04);
+}
+.web-shell .web-card>h3{margin:0 0 10px;font-size:14.5px;font-weight:700;letter-spacing:-.01em}
+.web-shell .web-card>.sub,.web-shell .web-card>.eyebrow{color:var(--w-muted)}
+
+/* ── 搜索输入 ───────────────────────────────────────────────────────── */
+.w-field{
+  display:flex;align-items:center;gap:9px;margin-top:14px;padding:11px 14px;
+  border:1px solid var(--w-line);border-radius:99px;background:#fff;
+  transition:border-color .2s,box-shadow .2s;
+}
+.w-field:focus-within{border-color:#b9c8bd;box-shadow:0 0 0 3px rgba(21,98,67,.08)}
+.w-field svg{width:17px;height:17px;flex:0 0 17px;stroke:var(--w-muted);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.w-field input{
+  flex:1;min-width:0;border:0;outline:0;background:none;font-size:13.5px;color:var(--w-ink);
+  font-family:inherit;
+}
+.w-field input::placeholder{color:#a3ada7}
+.w-field input::-webkit-search-cancel-button{-webkit-appearance:none}
+
+/* ── 装备商城：左分类 + 右网格（可隆） ───────────────────────────────── */
+.w-shop{display:grid;grid-template-columns:94px 1fr;margin:0;min-height:64vh}
+.w-shop__side{background:#eaede8;padding:6px 0 40px}
+.w-shop__side button{
+  display:block;width:100%;padding:16px 6px;border:0;background:none;cursor:pointer;
+  font-size:12.5px;font-weight:600;line-height:1.35;color:var(--w-ink2);
+  transition:background .2s,color .2s;
+}
+.w-shop__side button.on{background:var(--w-ink);color:#fff}
+.w-shop__main{padding:0 14px 26px;min-width:0}
+.w-shop__tabs{display:flex;gap:20px;border-bottom:1px solid var(--w-line);margin:0 0 16px;overflow-x:auto}
+.w-shop__tabs::-webkit-scrollbar{display:none}
+.w-shop__tabs button{
+  position:relative;flex:0 0 auto;padding:13px 1px 12px;border:0;background:none;cursor:pointer;
+  font-size:13.5px;font-weight:600;color:var(--w-muted);
+}
+.w-shop__tabs button.on{color:var(--w-ink)}
+.w-shop__tabs button.on:after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--w-ink)}
+.w-shop__note{padding:11px 14px 0;font-size:11.5px;color:var(--w-muted);line-height:1.6}
+
+/* 商品卡：**必须保留 .web-card 类** —— experience-consumer.js 是靠 `#publicProducts .web-card`
+   数商品张数的，卡片换个类名它就会认为「0 件在售」并把容器内容整个换成空态。 */
+.web-shell .web-card.w-product{
+  background:none;border:0;border-radius:0;padding:0;margin:0;box-shadow:none;
+  display:flex;flex-direction:column;
+}
+.w-product__media{
+  position:relative;aspect-ratio:1/1;border-radius:13px;overflow:hidden;background:#f0f1ee;
+  display:grid;place-items:center;transition:transform .35s;
+}
+.w-product__media svg{width:46px;height:46px;stroke:#b5bfb7;fill:none;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+.w-product__media img{width:100%;height:100%;object-fit:cover}
+.w-product__inner{display:flex;flex-direction:column;flex:1}
+.w-product__name{margin:10px 0 0;font-size:12.5px;font-weight:500;line-height:1.45;color:var(--w-ink)}
+.w-product__price{margin:6px 0 0;font-size:13.5px;font-weight:700;color:var(--w-accent)}
+.w-product__meta{margin:4px 0 0;font-size:11px;color:var(--w-muted)}
+.w-product__buy{
+  margin:10px 0 0;width:100%;padding:9px;border-radius:9px;border:1px solid var(--w-ink);
+  background:var(--w-ink);color:#fff;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;
+}
+.w-product__buy:active{transform:scale(.98)}
+.w-product__stock{font-size:11px;color:var(--w-muted)}
+
+/* ── 我的：深色照片底 + 毛玻璃卡（可隆会员中心） ─────────────────────── */
+.w-me__stage{position:relative;padding:20px 16px 30px;overflow:hidden;background:var(--w-ink)}
+.w-me__bg{
+  position:absolute;inset:0;background-size:cover;background-position:center;
+  filter:saturate(.85) brightness(.5);transform:scale(1.06);
+}
+.w-me__bgtint{position:absolute;inset:0;background:linear-gradient(158deg,rgba(21,98,67,.5),rgba(18,23,20,.72) 62%,rgba(18,23,20,.9))}
+.w-me__card{
+  position:relative;z-index:2;border-radius:20px;padding:19px;
+  background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.2);
+  -webkit-backdrop-filter:blur(20px) saturate(1.45);backdrop-filter:blur(20px) saturate(1.45);
+  color:#fff;box-shadow:0 18px 44px rgba(0,0,0,.26);
+}
+.w-me__id{display:flex;align-items:center;gap:12px}
+.w-me__avatar{
+  width:52px;height:52px;flex:0 0 52px;border-radius:50%;display:grid;place-items:center;
+  background:rgba(255,255,255,.94);color:var(--w-brand);font-size:20px;font-weight:700;
+  letter-spacing:-.02em;box-shadow:0 4px 14px rgba(0,0,0,.2);
+}
+.w-me__who{min-width:0;flex:1}
+.w-me__name{display:flex;align-items:center;gap:7px;font-size:16px;font-weight:600}
+.w-me__tier{
+  padding:3px 9px;border-radius:99px;font-size:10.5px;font-weight:700;letter-spacing:.02em;
+  background:linear-gradient(96deg,#e8c46a,#d8a63e);color:#4a3406;
+}
+.w-me__sub{margin-top:5px;font-size:11.5px;color:rgba(255,255,255,.72);line-height:1.5}
+.w-me__qr{
+  width:34px;height:34px;flex:0 0 34px;border:0;background:none;cursor:pointer;color:rgba(255,255,255,.86);
+  display:grid;place-items:center;
+}
+.w-me__qr svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.w-me__up{margin-top:16px;padding-top:15px;border-top:1px solid rgba(255,255,255,.16)}
+.w-me__uphead{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11.5px;color:rgba(255,255,255,.78)}
+.w-me__bar{margin-top:9px;height:4px;border-radius:99px;background:rgba(255,255,255,.2);overflow:hidden}
+.w-me__bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#8fe0b4,#4fb98a);transition:width .5s}
+.w-me__pts{margin-top:17px;display:flex;align-items:baseline;gap:9px}
+.w-me__pts span{font-size:12px;color:rgba(255,255,255,.76)}
+.w-me__pts b{font-size:29px;font-weight:700;letter-spacing:-.02em;line-height:1}
+.w-me__pts em{font-style:normal;font-size:11px;color:rgba(255,255,255,.6)}
+.w-me__grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-top:18px}
+.w-me__cell{
+  border:0;background:none;cursor:pointer;color:#fff;padding:7px 1px;border-radius:12px;
+  display:flex;flex-direction:column;align-items:center;gap:7px;font-size:10.5px;
+  transition:background .2s;line-height:1.2;
+}
+.w-me__cell:active{background:rgba(255,255,255,.14)}
+.w-me__cell svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.w-me__svc{margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,.16)}
+.w-me__svctitle{font-size:12px;color:rgba(255,255,255,.8);margin-bottom:4px}
+.w-me__more{
+  display:block;width:100%;margin-top:14px;padding:9px;border:0;background:none;
+  color:rgba(255,255,255,.72);font-size:11.5px;text-align:center;cursor:pointer;text-decoration:underline;
+  text-underline-offset:4px;
+}
+/* 我的页里共享组件（等级行/积分/福利）统一改成白色系 */
+.web-shell .w-me__stage .w-me__legacy{font-size:12px;color:rgba(255,255,255,.8);line-height:1.6}
+.web-shell .w-me__stage .w-me__legacy strong{color:#fff}
+
+/* 我的页下方白卡区 */
+.w-me__body{padding:16px 16px 0}
+
+/* ── 户外能力（建设中） ───────────────────────────────────────────────── */
+.w-ability{padding:22px 16px 0}
+.w-ability__hero{
+  position:relative;border-radius:20px;padding:26px 22px;overflow:hidden;color:#fff;
+  background-image:
+    radial-gradient(120% 96% at 14% 4%,rgba(31,107,74,.62),transparent 56%),
+    radial-gradient(90% 80% at 92% 100%,rgba(196,85,43,.4),transparent 60%),
+    linear-gradient(158deg,#141d18,#22302a 54%,#0f1613);
+}
+.w-ability__badge{
+  display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:99px;
+  background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);font-size:10.5px;letter-spacing:.1em;
+}
+.w-ability__hero h2{margin:14px 0 0;font-size:22px;font-weight:600;letter-spacing:-.02em}
+.w-ability__hero p{margin:11px 0 0;font-size:13px;line-height:1.65;color:rgba(255,255,255,.78);max-width:24em}
+.w-ability__list{margin-top:22px;display:grid;gap:10px}
+.w-ability__item{
+  display:flex;gap:12px;align-items:flex-start;padding:15px 16px;border-radius:var(--w-r);
+  background:#fff;border:1px solid var(--w-line);
+}
+.w-ability__item svg{width:20px;height:20px;flex:0 0 20px;margin-top:1px;stroke:var(--w-brand);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.w-ability__item b{display:block;font-size:13px;font-weight:600}
+.w-ability__item span{display:block;margin-top:4px;font-size:11.5px;color:var(--w-muted);line-height:1.6}
+
+/* ── 空态 / 骨架 ───────────────────────────────────────────────────────── */
+.w-empty{padding:44px 22px;text-align:center;color:var(--w-muted);font-size:13px;line-height:1.7}
+.w-empty svg{width:34px;height:34px;stroke:#c3ccc5;fill:none;stroke-width:1.3;margin-bottom:12px}
+.w-sk{padding:16px;display:grid;gap:12px}
+.w-sk__bar{height:13px;border-radius:99px;background:linear-gradient(90deg,#eceee9,#f6f7f4,#eceee9);background-size:220% 100%;animation:wShimmer 1.4s linear infinite}
+@keyframes wShimmer{from{background-position:120% 0}to{background-position:-120% 0}}
+@media (prefers-reduced-motion:reduce){.w-sk__bar{animation:none}}
+
+/* ── 详情页（沿用既有 DOM，只做视觉收口） ─────────────────────────────── */
+.web-shell #publicDetail{padding:0 16px}
+.web-shell #publicDetail .public-editorial{
+  background:#fff;border-radius:var(--w-lg);padding:20px;box-shadow:var(--w-shadow);margin-top:14px;
+}
+.web-shell #publicDetail .web-card{border:1px solid var(--w-line);border-radius:var(--w-lg);box-shadow:var(--w-shadow)}
+.w-back{
+  display:inline-flex;align-items:center;gap:6px;margin:14px 0 0;padding:8px 14px 8px 10px;
+  border:1px solid var(--w-line);border-radius:99px;background:#fff;color:var(--w-ink2);
+  font-size:12.5px;font-weight:600;cursor:pointer;
+}
+.w-back svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.w-detailhero{position:relative;margin:14px -16px 0;aspect-ratio:4/3;overflow:hidden;background:#e8ebe6}
+.w-detailhero img{width:100%;height:100%;object-fit:cover;display:block}
+.w-detailhero.is-fallback{background-image:
+  radial-gradient(120% 90% at 18% 8%,rgba(31,107,74,.5),transparent 58%),
+  radial-gradient(90% 80% at 88% 96%,rgba(196,85,43,.36),transparent 60%),
+  linear-gradient(158deg,#16201b,#232f28 52%,#101713)}
+.w-detailhero__cap{
+  position:absolute;left:0;right:0;bottom:0;padding:44px 18px 16px;color:#fff;
+  background:linear-gradient(180deg,transparent,rgba(8,12,10,.78));
+}
+.w-detailhero__cap h2{margin:0;font-size:21px;font-weight:600;letter-spacing:-.02em;line-height:1.3}
+.w-detailhero__cap .w-detailhero__meta{margin-top:8px;font-size:12px;color:rgba(255,255,255,.82);display:flex;flex-wrap:wrap;gap:12px}
+
+/* 报名卡高亮：从详情滚下来时它是终点，给个明确的视觉落点 */
+.web-shell #bookingCard{scroll-margin-top:64px}
+
+/* ── 报名页：积分确认式 ───────────────────────────────────────────────── */
+.web-shell .point-box{padding:14px;border:1px solid var(--w-line);border-radius:var(--w-r);background:#fbfcfa}
+.web-shell .point-box + .point-box{margin-top:10px}
+.web-shell .point-toggle{
+  margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:99px;
+  background:var(--w-brand-soft);color:var(--w-brand);font-size:11.5px;font-weight:700;cursor:pointer;
+  white-space:nowrap;
+}
+.web-shell .point-toggle input{width:auto;margin:0;padding:0;border:0;accent-color:var(--w-brand);cursor:pointer}
+.web-shell .point-toggle:has(input:disabled){opacity:.45;cursor:not-allowed}
+.web-shell .point-cap{margin-top:10px;font-size:12.5px;color:var(--w-ink2);line-height:1.55}
+.web-shell .point-cap b{color:var(--w-brand);font-size:15px}
+
+/* ── 弹窗与滚动条 ─────────────────────────────────────────────────────── */
+.web-shell::-webkit-scrollbar,.web-shell .w-hscroll::-webkit-scrollbar{height:0}
+
+/* ── 中文标题断行（统一在此，别在单个标题里各写一遍） ─────────────────────
+   浏览器默认允许在任意汉字之间断行，实测会把「蓥华山徒步」「户外瑜伽」这样的
+   词从中间劈开。keep-all 禁掉 CJK 内部断行，可断点就回到「｜」「×」和空格上；
+   break-word 兜住没有可断点的超长标题；balance 再在剩余断点里挑行宽最接近的。
+   **只给标题用**：正文段落套 keep-all 会让断点变稀疏、每行宽窄不齐，反而更难看。 */
+.web-shell .w-hero h1,
+.web-shell .w-reel__copy h3,
+.web-shell .w-detailhero__cap h2,
+.web-shell .w-mini__title,
+.web-shell .w-me__name,
+.web-shell .w-product__name,
+.web-shell .w-sec__head h2{
+  word-break:keep-all;overflow-wrap:break-word;text-wrap:balance;
+}
+@media (max-width:380px){
+  .w-shop{grid-template-columns:80px 1fr}
+  .w-reel__card{flex:0 0 82%}
+  .w-hero h1{font-size:26px}
+  .w-me__grid{grid-template-columns:repeat(4,1fr)}
+}
