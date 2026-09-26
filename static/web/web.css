@@ -321,6 +321,10 @@
 .w-product__buy:active{transform:scale(.98)}
 .w-product__stock{font-size:11px;color:var(--w-muted)}
 
+/* 参考图是「左分类 + 右双列」。这个网格必须显式声明 —— `.w-grid` 这个类名在本项目
+   其它任何地方都没有定义，不写就是裸 div、商品卡会单列一列堆到底（实测就是这样）。 */
+.w-shop__main .w-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 12px;align-content:start}
+
 /* ── 我的：深色照片底 + 毛玻璃卡（可隆会员中心） ─────────────────────── */
 .w-me__stage{position:relative;padding:20px 16px 30px;overflow:hidden;background:var(--w-ink)}
 .w-me__bg{
