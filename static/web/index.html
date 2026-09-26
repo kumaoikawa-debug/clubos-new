@@ -1,4 +1,7 @@
 <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>远拓户外</title>
+<!-- 内联 SVG 图标：省掉 /favicon.ico 的 404（浏览器默认会去请求它）。
+     用山形描边，和底部导航的图标同一套笔画。 -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121714'/%3E%3Cpath d='M3.5 23.5 12 11l4.6 7.6 3-4.8 8.9 9.7z' fill='none' stroke='%237fd0a4' stroke-width='2.1' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/shared.css"><link rel="stylesheet" href="/static/ux/clubos-ux.css"><link rel="stylesheet" href="/static/web/web.css"></head><body>
 
 <!-- C 端骨架：5 视图（首页 / 活动 / 装备 / 户外能力 / 我的）。
@@ -54,9 +57,13 @@
       <div class="w-shop">
         <aside class="w-shop__side" id="mallCats"></aside>
         <div class="w-shop__main">
+          <!-- 装备搜索框：web.js 的 renderMall() 一直在读 #gearSearch 做过滤，
+               之前 HTML 里没有这个节点，搜索是死代码（页面上根本没有输入框）。 -->
+          <label class="w-field w-field--shop"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.4"/><path d="m16 16 4.2 4.2"/></svg><input id="gearSearch" type="search" placeholder="搜索装备名称或分类" aria-label="搜索装备"></label>
           <div class="w-shop__tabs" id="mallTabs"></div>
           <div class="w-grid" id="publicProducts"></div>
-          <div class="w-shop__note">平台统一商品、库存、发货与售后；会员等级折扣在结算时自动生效。</div>
+          <!-- id 由 renderMall() 按筛选结果改写：「共 N 件在售」/「筛选出 N 件」 -->
+          <div class="w-shop__note" id="mallNote">平台统一商品、库存、发货与售后；会员等级折扣在结算时自动生效。</div>
         </div>
       </div>
     </section>
@@ -93,7 +100,9 @@
               <div class="w-me__name"><span id="meName">户外会员</span><span class="w-me__tier" id="meTier">普通会员</span></div>
               <div class="w-me__sub w-me__legacy" id="memberLevel">正在读取会员信息…</div>
             </div>
-            <button class="w-me__qr" type="button" data-me="qr" aria-label="出示会员码"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="3.5" width="6.4" height="6.4" rx="1.2"/><rect x="14.1" y="3.5" width="6.4" height="6.4" rx="1.2"/><rect x="3.5" y="14.1" width="6.4" height="6.4" rx="1.2"/><path d="M14.1 14.1h2.8v2.8h-2.8z"/><path d="M20.5 14.1v6.4h-6.4"/></svg></button>
+            <!-- 图标是「卡」不是二维码：点开是真实的会员信息，没有可被扫码核销的签名码，
+                 竖一个扫不动的码比不放更伤信任。 -->
+            <button class="w-me__qr" type="button" onclick="openMemberCard()" aria-label="查看会员信息"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.8" y="5" width="18.4" height="14" rx="2.6"/><path d="M2.8 9.6h18.4"/><path d="M6.4 14.6h4"/></svg></button>
           </div>
           <div class="w-me__up">
             <div class="w-me__uphead"><span>升级条件</span><span id="meUpTip">—</span></div>

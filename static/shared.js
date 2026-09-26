@@ -267,14 +267,31 @@ function renderPacking(master,opts){
     : '';
   return head+'<div class="pack-plan">'+slots+'</div>'+missLine+extra;
 }
+/* 费用说明的键名中文化。fees 是 AI 生成时落库的自由对象，键名常是 newCustomer /
+   member / note 这类英文标识符 —— 直接渲染出来，顾客看到的是「newCustomer 498元/人」。
+   与 ENUM_CN 同一套取舍：**表里没有的键原样显示**，宁可见到原始键名，也不要编一个
+   不存在的中文名把信息改错。 */
+const FEE_CN={
+  newCustomer:'新客价',new_customer:'新客价',firstTime:'首次参加',first_time:'首次参加',
+  member:'会员价',memberPrice:'会员价',vip:'会员价',
+  original:'原价',list:'原价',standard:'标准价',regular:'标准价',
+  child:'儿童价',kids:'儿童价',student:'学生价',
+  deposit:'定金',balance:'尾款',remaining:'尾款',
+  note:'说明',notes:'说明',remark:'说明',description:'说明',
+  includes:'包含',included:'包含',excludes:'不包含',excluded:'不包含',
+  extra:'额外费用',extras:'额外费用',optional:'可选费用',
+  gear:'装备租赁',rental:'装备租赁',insurance:'保险费',transport:'交通费',
+  meal:'餐费',meals:'餐费',accommodation:'住宿费',ticket:'门票费',guide:'领队费'
+};
 /* 费用说明：把 fees 对象渲染成可读的键值行，而不是一整块 JSON 代码。数组走 chips。 */
 function feeListHtml(fees){
   fees=fees||{};const keys=Object.keys(fees).filter(k=>fees[k]!=null&&fees[k]!=='');
   if(!keys.length)return '<p class="sub">费用以活动通知与最终确认为准</p>';
   return '<div class="fee-list">'+keys.map(k=>{const v=fees[k];
-    if(Array.isArray(v))return '<div class="fee-row"><b>'+esc(k)+'</b><div class="info-chips">'+v.map(x=>'<div>'+esc(String(x))+'</div>').join('')+'</div></div>';
-    if(typeof v==='object')return '<div class="fee-row"><b>'+esc(k)+'</b><p>'+esc(JSON.stringify(v))+'</p></div>';
-    return '<div class="fee-row"><b>'+esc(k)+'</b><p>'+esc(String(v))+'</p></div>';
+    const label=FEE_CN[String(k)]||FEE_CN[String(k).replace(/[_\-\s]/g,'').toLowerCase()]||k;
+    if(Array.isArray(v))return '<div class="fee-row"><b>'+esc(label)+'</b><div class="info-chips">'+v.map(x=>'<div>'+esc(String(x))+'</div>').join('')+'</div></div>';
+    if(typeof v==='object')return '<div class="fee-row"><b>'+esc(label)+'</b><p>'+esc(JSON.stringify(v))+'</p></div>';
+    return '<div class="fee-row"><b>'+esc(label)+'</b><p>'+esc(String(v))+'</p></div>';
   }).join('')+'</div>';
 }
 /* detail.blocks 里已经排过行程时，结构化区不再重复渲染同一份 master.itinerary——

@@ -90,7 +90,7 @@
 .web-shell .web-nav button{
   position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:4px;min-height:52px;padding:0;border:0;border-radius:14px;background:none;
-  color:rgba(255,255,255,.54);font-size:10.5px;font-weight:600;letter-spacing:.03em;
+  color:rgba(255,255,255,.54);font-size:11.5px;font-weight:600;letter-spacing:.03em;
   cursor:pointer;transition:color .2s,background .2s;-webkit-tap-highlight-color:transparent;
 }
 .web-shell .web-nav button:before,.web-shell .web-nav button:after{content:none!important;display:none!important}
@@ -128,7 +128,7 @@
     linear-gradient(158deg,#16201b,#232f28 52%,#101713);
 }
 .w-hero__copy{position:relative;z-index:2;width:100%;padding:0 24px 74px;color:#fff}
-.w-hero__eyebrow{font-size:10px;letter-spacing:.26em;text-transform:uppercase;color:rgba(255,255,255,.7)}
+.w-hero__eyebrow{font-size:11px;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,255,255,.7)}
 /* 断行规则见文件末尾「中文标题断行」那一段（keep-all + balance 统一在那里声明）。 */
 .w-hero h1{margin:13px 0 0;font-size:30px;line-height:1.16;letter-spacing:-.028em;font-weight:600;text-shadow:0 2px 18px rgba(0,0,0,.3)}
 .w-hero__sub{margin-top:11px;font-size:13.5px;line-height:1.62;color:rgba(255,255,255,.84);max-width:21em}
@@ -150,7 +150,7 @@
 .w-hero__meter{position:absolute;left:24px;right:24px;bottom:26px;height:1px;background:rgba(255,255,255,.24);z-index:3}
 .w-hero__meter i{display:block;height:100%;background:#fff;width:0;transition:width .45s cubic-bezier(.3,.8,.3,1)}
 .w-hero__count{
-  position:absolute;right:24px;bottom:36px;z-index:3;font-size:10.5px;letter-spacing:.16em;
+  position:absolute;right:24px;bottom:36px;z-index:3;font-size:11px;letter-spacing:.14em;
   color:rgba(255,255,255,.62);
 }
 
@@ -160,7 +160,8 @@
 .w-sec__head h2{margin:0;font-size:17px;font-weight:700;letter-spacing:-.012em}
 .w-sec__head p{margin:4px 0 0;font-size:12px;color:var(--w-muted);line-height:1.5}
 .w-more{
-  flex:0 0 auto;display:inline-flex;align-items:center;gap:4px;padding:5px 0;border:0;
+  flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;gap:4px;
+  min-height:38px;padding:0;border:0;
   background:none;color:var(--w-muted);font-size:12px;cursor:pointer;
 }
 .w-more svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
@@ -228,7 +229,7 @@
 }
 .w-reel__brand{
   position:absolute;left:0;right:0;bottom:20px;text-align:center;
-  font-size:9.5px;letter-spacing:.32em;text-transform:uppercase;color:rgba(255,255,255,.58);
+  font-size:11px;letter-spacing:.26em;text-transform:uppercase;color:rgba(255,255,255,.62);
 }
 .w-reel__price{
   position:absolute;left:50%;top:18px;transform:translateX(-50%);
@@ -248,7 +249,7 @@
 .w-chips{display:flex;gap:8px;overflow-x:auto;padding:2px 16px 4px;margin:0;-webkit-overflow-scrolling:touch}
 .w-chips::-webkit-scrollbar{display:none}
 .w-chip{
-  flex:0 0 auto;padding:9px 16px;border-radius:99px;border:1px solid var(--w-line);
+  flex:0 0 auto;padding:10px 16px;border-radius:99px;border:1px solid var(--w-line);
   background:#fff;color:var(--w-ink2);font-size:12.5px;font-weight:600;cursor:pointer;
   transition:background .2s,color .2s,border-color .2s;
 }
@@ -315,7 +316,7 @@
 .w-product__price{margin:6px 0 0;font-size:13.5px;font-weight:700;color:var(--w-accent)}
 .w-product__meta{margin:4px 0 0;font-size:11px;color:var(--w-muted)}
 .w-product__buy{
-  margin:10px 0 0;width:100%;padding:9px;border-radius:9px;border:1px solid var(--w-ink);
+  margin:10px 0 0;width:100%;min-height:38px;padding:10px;border-radius:9px;border:1px solid var(--w-ink);
   background:var(--w-ink);color:#fff;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;
 }
 .w-product__buy:active{transform:scale(.98)}
@@ -347,7 +348,7 @@
 .w-me__who{min-width:0;flex:1}
 .w-me__name{display:flex;align-items:center;gap:7px;font-size:16px;font-weight:600}
 .w-me__tier{
-  padding:3px 9px;border-radius:99px;font-size:10.5px;font-weight:700;letter-spacing:.02em;
+  padding:3px 9px;border-radius:99px;font-size:11.5px;font-weight:700;letter-spacing:.02em;
   background:linear-gradient(96deg,#e8c46a,#d8a63e);color:#4a3406;
 }
 .w-me__sub{margin-top:5px;font-size:11.5px;color:rgba(255,255,255,.72);line-height:1.5}
@@ -367,7 +368,7 @@
 .w-me__grid{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin-top:18px}
 .w-me__cell{
   border:0;background:none;cursor:pointer;color:#fff;padding:7px 1px;border-radius:12px;
-  display:flex;flex-direction:column;align-items:center;gap:7px;font-size:10.5px;
+  display:flex;flex-direction:column;align-items:center;gap:7px;font-size:11.5px;
   transition:background .2s;line-height:1.2;
 }
 .w-me__cell:active{background:rgba(255,255,255,.14)}
@@ -375,10 +376,28 @@
 .w-me__svc{margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,.16)}
 .w-me__svctitle{font-size:12px;color:rgba(255,255,255,.8);margin-bottom:4px}
 .w-me__more{
-  display:block;width:100%;margin-top:14px;padding:9px;border:0;background:none;
+  display:block;width:100%;min-height:38px;margin-top:6px;padding:9px;border:0;background:none;
   color:rgba(255,255,255,.72);font-size:11.5px;text-align:center;cursor:pointer;text-decoration:underline;
   text-underline-offset:4px;
 }
+/* 「我的服务」是行式深层链接，不是第二排图标格子 —— HTML 上 #meService 带着 .w-me__grid
+   （5 列网格），这里把它改回单列，否则三行会被摊成三列。 */
+.w-me__svc .w-me__grid{grid-template-columns:1fr;gap:2px;margin-top:6px}
+.w-me__row{
+  display:flex;align-items:center;gap:10px;width:100%;padding:9px 8px;
+  border:0;border-radius:12px;background:none;color:#fff;text-align:left;cursor:pointer;
+  transition:background .2s;
+}
+.w-me__row:active{background:rgba(255,255,255,.14)}
+.w-me__rowic{
+  width:28px;height:28px;flex:0 0 28px;display:grid;place-items:center;
+  border-radius:9px;background:rgba(255,255,255,.14);
+}
+.w-me__rowic svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.w-me__rowmain{flex:1;min-width:0;display:grid;gap:2px}
+.w-me__rowmain b{font-size:12.5px;font-weight:600}
+.w-me__rowmain em{font-style:normal;font-size:11.5px;color:rgba(255,255,255,.58);line-height:1.45}
+.w-me__rowgo{flex:0 0 auto;color:rgba(255,255,255,.45);font-size:15px;line-height:1}
 /* 我的页里共享组件（等级行/积分/福利）统一改成白色系 */
 .web-shell .w-me__stage .w-me__legacy{font-size:12px;color:rgba(255,255,255,.8);line-height:1.6}
 .web-shell .w-me__stage .w-me__legacy strong{color:#fff}
@@ -397,7 +416,7 @@
 }
 .w-ability__badge{
   display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:99px;
-  background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);font-size:10.5px;letter-spacing:.1em;
+  background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.22);font-size:11.5px;letter-spacing:.06em;
 }
 .w-ability__hero h2{margin:14px 0 0;font-size:22px;font-weight:600;letter-spacing:-.02em}
 .w-ability__hero p{margin:11px 0 0;font-size:13px;line-height:1.65;color:rgba(255,255,255,.78);max-width:24em}
@@ -425,7 +444,7 @@
 }
 .web-shell #publicDetail .web-card{border:1px solid var(--w-line);border-radius:var(--w-lg);box-shadow:var(--w-shadow)}
 .w-back{
-  display:inline-flex;align-items:center;gap:6px;margin:14px 0 0;padding:8px 14px 8px 10px;
+  display:inline-flex;align-items:center;gap:6px;min-height:38px;margin:14px 0 0;padding:8px 14px 8px 10px;
   border:1px solid var(--w-line);border-radius:99px;background:#fff;color:var(--w-ink2);
   font-size:12.5px;font-weight:600;cursor:pointer;
 }
@@ -473,12 +492,359 @@
 .web-shell .w-mini__title,
 .web-shell .w-me__name,
 .web-shell .w-product__name,
-.web-shell .w-sec__head h2{
+.web-shell .w-sec__head h2,
+.web-shell .w-ord__hd b,
+.web-shell .w-bnf__hd b,
+.web-shell .w-rdm__hd b,
+.web-shell .occ__main strong{
   word-break:keep-all;overflow-wrap:break-word;text-wrap:balance;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   以下为「所有页面美化」第二轮：报名区 / 我的页订单与福利 / 弹窗内容 / 骨架屏 /
+   详情页正文手机化。全部带 .web-shell 前缀，只作用于 C 端。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 无封面兜底：给纯色块一条山脊线 ──────────────────────────────────────
+   活动没上传封面时，hero / 长卡 / 详情头图都退化成一块深色渐变 —— 大面积纯色在
+   手机上看就是「图片没加载出来」。叠一层低对比度的山脊剪影，至少读得出是户外场景。
+   用内联 SVG data-URI：不新增网络请求，也不受 /static/uploads 的生产限制影响。 */
+.w-hero__media::after,
+.w-reel__card.is-fallback::before,
+.w-detailhero.is-fallback::before{
+  content:'';position:absolute;left:0;right:0;bottom:0;height:64%;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 200' preserveAspectRatio='none'%3E%3Cpath d='M0 200 52 112 92 150 148 56 205 134 258 92 320 166 400 104 400 200z' fill='%233f6350'/%3E%3Cpath d='M0 200 44 158 96 184 156 128 214 178 268 146 330 194 400 158 400 200z' fill='%2320332a'/%3E%3C/svg%3E") bottom/100% 100% no-repeat;
+  opacity:.55;pointer-events:none;
+}
+/* 有封面时不要这层 */
+.w-hero__slide:not(.is-fallback) .w-hero__media::after,
+.w-reel__card:not(.is-fallback)::before,
+.w-detailhero:not(.is-fallback)::before{content:none}
+
+/* ── 顶栏滚动态 ──────────────────────────────────────────────────────────
+   首页顶栏压在 hero 照片上（透明 + 白字）。滚过 hero 之后照片没了，白字会
+   压在浅色正文上糊成一片 —— 越过阈值就换回实底深色字。 */
+.web-shell.is-scrolled .web-top{
+  position:sticky;top:0;
+  background:rgba(255,255,255,.94);
+  -webkit-backdrop-filter:saturate(1.7) blur(18px);backdrop-filter:saturate(1.7) blur(18px);
+  border-bottom-color:var(--w-line);
+  color:var(--w-ink);text-shadow:none;
+}
+
+/* ── 状态徽章 ────────────────────────────────────────────────────────────
+   只做六档语义色（成功 / 进行中 / 警示 / 停用 / 信息 / 中性），
+   不按业务枚举逐一切色 —— 枚举会随版本增加，语义档位不会。 */
+.w-bdg{
+  display:inline-flex;align-items:center;flex:0 0 auto;
+  padding:2px 8px;border-radius:99px;border:1px solid transparent;
+  font-size:11px;font-weight:600;line-height:1.55;white-space:nowrap;
+}
+.w-bdg--ok{background:#e8f4ed;color:#1f6b47;border-color:#cfe7da}
+.w-bdg--wait{background:#eef3fb;color:#2f5d94;border-color:#d8e3f3}
+.w-bdg--warn{background:#fdf1e7;color:#96501f;border-color:#f6ddc7}
+.w-bdg--off{background:#f1f2f0;color:#7c8580;border-color:#e4e7e2}
+.w-bdg--info{background:#eaf1f5;color:#33617a;border-color:#d4e4ec}
+.w-bdg--mute{background:#f2f3f1;color:#6f7a75;border-color:#e6e9e4}
+
+/* ── 骨架屏：卡片 / 行 ─────────────────────────────────────────────────── */
+.w-sk-card{
+  border-radius:var(--w-r);
+  background:linear-gradient(90deg,#eceee9,#f6f7f4,#eceee9);background-size:220% 100%;
+  animation:wShimmer 1.4s linear infinite;
+}
+.w-sk-row{display:grid;gap:8px;padding:14px 0}
+@media (prefers-reduced-motion:reduce){.w-sk-card{animation:none}}
+
+/* ── 装备页搜索框 ──────────────────────────────────────────────────────── */
+.w-field--shop{margin:0 0 12px}
+
+/* ── 报名区 ────────────────────────────────────────────────────────────── */
+.web-shell .booking-card{
+  border:1px solid var(--w-line);border-radius:20px;box-shadow:var(--w-shadow);background:#fff;
+}
+.web-shell .eyebrow{font-size:11px;letter-spacing:.08em}
+.web-shell .booking-card>.eyebrow{color:var(--w-muted);letter-spacing:.14em}
+.web-shell .booking-card h2{font-size:18px;letter-spacing:-.01em;margin:6px 0 2px}
+.web-shell .booking-card .sub{color:var(--w-muted);font-size:12px;line-height:1.55}
+
+/* 分块：参加人是报名里唯一要填一堆字段的部分，给它一条分隔线把它和团期分开 */
+.w-block{margin-top:18px;padding-top:16px;border-top:1px solid var(--w-line)}
+.w-block__head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.w-block__head b{display:block;font-size:14px;font-weight:700}
+.w-block__hint{margin-top:4px;font-size:11.5px;color:var(--w-muted);line-height:1.55}
+.w-block__foot{margin-top:11px;font-size:11.5px;color:var(--w-muted);line-height:1.6}
+
+/* 人数步进器：手机上的 number 输入框那两个小箭头几乎点不中，改成整块可点的 −／＋ */
+.w-stepper{
+  flex:0 0 auto;display:inline-flex;align-items:center;gap:2px;padding:3px;
+  border:1px solid var(--w-line);border-radius:99px;background:#fff;
+}
+.w-stepper button{
+  width:36px;height:36px;border:0;border-radius:50%;background:#f3f5f2;color:var(--w-ink);
+  font-size:16px;line-height:1;cursor:pointer;display:grid;place-items:center;transition:background .2s;
+}
+.w-stepper button:active:not(:disabled){background:#e2e8e3}
+.w-stepper button:disabled{opacity:.32;cursor:not-allowed}
+.w-stepper output{
+  min-width:26px;text-align:center;font-size:13.5px;font-weight:700;font-variant-numeric:tabular-nums;
+}
+
+/* 团期卡：radio 语义（role=radio + aria-checked），左侧圆点就是选中态 */
+.web-shell .occ{position:relative;align-items:center;gap:12px;cursor:pointer;background:#fff}
+.web-shell .occ:hover{border-color:#cdd8d0}
+.web-shell .occ:active{background:#fafbfa}
+.web-shell .occ__pick{
+  width:18px;height:18px;flex:0 0 18px;border-radius:50%;border:1.5px solid #c8d1cb;
+  transition:border-width .18s,border-color .18s;
+}
+.web-shell .occ.active .occ__pick{border-color:var(--w-brand);border-width:6px}
+.web-shell .occ.active{border-color:var(--w-brand);background:#f6faf7;box-shadow:0 0 0 1px var(--w-brand)}
+.web-shell .occ__main{flex:1;min-width:0}
+.web-shell .occ__main strong{display:block;font-size:13.5px;font-weight:650}
+.web-shell .occ__sub{margin-top:3px;font-size:11.5px;color:var(--w-muted)}
+.web-shell .occ__sub em{font-style:normal;color:var(--w-accent);font-weight:600}
+.web-shell .occ__price{font-size:14px;font-weight:700;color:var(--w-accent);white-space:nowrap}
+.web-shell .occ.is-full{opacity:.6;cursor:not-allowed}
+.web-shell .occ.is-full:hover{border-color:var(--w-line)}
+.web-shell .occ.is-full .occ__price{color:var(--w-muted)}
+
+/* 参加人卡：每位一张，六格两列。字段各自带标签（原来只有 placeholder） */
+.w-pax{margin-top:12px;padding:13px;border:1px solid var(--w-line);border-radius:14px;background:#fcfdfb}
+.w-pax__hd{display:flex;align-items:center;gap:7px}
+.w-pax__idx{
+  width:20px;height:20px;flex:0 0 20px;display:grid;place-items:center;
+  background:var(--w-brand-soft);color:var(--w-brand);border-radius:6px;
+}
+.w-pax__idx svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round}
+.w-pax__hd b{font-size:12.5px;font-weight:650}
+.w-pax__tag{font-size:11.5px;color:var(--w-muted);padding:2px 7px;border-radius:99px;background:#eff1ee}
+.w-pax__del{
+  margin-left:auto;border:0;background:none;padding:2px 4px;
+  color:var(--w-muted);font-size:11px;cursor:pointer;
+}
+.w-pax__del:active{color:var(--w-accent)}
+.w-pax__grid{margin-top:11px;display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.w-fld{display:grid;gap:5px;min-width:0}
+.w-fld>span{font-size:11px;font-weight:600;color:var(--w-muted)}
+.w-fld>span i{color:var(--w-accent);font-style:normal;margin-left:2px}
+.w-fld input{
+  width:100%;min-height:40px;padding:9px 11px;border:1px solid var(--w-line);border-radius:10px;
+  background:#fff;color:var(--w-ink);font-family:inherit;font-size:13px;outline:0;
+  transition:border-color .2s,box-shadow .2s;
+}
+.w-fld input:focus{border-color:#b9c8bd;box-shadow:0 0 0 3px rgba(21,98,67,.08)}
+.w-fld input::placeholder{color:#aab3ad}
+
+/* 提交按钮：把「要付多少」写在按钮上，省掉一次「点了才知道多少钱」的往返 */
+.w-submit{
+  margin-top:14px;width:100%;display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:15px 20px;border:0;border-radius:14px;background:var(--w-ink);color:#fff;
+  font-size:14.5px;font-weight:650;cursor:pointer;box-shadow:0 12px 28px rgba(18,23,20,.2);
+  transition:transform .16s,box-shadow .2s;
+}
+.w-submit b{font-size:16px;font-weight:750;font-variant-numeric:tabular-nums}
+.w-submit:active:not(:disabled){transform:scale(.99)}
+.w-submit:disabled{background:#c6ccc7;box-shadow:none;cursor:not-allowed}
+
+/* 摘要框：给「订单摘要」一个抬头，抵扣行用绿色表达「这是减项」 */
+.web-shell .quote-box__hd{font-size:11px;letter-spacing:.18em;color:rgba(255,255,255,.55);margin-bottom:5px}
+.web-shell .quote-box .quote-line:not(.total){color:rgba(255,255,255,.84)}
+.web-shell .quote-box .is-cut{color:#8fd6ac}
+.web-shell .quote-line.total{font-weight:750}
+
+/* 提示块 */
+.web-shell .notice{border:1px solid var(--w-line);border-radius:11px;background:#f7f9f6;font-size:12px;color:var(--w-ink2);line-height:1.65;padding:11px 13px}
+.web-shell .notice strong{display:block;font-size:12.5px;margin-bottom:3px}
+.web-shell .notice.warn{background:#fdf4ed;border-color:#f6e0cd;color:#8a4a22}
+
+/* ── 我的：订单 / 售后 / 福利 / 兑换 ───────────────────────────────────── */
+.w-ord{border:1px solid var(--w-line);border-radius:14px;background:#fff;padding:13px 14px;margin-bottom:10px}
+.w-ord:last-child{margin-bottom:0}
+.w-ord__hd{display:flex;align-items:center;gap:8px}
+.w-ord__hd b{flex:1;min-width:0;font-size:13.5px;font-weight:650}
+.w-ord__meta{display:flex;flex-wrap:wrap;gap:3px 14px;margin-top:7px;font-size:11.5px;color:var(--w-muted)}
+.w-ord__amt{
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-top:9px;
+  padding-top:9px;border-top:1px dashed var(--w-line);font-size:12px;color:var(--w-muted);
+}
+.w-ord__amt b{font-size:16px;font-weight:750;color:var(--w-ink);font-variant-numeric:tabular-nums}
+.w-ord__items{margin-top:9px;display:grid;gap:0}
+.w-item{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px dashed var(--w-line);font-size:12px;color:var(--w-ink2)}
+.w-ord__pax{margin-top:9px;border-top:1px dashed var(--w-line);padding-top:6px}
+.w-ord__refund{margin-top:8px;font-size:11.5px;color:var(--w-muted);line-height:1.6}
+.w-ord__ops{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+
+.w-pax-row{display:flex;gap:9px;padding:9px 0;border-top:1px dashed var(--w-line)}
+.w-pax-row:first-child{border-top:0}
+.w-pax-row.is-off{opacity:.55}
+.w-pax-row__ic{width:22px;height:22px;flex:0 0 22px;margin-top:1px;display:grid;place-items:center;background:#f0f2ef;border-radius:7px}
+.w-pax-row__ic svg{width:14px;height:14px;stroke:#5c6a63;fill:none;stroke-width:1.7;stroke-linecap:round}
+.w-pax-row__main{flex:1;min-width:0}
+.w-pax-row__nm{display:flex;align-items:center;gap:6px;font-size:12.5px}
+.w-pax-row__nm b{font-weight:650}
+.w-pax-row__meta{margin-top:2px;font-size:11px;color:var(--w-muted)}
+.w-pax-row__ops{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
+.w-pax-row__prog{margin-top:5px;font-size:11px;color:var(--w-muted)}
+
+.w-act{
+  border:1px solid var(--w-line);background:#fff;border-radius:9px;padding:7px 12px;
+  font-size:12px;font-weight:600;color:var(--w-ink2);cursor:pointer;transition:.18s;
+}
+.w-act:active{transform:scale(.97)}
+.w-act--sm{min-height:38px;padding:8px 12px;font-size:11.5px;border-radius:9px;background:#f4f6f3}
+.w-act--danger{display:inline-flex;align-items:center;min-height:38px;color:#a44435;border-color:#f0d4cf;background:#fdf6f5}
+.w-act__note{font-size:11.5px;color:var(--w-muted)}
+
+.w-case{margin-top:9px;padding:10px 12px;border:1px solid var(--w-line);border-radius:12px;background:#fafbf9}
+.w-case__hd{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.w-case__meta{margin-top:5px;font-size:11.5px;color:var(--w-muted)}
+
+.w-bnf{padding:13px;border:1px solid var(--w-line);border-radius:14px;background:#fff}
+.w-bnf + .w-bnf{margin-top:10px}
+.w-bnf__hd{display:flex;align-items:center;gap:8px}
+.w-bnf__hd b{flex:1;min-width:0;font-size:13.5px;font-weight:650}
+.w-bnf__desc{margin:6px 0 0;font-size:11.5px;color:var(--w-muted);line-height:1.6}
+.w-bnf__ft{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:11px}
+.w-bnf__cost{display:flex;align-items:baseline;gap:5px;flex-wrap:wrap}
+.w-bnf__cost b{font-size:17px;font-weight:750;color:var(--w-accent)}
+.w-bnf__cost span{font-size:11px;color:var(--w-muted)}
+.w-bnf__cost em{font-style:normal;font-size:11px;color:var(--w-muted);margin-left:3px}
+.w-bnf__btn{border:0;border-radius:99px;min-height:38px;padding:10px 18px;background:var(--w-ink);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer}
+.w-bnf__btn:active{transform:scale(.96)}
+
+.w-rdm{padding:12px 13px;border:1px dashed var(--w-line);border-radius:13px;background:#fcfdfb}
+.w-rdm + .w-rdm{margin-top:8px}
+.w-rdm__hd{display:flex;align-items:center;gap:8px}
+.w-rdm__hd b{flex:1;min-width:0;font-size:13px;font-weight:650}
+.w-rdm__meta{margin-top:5px;font-size:11.5px;color:var(--w-muted)}
+.w-rdm__code{margin-top:7px;font-size:12px;color:var(--w-ink2)}
+.w-rdm__code code{
+  display:inline-block;margin-left:4px;padding:3px 8px;border-radius:6px;
+  background:#f0f2ef;font-size:11.5px;letter-spacing:.04em;
+}
+
+/* ── 弹窗内容（会员卡 / 常见问题） ─────────────────────────────────────── */
+.w-mcard{border:1px solid var(--w-line);border-radius:14px;overflow:hidden}
+.w-mcard__row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 14px;background:#fff;border-bottom:1px solid var(--w-line);font-size:13px}
+.w-mcard__row:last-child{border-bottom:0}
+.w-mcard__row span{color:var(--w-muted);font-size:12px;flex:0 0 auto}
+.w-mcard__row b{font-weight:650;text-align:right;min-width:0;overflow-wrap:anywhere}
+.w-mcard__note{margin:10px 0 0;font-size:11.5px;color:var(--w-muted);line-height:1.6;text-align:center}
+.w-help{display:grid;gap:10px}
+.w-help__item{padding:12px 13px;border:1px solid var(--w-line);border-radius:12px;background:#fafbf9}
+.w-help__item b{display:block;font-size:12.5px;font-weight:700;color:var(--w-ink)}
+.w-help__item p{margin:5px 0 0;font-size:11.5px;line-height:1.7;color:var(--w-muted)}
+
+/* ══ 详情页正文手机化 ═════════════════════════════════════════════════════
+   renderPromo 产出的 `renderPromo()` 是**公众号长图**模板：920px 宽、米黄底、
+   Georgia 58px 大标题、72px 留白。塞进 390px 手机上，实测详情页总高 9968px，
+   其中有两个各 560px 的头图（`.w-detailhero` 已经画过一次同一张封面）。
+   这里只改 C 端呈现，不动 shared.js —— 那是四端共用的。
+   ═══════════════════════════════════════════════════════════════════════════ */
+.web-shell #publicDetail .public-editorial{margin-left:0;margin-right:0}
+/* 头图重复：同一张封面在详情页顶部已经出现一次（`.w-detailhero` + 标题），
+   ed-hero 是第二次。手机竖屏下两块 560px 头图加起来比正文还长，去掉第二块。 */
+.web-shell .ed-hero{display:none}
+/* 照片按固定比例裁：`renderPromo` 出来的多是竖幅（库里实测 560×841 一类），
+   按原始比例一张就要 530px 高，一页十几张会把详情页顶到 8000px 以上，且高度参差。
+   统一裁成 4:3（单图 3:2），且这是**裁切**不是拉伸 —— 内部 img 是 object-fit:cover。 */
+.web-shell .editorial-media,
+.web-shell .ed-gallery .editorial-media,
+.web-shell .ed-media .editorial-media,
+.web-shell .ed-narrative-media .editorial-media{aspect-ratio:4/3}
+.web-shell .ed-media.single .editorial-media{aspect-ratio:3/2}
+.web-shell .ed-lead,.web-shell .ed-narrative,.web-shell .ed-section,
+.web-shell .ed-quote,.web-shell .ed-cta,.web-shell .ed-gallery,.web-shell .ed-media,
+.web-shell .ed-statement{padding-left:18px;padding-right:18px}
+.web-shell .ed-lead{padding-top:22px;padding-bottom:16px}
+.web-shell .ed-lead p{font-size:16.5px;line-height:1.85;color:var(--w-ink2);font-family:inherit;max-width:none}
+.web-shell .ed-statement{padding-top:26px;padding-bottom:26px}
+.web-shell .ed-statement span{font-family:inherit;font-size:19px;font-weight:600;line-height:1.6;max-width:none}
+.web-shell .ed-quote{padding-top:24px;padding-bottom:24px;font-family:inherit;font-size:17px;line-height:1.7}
+.web-shell .ed-narrative{padding-top:20px;padding-bottom:20px;gap:14px}
+.web-shell .ed-narrative.has-media{grid-template-columns:1fr}
+.web-shell .ed-copy h2,.web-shell .ed-section h2{font-family:inherit;font-size:19px;line-height:1.35;margin:6px 0 9px}
+.web-shell .ed-copy p{font-size:14px;line-height:1.85;color:var(--w-ink2)}
+.web-shell .ed-facts{margin:20px 18px;grid-template-columns:1fr}
+.web-shell .ed-facts>div{background:#fafbf9;padding:13px 14px}
+.web-shell .ed-facts small{font-size:11px;letter-spacing:.04em;color:var(--w-muted)}
+.web-shell .ed-facts strong{font-size:16px}
+.web-shell .ed-gallery,.web-shell .ed-media{padding-top:16px;padding-bottom:16px;gap:8px}
+.web-shell .ed-gallery .editorial-media,
+.web-shell .ed-gallery.count-3 .editorial-media,
+.web-shell .ed-gallery.count-3 .editorial-media:first-child,
+.web-shell .ed-media.single .editorial-media,
+.web-shell .ed-media.pair .editorial-media,
+.web-shell .ed-media.grid .editorial-media,
+.web-shell .ed-media.mosaic .editorial-media,
+.web-shell .ed-narrative-media .editorial-media{min-height:210px}
+.web-shell .ed-media.mosaic .editorial-media:first-child{grid-row:auto}
+.web-shell .ed-divider{margin:0 18px}
+.web-shell .ed-section{padding-top:20px;padding-bottom:20px}
+.web-shell .ed-section-head{margin-bottom:12px}
+.web-shell .ed-timeline{background:#fafbf9}
+.web-shell .timeline-item{grid-template-columns:1fr;gap:5px;padding:13px 0}
+.web-shell .ed-info{background:#fafbf9}
+.web-shell .info-chips{grid-template-columns:1fr}
+/* 结尾 CTA 区块：与下方报名卡重复，收成一张浅色提示卡，不做深色大色块 */
+.web-shell .ed-cta{background:#f3f7f4;color:var(--w-ink);padding-top:22px;padding-bottom:22px}
+.web-shell .ed-kicker{font-size:11px;letter-spacing:1.4px}
+.web-shell .ed-cta .ed-kicker{color:var(--w-brand)}
+.web-shell .ed-cta h2{font-family:inherit;font-size:18px;line-height:1.4;margin:6px 0 7px}
+.web-shell .ed-cta p{font-size:13px;color:var(--w-muted);max-width:none}
+
+/* 出行清单 × 装备推荐：`shared.css` 里 `.pack-need` 是米黄底 `#ede7db`，
+   那是俱乐部后台的暖色体系；C 端整页是冷白灰，一块米黄夹在中间像另一个页面。
+   只换底色与描边，不动结构（结构与文案来自 gear_recommend 的真实计算结果）。 */
+.web-shell .pack-need{background:#f4f7f4;border:1px solid var(--w-line);border-radius:12px;color:var(--w-ink2);font-size:12.5px}
+.web-shell .pack-plan{gap:16px}
+.web-shell .gear-summary{color:var(--w-muted)}
+.web-shell .gear-row{background:#fff;border:1px solid var(--w-line);border-radius:12px}
+.web-shell .gear-row.buyable:hover{border-color:#c9d6cd}
+.web-shell .gear-emoji{background:#f1f3f0;border-radius:9px}
+.web-shell .gear-none{border:1px dashed #dde3dc;border-radius:11px;background:#fbfcfa}
+.web-shell .gear-missing{color:var(--w-muted);line-height:1.6}
+.web-shell .gear-extras{border-top:1px solid var(--w-line)}
+.web-shell .gear-price{color:var(--w-accent)}
+.web-shell .gear-was{color:var(--w-muted)}
+
+/* 信息折叠层（info-stack）：手机上一行一行铺开太长，默认是收起的 details */
+.web-shell .info-stack.polished{margin:14px 0 0;max-width:none}
+.web-shell .info-stack details{background:#fff;border:1px solid var(--w-line);border-radius:12px;padding:13px 14px;margin:8px 0;box-shadow:none}
+.web-shell .info-stack summary{font-size:13px;font-weight:650;min-height:44px;align-items:center}
+.web-shell .info-stack summary span{font-size:11px}
+.web-shell .detail-list>div{grid-template-columns:1fr;gap:3px;padding:12px 0}
+.web-shell .detail-list p{font-size:12.5px}
+
+/* ── `.editorial` 本体并入 C 端冷白体系 ─────────────────────────────────────
+   `renderPromo()` 是四端共用的公众号长图渲染器，它的底色与分隔线是后台那套暖米黄
+   （#f4f0e8 / #d8d0c2 / #ede7db）。C 端整页是冷白灰，长图往上一铺，正文中间就出现
+   一条暖色带，读起来像从别的页面裁一块贴过来的。
+   这里**只换颜色，不动结构** —— 分块与文案仍是 renderPromo 的真实计算结果。
+   全部带 .web-shell 前缀提权，不依赖 shared.css / web.css 的加载顺序。 */
+.web-shell .editorial{background:#fff;border-color:transparent}
+.web-shell .editorial-media{background:#eef0ed}
+/* 引用块沿用 C 端唯一的深色语法（和底部提交按钮同一个 --w-ink），不另造深绿 */
+.web-shell .ed-statement{background:var(--w-ink)}
+.web-shell .ed-caption{color:var(--w-muted)}
+/* 缺图占位：ref 名直接压在 #ddd 上，在冷白页面里第一眼会被读成「图没加载出来」。
+   改成虚线占位 + 弱化小字，表达「这里本来该有图，素材没上传」，不做成错误态。 */
+.web-shell .editorial-media.missing{background:#fafbf9;border:1px dashed #dde3dc}
+.web-shell .editorial-media.missing span{color:#a7b0a9;font-size:11px}
+/* 这些 1px 间隙/分隔线是容器底色透出来的（shared.css 拿暖色 background 画的），
+   换成 C 端线色，否则米黄会顺着缝隙继续漏出来。 */
+.web-shell .ed-facts{background:var(--w-line)}
+.web-shell .info-chips>div{background:#fafbf9;border:1px solid var(--w-line)}
+.web-shell .ed-divider{background:var(--w-line)}
+.web-shell .timeline-list{border-top-color:var(--w-line)}
+.web-shell .timeline-item{border-bottom-color:var(--w-line)}
+
 @media (max-width:380px){
   .w-shop{grid-template-columns:80px 1fr}
   .w-reel__card{flex:0 0 82%}
   .w-hero h1{font-size:26px}
   .w-me__grid{grid-template-columns:repeat(4,1fr)}
+  .w-pax__grid{grid-template-columns:1fr}
+  .w-submit{padding:14px 16px;font-size:14px}
 }
