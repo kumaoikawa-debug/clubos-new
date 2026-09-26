@@ -199,6 +199,14 @@ function gearRow(p,opts){
     ? '<button type="button" class="gear-row buyable" onclick="buy('+Number(p.id||0)+')" title="下单购买">'+inner+'</button>'
     : '<button type="button" class="gear-row buyable" onclick="openGearProduct('+Number(p.id||0)+')" title="在装备商城里查看这件商品">'+inner+'</button>';
 }
+/* 同一件装备会同时满足多项清单要求（「速干衣裤」与「防晒外套」都命中服装面料），
+   整行重复出现会把清单拉长一倍，看起来像推荐错了。第二次出现收成一行只读引用，
+   购买入口保留在首次出现处。 */
+function gearRowDup(p){
+  return '<div class="gear-row gear-row--dup" title="同一件装备，已在上方列出">'
+    +'<span class="gear-emoji">'+esc(p.emoji||'🧰')+'</span>'
+    +'<span class="gear-main"><b>'+esc(p.name)+'</b><small>同一件装备 · 已在上方列出</small></span></div>';
+}
 function renderPacking(master,opts){
   opts=opts||{};
   const list=master.checklist||[];
@@ -208,8 +216,14 @@ function renderPacking(master,opts){
   const items=g.items||[],extras=g.extras||[];
   if(!items.length&&!extras.length)return chips;
   const o={canBuy:!!opts.canBuy&&typeof window.buy==='function',manage:!!opts.manage};
+  const seen={};                                          // 已完整展示过的商品 id
   const slots=items.map(it=>{
-    const ms=(it.matches||[]).map(p=>gearRow(p,o)).join('');
+    const ms=(it.matches||[]).map(p=>{
+      const id=Number(p.id||0);
+      if(id&&seen[id])return gearRowDup(p);
+      if(id)seen[id]=1;
+      return gearRow(p,o);
+    }).join('');
     // 清单项本身认不出装备品类时（如"身份证"）不该说"商城没有"，那是两回事
     const body=ms||((it.tags||[]).length?'<div class="gear-none">商城暂无对应装备</div>':'');
     return '<div class="pack-slot"><div class="pack-need">'+esc(it.text)+'</div>'
@@ -231,7 +245,8 @@ function renderPacking(master,opts){
   const missLine=miss.length
     ? '<div class="gear-missing">商城暂无对应装备：'+esc(miss.join('、'))+(o.manage?'（可在商城上架补全）':'')+'</div>'
     : '';
-  const extraRows=extras.map(p=>gearRow(p,o)).join('');
+  // 「其他在售装备」是补充位：清单里已经出现过的商品不再重复列一次
+  const extraRows=extras.filter(p=>!seen[Number(p.id||0)]).map(p=>gearRow(p,o)).join('');
   const extra=extraRows
     ? '<div class="gear-extras"><div class="gear-extras-title">本场活动其他在售装备</div><div class="pack-gear">'+extraRows+'</div></div>'
     : '';
@@ -268,13 +283,33 @@ function renderInfoStack(master,opts={}){
   return h+'</div>';
 }
 
+/* 枚举值中文化：同一个 status 在整个后台要长一样。此前「报名管理」把 draft / published、
+   平台端把 pro / active 这类原始枚举直接摆在页面上，中文界面里突然蹦出英文单词。
+   未知值原样返回——宁可显示原始值，也不要编一个不存在的中文名。 */
+const ENUM_CN={
+  active:'已启用',inactive:'已停用',disabled:'已停用',pending:'待处理',rejected:'已拒绝',
+  draft:'草稿',published:'已发布',archived:'已归档',cancelled:'已取消',canceled:'已取消',
+  paid:'已付款',unpaid:'待付款',open:'开放中',closed:'已关闭',ready:'就绪',failed:'失败',
+  processing:'处理中',completed:'已完成',shipped:'已发货',delivered:'已签收',refunded:'已退款',
+  requested:'待处理',approved:'已通过',settled:'已结算',preparing:'准备中',arrived:'已到达',
+  in_progress:'进行中',expired:'已过期'
+};
+function enumCn(v,fallback){
+  const k=String(v==null?'':v).trim();
+  if(!k)return fallback==null?'—':fallback;
+  return ENUM_CN[k]||ENUM_CN[k.toLowerCase()]||fallback||k;
+}
+
 // Logout must revoke the session on the server, not just hide the current UI.
 document.addEventListener('DOMContentLoaded',()=>{
   if(!clubosCookie('clubos_csrf')||location.pathname==='/login')return;
   const button=document.createElement('button');button.type='button';button.textContent='退出登录';
-  button.className='btn ghost';button.style.cssText='position:fixed;right:10px;bottom:10px;z-index:9000;font-size:12px';
+  /* 定位交给 CSS（.logout-fab）：C 端底部有一条固定 tab bar，按钮浮在右下角会把
+     第 4 个 tab「订单」整块盖住、那个入口点不到。有 tab bar 时按钮上移，并给页面留出底部空间。 */
+  button.className='btn ghost logout-fab';
   button.onclick=async()=>{try{await api('/api/auth/logout',{method:'POST'})}finally{location.href='/login'}};
   document.body.appendChild(button);
+  if(document.querySelector('.web-nav'))document.body.classList.add('has-webbar');
 });
 
 /* ---- 骨架屏 skeleton（组件层 .skeleton 已定义在 ux/clubos-ux.css）---- */

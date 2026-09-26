@@ -272,3 +272,30 @@ button.is-busy::after,.btn.is-busy::after{content:'';position:absolute;top:0;bot
   .ch-xhs{grid-template-columns:1fr}
   .ch-xhs-gallery{grid-template-columns:repeat(2,1fr)}
 }
+/* ===== UI/UX pass：让位、空态、去重、会员价补充 ===== */
+/* 退出登录浮层。C 端底部是 fixed 的 4 格 tab bar（约 71px），浮层压在右下角会把
+   「订单」整个 tab 盖住、那个入口完全点不到；有 tab bar 时抬到它上方。 */
+.logout-fab{position:fixed;right:10px;bottom:10px;z-index:9000;font-size:12px}
+body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
+/* 出行清单里同一件装备重复出现时收成只读引用行（购买入口保留在首次出现处）。 */
+.gear-row--dup{opacity:.7;border-style:dashed;cursor:default}
+.gear-row--dup .gear-main small{color:#8a998f}
+/* 经营数据趋势图：本期完全没有现金流时不画空坐标轴（一大片空白看起来像图表坏了），
+   直接给一句人话说明。 */
+.bi-trend-empty{display:grid;place-items:center;gap:6px;height:150px;border:1px dashed var(--line);border-radius:14px;background:#fbfcfa;color:var(--muted);font-size:12px;text-align:center;padding:0 16px;line-height:1.7}
+.bi-trend-empty b{color:#3c674c;font-size:13px}
+/* 领队卡：没有可推荐的人时要讲清是「名册还没建」还是「这次没有更合适的人」，
+   否则空着看起来像功能坏了。 */
+.leader-recs--none{margin-top:9px}
+.leader-note{font-size:11.5px;color:#8a9a91;line-height:1.65}
+/* 会员等级的「装备商城折扣」：这个能力必须在设置处看得见、改得动，否则会员价无从配置。 */
+.tier-gear{font-size:11px;font-weight:800;color:#2f6b48;background:#eef5ec;border:1px solid #dcebdc;border-radius:999px;padding:2px 9px;margin-left:6px}
+.tier-gear--off{color:#8a9a91;background:#f4f6f3;border-color:#e8ece6;font-weight:600}
+/* 装备商城的会员价：与出行清单同一口径，避免同一件商品两处价格不一致。 */
+.product .price-was{font-size:12px;color:#9aa8a0;text-decoration:line-through;font-weight:600;margin-left:6px}
+.product .price-member{font-size:11px;font-weight:800;color:#2f6b48;margin-top:3px}
+/* 命中区下限：卡片上的「编辑 / 删除」原为 44×23，低于 24px 的可点最小高度，容易点空。 */
+.act-op{padding:5px 10px;min-height:24px}
+.gear-row--dup+.gear-row--dup{margin-top:0}
+/* 表格筛选框：输入框本体只有 19px 高，点起来太窄，给一点纵向内边距。 */
+.ux-table-search input{padding:3px 0;min-height:22px}

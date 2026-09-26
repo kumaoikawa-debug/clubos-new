@@ -51,6 +51,22 @@ async function loadMemberCenter(){
   let d=await api(`/api/public/clubs/${CLUB}/member-center?user_id=${USER}`),w=d.wallet||{};
   if($('#clubPts'))$('#clubPts').textContent=w.clubPoints??0;if($('#gearPts'))$('#gearPts').textContent=w.gearPoints??0;
   if($('#memberLevel'))$('#memberLevel').innerHTML=`<strong>${esc(w.memberLevel||'普通会员')}</strong> · 已参加 ${w.activityCount||0} 场活动 · 累计活动消费 ${money(w.lifetimeActivitySpend||0)}`;
+  /* 会员等级权益：装备折扣是「加入会员更便宜」的唯一凭证，只在后台配置、C 端看不到
+     就等于没做。这里把当前折扣与「再消费能降到几折」讲清楚。 */
+  if($('#memberTierPerks')){
+    const tiers=d.tiers||[],rate=t=>{const v=Number(t&&t.gear_discount);return v>0&&v<1?v:0};
+    const cur=tiers.find(t=>String(t.name||'')===String(w.memberLevel||''))||null;
+    const up=tiers.filter(t=>(Number(t.rank)||0)>(Number(cur&&cur.rank)||0)).sort((a,b)=>(Number(a.rank)||0)-(Number(b.rank)||0))[0]||null;
+    const on=rate(cur),lines=[];
+    lines.push(on
+      ? `会员权益：装备商城 <b>${(Math.round(on*1000)/100)} 折</b> —— 在活动出行清单与装备商城里直接看到会员价。`
+      : '当前等级的装备商城按原价结算。');
+    const nu=rate(up);
+    if(up)lines.push((nu&&(!on||nu<on))
+      ? `再参加活动升到「${esc(up.name)}」，装备折扣可降到 <b>${(Math.round(nu*1000)/100)} 折</b>。`
+      : `再参加活动可升到「${esc(up.name)}」。`);
+    $('#memberTierPerks').innerHTML=lines.join(' ');
+  }
   if($('#memberBenefits'))$('#memberBenefits').innerHTML=(d.benefits||[]).map(x=>{let pt=x.points_type==='club'?'活动积分':'装备积分',owner=x.owner_type==='CLUB'?'俱乐部承担':'ClubOS 平台承担';return `<div class="notice" style="margin-bottom:10px"><div class="panel-title"><div><strong>${esc(x.title)}</strong><div class="sub">${esc(x.description||'')}</div></div><span class="tag">${owner}</span></div><div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px"><span><strong>${x.points_cost}</strong> ${pt}${x.cash_value?` · 权益价值 ${money(x.cash_value)}`:''}</span><button class="btn secondary" onclick="redeemBenefit(${x.id})">兑换</button></div></div>`}).join('')||'<div class="empty">暂无可兑换福利</div>';
   if($('#memberRedemptions'))$('#memberRedemptions').innerHTML=(d.redemptions||[]).map(x=>`<div style="padding:10px 0;border-bottom:1px solid var(--line)"><strong>${esc(x.title)}</strong><div class="sub">${x.points_spent} ${x.point_type==='club'?'活动积分':'装备积分'} · ${x.funding_owner==='CLUB'?'俱乐部承担':'平台承担'} · 券码 ${esc(x.voucher_code||'')} · ${x.status==='issued'?'可使用':x.status==='held'?'结算中':x.status==='used'?'已使用':esc(x.status||'')}</div></div>`).join('')||'<div class="empty">还没有兑换记录</div>';
 }
