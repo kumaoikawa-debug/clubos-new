@@ -14,6 +14,7 @@
 
   var LABEL = { wechat: '微信公众号图文', xhs: '小红书图文', poster: '活动招募海报', recap: '活动回顾' };
   var ICON = { wechat: '📰', xhs: '📕', poster: '🖼', recap: '📷' };
+  var _chSeq = 0;   /* 成品预览层标题 id 计数：叠开两层时 aria-labelledby 不能撞名 */
   var FONT = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif';
   var SERIF = 'Georgia,"Songti SC","Noto Serif SC",serif';
 
@@ -625,6 +626,8 @@
     data = data || {};
     var activityId = opts.activityId || data.activityId;
     if (!activityId) { showAlert({ title: '无法渲染', message: '缺少活动信息，无法渲染成品。' }); return; }
+    /* 渠道 key 不在白名单里时直接拒绝：以前会渲染出「undefined xxx」这种半成品标题。 */
+    if (!LABEL[channel]) { showAlert({ title: '无法渲染', message: '未知的内容渠道：' + channel + '。可用渠道为公众号 / 小红书 / 海报 / 回顾。' }); return; }
 
     var ctx;
     try { ctx = await loadCtx(activityId); }
@@ -633,10 +636,14 @@
     var ov = document.createElement('div');
     ov.className = 'ch-overlay';
     var headTitle = data.title || (data.titleOptions || [])[0] || ctx.title;
+    /* 成品预览是一层全屏 overlay：与 shared.js 的 uxDialog / clubos-ux 的 uxForm / 支付 sheet
+       共用同一套弹窗行为（焦点进入并圈闭、Esc 只关最上层、锁背景滚动、关闭后归还焦点）。
+       之前这里只有一条自己的 Esc 监听：打开后焦点仍在页面上、Tab 会跑到成品背后、背景能滚。 */
+    var chTitleId = 'ch-title-' + (++_chSeq);
     ov.innerHTML =
-      '<div class="ch-panel">' +
+      '<div class="ch-panel" role="dialog" aria-modal="true" aria-labelledby="' + chTitleId + '" tabindex="-1">' +
       '<div class="ch-head"><div><div class="eyebrow">AI CHANNEL OUTPUT · 成品预览</div>' +
-      '<h2>' + ICON[channel] + ' ' + esc(LABEL[channel] || channel) + '</h2>' +
+      '<h2 id="' + chTitleId + '">' + ICON[channel] + ' ' + esc(LABEL[channel] || channel) + '</h2>' +
       '<div class="sub">' + esc(headTitle) + ' · 活动：' + esc(ctx.title) + '</div></div>' +
       '<button class="ch-x" type="button" aria-label="关闭">×</button></div>' +
       '<div class="ch-tools" id="chTools"></div>' +
@@ -645,12 +652,12 @@
       '<pre>' + esc(JSON.stringify(data, null, 2)) + '</pre></details>' +
       '</div>';
     document.body.appendChild(ov);
-    var close = function () { ov.remove(); };
+    var chSession = null;
+    var close = function () { if (!ov.isConnected) return; if (chSession) chSession.release(); ov.remove(); };
     ov.querySelector('.ch-x').onclick = close;
     ov.onclick = function (e) { if (e.target === ov) close(); };
-    document.addEventListener('keydown', function onEsc(e) {
-      if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onEsc); }
-    });
+    /* 只在 shared.js 已就绪时接管；否则退化成以前只有 × / 点遮罩能关的行为，不会更差。 */
+    if (window.uxDialogSession) chSession = window.uxDialogSession(ov, { onEscape: close, initialFocus: '.ch-x' });
 
     var stage = ov.querySelector('#chStage');
     var tools = ov.querySelector('#chTools');
