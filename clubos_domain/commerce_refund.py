@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Any
+from clubos_domain.product_stock import variant_of, write_variant_stock
 
 
 class CommerceRefundEngine:
@@ -131,7 +132,9 @@ class CommerceRefundEngine:
             if self.inventory:
                 self.inventory.refund_restock(c,product_id=int(it['product_id']),quantity=int(it['quantity']),order_id=order_id,actor_type='refund',variant_id=it['variant_id'] if 'variant_id' in it.keys() else None)
             else:
-                c.execute('UPDATE products SET stock=stock+? WHERE id=?',(int(it['quantity']),int(it['product_id'])))
+                _v=variant_of(c,product_id=int(it['product_id']),variant_id=(it['variant_id'] if 'variant_id' in it.keys() else None))
+                if _v: write_variant_stock(c,product_id=int(it['product_id']),variant_id=int(_v['id']),new_stock=int(_v['stock'] or 0)+int(it['quantity']))
+                else: c.execute('UPDATE products SET stock=stock+? WHERE id=?',(int(it['quantity']),int(it['product_id'])))
 
         # Reverse commission once. Unsettled commission becomes reversed; if it was already
         # paid to the club, create a negative available entry so the next settlement offsets it.

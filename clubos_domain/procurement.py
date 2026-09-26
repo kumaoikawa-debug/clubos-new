@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 from typing import Any
+from clubos_domain.product_stock import variant_of, write_variant_stock
 
 
 class ProcurementEngine:
@@ -192,33 +193,9 @@ class ProcurementEngine:
         return self.get_purchase_order(c,po_id)
 
     def _variant_of(self,c,*,product_id:int,variant_id:int|None=None):
-        """确定这次库存变动要落到哪个规格。
-
-        库存真源在 product_variants。没传 variant_id 时取该商品的默认规格（迁移给每个
-        商品建的那个 is_default=1），这样单规格与存量商品的语义和原来完全一致。
-        多规格商品的调用方必须显式传 —— 否则「买 S 码扣 M 码库存」这种串账查不出来。
-        """
-        if variant_id:
-            r=c.execute('SELECT * FROM product_variants WHERE id=? AND product_id=?',(int(variant_id),int(product_id))).fetchone()
-            if not r: raise LookupError('规格不存在或不属于该商品')
-            return dict(r)
-        r=c.execute('SELECT * FROM product_variants WHERE product_id=? ORDER BY is_default DESC,sort,id LIMIT 1',(int(product_id),)).fetchone()
-        return dict(r) if r else None
-
+        return variant_of(c,product_id=product_id,variant_id=variant_id)
     def _write_variant_stock(self,c,*,product_id:int,variant_id:int,new_stock:int,sync_status:str|None=None) -> int:
-        """写规格层库存，并把 products.stock 重算成各规格之和。
-
-        products.stock 从真源降级为冗余字段（列表排序、采购预警读它），所以它必须
-        每次规格变动后跟着变，否则后台看到的汇总和详情页看到的规格明细会对不上。
-        """
-        v=c.execute('SELECT id,stock FROM product_variants WHERE id=?',(int(variant_id),)).fetchone()
-        if not v: raise LookupError('规格不存在')
-        before=int(v['stock'] or 0)
-        c.execute('UPDATE product_variants SET stock=? WHERE id=?',(int(new_stock),int(variant_id)))
-        total=c.execute('SELECT COALESCE(SUM(stock),0) s FROM product_variants WHERE product_id=? AND status=\'active\'',(int(product_id),)).fetchone()['s']
-        if sync_status: c.execute('UPDATE products SET stock=?,commerce_sync_status=? WHERE id=?',(int(total),sync_status,int(product_id)))
-        else: c.execute('UPDATE products SET stock=? WHERE id=?',(int(total),int(product_id)))
-        return before
+        return write_variant_stock(c,product_id=product_id,variant_id=variant_id,new_stock=new_stock,sync_status=sync_status)
 
     def _record_movement(self,c,*,product_id:int,movement_type:str,quantity_delta:int,stock_before:int,stock_after:int,
                          unit_cost:float|None=0,total_cost:float|None=None,reference_type:str='',reference_id:str='',note:str='',actor_type:str='platform',idempotency_key:str|None=None,variant_id:int|None=None):
@@ -252,12 +229,24 @@ class ProcurementEngine:
             self.warehouse._move(c,product_id=product_id,movement_type='manual_adjustment',quantity=abs(delta),from_location_id=lid if delta<0 else None,to_location_id=lid if delta>0 else None,reference_type=reference_type,reference_id=reference_id or str(m['id']),note=reason,actor_type=actor_type,idempotency_key=f'wms-manual:{m["id"]}')
         return {'ok':True,'productId':product_id,'variantId':vid,'stockBefore':before,'stockAfter':after,'quantityDelta':delta,'movementId':m['id'],'productIds':[product_id]}
 
-    def set_absolute_stock(self,c,*,product_id:int,new_stock:int,reason:str='平台手工修改库存',actor_type:str='platform') -> dict[str,Any]:
+    def set_absolute_stock(self,c,*,product_id:int,new_stock:int,reason:str='平台手工修改库存',actor_type:str='platform',variant_id:int|None=None) -> dict[str,Any]:
+        """把库存设成绝对值。库存真源在规格层，所以「设成多少」也必须落在具体规格上。
+
+        多规格商品没有「总库存」可设：delta 若按 products.stock（各规格之和）算、却落到
+        单个规格上，数字必然对不上。所以未指定规格且存在多个启用规格时直接报错（app.py 转成
+        409），让运营去规格管理里逐个改，而不是静默写歪。
+        """
+        if variant_id is None:
+            n=c.execute("SELECT COUNT(*) n FROM product_variants WHERE product_id=? AND status='active'",(product_id,)).fetchone()['n']
+            if int(n or 0)>1: raise ValueError('该商品有多个规格，库存按规格分别管理，请在「规格」里逐个调整')
         p=c.execute('SELECT stock FROM products WHERE id=?',(product_id,)).fetchone()
         if not p: raise LookupError('商品不存在')
-        delta=int(new_stock)-int(p['stock'] or 0)
-        if delta==0: return {'ok':True,'productId':product_id,'stockBefore':int(new_stock),'stockAfter':int(new_stock),'quantityDelta':0,'productIds':[],'idempotent':True}
-        return self.adjust_stock(c,product_id=product_id,quantity_delta=delta,reason=reason,actor_type=actor_type)
+        v=self._variant_of(c,product_id=product_id,variant_id=variant_id)
+        vid=int(v['id']) if v else None
+        before=int(v['stock'] or 0) if v else int(p['stock'] or 0)
+        delta=int(new_stock)-before
+        if delta==0: return {'ok':True,'productId':product_id,'variantId':vid,'stockBefore':before,'stockAfter':before,'quantityDelta':0,'productIds':[],'idempotent':True}
+        return self.adjust_stock(c,product_id=product_id,quantity_delta=delta,reason=reason,actor_type=actor_type,variant_id=vid)
 
     def sale_outbound(self,c,*,product_id:int,quantity:int,order_id:int,actor_type:str='system',variant_id:int|None=None) -> dict[str,Any]:
         q=max(1,int(quantity)); p0=c.execute('SELECT * FROM products WHERE id=?',(product_id,)).fetchone()
@@ -332,11 +321,17 @@ class ProcurementEngine:
             unit_cost=ordered_cost if req.get('unitCost') in (None,'') else float(req.get('unitCost'))
             if unit_cost<0: raise ValueError('实际到货单价不能小于 0')
             p=dict(c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone())
-            before=int(p['stock'] or 0); after=before+qty; avg_before=float(p.get('average_cost') or 0)
+            # 采购明细没有规格概念，入库一律落到默认规格；库存真源在规格层，
+            # 只写 products.stock 的话，下一次规格变动触发汇总重算就会把这次补货抹掉。
+            v=variant_of(c,product_id=pid)
+            before=int(v['stock'] or 0) if v else int(p['stock'] or 0); after=before+qty
+            avg_before=float(p.get('average_cost') or 0)
             avg_after=unit_cost if avg_before<=0 else round(((before*avg_before)+(qty*unit_cost))/after,4) if after else unit_cost
-            c.execute('''UPDATE products SET stock=?,average_cost=?,last_purchase_cost=?,last_inbound_at=CURRENT_TIMESTAMP,
+            c.execute('''UPDATE products SET average_cost=?,last_purchase_cost=?,last_inbound_at=CURRENT_TIMESTAMP,
                          commerce_sync_status=CASE WHEN commerce_inventory_item_id IS NOT NULL THEN 'pending' ELSE commerce_sync_status END WHERE id=?''',
-                      (after,avg_after,unit_cost,pid))
+                      (avg_after,unit_cost,pid))
+            if v: write_variant_stock(c,product_id=pid,variant_id=int(v['id']),new_stock=after)
+            else: c.execute('UPDATE products SET stock=? WHERE id=?',(after,pid))
             c.execute('UPDATE purchase_order_items SET quantity_received=quantity_received+? WHERE id=?',(qty,iid))
             line_total=round(qty*unit_cost,2); total_cost+=line_total
             variance=round((unit_cost-ordered_cost)*qty,2)
@@ -344,7 +339,7 @@ class ProcurementEngine:
                          VALUES(?,?,?,?,?,?,?,?,?,?)''',(receipt_id,iid,pid,qty,unit_cost,line_total,before,after,ordered_cost,variance))
             self._record_movement(c,product_id=pid,movement_type='purchase_inbound',quantity_delta=qty,stock_before=before,stock_after=after,
                                   unit_cost=unit_cost,total_cost=line_total,reference_type='purchase_receipt',reference_id=receipt_id,
-                                  note=f'采购单 {po_id} 到货入库',actor_type=received_by,idempotency_key=f'purchase_receipt:{receipt_id}:item:{iid}')
+                                  note=f'采购单 {po_id} 到货入库',actor_type=received_by,idempotency_key=f'purchase_receipt:{receipt_id}:item:{iid}',variant_id=int(v['id']) if v else None)
             if self.warehouse:
                 self.warehouse.inbound(c,product_id=pid,quantity=qty,reference_type='purchase_receipt',reference_id=receipt_id,note=f'采购单 {po_id} 到货上架',actor_type=received_by,idempotency_key=f'wms-purchase:{receipt_id}:item:{iid}')
             changed.append(pid)
@@ -404,10 +399,17 @@ class ProcurementEngine:
         if r['status']!='approved': raise ValueError(f"当前采购退货状态不能出库: {r['status']}")
         changed=[]
         for it in r['items']:
-            pid=int(it['product_id']); q=int(it['quantity']); p=dict(c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone()); before=int(p['stock'] or 0)
+            pid=int(it['product_id']); q=int(it['quantity']); p=dict(c.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone())
+            # before 必须和 after 落在同一级：都取默认规格的库存。读 products.stock（各规格之和）
+            # 却写回单个规格，多规格商品会凭空多出/少掉库存，且汇总重算后对不上。
+            v=variant_of(c,product_id=pid)
+            before=int(v['stock'] or 0) if v else int(p['stock'] or 0)
             if before<q: raise ValueError(f"{p['name']} 可售库存不足，不能退回供应商")
             if self.warehouse: self.warehouse.outbound_available(c,product_id=pid,quantity=q,reference_type='purchase_return',reference_id=return_id,note=f'采购退货 {return_id} 出库',actor_type=actor_type,idempotency_key=f'wms-purchase-return:{return_id}:{pid}')
-            after=before-q; c.execute("UPDATE products SET stock=?,commerce_sync_status=CASE WHEN commerce_inventory_item_id IS NOT NULL THEN 'pending' ELSE commerce_sync_status END WHERE id=?",(after,pid))
+            after=before-q
+            if v: write_variant_stock(c,product_id=pid,variant_id=int(v['id']),new_stock=after,
+                                      sync_status='pending' if c.execute('SELECT commerce_inventory_item_id FROM products WHERE id=?',(pid,)).fetchone()['commerce_inventory_item_id'] else None)
+            else: c.execute("UPDATE products SET stock=?,commerce_sync_status=CASE WHEN commerce_inventory_item_id IS NOT NULL THEN 'pending' ELSE commerce_sync_status END WHERE id=?",(after,pid))
             self._record_movement(c,product_id=pid,movement_type='supplier_return',quantity_delta=-q,stock_before=before,stock_after=after,unit_cost=float(it['unit_cost'] or 0),total_cost=float(it['line_total'] or 0),reference_type='purchase_return',reference_id=return_id,note=f'采购退货 {return_id} 退回供应商',actor_type=actor_type,idempotency_key=f'purchase-return:{return_id}:{it["id"]}')
             changed.append(pid)
         c.execute("UPDATE purchase_returns SET status='shipped',shipped_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(return_id,)); return {**self.get_purchase_return(c,return_id),'productIds':sorted(set(changed))}

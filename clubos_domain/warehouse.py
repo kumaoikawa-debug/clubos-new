@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
+from clubos_domain.product_stock import variant_of, write_variant_stock
 
 
 class WarehouseEngine:
@@ -187,9 +188,14 @@ class WarehouseEngine:
         delta=counted-old
         self._update(c,product_id,location_id,counted,reserved)
         if delta:
-            p=c.execute('SELECT stock FROM products WHERE id=?',(product_id,)).fetchone(); before=int(p['stock'] or 0); after=before+delta
+            # 盘盈盘亏也要落到规格层：只改 products.stock 的话，下一次规格变动
+            # 触发汇总重算就会把这次盘点差异抹掉（它是冗余字段，不是真源）。
+            v=variant_of(c,product_id=product_id)
+            p=c.execute('SELECT stock FROM products WHERE id=?',(product_id,)).fetchone()
+            before=int(v['stock'] or 0) if v else int(p['stock'] or 0); after=before+delta
             if after<0:raise ValueError('盘点调整后可售库存不能为负数')
-            c.execute('UPDATE products SET stock=? WHERE id=?',(after,product_id))
+            if v: write_variant_stock(c,product_id=product_id,variant_id=int(v['id']),new_stock=after)
+            else: c.execute('UPDATE products SET stock=? WHERE id=?',(after,product_id))
         m=self._move(c,product_id=product_id,movement_type='cycle_count',quantity=abs(delta),to_location_id=location_id if delta>=0 else None,from_location_id=location_id if delta<0 else None,reference_type='cycle_count',reference_id=str(uuid.uuid4()),note=note or f'库位盘点差异 {delta:+d}',actor_type='platform') if delta else None
         return {'ok':True,'productId':product_id,'locationId':location_id,'previousOnHand':old,'countedOnHand':counted,'delta':delta,'movementId':m['id'] if m else None}
 

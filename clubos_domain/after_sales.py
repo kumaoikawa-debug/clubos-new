@@ -1,6 +1,7 @@
 from __future__ import annotations
 import json, uuid
 from typing import Any
+from clubos_domain.product_stock import variant_of, write_variant_stock
 
 ACTIVE_STATUSES={
     'requested','pending_review','awaiting_return','return_in_transit',
@@ -133,7 +134,9 @@ class AfterSalesEngine:
                     if self.inventory:
                         self.inventory.after_sales_restock(c,case_id=case_id,item_id=int(it['id']),product_id=int(it['product_id']),quantity=int(it['quantity']),actor_type='platform_after_sales',variant_id=it.get('variant_id'))
                     else:
-                        c.execute('UPDATE products SET stock=stock+? WHERE id=?',(int(it['quantity']),int(it['product_id'])))
+                        _v=variant_of(c,product_id=int(it['product_id']),variant_id=it.get('variant_id'))
+                        if _v: write_variant_stock(c,product_id=int(it['product_id']),variant_id=int(_v['id']),new_stock=int(_v['stock'] or 0)+int(it['quantity']))
+                        else: c.execute('UPDATE products SET stock=stock+? WHERE id=?',(int(it['quantity']),int(it['product_id'])))
                     restocked_products.append(int(it['product_id']))
                     c.execute('UPDATE after_sales_items SET restocked=1 WHERE id=?',(it['id'],))
         c.execute("UPDATE gear_orders SET after_sales_status=? WHERE id=?",(next_status,case['order_id']))

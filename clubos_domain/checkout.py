@@ -2,6 +2,7 @@ from __future__ import annotations
 import json, uuid
 from dataclasses import dataclass
 from typing import Any
+from clubos_domain.product_stock import variant_of, write_variant_stock
 
 @dataclass
 class CheckoutIntent:
@@ -252,7 +253,10 @@ class CheckoutEngine:
             if self.inventory:
                 self.inventory.sale_outbound(c,product_id=int(p['id']),quantity=q,order_id=oid,actor_type='checkout',variant_id=p.get('_variantId'))
             else:
-                c.execute('UPDATE products SET stock=stock-? WHERE id=?',(q,p['id']))
+                # 兜底分支也写规格层：products.stock 已是冗余字段，只改它会被下一次汇总重算抹掉
+                _v=variant_of(c,product_id=int(p['id']),variant_id=p.get('_variantId'))
+                if _v: write_variant_stock(c,product_id=int(p['id']),variant_id=int(_v['id']),new_stock=max(0,int(_v['stock'] or 0)-q))
+                else: c.execute('UPDATE products SET stock=stock-? WHERE id=?',(q,p['id']))
         self.points.materialize_redemptions(c,intent_id=intent['id'],order_kind='gear',order_id=oid,club_id=int(intent['club_id']))
         if self.benefits:
             self.benefits.consume_vouchers(c,intent_id=intent['id'],order_kind='gear',order_id=oid)
