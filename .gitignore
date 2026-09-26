@@ -8,3 +8,7 @@ services/medusa/.clubos-runtime.json
 services/medusa/node_modules/
 services/medusa/.medusa/
 .DS_Store
+# 运行时上传产物（体积大，由上传动作再生，不随仓库分发）
+static/uploads/*/*/
+# 本地版本快照（改动前备份，仅供本机回滚）
+versions/
