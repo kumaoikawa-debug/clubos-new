@@ -157,6 +157,10 @@ button.is-busy::after,.btn.is-busy::after{content:'';position:absolute;top:0;bot
 .leader-roster>summary{font-size:12px;font-weight:800;color:#3c674c;cursor:pointer}
 .act-pane{min-width:0}
 .act-pane__empty{background:var(--panel);border:1px dashed #d5e0d6;border-radius:18px;padding:52px 22px;text-align:center;color:var(--muted);line-height:1.8}
+/* 标题栏右侧按钮曾被 flex 压成两行（「＋ 新增领队」被折成「新增领 / 队」）：
+   文字块给 min-width:0 让它先收缩，按钮保持单行且不被压缩。四端通用。 */
+.panel-title>div{min-width:0}
+.panel-title>.btn,.panel-title>button{white-space:nowrap;flex-shrink:0}
 /* 预览被压进右栏后，编辑画册的排版按容器收一档，否则 58px 大标题会在窄栏里散架 */
 @media(max-width:1500px){
   .act-pane .ed-hero h1{font-size:clamp(28px,3.4vw,46px)}

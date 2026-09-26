@@ -26,7 +26,7 @@ pieces={
         '/api/platform/settlements/preview','/api/platform/orders/',
     ],
     'workflows-completion-club.js':[
-        '/api/club/','/activities/','/channel/','/execution/status',
+        '/api/club/','/activities/','/execution/status',
     ],
     'payment-experience.js':[
         '/api/public/checkouts/','/api/public/activities/','/gear-checkout',
@@ -37,6 +37,15 @@ for fname,targets in pieces.items():
     code=(root/'static/ux'/fname).read_text()
     for target in targets:
         assert target in code,(fname,target)
+# 成品渲染（loadContent / genChannel）的权威实现只有 static/club/club.js 一处。
+# workflows-completion-club.js 在 club.js 之后加载，若再定义同名函数会静默覆盖新版
+# （旧版把接口 JSON 直接塞进 <pre>，老板看到的是代码而不是成品），故反向锁定防回归。
+_cc=(root/'static'/'ux'/'workflows-completion-club.js').read_text()
+for _dup in ('function loadContent','function genChannel','window.loadContent','window.genChannel'):
+    assert _dup not in _cc,('workflows-completion-club.js 不得重复定义 '+_dup)
+assert 'channel-render.js' in _cc,'应注明成品渲染的权威位置'
+_cj=(root/'static'/'club'/'club.js').read_text()
+assert 'function loadContent' in _cj and 'function genChannel' in _cj,'club.js 应持有成品渲染的权威实现'
 assert '@app.post(\'/api/platform/warehouse/move\')' in api
 assert '@app.post(\'/api/platform/warehouse/count\')' in api
 assert '@app.get(\'/api/public/checkouts/{checkout_id}\')' in api
