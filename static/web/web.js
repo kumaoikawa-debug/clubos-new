@@ -574,15 +574,26 @@ function bindWebEvents(){
    「我的」= 毛玻璃会员卡 + 全部订单（活动 + 装备）+ 会员福利，所以两个 loader 一起跑。
    b 允许省略：页面里的「全部活动 →」这类入口不必自己去找底部按钮，由这里按 data-wv 反查，
    否则 active 态与 aria-current 会漏更新。 */
-function wv(id,b){
-  const view=$('#'+id);if(!view)return;
-  b=b||document.querySelector('.web-nav button[data-wv="'+id+'"]');
+/* 只做「切视图 + 高亮对应 tab」这两件事，不碰任何业务状态。
+   和 wv 拆开是因为 openAct 也需要它：从首页（hero 的「即刻探索」、本月精选卡）
+   点进详情时当前视图还是 whome，而 #publicDetail 属于 #wactivities —— 那个 section
+   还是 display:none，详情渲染得再完整也整段看不见，用户看到的就是「点了没反应」。
+   openAct 不能直接调 wv：wv 见到 #publicDetail 里已有内容会按「还在详情页」调
+   showActivityList() 把列表复位，和紧接着的渲染互相清；而且 wv 还会顺带重绘列表 /
+   回源拉数据，这些都不该在打开详情时发生。顺序依赖太脆，所以只共用这一段。 */
+function wviewShow(id,tab){
+  const view=$('#'+id);if(!view)return false;
   $$('.wview').forEach(x=>x.style.display='none');view.style.display='block';
-  $$('.web-nav button').forEach(x=>x.classList.remove('active'));b?.classList.add('active');
+  tab=tab||document.querySelector('.web-nav button[data-wv="'+id+'"]');
+  $$('.web-nav button').forEach(x=>x.classList.remove('active'));tab?.classList.add('active');
   /* 首页顶栏要浮在 hero 照片上，靠 .is-home 切；其余视图顶栏是白底吸顶。 */
   const shell=document.querySelector('.web-shell');
   shell?.classList.toggle('is-home',id==='whome');
   if(id!=='whome')shell?.classList.remove('is-scrolled');
+  return true;
+}
+function wv(id,b){
+  if(!wviewShow(id,b))return;
   window.scrollTo({top:0,behavior:'instant'});
   if(id==='whome')loadHome();
   /* 点「活动」tab 的语义是「我要看活动列表」。openAct 把列表区设成了 display:none，
@@ -601,7 +612,9 @@ function wv(id,b){
   }
   if(id==='wme'){loadMemberCenter();loadOrders()}
 }
-async function openAct(id){let a=await api(`/api/public/activities/${id}`);currentAct=a;
+async function openAct(id){/* 不先切视图的话，详情会被渲染进一个 display:none 的 section ——
+   从首页 hero / 本月精选点进来时，页面看起来毫无反应。 */wviewShow('wactivities');
+let a=await api(`/api/public/activities/${id}`);currentAct=a;
 /* 默认团期必须是**第一个还有余位**的：早前固定取 occurrences[0]，售罄的第一个团期会被默认选中，
    顾客直接点报名就被后端拒，还看不出为什么。全满时留 null，由 signupNow 给出明确提示。 */
 currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0)||null;

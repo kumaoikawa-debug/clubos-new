@@ -18,3 +18,7 @@ python tests/points_max_redeemable_smoke.py
 # 删除活动的报名护栏：只有「未取消且未退款」的报名才拦得住（refunded 已全额退款，不该再拦）。
 # 自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/registration_delete_smoke.py
+# C 端从首页点进活动详情必须真的看得见：openAct 要先把视图切到 #wactivities，
+# 否则详情被写进一个 display:none 的 section，用户看到的是「点了没反应」。
+# 纯静态断言（只读 static/web/*），不建库不碰真库。
+python tests/web_act_view_guard.py
