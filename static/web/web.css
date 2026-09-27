@@ -607,7 +607,9 @@
 }
 .web-shell .occ:hover{border-color:#cdd8d0}
 .web-shell .occ:active{background:#fafbfa}
-.web-shell .occ__top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}
+/* occ__check 绝对定位在右上角，所以标题行必须给它留出空间，
+   否则「标准团/小团」徽标会被 ✓ 圆点盖住（用户截图实测）。 */
+.web-shell .occ__top{display:flex;align-items:center;justify-content:space-between;gap:6px;min-width:0;padding-right:26px}
 .web-shell .occ__top strong{font-size:14px;font-weight:750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .web-shell .occ__kind{
   flex:0 0 auto;font-size:10.5px;font-weight:650;color:#42544d;
