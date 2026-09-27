@@ -120,6 +120,15 @@ def _backfill_v027_variants(c):
         if p['image_url'] and not c.execute('SELECT 1 FROM product_images WHERE product_id=?',(pid,)).fetchone():
             c.execute('INSERT INTO product_images(product_id,url,sort) VALUES(?,?,?)',(pid,p['image_url'],0))
 
+def _backfill_v028_leader_avatar(c):
+    """给 club_leaders 补 avatar_url 列。
+
+    存量领队一律没有头像，这里只加列不编造数据 —— 前端渲染时按「有头像用头像、
+    没有就用姓名首字生成的占位圆」降级，不要给老领队硬塞一张假图。
+    可空 + 无回填，所以本函数本身幂等（_ensure_column 已判列存在）。
+    """
+    _ensure_column(c,'club_leaders','avatar_url','avatar_url TEXT')
+
 def _run_compat_migrations(c):
     _ensure_column(c,'clubs','contact_name','contact_name TEXT')
     _ensure_column(c,'clubs','contact_phone','contact_phone TEXT')
@@ -528,6 +537,9 @@ def init_db():
             _backfill_v021_finance(c)
             _backfill_v023_ai_credits(c)
             _backfill_v027_variants(c)
+            # 必须挂在这个 return 之前：init_db 只要发现库里已经有 clubs
+            # 就会提前返回，挂在后面等于给存量库迁移不到新列。
+            _backfill_v028_leader_avatar(c)
             return
         if os.getenv('CLUBOS_SECURITY_MODE','demo')=='production':
             # Never provision sample clubs, consumers, catalog, payments or credits in production.

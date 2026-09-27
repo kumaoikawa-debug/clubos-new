@@ -502,33 +502,38 @@ async function openGearProduct(pid){
 function renderLeaderCard(a,id){
   const lp=a?.leaderPlan||{};
   const occ=lp.occurrences||[],roster=lp.roster||[];
+  // 团期上的领队是 occurrence_leaders 里的历史手打记录，头像要从名册按 leader_id 反查；
+  // 查不到（早期没排到名册的人）就退回姓名首字占位，不显示空白。
+  const avOf=lid=>{const r=(lp.roster||[]).find(x=>Number(x.id)===Number(lid));return r?r.avatar_url:''};
   const occRows=occ.map(o=>{
     const has=(o.leaders||[]).length;
     const chips=has
-      ? o.leaders.map(x=>`<span class="leader-chip"><b>${esc(x.name)}</b><i>${esc(x.role||'领队')}</i>${x.phone?`<u>${esc(x.phone)}</u>`:''}<button type="button" class="leader-chip__x" title="撤下这位领队" onclick="unassignLeader(${o.occurrenceId},${x.assignmentId},${id})">×</button></span>`).join('')
+      ? o.leaders.map(x=>`<span class="leader-chip">${leaderAvatar(x.name||'',avOf(x.leaderId))}<b>${esc(x.name)}</b><i>${esc(x.role||'领队')}</i>${x.phone?`<u>${esc(x.phone)}</u>`:''}<button type="button" class="leader-chip__x" title="撤下这位领队" onclick="unassignLeader(${o.occurrenceId},${x.assignmentId},${id})">×</button></span>`).join('')
       : '<span class="leader-empty">本团期还没有安排领队</span>';
     const recs=(o.recommendations||[]).filter(r=>!r.alreadyAssigned).map(r=>
       `<button type="button" class="leader-rec" onclick="assignLeader(${o.occurrenceId},${r.leaderId},${id})">`
-      +`<b>${esc(r.name)}</b><i>${esc(r.reason)}</i><span>指派</span></button>`).join('');
+      +`${leaderAvatar(r.name,avOf(r.leaderId))}<b>${esc(r.name)}</b><i>${esc(r.reason)}</i><span>指派</span></button>`).join('');
     return `<div class="leader-occ"><div class="leader-occ__head"><b>${esc(o.label||'')}</b><span>${esc(o.startAt||'')}</span>`
       +`<button type="button" class="act-op" onclick="openLeaderPick(${o.occurrenceId},${id})">指派领队</button></div>`
       +`<div class="leader-chips">${chips}</div>`
       +(recs?`<div class="leader-recs"><span class="leader-recs__t">系统推荐</span>${recs}</div>`:leaderRecNote(roster.filter(r=>r.status==='active').length))
       +`</div>`;
   }).join('')||'<div class="empty">先在「团期 / 价格 / 名额」里添加团期，再安排带队领队</div>';
-  const rosterRows=roster.map(r=>`<div class="list-row"><div class="list-row__main">`
-      +`<div class="list-row__title">${esc(r.name)} <span class="tag ${r.status==='active'?'':'orange'}">${r.status==='active'?'在岗':'已停用'}</span></div>`
+  const rosterRows=roster.map(r=>`<div class="list-row leader-row"><div class="list-row__main">`
+      +`<div class="list-row__title">${leaderAvatar(r.name,r.avatar_url,'sm')}${esc(r.name)} <span class="tag ${r.status==='active'?'':'orange'}">${r.status==='active'?'在岗':'已停用'}</span></div>`
       +`<div class="list-row__sub">${esc(r.role||'领队')}${r.phone?' · '+esc(r.phone):''}${r.base_city?' · 常驻 '+esc(r.base_city):''} · 累计带队 ${Number(r.assignedCount||0)} 次</div>`
       +`<div class="list-row__sub">擅长：${(r.specialties||[]).length?esc(r.specialties.join('、')):'未填写'}</div></div>`
       +`<div class="list-row__end"><button class="btn ghost" onclick="editLeader(${r.id},${id})">编辑</button>`
       +`<button class="btn ghost" onclick="removeLeader(${r.id},${id})">${r.status==='active'?'停用':'删除'}</button></div></div>`).join('')
     ||'<div class="empty">资源库还没有领队，先新增一位</div>';
+  const active=LEADER_FORM&&LEADER_FORM.mode==='edit'?(roster.find(x=>Number(x.id)===Number(LEADER_FORM.leaderId))||{}):{};
   return `<div class="card section" id="sec-leaders"><div class="panel-title">`
     +`<div><h3>带队领队</h3><div class="sub">从俱乐部领队资源库里挑人；系统按「带过同线路 / 同类型活动」自动推荐，推荐理由直接写在按钮上。</div></div>`
-    +`<button class="btn secondary" onclick="addLeader(${id})">＋ 新增领队</button></div>`
+    +`<button class="btn secondary" onclick="toggleLeaderForm('add',${id})">${LEADER_FORM&&LEADER_FORM.mode==='add'?'收起表单':'＋ 新增领队'}</button></div>`
     +`<div class="leader-summary">领队资源库 <b>${Number(lp.rosterCount||0)}</b> 人 · 在岗 <b>${Number(lp.activeCount||0)}</b> 人</div>`
     +`<div class="leader-occs">${occRows}</div>`
-    +`<details class="leader-roster"><summary>领队资源库（${Number(lp.rosterCount||0)} 人）</summary>${rosterRows}</details></div>`;
+    +`<details class="leader-roster"${LEADER_FORM?' open':''}><summary>领队资源库（${Number(lp.rosterCount||0)} 人）</summary>${rosterRows}</details>`
+    +`${LEADER_FORM?leaderFormHtml(id,active):''}</div>`;
 }
 
 async function assignLeader(occId,leaderId,actId){
@@ -565,47 +570,169 @@ async function openLeaderPick(occId,actId){
 
 const LEADER_ROLE_OPTS=[{value:'领队',label:'领队'},{value:'副领队',label:'副领队'},{value:'教练',label:'教练'},{value:'向导',label:'向导'},{value:'随队医护',label:'随队医护'}];
 
-async function addLeader(actId){
-  const lp=(currentActivity&&Number(currentActivity.id)===Number(actId))?(currentActivity.leaderPlan||{}):{};
-  const specs=lp.specialties||[];
-  const d=await uxForm({title:'新增领队',subtitle:'进了资源库才能被排班、被推荐；擅长方向按活动类型选（可多选，逗号分隔）。',
-    fields:[
-      {name:'name',label:'姓名',type:'text',required:true,value:''},
-      {name:'phone',label:'联系电话',type:'text',value:''},
-      {name:'role',label:'角色',type:'select',value:'领队',options:LEADER_ROLE_OPTS},
-      {name:'baseCity',label:'常驻城市',type:'text',value:''},
-      {name:'specialties',label:'擅长方向',type:'text',full:true,value:'',placeholder:'从这些里选：'+specs.join('、')},
-      {name:'note',label:'备注',type:'textarea',full:true,value:''}
-    ],submitText:'加入资源库'});
-  if(!d)return;
-  await uxFlow('addLeader',async()=>{
-    await api(`/api/club/${CLUB}/leaders`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
-    toast('领队已加入资源库');
+/* 新增/编辑领队改成卡片内联表单，不再弹 uxForm 覆盖层。
+   原先点「＋ 新增领队」会在「AI 详情预览」正中间盖出一张弹窗，
+   填完还得先关掉才能继续看正文 —— 这是很强的打断，也解释了
+   「怎么在活动详情预览里又跳出一个东西」。
+   内联展开后表单就长在领队卡片里，与下面的名册同屏，改完直接提交。 */
+let LEADER_FORM=null;
+
+function refreshLeaderPane(){
+  if(!currentActivity||!$('#sec-leaders'))return;
+  $('#sec-leaders').outerHTML=renderLeaderCard(currentActivity,currentActivity.id);
+}
+
+function toggleLeaderForm(mode,actId,leaderId){
+  const same=LEADER_FORM&&LEADER_FORM.mode===mode&&Number(LEADER_FORM.actId)===Number(actId)
+    &&(mode!=='edit'||Number(LEADER_FORM.leaderId)===Number(leaderId));
+  LEADER_FORM=same?null:{mode,actId:Number(actId),...(mode==='edit'?{leaderId:Number(leaderId),pendingFile:null}:{})};
+  refreshLeaderPane();
+}
+
+function leaderFormHtml(actId,r){
+  const editing=LEADER_FORM.mode==='edit';
+  const av=r.avatar_url||'';
+  const specs=(currentActivity&&currentActivity.leaderPlan&&currentActivity.leaderPlan.specialties)||[];
+  return `<div class="leader-inline" id="leaderInlineForm">
+    <div class="leader-inline__head">
+      <span class="leader-av-wrap" id="leaderAvWrap">
+        ${leaderAvatar(r.name||'',av,'lg')}
+        <button type="button" class="leader-av-edit" data-ava-pick="1" title="上传 / 替换头像">✎</button>
+        <input type="file" accept="image/*" data-ava-input hidden>
+      </span>
+      <b>${editing?`编辑领队 · ${esc(r.name||'')}`:'新增领队'}</b>
+      ${editing?'':'<span class="leader-inline__hint">（先建档案，保存后可补头像）</span>'}
+    </div>
+    <div class="leader-inline__grid">
+      <label>姓名 *<input name="name" value="${esc(r.name||'')}" required placeholder="如 王野"></label>
+      <label>联系电话<input name="phone" value="${esc(r.phone||'')}" placeholder="手机号"></label>
+      <label>角色<select name="role">${LEADER_ROLE_OPTS.map(o=>`<option value="${o.value}"${o.value===(r.role||'领队')?' selected':''}>${o.label}</option>`).join('')}</select></label>
+      <label>常驻城市<input name="baseCity" value="${esc(r.base_city||'')}" placeholder="如 成都"></label>
+      <label>状态<select name="status">${['active','inactive'].map(v=>`<option value="${v}"${v===(r.status||'active')?' selected':''}>${v==='active'?'在岗':'停用'}</option>`).join('')}</select></label>
+      <label class="full">擅长方向<input name="specialties" value="${esc((r.specialties||[]).join(','))}" placeholder="从这些里选：${esc(specs.join('、'))}"></label>
+      <label class="full">备注<textarea name="note" rows="2" placeholder="领队资质、带线经历等">${esc(r.note||'')}</textarea></label>
+    </div>
+    <input type="hidden" name="avatarUrl" value="${esc(av)}">
+    <div class="leader-inline__foot">
+      <button class="btn" type="button" data-lf-submit>${editing?'保存':'加入资源库'}</button>
+      <button class="btn ghost" type="button" data-lf-cancel>取消</button>
+      ${editing?'<span class="leader-inline__hint">停用后不再参与推荐，但历史带队记录会保留。</span>':''}
+    </div>
+  </div>`;
+}
+
+async function uploadLeaderAvatar(lid,file){
+  const fd=new FormData();fd.append('file',file);
+  const r=await api(`/api/club/${CLUB}/leaders/${lid}/avatar`,{method:'POST',body:fd});
+  const url=((r||{}).avatarUrl||'');
+  toast(url?'头像已更新':'头像上传成功');
+  return url;
+}
+
+async function submitLeaderForm(){
+  if(!LEADER_FORM)return;
+  const box=$('#leaderInlineForm');if(!box)return;
+  const g=n=>String((box.querySelector(`[name="${n}"]`)||{}).value||'').trim();
+  const name=g('name');
+  if(!name){toast('姓名不能为空');box.querySelector('[name=name]').focus();return}
+  const editing=LEADER_FORM.mode==='edit';
+  const payload={name,phone:g('phone'),role:g('role')||'领队',baseCity:g('baseCity'),
+                 specialties:g('specialties'),note:g('note')};
+  const av=g('avatarUrl');
+  if(av)payload.avatarUrl=av;
+  const st=g('status');
+  if(st&&editing)payload.status=st;   // 只有编辑态才有状态字段，新增不该带 status
+  const actId=LEADER_FORM.actId,lid=LEADER_FORM.leaderId,file=LEADER_FORM.pendingFile||null;
+  const btn=box.querySelector('[data-lf-submit]');
+  if(btn){btn.disabled=true;btn.textContent='保存中…'}
+  try{
+    await uxFlow('leaderInline',async()=>{
+      let targetId=lid;
+      if(editing){
+        await api(`/api/club/${CLUB}/leaders/${lid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        toast('领队信息已更新');
+      }else{
+        const res=await api(`/api/club/${CLUB}/leaders`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        targetId=Number((res||{}).id||0);
+        toast('领队已加入资源库');
+      }
+      // 新增时选了头像：档案建好才有 id 可传，所以放在创建之后补传。
+      if(file&&targetId){
+        const url=await uploadLeaderAvatar(targetId,file);
+        if(url)payload.avatarUrl=url;
+      }
+    });
+    LEADER_FORM=null;
     await openActivity(actId);
+  }catch(e){
+    if(btn){btn.disabled=false;btn.textContent=editing?'保存':'加入资源库'}
+    showAlert({title:editing?'保存领队失败':'新增领队失败',message:e.message});
+  }
+}
+
+document.addEventListener('click',e=>{
+  const t=e.target;if(!t||!t.closest)return;
+  if(t.closest('[data-lf-submit]')){e.preventDefault();submitLeaderForm();return}
+  if(t.closest('[data-lf-cancel]')){e.preventDefault();LEADER_FORM=null;refreshLeaderPane();return}
+  const pk=t.closest('[data-ava-pick]');
+  if(pk){const inp=pk.parentElement.querySelector('[data-ava-input]');if(inp)inp.click()}
+});
+
+document.addEventListener('change',async e=>{
+  const t=e.target;
+  if(!t||!t.matches||!t.matches('[data-ava-input]'))return;
+  const f=t.files&&t.files[0];
+  const wrap=t.parentElement;
+  t.value='';
+  if(!f){return}
+  if(!wrap||!$('#leaderInlineForm')||!LEADER_FORM){toast('请先在领队卡片里打开新增 / 编辑表单');return}
+  const tip=wrap.querySelector('.leader-av');
+  if(LEADER_FORM.mode==='edit'&&tip&&Number(LEADER_FORM.leaderId)){
+    try{
+      const url=await uploadLeaderAvatar(Number(LEADER_FORM.leaderId),f);
+      if(url){
+        const box=$('#leaderInlineForm');
+        if(box){const h=box.querySelector('[name=avatarUrl]');if(h)h.value=url}
+        toast('头像已更新');
+      }
+    }catch(err){showAlert({title:'头像上传失败',message:err.message})}
+  }else{
+    // 新增还没落库，先记住这个文件，等档案建好再传（见 submitLeaderForm）。
+    LEADER_FORM.pendingFile=f;
+    LEADER_FORM.pendingName=f.name;
+    toast('已选中头像，保存后生效');
+  }
+  // 上传完会整块重渲染领队区，不先把用户填过的内容接回来，
+  // 「先打字、再选头像」就会把辛苦填的备注和电话清空（实测复现过）。
+  const snap=leaderFormSnapshot();
+  refreshLeaderPane();
+  leaderFormRestore(snap);
+});
+
+/* 内联表单是整块重绘的，任何一次 refreshLeaderPane 都可能吃掉用户已经填好的内容。
+   上传头像这条路径尤其容易撞上，所以统一用「快照 + 还原」兜住。 */
+function leaderFormSnapshot(){
+  if(!LEADER_FORM)return null;
+  const box=$('#leaderInlineForm');if(!box)return null;
+  const v={};
+  box.querySelectorAll('input,select,textarea').forEach(el=>{if(el.name)v[el.name]=el.value});
+  return v;
+}
+function leaderFormRestore(snap){
+  if(!snap||!LEADER_FORM)return;
+  const box=$('#leaderInlineForm');if(!box)return;
+  Object.keys(snap).forEach(k=>{
+    const el=box.querySelector(`[name="${k}"]`);
+    if(!el||el.type==='file')return;
+    // 头像地址刚被上传结果改写过，空的时候才回填旧值，别把新地址冲掉
+    if(k==='avatarUrl'&&el.value)return;
+    el.value=snap[k];
   });
 }
 
-async function editLeader(leaderId,actId){
-  const lp=(currentActivity&&Number(currentActivity.id)===Number(actId))?(currentActivity.leaderPlan||{}):{};
-  const r=(lp.roster||[]).find(x=>Number(x.id)===Number(leaderId));
-  if(!r){showAlert({title:'读取领队失败',message:'请重新打开这个活动再试'});return}
-  const d=await uxForm({title:'编辑领队',subtitle:'停用后不再参与推荐，但历史带队记录会保留。',
-    fields:[
-      {name:'name',label:'姓名',type:'text',required:true,value:r.name||''},
-      {name:'phone',label:'联系电话',type:'text',value:r.phone||''},
-      {name:'role',label:'角色',type:'select',value:r.role||'领队',options:LEADER_ROLE_OPTS},
-      {name:'baseCity',label:'常驻城市',type:'text',value:r.base_city||''},
-      {name:'specialties',label:'擅长方向',type:'text',full:true,value:(r.specialties||[]).join(',')},
-      {name:'status',label:'状态',type:'select',value:r.status||'active',options:[{value:'active',label:'在岗'},{value:'inactive',label:'停用'}]},
-      {name:'note',label:'备注',type:'textarea',full:true,value:r.note||''}
-    ],submitText:'保存'});
-  if(!d)return;
-  await uxFlow('editLeader',async()=>{
-    await api(`/api/club/${CLUB}/leaders/${leaderId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
-    toast('领队信息已更新');
-    await openActivity(actId);
-  });
-}
+function addLeader(actId){toggleLeaderForm('add',actId)}
+
+function editLeader(leaderId,actId){toggleLeaderForm('edit',actId,leaderId)}
 
 async function removeLeader(leaderId,actId){
   const lp=(currentActivity&&Number(currentActivity.id)===Number(actId))?(currentActivity.leaderPlan||{}):{};

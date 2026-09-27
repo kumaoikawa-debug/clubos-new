@@ -298,6 +298,40 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 /* 装备商城的会员价：与出行清单同一口径，避免同一件商品两处价格不一致。 */
 .product .price-was{font-size:12px;color:#9aa8a0;text-decoration:line-through;font-weight:600;margin-left:6px}
 .product .price-member{font-size:11px;font-weight:800;color:#2f6b48;margin-top:3px}
+
+/* ===== 领队头像（四端共用，2026-09-28）=====
+   领队在排班、名册、执行页都要认人，光靠名字分不清谁是谁。
+   没有头像的用姓名首字生成占位圆，配色按姓名稳定取，
+   同一个人在任何页面都是同一个颜色。 */
+.leader-av{width:30px;height:30px;border-radius:50%;flex:0 0 auto;overflow:hidden;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff;letter-spacing:.02em;background:#9db5a6;user-select:none}
+.leader-av img{width:100%;height:100%;object-fit:cover;display:block}
+.leader-av--sm{width:24px;height:24px;font-size:10.5px}
+.leader-av--lg{width:44px;height:44px;font-size:16px}
+.leader-av--xl{width:60px;height:60px;font-size:22px}
+.leader-av-wrap{position:relative;display:inline-flex;flex:0 0 auto}
+.leader-av-wrap .leader-av-edit{position:absolute;inset:0;border-radius:50%;background:#17342ccc;color:#fff;border:0;font-size:18px;line-height:1;cursor:pointer;opacity:0;transition:opacity .15s;display:flex;align-items:center;justify-content:center}
+.leader-av-wrap:hover .leader-av-edit,.leader-av-wrap:focus-within .leader-av-edit{opacity:1}
+/* 头像回流到 chip / 推荐按钮里：圆角跟着容器走，别露出方角。 */
+.leader-chip .leader-av,.leader-rec .leader-av{width:22px;height:22px;font-size:10px}
+.leader-chip{padding-left:4px}
+.leader-rec{padding-left:4px;gap:8px}
+.leader-occ__head .leader-av{width:22px;height:22px;font-size:10px}
+/* 名册行里的头像与右侧操作之间的间距 */
+.leader-row .list-row__main{display:flex;gap:10px;align-items:flex-start}
+.leader-row .list-row__title{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* 内联编辑区：新增/编辑领队不再弹窗，直接在卡片里展开，
+   避免「活动详情预览」里点一下就跳出一个覆盖层打断阅读。 */
+.leader-inline{border:1px solid #cfe0cf;background:#f7faf5;border-radius:12px;padding:12px;margin-top:10px}
+.leader-inline__head{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.leader-inline__head b{font-size:13px;color:#224c38}
+.leader-inline__grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px}
+.leader-inline__grid label{display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:700;color:#6b8a7b}
+.leader-inline__grid input,.leader-inline__grid select,.leader-inline__grid textarea{border:1px solid var(--line);border-radius:9px;padding:7px 9px;font-size:12.5px;color:#17342c;background:#fff;font-family:inherit}
+.leader-inline__grid .full{grid-column:1/-1}
+.leader-inline__foot{display:flex;gap:8px;align-items:center;margin-top:11px;flex-wrap:wrap}
+.leader-inline__hint{font-size:11px;color:#8a9a91}
+@media(max-width:640px){.leader-inline__grid{grid-template-columns:1fr}}
 /* 命中区下限：卡片上的「编辑 / 删除」原为 44×23，低于 24px 的可点最小高度，容易点空。 */
 .act-op{padding:6px 11px;min-height:28px;display:inline-flex;align-items:center}
 .act-op:focus-visible{outline:2px solid #70a279;outline-offset:2px}

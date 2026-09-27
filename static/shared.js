@@ -469,3 +469,23 @@ function showForm({title='',desc='',fields=[],submitText='提交',validate=null,
     };
   });
 }
+
+/* ===== 领队头像（俱乐部端后台 + 领队执行端共用，四端都加载本文件）=====
+   领队在排班、名册、执行页要认人。没有头像时用姓名首字生成占位圆，
+   配色由姓名哈希稳定得出 —— 同一个人在任何页面都是同一个颜色，
+   不会出现上一页蓝的下一页绿的情况。 */
+const LEADER_AV_PALETTE=['#2f6b48','#3c5d78','#7a5a2e','#6d3a52','#2f5f5a','#5a4a7a'];
+function leaderAvatarColor(name){
+  const s=String(name||'');let n=0;
+  for(let i=0;i<s.length;i++)n=(n*31+s.charCodeAt(i))>>>0;
+  return LEADER_AV_PALETTE[n%LEADER_AV_PALETTE.length];
+}
+function leaderAvatar(name,url,size){
+  const nm=String(name||'').trim();
+  const cls=['leader-av',size?`leader-av--${size}`:''].filter(Boolean).join(' ');
+  // 刻意不加 loading="lazy"：这是几十像素的小图，懒加载省不下什么，
+  // 却会让头像在部分滚动位置一直空白 —— 「图不显示」比多请求一张图贵得多。
+  if(url)return `<span class="${cls}"><img src="${esc(url)}" alt="${esc(nm)}"></span>`;
+  if(!nm)return `<span class="${cls}" style="background:#9db5a6"></span>`;
+  return `<span class="${cls}" style="background:${leaderAvatarColor(nm)}" title="${esc(nm)}" aria-hidden="true">${esc(nm.slice(0,1))}</span>`;
+}

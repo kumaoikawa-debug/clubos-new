@@ -121,7 +121,13 @@ class ActivityExecutionService:
         return {"ok": True, "removed": assignment_id}
 
     def list_leaders(self, c, occurrence_id: int) -> list[dict[str, Any]]:
-        return [dict(r) for r in c.execute("SELECT * FROM occurrence_leaders WHERE occurrence_id=? ORDER BY id", (occurrence_id,)).fetchall()]
+        # 补 club_leaders.avatar_url：occurrence_leaders 只记「谁被排了这个团期」，
+        # 头像本身在名册里。执行页（领队端）要显示带头队的带队人，不关联就是一张空白卡。
+        # LEFT JOIN + club_id 双重匹配，避免别的俱乐部的同名领队被错配过来。
+        return [dict(r) for r in c.execute('''SELECT ol.*, cl.avatar_url
+            FROM occurrence_leaders ol
+            LEFT JOIN club_leaders cl ON cl.id=ol.leader_id AND cl.club_id=ol.club_id
+            WHERE ol.occurrence_id=? ORDER BY ol.id''', (occurrence_id,)).fetchall()]
 
     def add_group(self, c, *, club_id: int, occurrence_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         self._occurrence(c, club_id=club_id, occurrence_id=occurrence_id)

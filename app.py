@@ -1,5 +1,5 @@
 from __future__ import annotations
-import uuid, os, io, csv, zipfile, shutil
+import uuid, os, io, csv, re, zipfile, shutil
 from sqlite3 import IntegrityError
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -990,12 +990,13 @@ def club_leader_add(club_id:int,payload:dict=Body(...)):
     with conn() as c:
         dup=c.execute('SELECT id FROM club_leaders WHERE club_id=? AND name=?',(club_id,name)).fetchone()
         if dup: raise HTTPException(409,f'资源库里已经有「{name}」了')
-        lid=c.execute('''INSERT INTO club_leaders(club_id,name,phone,role,specialties,base_city,status,note)
-                        VALUES(?,?,?,?,?,?,?,?)''',(
+        lid=c.execute('''INSERT INTO club_leaders(club_id,name,phone,role,specialties,base_city,avatar_url,status,note)
+                        VALUES(?,?,?,?,?,?,?,?,?)''',(
             club_id,name,str(payload.get('phone') or '').strip() or None,
             str(payload.get('role') or '').strip() or '领队',
             jdump(_leader_specs(payload.get('specialties'))),
             str(payload.get('baseCity') or '').strip() or None,
+            _normalize_avatar_url(payload.get('avatarUrl')),
             str(payload.get('status') or 'active'),str(payload.get('note') or '').strip() or None)).lastrowid
     return {'id':int(lid)}
 
@@ -1019,6 +1020,7 @@ def club_leader_update(club_id:int,leader_id:int,payload:dict=Body(...)):
         if 'status' in payload: fields['status']=str(payload.get('status') or 'active')
         if 'note' in payload: fields['note']=str(payload.get('note') or '').strip() or None
         if 'specialties' in payload: fields['specialties']=jdump(_leader_specs(payload.get('specialties')))
+        if 'avatarUrl' in payload: fields['avatar_url']=_normalize_avatar_url(payload.get('avatarUrl'))
         if not fields: raise HTTPException(400,'没有需要更新的字段')
         sets=','.join(f'{k}=?' for k in fields)
         c.execute(f'UPDATE club_leaders SET {sets},updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
@@ -1039,6 +1041,80 @@ def club_leader_delete(club_id:int,leader_id:int):
             return {'ok':True,'mode':'deactivated','assignments':used}
         c.execute('DELETE FROM club_leaders WHERE id=? AND club_id=?',(leader_id,club_id))
     return {'ok':True,'mode':'deleted'}
+
+
+@app.post('/api/club/{club_id}/leaders/{leader_id}/avatar')
+@app.post('/api/club/{club_id}/leaders/{leader_id}/avatar.{ext}')
+async def club_leader_avatar_upload(club_id:int,leader_id:int,file:UploadFile=File(...),ext:str=''):
+    """上传/替换领队头像。旧文件不清，覆盖写同名文件即可。
+
+    落盘路径固定在 uploads/{club}/leaders/{leader_id}/avatar{ext}，
+    返回的是俱乐部域代理地址而不是裸 /static/uploads 链 —— 后者在生产环境
+    被 security_v025 直接 404，写进去等于存了一条打不开的地址。
+
+    两条路径都注册：前端按「不带扩展名」拼更容易读，但返回的一定带真实扩展名。
+    路径上带的扩展名必须与文件后缀一致，否则读的时候按路径找会得到 404，
+    存了一条自己读不回来的地址。
+    """
+    club_or_404(club_id)
+    real=Path(file.filename or '').suffix.lower()
+    if real not in _PUBLIC_IMAGE_EXT: raise HTTPException(400,'仅支持图片文件：png/jpg/jpeg/webp/gif')
+    if ext and '.'+str(ext).lower().lstrip('.')!=real:
+        raise HTTPException(400,'路径里的扩展名与文件后缀不一致')
+    data=await file.read()
+    if len(data) > 5*1024*1024: raise HTTPException(413,'图片过大（上限 5MB）')
+    with conn() as c:
+        r=row(c.execute('SELECT id,name FROM club_leaders WHERE id=? AND club_id=?',(leader_id,club_id)))
+        if not r: raise HTTPException(404,'领队不存在')
+    dest=UPLOAD/str(club_id)/'leaders'/str(leader_id)
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest/f'avatar{real}').write_bytes(data)
+    # 覆盖写会让旧扩展名的残file变成孤儿，顺手清掉，避免磁盘上堆积
+    for stale in dest.glob('avatar.*'):
+        if stale.suffix.lower()!=real: stale.unlink(missing_ok=True)
+    # URL 必须带扩展名：反解回磁盘时要靠它找真实文件，
+    # 存成 /avatar（无扩展名）会让代理永远返回「头像文件已丢失」。
+    url=f'/api/club/{club_id}/leaders/{leader_id}/avatar{real}'
+    with conn() as c:
+        c.execute('UPDATE club_leaders SET avatar_url=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
+                  (url,leader_id,club_id))
+    return {'avatarUrl':url}
+
+
+@app.get('/api/club/{club_id}/leaders/{leader_id}/avatar.{ext}')
+def club_leader_avatar(club_id:int,leader_id:int,ext:str):
+    """俱乐部域头像代理：后台、领队执行端走这条（带登录态）。
+
+    路径里必须带扩展名 —— 落盘文件是按扩展名命名的（换图可能是 .jpg 覆盖
+    .png），URL 不带就没法定位；而且动态路由少了这一段，带扩展名的请求会
+    连路由都匹配不上，直接落到 404。
+    """
+    return _serve_leader_avatar(club_id,leader_id,ext)
+
+
+_AVATAR_URL_RE=re.compile(r'^/api/club/(\d+)/leaders/(\d+)/avatar(\.[a-z0-9]{2,5})$', re.I)
+
+
+def _serve_leader_avatar(club_id:int, leader_id:int, ext:str):
+    """把 club_leaders.avatar_url 还原成磁盘上的那张图。
+
+    不能走 _safe_media_path：那个函数只认 /static/ 下 uploads/ 或 demo/ 开头的
+    路径，而这里存的是 /api/club/... 代理地址，反解成 /static/1/leaders/... 会被
+    直接拒掉，代理永远返回「头像文件已丢失」。所以这里改成：先按形状校验 URL，
+    再拿路由参数拼路径 —— 路径里不掺 avatar_url 的任意片段，
+    即便库里被写入畸形值也跳出不了 uploads。
+    """
+    with conn() as c:
+        r=row(c.execute('SELECT avatar_url FROM club_leaders WHERE id=? AND club_id=?',(leader_id,club_id)))
+    if not r: raise HTTPException(404,'领队不存在')
+    m=_AVATAR_URL_RE.match(str(r['avatar_url'] or ''))
+    if not m or int(m.group(1))!=int(club_id) or int(m.group(2))!=int(leader_id):
+        raise HTTPException(404,'该领队还没有设置头像')
+    ext='.'+str(ext).lower().lstrip('.')
+    if ext not in _PUBLIC_IMAGE_EXT: raise HTTPException(404,'不支持的图片格式')
+    fp=UPLOAD/f'{int(club_id)}'/f'leaders'/f'{int(leader_id)}'/f'avatar{ext}'
+    if not fp.is_file(): raise HTTPException(404,'头像文件已丢失')
+    return FileResponse(fp)
 
 
 @app.post('/api/club/{club_id}/occurrences/{occurrence_id}/groups')
@@ -1354,6 +1430,21 @@ def _safe_media_path(source:str) -> Path|None:
     if not candidate.is_relative_to(STATIC.resolve()) or candidate.suffix.lower() not in _PUBLIC_IMAGE_EXT:
         return None
     return candidate
+
+def _normalize_avatar_url(value) -> str|None:
+    """收下头像地址，但只放行「领队头像代理」这一种形状。
+
+    生产环境 security_v025 直接封死 /static/uploads/*，存裸链等于存了一条
+    在俱乐部端和领队执行端都打不开的路径。这里把来源收敛到 club 域头像代理，
+    任何别的写法（裸 uploads 路径、外部 URL、不带扩展名的地址）一律淘汰成
+    None，让前端退回姓名首字占位 —— 宁可少一张图，也不能存一条读不回来的地址。
+    """
+    s=str(value or '').strip()
+    if not s or s.lower().startswith(('http://','https://','data:','//')):
+        return None
+    if not re.fullmatch(r'/api/club/\d+/leaders/\d+/avatar\.[a-z0-9]{2,5}', s, re.I):
+        return None
+    return s
 
 @app.get('/api/public/activities/{activity_id}/media/{asset_path:path}')
 def public_activity_media(activity_id:int,asset_path:str):

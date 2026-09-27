@@ -753,6 +753,10 @@ CREATE TABLE IF NOT EXISTS club_leaders (
   -- 擅长方向（活动类型标签，JSON 字符串数组），用于按活动自动推荐领队
   specialties TEXT NOT NULL DEFAULT '[]',
   base_city TEXT,
+  -- 领队头像。只存经 /api/club/{club_id}/leaders/{id}/avatar.{ext} 代理过的路径，
+  -- 且扩展名必须带（反解磁盘文件时靠它定位）。绝不存 /static/uploads 裸链 ——
+  -- 生产环境该路径被 security_v025 封死，存进去就是一条打不开的地址。
+  avatar_url TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   note TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

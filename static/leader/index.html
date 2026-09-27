@@ -1,1 +1,17 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ClubOS 领队执行</title><link rel="stylesheet" href="/static/shared.css"><style>body{background:#eef2f0}.leader-shell{max-width:720px;margin:0 auto;padding:16px 14px 90px}.leader-head{position:sticky;top:0;z-index:10;background:#eef2f0ee;backdrop-filter:blur(10px);padding:8px 0 12px}.leader-actions{display:flex;gap:8px;flex-wrap:wrap}.leader-actions .btn{padding:8px 10px}.exec-step{display:flex;gap:6px;flex-wrap:wrap}.exec-step span{padding:7px 10px;border-radius:999px;background:#fff;border:1px solid var(--line);font-size:12px}.exec-step span.active{background:#17342c;color:#fff;border-color:#17342c}</style><link rel="stylesheet" href="/static/ux/clubos-ux.css"></head><body><div class="leader-shell"><div class="leader-head"><div class="eyebrow">LEADER EXECUTION</div><h2 id="ltitle" style="margin:4px 0">活动执行</h2><div id="lmeta" class="sub"></div></div><div id="leaderBody"></div></div><script src="/static/shared.js"></script><script src="/static/leader/leader.js"></script><script src="/static/ux/clubos-ux.js"></script><script src="/static/ux/leader-experience.js"></script></body></html>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ClubOS 领队执行</title><link rel="stylesheet" href="/static/shared.css"><style>body{background:#eef2f0}.leader-shell{max-width:720px;margin:0 auto;padding:16px 14px 90px}.leader-head{position:sticky;top:0;z-index:10;background:#eef2f0ee;backdrop-filter:blur(10px);padding:8px 0 12px}.leader-actions{display:flex;gap:8px;flex-wrap:wrap}.leader-actions .btn{padding:8px 10px}.exec-step{display:flex;gap:6px;flex-wrap:wrap}.exec-step span{padding:7px 10px;border-radius:999px;background:#fff;border:1px solid var(--line);font-size:12px}.exec-step span.active{background:#17342c;color:#fff;border-color:#17342c}
+/* 头部：领队头像组 + 标题。领队端几乎都在手机上看，第一行要能一眼看到「今天谁带队」。 */
+.leader-headrow{display:flex;gap:12px;align-items:center}
+.leader-stack{display:flex;padding-left:8px;flex:0 0 auto}
+.leader-stack__it{margin-left:-10px;border:2px solid #eef2f0;border-radius:50%;display:inline-flex;box-shadow:0 1px 3px #17342c22}
+.leader-stack__it:first-child{margin-left:0}
+/* 本次带队卡片 */
+.leader-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px;margin-top:10px}
+.leader-card{border:1px solid var(--line);border-radius:12px;background:#fbfdfa;padding:11px 12px}
+.leader-card__top{display:flex;gap:10px;align-items:center}
+.leader-card__id{display:flex;flex-direction:column;gap:1px;min-width:0}
+.leader-card__id b{font-size:13.5px;color:#17342c}
+.leader-card__id i{font-style:normal;font-size:11px;font-weight:800;color:#2f6b48}
+.leader-card__id u{text-decoration:none;font-size:10.5px;color:#8a9a91}
+.leader-card__tel{display:inline-block;margin-top:8px;font-size:12.5px;font-weight:700;color:#2f6b48;text-decoration:none;border:1px solid #cfe0cf;background:#eef5ec;border-radius:999px;padding:3px 11px}
+.leader-card__tel:hover{background:#e3efe0}
+@media(max-width:520px){.leader-cards{grid-template-columns:1fr}}</style><link rel="stylesheet" href="/static/ux/clubos-ux.css"></head><body><div class="leader-shell"><div class="leader-head"><div class="eyebrow">LEADER EXECUTION</div><h2 id="ltitle" style="margin:4px 0">活动执行</h2><div id="lmeta" class="sub"></div></div><div id="leaderBody"></div></div><script src="/static/shared.js"></script><script src="/static/leader/leader.js"></script><script src="/static/ux/clubos-ux.js"></script><script src="/static/ux/leader-experience.js"></script></body></html>
