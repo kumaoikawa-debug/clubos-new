@@ -423,6 +423,10 @@ function uxDialog({title='',desc='',body='',foot='',wide=false,onClose=null,init
   ov.uxClose=close;
   ov.querySelector('.ux-x').onclick=close;
   ov.onclick=e=>{if(e.target===ov)close()};
+  /* foot 里的 [data-ok]（各端「关闭 / 知道了」按钮）原本没有任何行为，点了没反应 ——
+     弹窗只能靠 × / 点遮罩 / Esc 关。这里补上默认关闭；showConfirm 随后会在自己那一层重新覆盖。 */
+  const footOk=ov.querySelector('.ux-dialog-foot [data-ok]');
+  if(footOk&&!footOk.onclick)footOk.onclick=()=>close();
   session=uxDialogSession(ov,{onEscape:close,initialFocus:initialFocus||ov.querySelector('.ux-dialog')});
   return ov;
 }

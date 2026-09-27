@@ -1335,7 +1335,17 @@ def club_products(club_id:int):
 
 @app.get('/api/club/{club_id}/mall/orders')
 def club_orders(club_id:int):
-    with conn() as c:return rows(c.execute('SELECT id,total,status,tracking_no,carrier,club_commission,after_sales_status,created_at FROM gear_orders WHERE source_club_id=? ORDER BY id DESC',(club_id,)))
+    # 带上买家与商品明细：俱乐部端点开订单要能看到「卖了哪几件、各多少」，
+    # 只回一行 total 的话「商城订单详情」只能是空壳。
+    with conn() as c:
+        orders=rows(c.execute('SELECT o.id,o.total,o.status,o.tracking_no,o.carrier,o.club_commission,o.after_sales_status,o.created_at,u.name buyer FROM gear_orders o JOIN users u ON u.id=o.user_id WHERE o.source_club_id=? ORDER BY o.id DESC',(club_id,)))
+        items=rows(c.execute('''SELECT i.order_id,i.product_id,i.variant_name,i.quantity,i.unit_price,i.unit_cost_snapshot,p.name product_name
+                                FROM gear_order_items i LEFT JOIN products p ON p.id=i.product_id
+                                WHERE i.order_id IN (SELECT id FROM gear_orders WHERE source_club_id=?)''',(club_id,)))
+        by={}
+        for it in items: by.setdefault(it['order_id'],[]).append(it)
+        for o in orders: o['items']=by.get(o['id'],[])
+        return orders
 
 @app.get('/api/club/{club_id}/mall/commission-summary')
 def club_commission_summary(club_id:int):

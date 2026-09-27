@@ -1,6 +1,6 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
-window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='credits')await loadCredits();if(v==='analytics')await loadClubBI()};
+window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='credits'){await loadCredits();await loadAIUsage()};if(v==='analytics')await loadClubBI();if(v==='payaccount')await loadPayAccount()};
 async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`AI Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>'}
 /* ===== 活动中心：可搜索的活动栏 + 右侧成品预览（2026-09-26）=====
    过去 #activityRows 里又套了一层 .act-grid：外层网格只给内层一个格子宽，
@@ -248,7 +248,7 @@ async function loadMembers(){skel('#tierList',3);
 }
 async function recalcMembership(){await api(`/api/club/${CLUB}/membership/recalculate`,{method:'POST'});toast('会员等级已重新计算');loadMembers()}
 
-async function loadMall(){skel('#clubOrders',4);let [p,o,cs,sett,aftersales,tiers]=await Promise.all([api(`/api/club/${CLUB}/mall/products`),api(`/api/club/${CLUB}/mall/orders`),api(`/api/club/${CLUB}/mall/commission-summary`),api(`/api/club/${CLUB}/mall/settlements`),api(`/api/club/${CLUB}/mall/after-sales`),api(`/api/club/${CLUB}/membership/tiers`)]);const md=bestGearDiscount(tiers);$('#clubCommissionSummary').innerHTML=[['待签收',money(cs.pending)],['售后冻结',money(cs.frozen)],['可结算',money(cs.payableNow)],['已结算',money(cs.settled)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">${cs.carryDebt&&x[0]==='可结算'?`退款待冲抵 ${money(cs.carryDebt)}`:`售后期 ${cs.policy.afterSalesDays} 天`}</div></div>`).join('');$('#clubProducts').innerHTML=p.map(x=>`<div class="product" data-pid="${x.id}"><div class="ph">🎒</div><h4>${esc(x.name)}</h4><div class="sub">${esc(x.category||'户外装备')}</div>${memberPriceHtml(x.price,md)}<div class="sub">库存 ${x.stock} · 平台统一履约</div></div>`).join('');$('#clubOrders').innerHTML=o.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">订单 #${x.id}</div> · ${money(x.total)} · 佣金 ${money(x.club_commission)}<div class="list-row__sub">${x.status} · ${x.carrier||'待发货'} ${x.tracking_no||''} · 售后 ${x.after_sales_status||'无'}</div></div></div>`).join('')||'<div class="empty">暂无商城订单</div>';$('#clubAfterSales').innerHTML=aftersales.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.case_type)}</div> · 订单 #${x.order_id} <span class="tag">${esc(x.status)}</span><div class="list-row__sub">平台售后处理 · ${esc(x.reason||'')} · 申请退款 ${money(x.requested_refund_amount||0)}</div></div></div>`).join('')||'<div class="empty">暂无商城售后</div>';$('#clubSettlements').innerHTML=sett.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${money(x.net_amount)}</div> · ${esc(x.payment_ref)} <span class="tag">${x.status}</span><div class="list-row__sub">佣金 ${money(x.gross_amount)} · 退款冲抵 ${money(x.deduction_amount)} · ${esc(x.paid_at||x.created_at)}</div></div></div>`).join('')||'<div class="empty">暂无结算记录</div>'}
+async function loadMall(){skel('#clubOrders',4);let [p,o,cs,sett,aftersales,tiers]=await Promise.all([api(`/api/club/${CLUB}/mall/products`),api(`/api/club/${CLUB}/mall/orders`),api(`/api/club/${CLUB}/mall/commission-summary`),api(`/api/club/${CLUB}/mall/settlements`),api(`/api/club/${CLUB}/mall/after-sales`),api(`/api/club/${CLUB}/membership/tiers`)]);const md=bestGearDiscount(tiers);$('#clubCommissionSummary').innerHTML=[['待签收',money(cs.pending)],['售后冻结',money(cs.frozen)],['可结算',money(cs.payableNow)],['已结算',money(cs.settled)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">${cs.carryDebt&&x[0]==='可结算'?`退款待冲抵 ${money(cs.carryDebt)}`:`售后期 ${cs.policy.afterSalesDays} 天`}</div></div>`).join('');$('#clubProducts').innerHTML=p.map(x=>`<div class="product" data-pid="${x.id}" role="button" tabindex="0" onclick="openClubProduct(${x.id})"><div class="ph">🎒</div><h4>${esc(x.name)}</h4><div class="sub">${esc(x.category||'户外装备')}</div>${memberPriceHtml(x.price,md)}<div class="sub">库存 ${x.stock} · 平台统一履约</div></div>`).join('');$('#clubOrders').innerHTML=o.map(x=>`<div class="list-row" role="button" tabindex="0" onclick="openClubOrder(${x.id})"><div class="list-row__main"><div class="list-row__title">订单 #${x.id}</div> · ${money(x.total)} · 佣金 ${money(x.club_commission)}<div class="list-row__sub">${x.status} · ${x.carrier||'待发货'} ${x.tracking_no||''} · 售后 ${x.after_sales_status||'无'}</div></div></div>`).join('')||'<div class="empty">暂无商城订单</div>';$('#clubAfterSales').innerHTML=aftersales.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.case_type)}</div> · 订单 #${x.order_id} <span class="tag">${esc(x.status)}</span><div class="list-row__sub">平台售后处理 · ${esc(x.reason||'')} · 申请退款 ${money(x.requested_refund_amount||0)}</div></div></div>`).join('')||'<div class="empty">暂无商城售后</div>';$('#clubSettlements').innerHTML=sett.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${money(x.net_amount)}</div> · ${esc(x.payment_ref)} <span class="tag">${x.status}</span><div class="list-row__sub">佣金 ${money(x.gross_amount)} · 退款冲抵 ${money(x.deduction_amount)} · ${esc(x.paid_at||x.created_at)}</div></div></div>`).join('')||'<div class="empty">暂无结算记录</div>'}
 async function loadCredits(){skel('#creditLedger',5);let d=await api(`/api/club/${CLUB}/credits`),sub=d.subscription||{};$('#creditAccount').innerHTML=`<div class="grid g4"><div class="stat-tile"><div class="k">当前可用</div><div class="v">${d.account?.balance||0}</div><div class="hint">AI Credits</div></div><div class="stat-tile"><div class="k">当前套餐</div><div class="v" style="font-size:22px">${esc(sub.plan_name||sub.plan_code||'未开通')}</div><div class="hint">月额度 ${d.account?.monthly_quota||0}</div></div><div class="stat-tile"><div class="k">本月已用</div><div class="v">${d.creditsConsumed||0}</div><div class="hint">成功调用 ${d.successfulCalls||0} 次</div></div><div class="stat-tile"><div class="k">待偿欠账</div><div class="v">${d.unresolvedDebt||0}</div><div class="hint">后续获得 Credits 自动优先抵扣</div></div></div><div class="notice section">大模型由<b>总平台统一接入并结算</b>，俱乐部不需要也无法配置模型或密钥；Credits 只决定计费，不决定模型质量——平台不会因为余额或套餐降低模型、减少图片或截断资料。</div>`;$('#creditTopups').innerHTML=(d.topupPackages||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}</div><div class="list-row__sub">${money(x.amount)} · 共 ${x.credits} Credits · 单价 ${unitCreditPrice(x.amount,x.credits)}</div><button class="btn secondary" style="margin-top:6px" onclick="buyCredits('${x.code}')">创建充值订单</button></div></div>`).join('')||'<div class="empty">暂无充值包</div>';$('#creditPendingOrders').innerHTML=(d.pendingOrders||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.order_type==='subscription'?'套餐':'充值'} ${x.credits} Credits</div><div class="list-row__sub">${money(x.amount)} · 待付款确认 · ${esc(x.period_key||x.package_code||'')}</div></div></div>`).join('')||'<div class="empty">暂无待付款账单</div>';$('#creditLedger').innerHTML=d.ledger.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.amount>0?'+':''}${x.amount}</div> · ${esc(x.note||x.type)}<div class="list-row__sub">${esc(x.type)} · ${x.created_at}</div></div></div>`).join('')}
 async function buyCredits(code){let r=await api(`/api/club/${CLUB}/credits/topups`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageCode:code})});toast(`充值订单已创建：${r.credits} Credits / ${money(r.amount)}，等待平台/支付确认`);loadCredits()}
 async function startClub(){
@@ -1000,3 +1000,103 @@ function leaderRecNote(activeCount){
     ? '<div class="leader-recs leader-recs--none"><span class="leader-note">暂时没有可推荐的人：系统只推「带过这条线路或同类活动」的领队，讲不出理由的不硬推。可直接点上面的「指派领队」从资源库里挑。</span></div>'
     : '<div class="leader-recs leader-recs--none"><span class="leader-note">资源库里还没有在岗领队。先新增一位，之后系统才能按历史带队记录给出推荐。</span></div>';
 }
+
+/* ---------------------------------------------------------------------------
+   装备商城的两个只读二级页。
+   商品归总平台所有：俱乐部既改不了价也改不了库存，能做的是「看清楚」。
+   过去商品卡和订单行都是死的，点下去没有任何反应，用户只能靠猜。
+   详情统一走 uxDialog —— 俱乐部端的弹窗层已经收口到这一套，不再自造 modal。
+--------------------------------------------------------------------------- */
+async function openClubProduct(pid){
+  let list;
+  try{ list=await api('/api/club/'+CLUB+'/mall/products') }
+  catch(e){ showAlert({title:'读取商品失败',message:e.message}); return }
+  const p=(list||[]).find(x=>Number(x.id)===Number(pid));
+  if(!p){ showAlert({title:'这件商品不在本俱乐部商城',message:'商品由总平台统一上架，俱乐部端只能查看已上架商品。'}); return }
+  const imgs=(p.images||[]).map(i=>`<img src="${esc(i.url)}" alt="${esc(p.name)}" style="width:100%;border-radius:10px;display:block;margin-bottom:8px">`).join('');
+  const variants=(p.variants||[]).map(v=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(v.name||'默认规格')}</div>`
+    +`<div class="list-row__sub">${esc(v.sku||'—')} · 库存 ${v.stock}${v.isDefault?' · 默认规格':''}</div>`
+    +`<div class="list-row__end"><strong>${money(v.price)}</strong></div></div></div>`).join('')
+    ||'<div class="sub">这件商品没有启用中的规格，按整件计。</div>';
+  uxDialog({title:p.name,desc:`${esc(p.category||'户外装备')} · ${esc(p.sku||'')} · 售价 ${money(p.price)} · 库存 ${p.stock}`,
+    body:`<div>${imgs}</div><div class="sub" style="margin:2px 0 10px">商品由总平台统一上架、定价与库存，俱乐部只读；销售归因见下面的订单与佣金。</div>${variants}`,
+    initialFocus:'[data-ok]',foot:`<button class="btn" type="button" data-ok>关闭</button>`});
+}
+async function openClubOrder(id){
+  let o=null;
+  try{ const list=await api('/api/club/'+CLUB+'/mall/orders'); o=(list||[]).find(x=>Number(x.id)===Number(id)) }
+  catch(e){ showAlert({title:'读取订单失败',message:e.message}); return }
+  if(!o){ showAlert({title:'订单不存在',message:'这笔订单不属于本俱乐部。'}); return }
+  const line=(k,v)=>`<div style="display:flex;justify-content:space-between;border-bottom:1px dashed #d8e3dd;padding:8px 0"><span style="color:#6b7f76">${esc(k)}</span><strong>${esc(v==null||v===''?'—':String(v))}</strong></div>`;
+  const items=Number(o.total||0);
+  const parts=(o.items||[]).map(i=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(i.product_name||('商品 #'+i.product_id))}${i.variant_name?` · ${esc(i.variant_name)}`:''}</div>`
+    +`<div class="list-row__sub">单价 ${money(i.unit_price)} · 数量 ${i.quantity}${i.unit_cost_snapshot?` · 成本快照 ${money(i.unit_cost_snapshot)}`:''}</div>`
+    +`<div class="list-row__end"><strong>${money(Number(i.unit_price||0)*Number(i.quantity||0))}</strong></div></div></div>`).join('')
+    ||'<div class="sub">这笔订单没有商品明细。</div>';
+  const body=`<div style="margin-top:6px">${line('订单号','#'+o.id)}${line('买家',o.buyer)}${line('下单时间',o.created_at)}`
+    +`${line('订单状态',enumCn(o.status))}${line('订单金额',money(items))}${line('本单佣金',money(o.club_commission))}`
+    +`${line('物流',[o.carrier,o.tracking_no].filter(Boolean).join(' ')||'待发货')}${line('售后',o.after_sales_status||'无')}</div>`
+    +`<div style="margin-top:14px"><b class="sub">商品明细</b><div style="margin-top:6px">${parts}</div></div>`;
+  uxDialog({title:'商城订单详情',desc:'俱乐部只读这笔订单的成交明细；发货与售后仍由总平台处理。',
+    body,initialFocus:'[data-ok]',foot:`<button class="btn" type="button" data-ok>关闭</button>`});
+}
+
+/* ---------------------------------------------------------------------------
+   收款账户：后端 get / patch 早就就绪，前端从没调过 —— 于是这页在界面上完全不存在。
+   俱乐部只登记渠道信息，不动密钥；生产环境后端会拒绝 provider=local，直接把原因透出。
+--------------------------------------------------------------------------- */
+const PAY_PROV_CN={local:'本地模拟',wechatpay_v3:'微信支付 v3',alipay:'支付宝'};
+async function loadPayAccount(){
+  const box=$('#payAccount'); if(!box)return;
+  skel('#payAccount',3);
+  try{
+    const a=await api('/api/club/'+CLUB+'/payment-account')||{};
+    const prov=PAY_PROV_CN[a.provider]||a.provider||'未配置';
+    const pair=[a.merchant_id,a.app_id].filter(Boolean).join(' / ')||'—';
+    box.innerHTML=`<div class="grid g4"><div class="stat-tile"><div class="k">当前收款渠道</div><div class="v" style="font-size:22px">${esc(prov)}</div>`
+      +`<div class="hint">${esc(a.channel||'未配置接入方式')}</div></div>`
+      +`<div class="stat-tile"><div class="k">状态</div><div class="v" style="font-size:22px">${a.enabled?'已启用':'已停用'}</div><div class="hint">${esc(a.updated_at||'尚未保存过')}</div></div>`
+      +`<div class="stat-tile"><div class="k">商户号 / AppID</div><div class="v" style="font-size:22px">${esc(pair)}</div><div class="hint">来自支付渠道配置</div></div></div>`
+      +`<div class="section" style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn secondary" type="button" onclick="editPayAccount()">编辑收款账户</button></div>`;
+  }catch(e){ box.innerHTML='<div class="empty">读取失败：'+esc(e.message)+'</div>' }
+}
+async function editPayAccount(){
+  let cur={};
+  try{ cur=await api('/api/club/'+CLUB+'/payment-account')||{} }
+  catch(e){ showAlert({title:'读取收款账户失败',message:e.message}); return }
+  const v=await uxForm({title:'编辑收款账户',subtitle:'这里只登记渠道信息；密钥仍由 ClubOS 支付层统一管理，不写进俱乐部账户。',
+    fields:[
+      {name:'provider',label:'收款渠道',type:'select',required:true,options:[{value:'local',label:'本地模拟（仅演示与内部环境）'},{value:'wechatpay_v3',label:'微信支付 v3'},{value:'alipay',label:'支付宝'}]},
+      {name:'channel',label:'接入方式',required:true,value:(cur.channel||'mock')},
+      {name:'merchantId',label:'商户号',full:true,value:(cur.merchant_id||'')},
+      {name:'appId',label:'AppID',full:true,value:(cur.app_id||'')},
+      {name:'enabled',label:'启用该账户',type:'select',options:[{value:'1',label:'启用'},{value:'0',label:'停用'}],value:(cur.enabled?'1':'0')}
+    ],submitText:'保存'});
+  if(!v)return;
+  try{
+    await api('/api/club/'+CLUB+'/payment-account',{method:'PATCH',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({provider:v.provider,channel:v.channel,merchantId:v.merchantId,appId:v.appId,enabled:String(v.enabled)!=='0'})});
+    toast('收款账户已保存');
+    await loadPayAccount();
+  }catch(e){ showAlert({title:'保存失败',message:e.message}) }
+}
+
+/* AI 用量明细：Credits 余额看得出「花了多少」，但看不出「花在哪一步」。
+   这张表把每次调用的类型、模型、token 与扣费摊开，超额时才知道该调哪类用法的额度。 */
+async function loadAIUsage(){
+  const box=$('#aiUsage'); if(!box)return;
+  skel('#aiUsage',6);
+  try{
+    const list=await api('/api/club/'+CLUB+'/ai/usage')||[];
+    /* 任务名与 channel-render.js 的 LABEL 对齐：渠道生成时 task_type 直接就是渠道 id，
+   表里有 wechat/xhs/poster/recap（见 static/channel-render.js）。之前只认了 detail 一类，
+   其余直接把英文 id 显示给用户。 */
+    const task={detail:'活动详情生成',wechat:'微信公众号图文',xhs:'小红书图文',poster:'活动招募海报',recap:'活动回顾'};
+    box.innerHTML=list.slice(0,60).map(u=>`<div class="list-row"><div class="list-row__main">`
+      +`<div class="list-row__title">${esc(task[u.task_type]||u.task_type||'AI 调用')} <span class="tag">${esc(u.status||'—')}</span></div>`
+      +`<div class="list-row__sub">${esc(u.model||'—')} · ${esc(u.provider||'—')} · ${u.input_tokens||0} in / ${u.output_tokens||0} out · ${esc(u.created_at||'')}</div>`
+      +`<div class="list-row__end"><strong>${u.credits_charged!=null?('-'+u.credits_charged+' Credits'):(u.provider_cost!=null?money(u.provider_cost):'—')}</strong></div>`
+      +`</div></div>`).join('')||'<div class="empty">还没有 AI 调用记录</div>';
+  }catch(e){ box.innerHTML='<div class="empty">读取失败：'+esc(e.message)+'</div>' }
+}
+
