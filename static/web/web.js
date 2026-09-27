@@ -38,7 +38,9 @@ function wCovCls(x){return 'cov-'+((Number(x&&x.id||0)%6)+1);}
 /* ── 状态文案 ────────────────────────────────────────────────────────────────
    后端枚举一律映射成中文；**认不出来的值原样显示**（`||x.status`）。
    猜错枚举比露出 `awaiting_return` 更糟 —— 前者会让顾客看到一句断言错的话。 */
-const ORD_ST={paid:'已支付',pending:'待支付',unpaid:'待支付',refunded:'已退款',cancelled:'已取消',canceled:'已取消',closed:'已关闭',completed:'已完成',refunding:'退款中',partial_refunded:'部分退款'};
+/* pending_payment 是真实的订单态（建单未付款），failed 来自 registrations/gear_orders 的
+   payment_status。缺这两个键时 badge 会把英文枚举原样显示给用户。 */
+const ORD_ST={paid:'已支付',pending:'待支付',unpaid:'待支付',pending_payment:'待支付',payment_failed:'支付未完成',refunded:'已退款',cancelled:'已取消',canceled:'已取消',closed:'已关闭',completed:'已完成',refunding:'退款中',partial_refunded:'部分退款',processing:'处理中'};
 const RF_ST={none:'',rejected:'已驳回',pending:'审核中',approved:'已通过',processing:'处理中',refunded:'已退款'};
 const INS_ST={pending:'待处理',processing:'办理中',done:'已投保',insured:'已投保',completed:'已投保',failed:'投保失败',not_required:'无需保险'};
 const AS_TYPE={refund_only:'仅退款',return_refund:'退货退款',exchange:'换货'};
@@ -887,6 +889,18 @@ async function loadOrders(){
       ${cases}${action?`<div class="w-ord__ops">${action}</div>`:''}
     </div>`
   }).join('')||'<div class="w-empty">'+WI.bag+'<div>暂无装备订单</div><div style="margin-top:4px">在装备商城下单后订单会出现在这里</div></div>';
+  /* 待支付单独立成一块：它还没落 registrations / gear_orders，所以不会出现在上面两个列表里。
+     以前这块是空的，用户关掉支付面板后这笔钱单就没有任何出口。 */
+  const pbox=$('#pendingOrders');
+  if(pbox){
+    const pends=d.pendingOrders||[];
+    pbox.innerHTML=pends.map(x=>`<div class="w-ord">
+      <div class="w-ord__hd"><b>${x.orderKind==='gear'?`装备订单 #${esc(x.orderId)}`:esc(x.subject||'活动报名')}</b>${badge('待支付','wait')}</div>
+      <div class="w-ord__amt"><span>待支付</span><b>${money(x.cashAmount)}</b></div>
+      ${x.paymentStatus==='failed'?`<div class="w-act__note">上一次支付未完成，可继续支付或取消。</div>`:''}
+      <div class="w-ord__ops"><button class="w-act" type="button" onclick="resumeCheckout('${esc(x.checkoutId)}','${esc(x.orderKind==='gear'?'gear':'activity')}')">继续支付</button><button class="w-act w-act--danger" type="button" onclick="cancelPendingCheckout('${esc(x.checkoutId)}')">取消订单</button></div>
+    </div>`).join('')||'<div class="w-empty">'+WI.receipt+'<div>没有待支付订单</div><div style="margin-top:4px">未完成付款的订单会出现在这里</div></div>';
+  }
 }
 async function editParticipant(regId,pid){
   const d=await api(`/api/public/registrations/${regId}/participants`),p=(d.participants||[]).find(x=>x.id===pid);if(!p)return;
@@ -914,8 +928,6 @@ async function requestGearAfterSales(order){
   try{await api(`/api/public/orders/${order.id}/after-sales`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:USER,type:v.type,reason:v.reason,items:[{orderItemId:itemId,quantity:Number(v.qty||1)}]})});toast('售后申请已提交，由 ClubOS 总平台处理');loadOrders()}catch(e){showAlert({title:'提交失败',message:e.message})}
 }
 async function submitReturn(id){const v=await showForm({title:'填写退货物流',submitText:'提交',fields:[{name:'carrier',label:'退货承运商',value:'顺丰'},{name:'no',label:'退货物流单号',required:true}]});if(!v)return;try{await api(`/api/public/after-sales/${id}/return-shipment`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({carrier:v.carrier||'顺丰',trackingNo:v.no})});toast('退货物流已提交');loadOrders()}catch(e){showAlert({title:'提交失败',message:e.message})}}
-async function requestGearRefund(id){showAlert({title:'功能已升级',message:'v0.18 已升级为商品级售后，请使用「申请售后」。'})}
-async function afterSales(id){return requestGearRefund(id)}
 async function startWeb(){
   if(clubosCookie('clubos_csrf')){
     try{const me=await api('/api/auth/me');if(me.role!=='member')throw new Error('请使用会员账号登录');USER=Number(me.userId);PAYER_NAME=me.name||'';PAYER_PHONE=me.phone||'';}catch(err){showAlert({title:'无法进入',message:err.message});setTimeout(()=>location.href='/login',1800);return}

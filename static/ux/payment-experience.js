@@ -13,7 +13,13 @@ function sheet({title,desc='',body,actionLabel='关闭',onClose}){const node=doc
  const close=()=>{if(sheetDone)return;sheetDone=true;node.remove();sheetSession&&sheetSession.release();onClose?.()};
  node.querySelector('.x').onclick=close;node.querySelector('.ux-sheet-close').onclick=close;
  sheetSession=window.uxDialogSession(node,{onEscape:close,initialFocus:'.x'});
- return {node,close};}async function receipt(title,lines){const box=document.createElement('div');box.className='ux-receipt';const mark=document.createElement('div');mark.className='ux-receipt-mark';mark.textContent='✓';box.append(mark);for(const [name,value] of lines){const row=document.createElement('div');row.className='ux-receipt-line';const a=document.createElement('span'),b=document.createElement('strong');a.textContent=name;b.textContent=value;row.append(a,b);box.append(row)}const button=document.createElement('button');button.className='btn';button.type='button';button.textContent='查看我的订单';box.append(button);const dialog=sheet({title,desc:'付款结果已由服务端确认。',body:box,actionLabel:'继续浏览'});/* 按 data-wv 找「我的」而不是按按钮下标：下标 3 在导航改成 4 板块前后含义不同，写死位置迟早错位。 */button.onclick=()=>{dialog.close();const btn=document.querySelector('.web-nav button[data-wv="wme"]');if(btn)wv('wme',btn)};}
+ return {node,close};}async function receipt(title,lines){const box=document.createElement('div');box.className='ux-receipt';const mark=document.createElement('div');mark.className='ux-receipt-mark';mark.textContent='✓';box.append(mark);for(const [name,value] of lines){const row=document.createElement('div');row.className='ux-receipt-line';const a=document.createElement('span'),b=document.createElement('strong');a.textContent=name;b.textContent=value;row.append(a,b);box.append(row)}const button=document.createElement('button');button.className='btn';button.type='button';button.textContent='查看我的订单';box.append(button);
+/* 收据过去只在弹窗里躺着，顾客想留个凭证只能整页截图 —— 而弹窗一关就没了。
+   打印走独立窗口而不是 window.print()：后者会打印整页（导航、活动正文全在里面），
+   除非再补一套 @media print 把其他节点藏起来，代价更大的同时还会影响其他页面。 */
+const printBtn=document.createElement('button');printBtn.type='button';printBtn.className='btn ghost';printBtn.style.marginTop='10px';printBtn.textContent='打印 / 保存为 PDF';
+printBtn.onclick=()=>{const w=window.open('','_blank','width=420,height=780');if(!w){toast('浏览器拦截了弹出窗口，无法打印收据');return}const rows=lines.map(([n,v])=>'<div class="row"><span>'+esc(n)+'</span><strong>'+esc(String(v))+'</strong></div>').join('');w.document.write('<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>'+esc(title)+'</title><style>@page{size:A4;margin:18mm}body{font:15px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:#1a2b23;padding:8px}.mark{width:44px;height:44px;border-radius:50%;background:#e8f4ec;color:#2f7d55;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700}h1{font-size:19px;margin:12px 0 2px}.sub{color:#8a9a92;margin:0 0 14px}.row{display:flex;justify-content:space-between;border-bottom:1px dashed #d8e3dd;padding:9px 0}.row span{color:#6b7f76}.btn{margin-top:20px;width:100%;padding:12px;border:0;border-radius:10px;background:#1a2b23;color:#fff;font-size:15px;cursor:pointer}.foot{margin-top:14px;color:#8a9a92;font-size:12px}</style></head><body><div class="mark">✓</div><h1>'+esc(title)+'</h1><p class="sub">'+esc(desc)+'</p>'+rows+'<button class="btn" type="button" onclick="window.print()">打印 / 另存为 PDF</button><p class="foot">由 ClubOS 生成，金额以服务端结算记录为准。</p></body></html>');w.document.close();setTimeout(()=>{try{w.print()}catch{}},300)};
+box.append(printBtn);const dialog=sheet({title,desc:'付款结果已由服务端确认。',body:box,actionLabel:'继续浏览'});/* 按 data-wv 找「我的」而不是按按钮下标：下标 3 在导航改成 4 板块前后含义不同，写死位置迟早错位。 */button.onclick=()=>{dialog.close();const btn=document.querySelector('.web-nav button[data-wv="wme"]');if(btn)wv('wme',btn)};}
 async function qrPayment(checkoutId,url){let closed=false,finished=false,finish;const result=new Promise(resolve=>finish=resolve);const box=document.createElement('div');box.className='ux-payment-body';const note=document.createElement('p');note.className='sub';note.textContent='使用付款设备扫码。此页面只展示支付渠道返回的收款码，并通过订单接口查询实际付款状态。';const canvas=document.createElement('canvas');canvas.className='ux-pay-qr';const code=document.createElement('code');code.className='ux-pay-code';code.textContent=url;const controls=document.createElement('div');controls.className='ux-pay-controls';const copy=document.createElement('button');copy.type='button';copy.className='btn secondary';copy.textContent='复制支付链接 / 码';const check=document.createElement('button');check.type='button';check.className='btn';check.textContent='我已付款，查询状态';const status=document.createElement('div');status.className='ux-payment-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');status.textContent='等待支付渠道确认…';controls.append(copy,check);box.append(note,canvas,code,controls,status);
  try{window.ClubOSQR.draw(canvas,url)}catch(err){canvas.hidden=true;status.textContent='此支付码暂无法显示为二维码，请复制支付链接并在支持的环境中打开。';}
  const dlg=sheet({title:'完成订单支付',desc:'订单号 '+checkoutId,body:box,actionLabel:'稍后到订单查看',onClose:()=>{closed=true;if(!finished)finish(null)}});
@@ -36,6 +42,30 @@ async function qrPayment(checkoutId,url){let closed=false,finished=false,finish;
      确认走 /confirm（后端 local-manual 的幂等确认），返回的是与真实渠道同一个形状的 result。 */
   if(a.type==='mock')return await localSimulatePayment(checkout.checkoutId,a);
   toast('当前支付渠道没有返回可执行的付款方式，请到订单查看。');return null;
+ };
+/* 待支付订单的两个出口：继续支付、取消订单。
+   重新发起只需要再调一次 payCheckout —— 后端 start_checkout_payment 对已 paid 的结算单返回
+   幂等结果，对 pending_payment 的单会正常建立新的支付尝试，所以不需要「恢复结算单」之类的新接口。
+   「重试支付」没有单独按钮：它和「继续支付」是同一个动作，分两个入口只会让人以为要付两遍。 */
+ window.resumeCheckout=async function(checkoutId,kind){
+  return uxFlow('checkout-resume',async()=>{
+   try{
+     const paid=await payCheckout({checkoutId});
+     if(!paid)return;
+     const r=paid.result||paid;
+     if(kind==='gear')await receipt('装备订单付款成功',[['本单实付',money(r.cashPaid)],['获得装备积分',String(r.gearPointsEarned||0)],['履约方','ClubOS 平台']]);
+     else await receipt('报名成功',[['参加人数',(r.participantCount||1)+' 人'],['实际支付',money(r.cashPaid)],['获得活动积分',String(r.clubPointsEarned||0)]]);
+     if(typeof loadOrders==='function')loadOrders();
+     if(typeof loadMemberCenter==='function')loadMemberCenter();
+     if(typeof loadWallet==='function')loadWallet();
+   }catch(e){toast(e.message||'支付未完成，可稍后继续支付')}
+  });
+ };
+ window.cancelPendingCheckout=async function(checkoutId){
+  if(!await uxConfirm({title:'取消这笔待支付订单',message:'取消后占用的积分与福利券会一并释放；之后重新下单需要重新锁定。',confirmText:'确认取消',danger:true}))return;
+  await post('/api/public/checkouts/'+checkoutId+'/cancel',{});
+  toast('订单已取消');
+  if(typeof loadOrders==='function')loadOrders();
  };
 /* 「本地模拟支付」面板：金额 / 确认成功 / 取消订单。
    这里刻意不提供「模拟支付失败」按钮 —— 后端没有暴露标记失败的端点，前端硬造一个假失败

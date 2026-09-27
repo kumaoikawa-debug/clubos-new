@@ -2217,6 +2217,15 @@ def user_order_center(user_id:int,club_id:int=1):
             FROM gear_orders g JOIN clubs cl ON cl.id=g.source_club_id
             LEFT JOIN refund_requests rr ON rr.id=g.refund_request_id
             WHERE g.user_id=? ORDER BY g.created_at DESC,g.id DESC''',(user_id,)))
+        # checkout_intents 与 registrations / gear_orders 之间没有外键，只有 user_id 能串起来。
+        # C 端「继续支付 / 取消订单」需要结算单号，所以在这里按 kind + payload 内容把待支付单对回订单，
+        # 否则用户关掉支付面板后这笔单会永久停在 pending_payment，界面上没有任何可操作的出口。
+        pending_intents=rows(c.execute("SELECT * FROM checkout_intents WHERE user_id=? AND status='pending_payment' ORDER BY created_at DESC",(user_id,)))
+        def _pending_summary(it,subject=''):
+            return {'checkoutId':it['id'],'kind':it['kind'],'subject':subject,
+                    'cashAmount':float(it['cash_amount'] or 0),
+                    'paymentStatus':str(it.get('payment_status') or 'pending'),
+                    'createdAt':it.get('created_at')}
         for x in activity_orders:
             ps=participant_service.summary_for_registration(c,int(x['id']))
             x.update(ps)
@@ -2242,11 +2251,31 @@ def user_order_center(user_id:int,club_id:int=1):
             x['afterSalesCases']=after_sales_engine.list_for_order(c,int(x['id']))
             x['refundProgress']=_refund_progress('gear',x.get('refund_status'))
             x['orderKind']='gear'
+        # 待支付单在 confirming 之前不会落一行 registrations / gear_orders，所以它不会出现在
+        # 上面两个列表里 —— 这正是它会卡死的根因。直接从结算单解析，不能挂在订单行下（那样必然查不到）。
+        pending_orders=[]
+        for it in pending_intents:
+            payload=jload(it['payload_json'],{})
+            subject=''
+            if it['kind']=='activity':
+                aid=payload.get('activityId')
+                ra=row(c.execute('SELECT title FROM activities WHERE id=?',(aid,))) if aid else None
+                subject=(ra or {}).get('title') or ''
+            elif it['kind']=='gear':
+                names=[]
+                for p in (payload.get('items') or []):
+                    pid=p.get('productId')
+                    if not pid or pid in names:continue
+                    rp=row(c.execute('SELECT name FROM products WHERE id=?',(pid,))) or {}
+                    if rp.get('name'):names.append(rp['name'])
+                subject=' / '.join(names)
+            pending_orders.append({**_pending_summary(it,subject),'orderKind':it['kind']})
+        pending_orders.sort(key=lambda y:str(y.get('createdAt') or ''),reverse=True)
         combined=[]
         for x in activity_orders: combined.append({'kind':'activity','createdAt':x.get('created_at'),'order':x})
         for x in gear_orders: combined.append({'kind':'gear','createdAt':x.get('created_at'),'order':x})
         combined.sort(key=lambda y:str(y.get('createdAt') or ''),reverse=True)
-    return {'activityOrders':activity_orders,'gearOrders':gear_orders,'allOrders':combined}
+    return {'activityOrders':activity_orders,'gearOrders':gear_orders,'allOrders':combined,'pendingOrders':pending_orders}
 
 @app.get('/api/public/users/{user_id}/orders')
 def user_orders(user_id:int):
@@ -2690,7 +2719,13 @@ def platform_update_product(product_id:int,payload:dict=Body(...)):
 
 @app.get('/api/platform/orders')
 def platform_orders():
-    with conn() as c:return rows(c.execute('SELECT o.*,u.name buyer,cl.name source_club FROM gear_orders o JOIN users u ON u.id=o.user_id JOIN clubs cl ON cl.id=o.source_club_id ORDER BY o.id DESC'))
+    # packed 让平台端订单行能判断「还该不该显示打包按钮」—— 打包结果只落在 warehouse_tasks，
+    # 订单行自己看不出来，否则打完包按钮还挂在那里。
+    with conn() as c:
+        packed={r['order_id'] for r in rows(c.execute("SELECT DISTINCT order_id FROM warehouse_tasks WHERE task_type='pack' AND status='packed'"))}
+        out=rows(c.execute('SELECT o.*,u.name buyer,cl.name source_club FROM gear_orders o JOIN users u ON u.id=o.user_id JOIN clubs cl ON cl.id=o.source_club_id ORDER BY o.id DESC'))
+        for x in out:x['packed']=x['id'] in packed
+        return out
 
 @app.patch('/api/platform/orders/{order_id}')
 def platform_update_order(order_id:int,payload:dict=Body(...)):

@@ -324,7 +324,11 @@ const ENUM_CN={
   paid:'已付款',unpaid:'待付款',open:'开放中',closed:'已关闭',ready:'就绪',failed:'失败',
   processing:'处理中',completed:'已完成',shipped:'已发货',delivered:'已签收',refunded:'已退款',
   requested:'待处理',approved:'已通过',settled:'已结算',preparing:'准备中',arrived:'已到达',
-  in_progress:'进行中',expired:'已过期'
+  in_progress:'进行中',expired:'已过期',
+  /* 售后流程的六个态此前没进来，中文界面会直接漏出 pending_review / awaiting_return 这类原始枚举。
+     放在 shared 里而不是某一端，是为了让四端显示同一个名字。 */
+  pending_review:'待审核',reviewing:'审核中',awaiting_return:'待寄回',returned:'已寄回',
+  exchanging:'换货中',exchanged:'已换货'
 };
 function enumCn(v,fallback){
   const k=String(v==null?'':v).trim();
