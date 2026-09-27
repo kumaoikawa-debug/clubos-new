@@ -23,6 +23,10 @@ python tests/registration_delete_smoke.py
 # 由总平台批准时改。这条链断在哪一环，这个测试都会红。
 # 自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/product_visibility_smoke.py
+# C 端活动详情的「带队领队」：只下发已指派的人、绝不下发手机号与推荐名单、
+# 头像必须走 C 端可访问的公开代理、生产白名单必须放行 leaders。
+# 自带临时库隔离，不需要 CLUBOS_DB_PATH。
+python tests/public_leaders_smoke.py
 # C 端从首页点进活动详情必须真的看得见：openAct 要先把视图切到 #wactivities，
 # 否则详情被写进一个 display:none 的 section，用户看到的是「点了没反应」。
 # 纯静态断言（只读 static/web/*），不建库不碰真库。

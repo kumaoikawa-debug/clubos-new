@@ -1,5 +1,5 @@
 /* ClubOS NEW: owner journey and execution UX; club scope remains server-owned. */
-(function(){'use strict';if(!location.pathname.startsWith('/club'))return;
+(function(){'use strict';if(uxPage()!=='club')return;
  const post=(p,d={})=>api(p,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(d)});
  /* 内容中心的 loadContent 与 genChannel 已由 static/club/club.js 统一实现（旧版把接口 JSON 塞进 <pre>，
     老板拿到的是代码而不是成品）。这里不再重复定义，避免后加载覆盖新版：成品渲染见 static/channel-render.js。 */

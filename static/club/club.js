@@ -463,11 +463,33 @@ function openActivityRegs(id){
    注意：node 端的 post/patch 是 workflows-club.js 里 IIFE 的局部 const，不是全局，
    因此这里直接调全局 api()；api() 不会自己序列化 body，必须显式传 JSON 字符串。
 --------------------------------------------------------------------------- */
+/* 保存成功之后必须留下看得见的痕迹。原来只有一条 2.4 秒就消失的 toast，弹窗一关
+   用户既不知道改了哪几项、也判断不了到底成没成功（用户明确反馈过「编辑修改活动之后
+   不知道是否修改成功」）。这里在活动中心顶部留一条可关闭的横幅，只列**真正变化**的
+   字段，并写明 AI 详情文案不会跟着改 —— 否则用户会以为改了价格详情页就该跟着变。 */
+function activitySavedBanner(changed){
+  const host=document.getElementById('activities');if(!host)return;
+  document.getElementById('actSavedBanner')?.remove();
+  const when=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'});
+  const bar=document.createElement('div');
+  bar.id='actSavedBanner';bar.className='act-saved';bar.setAttribute('role','status');
+  bar.innerHTML='<span class="act-saved__ok" aria-hidden="true">✓</span>'
+    +'<div class="act-saved__body"><b>活动信息已保存</b>'
+    +'<span>'+(changed.length?'本次改动：'+esc(changed.join('、'))+' · ':'本次未改动任何字段 · ')+'已同步到 C 端<i>'+esc(when)+'</i></span>'
+    +'<span class="act-saved__note">AI 详情文案不会自动跟着改；需要重写文案或排版请点「重新生成 / 换一版」。</span></div>'
+    +'<button type="button" class="act-saved__x" aria-label="关闭这条提示">×</button>';
+  bar.querySelector('.act-saved__x').onclick=()=>bar.remove();
+  host.prepend(bar);
+  /* 30 秒够读完，不再是 toast 那种 2.4 秒；也可手动关掉。 */
+  setTimeout(()=>{if(bar.isConnected)bar.remove()},30000);
+}
 async function editActivity(id){
   let a=currentActivity;
   if(!a||Number(a.id)!==Number(id)){
     try{a=await api(`/api/club/${CLUB}/activities/${id}`)}catch(e){showAlert({title:'读取活动失败',message:e.message});return}
   }
+  const before={title:String(a.title||''),eventDate:String(a.event_date||''),location:String(a.location||''),
+                price:Number(a.price||0),capacity:Number(a.capacity||0)};
   const d=await uxForm({title:'编辑活动基本信息',
     subtitle:'改的是活动事实（名称 / 日期 / 地点 / 价格 / 名额），会同步到 C 端与页面上的事实字段；AI 详情文案如需重写，请用「重新生成 / 换一版」。',
     fields:[
@@ -476,14 +498,21 @@ async function editActivity(id){
       {name:'location',label:'集合地 / 目的地',type:'text',value:a.location||''},
       {name:'price',label:'活动价格（元）',type:'number',min:0,step:.01,value:a.price||0},
       {name:'capacity',label:'总名额（人）',type:'number',min:0,step:1,value:a.capacity||0}
-    ],submitText:'保存修改'});
+    ],submitText:'保存并更新活动'});
   if(!d)return;
   await uxFlow('editActivity',async()=>{
     await api(`/api/club/${CLUB}/activities/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({title:d.title,eventDate:d.eventDate,location:d.location,price:d.price,capacity:d.capacity})});
-    toast('活动信息已更新');
+    const changed=[];
+    if(String(d.title||'').trim()!==before.title.trim())changed.push('名称');
+    if(String(d.eventDate||'').trim()!==before.eventDate.trim())changed.push('日期');
+    if(String(d.location||'').trim()!==before.location.trim())changed.push('地点');
+    if(Number(d.price)!==before.price)changed.push('价格');
+    if(Number(d.capacity)!==before.capacity)changed.push('总名额');
+    toast(changed.length?'已保存：'+changed.join('、'):'已保存（本次没有字段变化）');
     await loadActivities();
     await openActivity(id);
+    activitySavedBanner(changed);
   });
 }
 

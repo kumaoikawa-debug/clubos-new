@@ -923,3 +923,23 @@
 .w-ability__stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:18px}
 .w-ability__blocks{margin-top:22px;display:grid;gap:10px}
 @media(max-width:680px){.w-ability__stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* ── 带队领队（详情页，报名卡之前）─────────────────────────────────
+   顾客挑团期时最想知道「谁带」。头像走公开代理（顾客没有 club 角色，取不到俱乐部域
+   那条），没设头像就退回首字占位 —— 不给灰块。手机号不下发，所以这里也不写。 */
+.web-shell .w-lead__row{display:flex;gap:12px;align-items:center;padding:10px 0;border-top:1px solid var(--w-line)}
+.web-shell .w-lead__row:first-of-type{border-top:0;padding-top:4px}
+.web-shell .w-lead__when{flex:0 0 38%;min-width:0;font-size:12.5px;font-weight:650}
+.web-shell .w-lead__people{flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:8px}
+.web-shell .w-lead__chip{display:inline-flex;align-items:center;gap:7px;background:#f4f8f5;border:1px solid #dfeae3;border-radius:999px;padding:4px 12px 4px 4px}
+.web-shell .w-lead__av{width:30px;height:30px;flex:0 0 30px;border-radius:999px;overflow:hidden;background:#e7f0ea;display:grid;place-items:center}
+.web-shell .w-lead__av img{width:100%;height:100%;object-fit:cover;display:block}
+.web-shell .w-lead__ph{font-size:13px;font-weight:750;color:#3c6b53}
+.web-shell .w-lead__who{display:flex;flex-direction:column;line-height:1.25;min-width:0}
+.web-shell .w-lead__who b{font-size:12.5px;font-weight:750;white-space:nowrap}
+.web-shell .w-lead__who i{font-style:normal;font-size:10.5px;color:var(--w-muted)}
+.web-shell .w-lead__tbd{font-size:12px;color:var(--w-muted);background:#f8f9f8;border:1px dashed var(--w-line);border-radius:999px;padding:6px 12px}
+@media(max-width:520px){
+  .web-shell .w-lead__row{flex-direction:column;align-items:flex-start;gap:7px}
+  .web-shell .w-lead__when{flex:none}
+}

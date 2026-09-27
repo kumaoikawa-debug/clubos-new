@@ -621,7 +621,7 @@ let a=await api(`/api/public/activities/${id}`);currentAct=a;
 /* 默认团期必须是**第一个还有余位**的：早前固定取 occurrences[0]，售罄的第一个团期会被默认选中，
    顾客直接点报名就被后端拒，还看不出为什么。全满时留 null，由 signupNow 给出明确提示。 */
 currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0)||null;
-bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${money(a.price)} / 人</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail)})}${bookingHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
+bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${money(a.price)} / 人</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail)})}${leadersHtml(a)}${bookingHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
 /* 回到活动列表。两个入口共用：详情页的「返回活动」、底部「活动」tab。 */
 function showActivityList(){
   const l=$('#activityList');if(l)l.style.display='block';
@@ -633,6 +633,35 @@ function showActivityList(){
   history.replaceState({},'',location.pathname);
 }
 function backList(){showActivityList()}
+/* 带队领队：后端已按团期把「谁带队」算好（public_activity.leaders），前端只负责展示。
+   顾客挑团期时最想知道的就是「谁带」，所以放在报名卡之前而不是塞在页尾。
+   只展示姓名 / 角色 / 头像三样 —— 领队手机号是俱乐部内部联络信息，后端压根不下发，
+   前端也不去要；没安排领队的团期如实写「待定」，不拿别的字段顶上。
+   一个团期都没有、也没指派过谁时整块不显示：空壳卡片只会让顾客以为页面缺了东西。 */
+function leaderChip(x){
+  const initial=esc(String(x.name||'领').trim().slice(0,1)||'领');
+  const av=x.avatarUrl
+    ? `<img src="${esc(x.avatarUrl)}" alt="" loading="lazy">`
+    : `<span class="w-lead__ph" aria-hidden="true">${initial}</span>`;
+  return `<span class="w-lead__chip"><span class="w-lead__av">${av}</span>`
+    +`<span class="w-lead__who"><b>${esc(x.name||'领队')}</b><i>${esc(x.role||'领队')}</i></span></span>`;
+}
+function leadersHtml(a){
+  const list=a.leaders||[];
+  const occs=a.occurrences||[];
+  if(!occs.length&&!list.length)return '';
+  const rows=(occs.length?occs.map(o=>({id:o.id,label:o.label||o.start_at}))
+                         :list.map(g=>({id:g.occurrenceId,label:g.label})))
+    .map(o=>{
+      const g=list.find(x=>Number(x.occurrenceId)===Number(o.id))||{leaders:[]};
+      const people=(g.leaders||[]).map(leaderChip).join('');
+      return `<div class="w-lead__row"><div class="w-lead__when">${esc(o.label||'团期')}</div>`
+        +`<div class="w-lead__people">${people||'<span class="w-lead__tbd">领队待定 · 确定后显示在这里</span>'}</div></div>`;
+    }).join('');
+  const any=list.some(g=>(g.leaders||[]).length);
+  return `<section class="w-block w-lead"><div class="w-block__head"><div><b>带队领队</b>`
+    +`<div class="w-block__hint">${any?'由本俱乐部领队带队，出发前会在订单里给出集合与联络方式。':'团期已经排好，领队还在安排中；确定后显示在这里。'}</div></div></div>${rows}</section>`;
+}
 function bookingHtml(a){
   const p=a.pointsPolicy||{}; const e=p.effective||{};
   /* 抵扣不该是顾客的算术题：额度由系统算好（后端 maxRedeemable），顾客只勾一下「用 / 不用」。

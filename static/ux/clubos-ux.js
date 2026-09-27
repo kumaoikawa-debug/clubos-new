@@ -1,6 +1,6 @@
 /* ClubOS NEW UX · progressive enhancement for the current three frontends. */
 (function(){
- const page=location.pathname.startsWith('/platform')?'platform':location.pathname.startsWith('/club')?'club':location.pathname.startsWith('/web')?'web':'other';
+ const page=uxPage();
  const platformGroups=[['工作空间',['pdash']],['组织与资源',['clubs','pcredits','ppoints','pbenefits']],['商品与供应链',['products','supply','warehouse','analytics']],['交易与服务',['orders','aftersales','commissions']],['财务',['finance']]];
 const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activities','content','regs','execution','points']],['客户与增长',['members','mall']],['账户',['credits','payaccount']]];
 const glyphs={pdash:'◫',clubs:'♧',pcredits:'◎',ppoints:'◈',pbenefits:'◇',products:'▤',supply:'⇄',warehouse:'▦',finance:'¥',analytics:'▥',orders:'▤',aftersales:'↺',commissions:'⇥',dash:'◫',activities:'⌁',content:'✦',regs:'▤',execution:'⤴',members:'♧',mall:'◇',credits:'◎',payaccount:'¥',points:'◈'};

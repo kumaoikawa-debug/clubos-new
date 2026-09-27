@@ -1,4 +1,18 @@
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
+/* 当前打开的是哪一端。**唯一的权威判据** —— ux/*.js 过去各自写
+   `location.pathname.startsWith('/club')`，但后端 `/` 与 `/club` 服务的是同一份
+   club/index.html（见 app.py 的 root()），从根路径打开时那些守卫全部判假：
+   整个 workflows-club.js 不执行，quickAddOccurrence 等业务动作函数全是 undefined，
+   用户点「＋ 添加团期」只得到一个 ReferenceError（页面毫无反应）。
+   所以把「根路径 = 俱乐部端」这条事实收在这里，各处一律引用它。 */
+function uxPage(){
+  const p=location.pathname;
+  if(p.startsWith('/platform'))return 'platform';
+  if(p.startsWith('/web'))return 'web';
+  if(p.startsWith('/leader'))return 'leader';
+  if(p.startsWith('/club')||p==='/'||p==='')return 'club';
+  return 'other';
+}
 function clubosCookie(name){return document.cookie.split('; ').find(x=>x.startsWith(name+'='))?.split('=').slice(1).join('=')||''}
 /* ===== 写操作防重复提交（在 api() 层统一兜底，覆盖全部调用点，无需改调用方）=====
    - 在途去重：同一写请求（方法+URL+body）在途时复用同一 Promise，不会向服务端发第二次。

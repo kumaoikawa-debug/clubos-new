@@ -1451,6 +1451,52 @@ def public_activities(club_id:int):
             a['cover']='/api/public/activities/%d/media/%s'%(a['id'],quote(str(cov)[len('/static/'):],safe='/'))
     return acts
 
+def _public_leader_avatar_url(club_id:int,leader_id,avatar_url):
+    """把俱乐部域头像地址改写成 C 端可访问的公开代理地址。
+
+    C 端顾客没有 club 角色，`/api/club/{c}/leaders/{id}/avatar.png` 那条根本取不到；
+    而头像又必须回代理地址（生产环境 /static/uploads/* 被封死，裸链就是死链）。
+    形状不对（库里是空值或畸形值）就回 None，前端退回首字占位，不做二次猜测。
+    """
+    m=_AVATAR_URL_RE.match(str(avatar_url or ''))
+    if not m or int(m.group(1))!=int(club_id) or int(m.group(2))!=int(leader_id):return None
+    return '/api/public/leaders/%d/avatar%s'%(int(leader_id),m.group(3))
+
+
+def _public_leaders(c,activity_id:int,club_id:int)->list:
+    """C 端活动详情的「带队领队」：按团期分组，只含**已经指派**的人。
+
+    字段收敛到 姓名 / 角色 / 头像 三样 —— 手机号是俱乐部内部联络信息，
+    俱乐部端 _leader_plan_for 里带 phone 是给经营者看的，这里绝不下发；
+    也**不下发推荐名单**（顾客不需要知道「本来还考虑过谁」）。
+    """
+    occ=rows(c.execute('SELECT id,label,start_at FROM activity_occurrences WHERE activity_id=? AND club_id=? AND status="open" ORDER BY start_at',(activity_id,club_id)))
+    assigned={}
+    for r in rows(c.execute('''SELECT ol.occurrence_id,ol.name,ol.role,ol.leader_id,l.avatar_url
+                               FROM occurrence_leaders ol
+                               JOIN activity_occurrences o ON o.id=ol.occurrence_id
+                               LEFT JOIN club_leaders l ON l.id=ol.leader_id
+                               WHERE o.activity_id=? AND ol.club_id=? ORDER BY ol.id''',(activity_id,club_id))):
+        assigned.setdefault(int(r['occurrence_id']),[]).append({
+            'name':r.get('name') or '领队','role':r.get('role') or '领队',
+            'avatarUrl':_public_leader_avatar_url(club_id,r.get('leader_id'),r.get('avatar_url'))})
+    return [{'occurrenceId':int(o['id']),'label':o.get('label') or o.get('start_at'),
+             'startAt':o.get('start_at'),'leaders':assigned.get(int(o['id']),[])} for o in occ]
+
+
+@app.get('/api/public/leaders/{leader_id}/avatar.{ext}')
+def public_leader_avatar(leader_id:int,ext:str):
+    """C 端领队头像。顾客没有 club 角色，走不了俱乐部域那条代理，所以单开一条公开的。
+
+    磁盘定位与扩展名校验完全复用 _serve_leader_avatar：先按形状校验库里存的 URL，
+    再用路由参数拼路径 —— 公开端点也不能变成读任意文件的口子。
+    """
+    with conn() as c:
+        r=row(c.execute('SELECT club_id FROM club_leaders WHERE id=?',(leader_id,)))
+    if not r: raise HTTPException(404,'领队不存在')
+    return _serve_leader_avatar(int(r['club_id']),leader_id,ext)
+
+
 @app.get('/api/public/activities/{activity_id}')
 def public_activity(activity_id:int):
     with conn() as c:
@@ -1463,6 +1509,8 @@ def public_activity(activity_id:int):
     a['activityMaster']=_repair_master_media(jload(a.pop('activity_master_json'),{}),_pub_src);a['detail']=jload(a.pop('detail_json'),{});a['occurrences']=occ
     # 出行清单 × 商城在售装备：让 C 端报名页能直接把清单变成可下单的装备推荐
     with conn() as _gc:a['gearRecommendations']=_gear_plan_for(_gc,a['activityMaster'],int(a['club_id']))
+    # 带队领队：顾客挑团期时最想知道「谁带」，俱乐部端排好班之后这里必须看得见
+    with conn() as _lc:a['leaders']=_public_leaders(_lc,activity_id,int(a['club_id']))
     cov=a.get('cover')
     if cov and str(cov).startswith('/static/'):
         a['cover']='/api/public/activities/%d/media/%s'%(activity_id,quote(str(cov)[len('/static/'):],safe='/'))
@@ -1471,7 +1519,10 @@ def public_activity(activity_id:int):
     a['participantPolicy']=participant_service.from_activity(a).as_dict()
     if IS_PROD:
         # Public activity is not a dump of private activity_master_json (internalData).
-        a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy','gearRecommendations')}
+        a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy','gearRecommendations','leaders')}
+        # 领队只放行展示必需的三样：手机号一类内部联络信息即便将来被写进这张表，也出不去。
+        a['leaders']=[{**g,'leaders':[{k:v for k,v in x.items() if k in ('name','role','avatarUrl')}
+                                      for x in (g.get('leaders') or [])]} for g in (a.get('leaders') or [])]
         master=a.get('activityMaster') or {}
         if isinstance(master,dict):
             public_keys={'title','date','location','price','capacity','itinerary','fees','checklist','services','media'}

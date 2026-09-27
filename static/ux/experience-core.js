@@ -1,8 +1,10 @@
 /* ClubOS NEW / complete experience pass: UI-only, no authority or financial rules. */
 (function(){
  'use strict';
- const isAdmin=/^\/(platform|club)(\/|$)/.test(location.pathname);
- const isWeb=/^\/web(\/|$)/.test(location.pathname);
+ // 一侧判据统一走 uxPage()：根路径 `/` 服务的也是俱乐部端，用正则匹配 pathname
+ // 会把「从根域名打开」判成非管理端，表格增强/视图反馈那一整层在那边全部静默不生效。
+ const isAdmin=uxPage()==='platform'||uxPage()==='club';
+ const isWeb=uxPage()==='web';
  let currentView='', seq=0;
  const text=(s)=>String(s??'');
  function empty(message='没有符合条件的记录') {const el=document.createElement('div');el.className='ux-state ux-empty';el.innerHTML='<div aria-hidden="true" class="ux-state-icon">⌁</div><strong></strong><p>可调整筛选条件或稍后刷新。</p>';el.querySelector('strong').textContent=message;return el;}
