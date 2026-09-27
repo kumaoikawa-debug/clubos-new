@@ -1149,3 +1149,23 @@ CREATE TABLE IF NOT EXISTS product_images (
   FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_product_images_product ON product_images(product_id,sort,id);
+
+-- v0.26 · 俱乐部「装备上下架」申请
+-- products 表没有 club 归属列，商品归总平台所有：俱乐部不能直接改 status，
+-- 否则俱乐部端就能绕过总平台把商品从 C 端商城里摘掉。改成俱乐部提交申请、
+-- 总平台一键处理，两边看到的是同一条记录。
+CREATE TABLE IF NOT EXISTS club_product_visibility_requests (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  action TEXT NOT NULL,                     -- on=申请上架 / off=申请下架
+  note TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',   -- pending / approved / rejected
+  decided_note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  decided_at TEXT,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(product_id) REFERENCES products(id)
+);
+CREATE INDEX IF NOT EXISTS idx_club_prod_vis_club ON club_product_visibility_requests(club_id,status,id DESC);
+CREATE INDEX IF NOT EXISTS idx_club_prod_vis_product ON club_product_visibility_requests(product_id,id DESC);

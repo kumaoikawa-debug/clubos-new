@@ -18,6 +18,11 @@ python tests/points_max_redeemable_smoke.py
 # 删除活动的报名护栏：只有「未取消且未退款」的报名才拦得住（refunded 已全额退款，不该再拦）。
 # 自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/registration_delete_smoke.py
+# 俱乐部提交的「装备上下架」申请必须真的改到 C 端商城的可见性：
+# products 表没有 club 归属列，俱乐部无权直接改 products.status，只能申请，
+# 由总平台批准时改。这条链断在哪一环，这个测试都会红。
+# 自带临时库隔离，不需要 CLUBOS_DB_PATH。
+python tests/product_visibility_smoke.py
 # C 端从首页点进活动详情必须真的看得见：openAct 要先把视图切到 #wactivities，
 # 否则详情被写进一个 display:none 的 section，用户看到的是「点了没反应」。
 # 纯静态断言（只读 static/web/*），不建库不碰真库。

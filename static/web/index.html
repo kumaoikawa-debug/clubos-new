@@ -76,15 +76,18 @@
     <section id="wability" class="wview" style="display:none">
       <div class="w-ability">
         <div class="w-ability__hero">
-          <span class="w-ability__badge">BUILDING · 建设中</span>
+          <span class="w-ability__badge">REAL DATA · 真实记录</span>
           <h2>你的户外履历，值得被记录</h2>
-          <p>走过的线路、掌握的技能、能挑战的难度 —— 开放后这里会形成你的户外能力档案，俱乐部据此给你匹配更合适的活动。</p>
+          <p>这里不生成任何虚构标签：内容是你在俱乐部的真实报名与真实购买记录。参加得越多、装备越齐，推荐给你的档期自然越对得上。</p>
         </div>
+        <div id="wabilitySummary" class="w-ability__stats"></div>
         <div class="w-ability__list">
-          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.6"/><circle cx="17.5" cy="17.5" r="2.6"/><path d="M9.1 6.5h5.4a3 3 0 0 1 0 6H9.5a3 3 0 0 0 0 6h5.4"/></svg><div><b>线路履历</b><span>按里程、爬升与海拔记录你走过的每一条线。</span></div></div>
-          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="5"/><path d="m8.6 13.4-1.3 7 4.7-2.6 4.7 2.6-1.3-7"/></svg><div><b>技能标签</b><span>徒步 / 溯溪 / 攀岩 / 急救，标签决定你能进入哪一档活动。</span></div></div>
-          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0v11H6z"/><path d="M6 13h12"/><path d="M10.4 3.4h3.2"/></svg><div><b>装备掌握</b><span>把你实际用过的装备经验与商城商品关联起来。</span></div></div>
+          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.6"/><circle cx="17.5" cy="17.5" r="2.6"/><path d="M9.1 6.5h5.4a3 3 0 0 1 0 6H9.5a3 3 0 0 0 0 6h5.4"/></svg><div><b>线路履历</b><span id="wabilityRouteHint">按你报名过的活动如实列出。</span></div></div>
+          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="5"/><path d="m8.6 13.4-1.3 7 4.7-2.6 4.7 2.6-1.3-7"/></svg><div><b>技能标签</b><span id="wabilitySkillHint">从你实际参加过的活动归纳。</span></div></div>
+          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0v11H6z"/><path d="M6 13h12"/><path d="M10.4 3.4h3.2"/></svg><div><b>装备掌握</b><span id="wabilityGearHint">你真正买过、用过的装备。</span></div></div>
         </div>
+        <div id="wabilityRoutes" class="w-ability__blocks"></div>
+        <div class="grid g2 section"><div id="wabilitySkills" class="card"></div><div id="wabilityGear" class="card"></div></div>
       </div>
     </section>
 

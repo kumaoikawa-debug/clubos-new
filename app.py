@@ -248,7 +248,12 @@ def club_business_analytics(club_id:int,window_days:int=Query(30,alias='windowDa
 
 @app.get('/api/club/{club_id}/activities')
 def club_activities(club_id:int):
-    with conn() as c:return rows(c.execute('SELECT id,title,status,event_date,location,price,capacity,created_at,cover FROM activities WHERE club_id=? ORDER BY id DESC',(club_id,)))
+    # 积分策略页要在列表里直接看到每场活动的积分规则，因此把 7 个积分列一起带出来，
+    # 免得页面上为每一行再打一次 points-policy。
+    with conn() as c:return rows(c.execute('''SELECT id,title,status,event_date,location,price,capacity,created_at,cover,
+        points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent,
+        accept_gear_points,gear_points_max_discount_amount,club_points_earn_rate_override
+        FROM activities WHERE club_id=? ORDER BY id DESC''',(club_id,)))
 
 # ===== 活动详情版本：生成 / 重新生成 / 恢复上一版 =====
 # 老板对第一版不满意时必须能「换一版」，而换一版的前提是原始资料还在。
@@ -1333,6 +1338,51 @@ def club_products(club_id:int):
         items=rows(c.execute('SELECT id,name,sku,price,stock,status,image_url,category FROM products WHERE status="active" ORDER BY id DESC'))
         return _with_extras(c,items)
 
+@app.get('/api/club/{club_id}/mall/inventory')
+def club_mall_inventory(club_id:int):
+    """俱乐部端「装备管理」用：要能在架/下架之间切换着看，所以这里不过滤 status，
+    只给俱乐部自己。C 端仍然走 club_products（只取 active），两边不互相污染。"""
+    club_or_404(club_id)
+    with conn() as c:
+        items=rows(c.execute('SELECT id,name,sku,price,stock,status,category,image_url,commission_rate FROM products ORDER BY id DESC'))
+        reqs=rows(c.execute('SELECT * FROM club_product_visibility_requests WHERE club_id=? ORDER BY id DESC',(club_id,)))
+    by_req={}
+    for r in reqs: by_req.setdefault(r['product_id'],[]).append(r)
+    for it in items:
+        mine=by_req.get(it['id']) or []
+        it['requests']=mine
+        it['pendingRequest']=next((x for x in mine if x['status']=='pending'),None)
+    return items
+
+@app.post('/api/club/{club_id}/mall/products/{product_id}/visibility')
+def club_product_visibility_request(club_id:int,product_id:int,payload:dict=Body(...)):
+    """俱乐部提交上下架申请。商品归总平台所有（products 表没有 club 归属列），
+    俱乐部直接改 status 就是绕过总平台，所以这里只落一条待处理申请。"""
+    club_or_404(club_id)
+    action=str(payload.get('action') or '').strip()
+    if action not in {'on','off'}: raise HTTPException(400,'申请类型只能是 on/off')
+    with conn() as c:
+        p=row(c.execute('SELECT id,name,status FROM products WHERE id=?',(product_id,)))
+        if not p: raise HTTPException(404,'商品不存在')
+        want='active' if action=='on' else 'inactive'
+        if str(p.get('status') or '')==want:
+            raise HTTPException(409,'该商品当前已经是这个状态，无需重复申请')
+        pending=row(c.execute("""SELECT id FROM club_product_visibility_requests
+                                 WHERE club_id=? AND product_id=? AND status='pending' ORDER BY id DESC LIMIT 1""",(club_id,product_id)))
+        if pending: raise HTTPException(409,'这件商品已有一条待处理的申请，请先等总平台处理')
+        c.execute("""INSERT INTO club_product_visibility_requests(club_id,product_id,action,note)
+                     VALUES(?,?,?,?)""",(club_id,product_id,action,str(payload.get('note') or '')[:200]))
+        rid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    return {'ok':True,'requestId':rid,'productName':p.get('name')}
+
+@app.get('/api/club/{club_id}/mall/visibility-requests')
+def club_mall_visibility_requests(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return rows(c.execute("""SELECT r.*,p.name product_name,p.sku
+                                 FROM club_product_visibility_requests r JOIN products p ON p.id=r.product_id
+                                 WHERE r.club_id=? ORDER BY r.id DESC""",(club_id,)))
+
 @app.get('/api/club/{club_id}/mall/orders')
 def club_orders(club_id:int):
     # 带上买家与商品明细：俱乐部端点开订单要能看到「卖了哪几件、各多少」，
@@ -2185,7 +2235,19 @@ def public_member_center(club_id:int,user_id:int=1):
         benefits=benefit_engine.list_for_club(c,club_id=club_id,include_inactive=False)
         redemptions=benefit_engine.user_redemptions(c,user_id=user_id,club_id=club_id)
         tiers=membership_engine.list_tiers(c,club_id)
-    return {'member':member,'wallet':wallet,'benefits':benefits,'redemptions':redemptions,'tiers':tiers}
+        # C 端「户外能力」页的数据只能来自真实存在的记录：报名履历 + 买过的装备。
+        # 没有 skill/ability 表，所以这里不造能力值，只把真实消费记录交出去，
+        # 页面上怎么归纳是前端的展示问题。
+        history=rows(c.execute('''SELECT r.id,r.activity_id,r.amount,r.status,r.participant_count,r.created_at,r.refund_status,
+                                         a.title,a.location,a.event_date,a.cover
+                                  FROM registrations r JOIN activities a ON a.id=r.activity_id
+                                  WHERE r.user_id=? AND r.club_id=? ORDER BY r.id DESC LIMIT 50''',(user_id,club_id)))
+        owned=rows(c.execute('''SELECT i.product_id,i.quantity,i.unit_price,i.variant_name,p.name product_name,p.category,p.image_url
+                                FROM gear_order_items i JOIN gear_orders o ON o.id=i.order_id
+                                LEFT JOIN products p ON p.id=i.product_id
+                                WHERE o.user_id=? ORDER BY o.id DESC LIMIT 50''',(user_id,)))
+    return {'member':member,'wallet':wallet,'benefits':benefits,'redemptions':redemptions,'tiers':tiers,
+            'activityHistory':history,'gearOwned':owned}
 
 @app.post('/api/public/clubs/{club_id}/benefits/{benefit_id}/redeem')
 def public_redeem_benefit(club_id:int,benefit_id:int,payload:dict=Body(...)):
@@ -2707,6 +2769,35 @@ def platform_link_product(product_id:int,payload:dict=Body(...)):
 @app.post('/api/platform/products/{product_id}/sync')
 def platform_sync_product(product_id:int):
     return _sync_product_to_medusa(product_id)
+
+@app.get('/api/platform/product-visibility-requests')
+def platform_product_visibility_requests(status:str|None=None):
+    """总平台处理俱乐部提交的上下架申请。只有这里能真正改 products.status，
+    C 端商城的可见性随之变化 —— 这是俱乐部改不动但确实生效的那一步。"""
+    with conn() as c:
+        q='''SELECT r.*,cl.name club_name,p.name product_name,p.sku,p.status product_status
+             FROM club_product_visibility_requests r
+             JOIN clubs cl ON cl.id=r.club_id JOIN products p ON p.id=r.product_id'''
+        args=[]
+        if status: q+=' WHERE r.status=?'; args.append(status)
+        return rows(c.execute(q+' ORDER BY r.id DESC',args))
+
+@app.post('/api/platform/product-visibility-requests/{request_id}/decide')
+def platform_decide_product_visibility(request_id:int,payload:dict=Body(...)):
+    decision=str(payload.get('decision') or '').strip()
+    if decision not in {'approved','rejected'}: raise HTTPException(400,'decision 只能是 approved / rejected')
+    with conn() as c:
+        r=row(c.execute('SELECT * FROM club_product_visibility_requests WHERE id=?',(request_id,)))
+        if not r: raise HTTPException(404,'申请不存在')
+        if r['status']!='pending':
+            return {'ok':True,'requestId':request_id,'status':r['status'],'productStatus':None,'note':'该申请已处理过，未重复处理'}
+        c.execute("""UPDATE club_product_visibility_requests SET status=?,decided_note=?,decided_at=CURRENT_TIMESTAMP WHERE id=?""",
+                  (decision,str(payload.get('note') or '')[:200],request_id))
+        new_status=None
+        if decision=='approved':
+            new_status='active' if r['action']=='on' else 'inactive'
+            c.execute('UPDATE products SET status=? WHERE id=?',(new_status,r['product_id']))
+    return {'ok':True,'requestId':request_id,'status':decision,'productStatus':new_status}
 
 @app.patch('/api/platform/products/{product_id}')
 def platform_update_product(product_id:int,payload:dict=Body(...)):

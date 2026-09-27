@@ -895,3 +895,9 @@
   .w-pax__grid{grid-template-columns:1fr}
   .w-submit{padding:14px 16px;font-size:14px}
 }
+
+/* ── 户外能力页的真实数据块（线路履历 / 项目类型 / 装备）─────────────
+   这一页不生成虚构标签，全部来自真实报名与真实订单，所以布局偏"记录"而非"徽章"。 */
+.w-ability__stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:18px}
+.w-ability__blocks{margin-top:22px;display:grid;gap:10px}
+@media(max-width:680px){.w-ability__stats{grid-template-columns:repeat(2,minmax(0,1fr))}}

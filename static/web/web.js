@@ -613,6 +613,7 @@ function wv(id,b){
     else if(MALL_ALL.length)renderMall();else loadMall();
   }
   if(id==='wme'){loadMemberCenter();loadOrders()}
+  if(id==='wability')loadWability();
 }
 async function openAct(id){/* 不先切视图的话，详情会被渲染进一个 display:none 的 section ——
    从首页 hero / 本月精选点进来时，页面看起来毫无反应。 */wviewShow('wactivities');
@@ -784,6 +785,56 @@ async function waitForCheckoutPaid(checkoutId,attempts=45){for(let i=0;i<attempt
 async function payCheckout(checkout){let p=await api(`/api/public/checkouts/${checkout.checkoutId}/pay`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({simulateSuccess:!Boolean(clubosCookie('clubos_csrf')),returnUrl:location.href})});if(p.paymentStatus==='succeeded')return p.result;let a=p.paymentAction||{};if(a.type==='redirect'&&a.url){location.href=a.url;return null}if(a.type==='jsapi'&&a.params){if(window.WeixinJSBridge){await new Promise((resolve,reject)=>WeixinJSBridge.invoke('getBrandWCPayRequest',a.params,r=>String(r.err_msg||'').includes(':ok')?resolve(r):reject(new Error(r.err_msg||'微信支付未完成'))));return await waitForCheckoutPaid(checkout.checkoutId)}showAlert({title:'无法唤起微信支付',message:'当前页面不在微信 JSAPI 环境，请在微信内打开'});return null}if(a.type==='qrcode'&&a.url){await showAlert({title:'请扫码完成支付',message:'微信 Native 支付 code_url：'+a.url,wide:true});return await waitForCheckoutPaid(checkout.checkoutId,15)}return null}
 async function signupNow(){if(!currentAct||!currentOcc){showAlert({title:'请选择团期',message:'当前没有可报名的团期，请稍后再试或联系俱乐部。'});return}let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';try{let d=await api(`/api/public/activities/${currentAct.id}/checkout`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:PAYER_NAME,phone:PAYER_PHONE,occurrenceId:currentOcc.id,clubPoints:cp,gearPoints:gp,voucherCodes:voucher?[voucher]:[],participants:bookingParticipants})});let paid=await payCheckout(d);if(!paid)return;await showAlert({title:'报名成功',message:`${paid.participantCount||bookingParticipants.length} 人\n实际支付 ${money(paid.cashPaid)}\n本次获得 ${paid.clubPointsEarned} 活动积分${paid.clubBenefitDiscount?`\n俱乐部福利抵扣 ${money(paid.clubBenefitDiscount)}`:''}${paid.platformBenefitSubsidy?`\n平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}`});await loadWallet();openAct(currentAct.id)}catch(e){showAlert({title:'操作失败',message:e.message})}}
 async function buy(pid){let w=await api(`/api/public/users/${USER}/wallet?club_id=${CLUB}`);let vouchers=[];try{vouchers=await api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=gear`)}catch(e){}let v=await showForm({title:'确认下单',desc:'选择本单使用的装备积分与福利券。',submitText:'提交订单',fields:[{name:'use',label:'使用装备积分',type:'number',value:0,min:0,help:`当前可用装备积分 ${w.gearPoints}`},{name:'voucher',label:'装备福利券',type:'select',value:'',options:[{value:'',label:'不使用福利券'}].concat(vouchers.map(x=>({value:x.voucher_code,label:`${x.title} · 抵 ${money(x.cash_value)}`})))}]});if(!v)return;try{let d=await api(`/api/public/clubs/${CLUB}/gear-checkout`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:USER,items:[{productId:pid,quantity:1}],gearPoints:Number(v.use||0),voucherCodes:v.voucher?[v.voucher]:[]})});let paid=await payCheckout(d);if(!paid)return;await showAlert({title:'下单成功',message:`实际支付 ${money(paid.cashPaid)}\n获得 ${paid.gearPointsEarned} 装备积分${paid.platformBenefitSubsidy?`\n平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}\n俱乐部获得 ${money(paid.clubCommission)} 佣金\n俱乐部获得 ${paid.clubAIReward} AI Credits奖励`});loadWallet();loadMemberCenter()}catch(e){showAlert({title:'下单失败',message:e.message})}}
+/* 「户外能力」页。后端没有任何 skill / ability / rating 表，所以这里不编造能力值，
+   只用该用户在俱乐部的真实记录：报名过的活动 + 买过的装备。
+   项目类型是从活动标题归纳出来的，页面上就按「参加过的项目类型」来写，
+   不冒充技能等级或官方认证。没有的那一项直接说没有，不拿相似内容顶替。 */
+const WABILITY_KEYS=[['徒步',/徒步|越野|walk|trail/i],['登山',/登山|雪山|雪线|攀登|岩/i],['溯溪',/溯溪|溪|瀑/i],
+  ['露营',/露营|营地|帐篷|宿营/i],['滑雪',/滑雪|雪场|单板|双板/i],['皮划艇',/皮划艇|皮艇|舟/i],
+  ['桨板',/桨板|SUP|冲浪/i],['骑行',/骑行|自行车|单车/i],['跑步',/跑|马拉松|越野跑/i],['航海',/帆|船/i]];
+async function loadWability(){
+  const box=$('#wabilityRoutes');
+  if(box&&!box.children.length)box.innerHTML='<div class="w-sk"><div style="height:52px;border-radius:10px;background:#eef2ef"></div>'.repeat(2)+'</div>';
+  let d=await api(`/api/public/clubs/${CLUB}/member-center?user_id=${USER}`);
+  const h=d.activityHistory||[],g=d.gearOwned||[];
+  /* 展示给会员的文案不能漏英文：status 是库里的原始值， refunded / cancelled 都要翻成中文，
+     否则「线路履历」里会出现一个客人看不懂的 refunded。 */
+  const tier=(x)=>x.refund_status&&x.refund_status!=='none'?'已退款':x.status==='paid'?'已参加':x.status==='refunded'?'已退款':x.status==='cancelled'?'已取消':x.status==='pending'?'待支付':String(x.status||'');
+  /* WABILITY_KEYS 是 [名称, 正则] 的平铺对，解构要取第二个才是正则：
+     写成 ([re]) 会把中文名当正则拿去 test()，整个函数当场抛错、页面永远停在骨架屏。 */
+  const kinds=WABILITY_KEYS.filter(([,re])=>h.some(a=>re.test(String((a.title||'')+(a.location||''))))).map(x=>x[0]);
+  $('#wabilitySummary').innerHTML=[['参加过',h.length+' 场活动'],['去过的地点',new Set(h.map(a=>a.location||'')).size+' 个'],
+    ['用过的装备',g.length+' 件'],['装备累计',money(g.reduce((s,x)=>s+Number(x.unit_price||0)*Number(x.quantity||1),0))]]
+    .map(x=>'<div style="background:#fff;border:1px solid var(--w-line);border-radius:14px;padding:14px 16px"><div style="font-size:11.5px;color:var(--w-muted)">'+(x[0]||'—')+'</div><div style="font-size:21px;font-weight:700;margin-top:5px">'+x[1]+'</div></div>').join('');
+  $('#wabilityRoutes').innerHTML=h.length?h.map(a=>'<div style="display:flex;gap:12px;align-items:center;background:#fff;border:1px solid var(--w-line);border-radius:14px;padding:13px 15px;margin-bottom:9px">'
+    +(a.cover?'<img src="'+esc(a.cover)+'" alt="" style="width:48px;height:48px;border-radius:10px;object-fit:cover">':'<span style="width:48px;height:48px;border-radius:10px;background:#eef2ef;display:block"></span>')
+    +'<div style="min-width:0"><div style="font-size:13px;font-weight:600">'+esc(a.title)+'</div><div style="font-size:11.5px;color:var(--w-muted);margin-top:3px">'+esc(a.event_date||'')+' · '+esc(a.location||'')+' · '+money(a.amount||0)+'</div></div>'
+    +'<span style="margin-left:auto;font-size:11px;color:#5c6b62;white-space:nowrap">'+esc(tier(a))+'</span></div>').join(''):'<div class="w-empty">还没有报名记录。报名参加活动后，这里会变成你的线路履历。</div>';
+  $('#wabilitySkills').innerHTML='<h3 style="margin:0 0 6px;font-size:15px">参加过的项目类型</h3>'
+    +'<div class="sub" style="margin-bottom:12px">按你实际报名过的活动标题归纳，不是技能认证。</div>'
+    +(kinds.length?kinds.map(k=>'<span style="display:inline-block;margin:0 8px 8px 0;padding:6px 12px;border-radius:99px;background:#eaf3ec;color:#2c5c42;font-size:12px">'+esc(k)+'</span>').join('')
+      :'<div class="w-empty" style="padding:26px 12px">暂无。参加活动后，这里会按活动类型归纳。</div>');
+  /* 同一件商品会在不同订单里重复出现，26 行明细里其实可能只有 6 件不同的东西。
+     先按商品聚合成「买了几次 / 共几件 / 花了多少」，列表才有信息量。 */
+  /* 同一件商品会跨订单重复出现，而且 variant_name 在不同订单里可能一个是 '默认'、
+     一个是 null —— 按 id+变体分组会把「轻量防风软壳」拆成前后两行，看起来像买了两样东西。
+     所以按商品本身聚合，变体名收进一个集合，只有真有多种变体时才在副标题里列出来。 */
+  const agg={};
+  for(const x of g){const k=x.product_id;const a=agg[k]||(agg[k]={id:x.product_id,name:x.product_name,category:x.category,qty:0,times:0,spend:0,variants:[]});
+    a.qty+=Number(x.quantity||1);a.times+=1;a.spend+=Number(x.unit_price||0)*Number(x.quantity||1);
+    const vn=String(x.variant_name||'').trim();if(vn&&a.variants.indexOf(vn)<0)a.variants.push(vn);}
+  const gl=Object.values(agg);
+  const gearSpend=gl.reduce((s,x)=>s+x.spend,0);
+  $('#wabilityGear').innerHTML='<h3 style="margin:0 0 6px;font-size:15px">买过的装备</h3>'
+    +'<div class="sub" style="margin-bottom:12px">来自你的真实商城订单，不是推荐也不是库存。'+gl.length+' 种 / 累计 '+money(gearSpend)+'</div>'
+    +(gl.length?gl.map(x=>'<div style="display:flex;gap:10px;align-items:center;padding:11px 0;border-top:1px solid var(--w-line)">'
+      +'<div style="min-width:0;flex:1"><div style="font-size:12.5px;font-weight:600">'+esc(x.name||'?')+'</div>'
+      +'<div style="font-size:11px;color:var(--w-muted);margin-top:3px">'+esc(x.category||'户外装备')+' · 共 '+x.qty+' 件'
+      +(x.times>1?' · 买了 '+x.times+' 次':'')
+      +(x.variants.length>1?' · '+esc(x.variants.join(' / ')):'')+'</div></div>'
+      +'<div style="font-size:12px;font-weight:600;white-space:nowrap">'+money(x.spend)+'</div></div>').join('')
+      :'<div class="w-empty" style="padding:26px 12px">暂无。在装备商城买过东西后，这里会列出你真实用过的装备。</div>');
+}
 async function loadMemberCenter(){
   const mbox=$('#memberBenefits'),rbox=$('#memberRedemptions');
   if(mbox&&!mbox.children.length)mbox.innerHTML=wSkRows(2);
