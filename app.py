@@ -807,7 +807,11 @@ def delete_activity(club_id:int,activity_id:int):
     with conn() as c:
         a=row(c.execute('SELECT id,title FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
         if not a: raise HTTPException(404,'活动不存在')
-        live=int(c.execute('SELECT COUNT(*) FROM registrations WHERE activity_id=? AND club_id=? AND status!="cancelled"',(activity_id,club_id)).fetchone()[0])
+        # 只有「未取消且未退款」的报名才算牵涉资金/履约。
+        # refunded 是全额退款后的终态：钱已退完、保险与履约都已结清，没有可损失的东西，
+        # 继续把它算进 live 会让「活动刚被全额退款就删不掉」—— 实测就是这条把测试数据清理卡死了
+        # （先取消报名再删，状态变 refunded 依然 409，等于删除按钮对已退款活动永久失效）。
+        live=int(c.execute("SELECT COUNT(*) FROM registrations WHERE activity_id=? AND club_id=? AND status NOT IN ('cancelled','refunded')",(activity_id,club_id)).fetchone()[0])
         if live: raise HTTPException(409,f'该活动还有 {live} 笔未取消的报名，不能删除。请先在报名管理里处理（取消 / 退款）后再删。')
         occ=[int(r['id']) for r in c.execute('SELECT id FROM activity_occurrences WHERE activity_id=? AND club_id=?',(activity_id,club_id)).fetchall()]
         if occ:
