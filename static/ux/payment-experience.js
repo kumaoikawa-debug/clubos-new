@@ -29,8 +29,38 @@ async function qrPayment(checkoutId,url){let closed=false,finished=false,finish;
   if(a.type==='redirect'&&a.url){if(!/^https?:\/\//i.test(a.url))throw new Error('支付链接格式异常');location.assign(a.url);return null}
   if(a.type==='jsapi'&&a.params){if(!window.WeixinJSBridge){toast('请在微信中打开该页面完成 JSAPI 支付');return null}await new Promise((resolve,reject)=>WeixinJSBridge.invoke('getBrandWCPayRequest',a.params,r=>String(r.err_msg||'').includes(':ok')?resolve(r):reject(new Error(r.err_msg||'微信支付未完成'))));return await waitForCheckoutPaid(checkout.checkoutId)}
   if(a.type==='qrcode'&&a.url)return await qrPayment(checkout.checkoutId,a.url);
+  /* provider=local 时后端只回 {"type":"mock"}，没有任何可执行付款方式。旧代码落到下面那句兜底
+     toast，订单永远停在 pending_payment —— 而已登录会员必然走这条分支（未登录访客因为没有
+     csrf cookie、simulateSuccess 短路反而能成功），也就是说这个断点只在「正常登录下单」时出现，
+     demo 里几乎每单都会撞上。补一条模拟支付面板：不接任何真实渠道，但走完整状态机 ——
+     确认走 /confirm（后端 local-manual 的幂等确认），返回的是与真实渠道同一个形状的 result。 */
+  if(a.type==='mock')return await localSimulatePayment(checkout.checkoutId,a);
   toast('当前支付渠道没有返回可执行的付款方式，请到订单查看。');return null;
  };
+/* 「本地模拟支付」面板：金额 / 确认成功 / 取消订单。
+   这里刻意不提供「模拟支付失败」按钮 —— 后端没有暴露标记失败的端点，前端硬造一个假失败
+   只会让界面状态与服务端不一致，一旦有人以为失败就不会再查单。失败的真实来源（渠道回调
+   或商家关门）仍会由 qrPayment 的轮询读出 payment_status=failed。
+   取消走 /cancel，后端会把积分冻结一并释放，与真实渠道取消的行为一致。 */
+async function localSimulatePayment(checkoutId,action){
+  const amount=Number((action&&action.amount)||0)||0;
+  const box=document.createElement('div');box.className='ux-payment-body';
+  const note=document.createElement('p');note.className='sub';
+  note.textContent='当前为本地模拟支付：不会产生任何真实扣款，确认后由服务端按本地通道幂等确认这笔订单。';
+  const amt=document.createElement('div');amt.className='ux-pay-code';amt.textContent=amount?money(amount):'—';
+  const controls=document.createElement('div');controls.className='ux-pay-controls';
+  const pay=document.createElement('button');pay.type='button';pay.className='btn';pay.textContent='确认已支付';
+  const cancel=document.createElement('button');cancel.type='button';cancel.className='btn secondary';cancel.textContent='取消这笔订单';
+  controls.append(pay,cancel);
+  const status=document.createElement('div');status.className='ux-payment-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+  box.append(note,amt,controls,status);
+  let finished=false,finish;const result=new Promise(res=>finish=res);
+  const dlg=sheet({title:'本地模拟支付',desc:'订单 '+checkoutId,body:box,actionLabel:'稍后到订单查看',
+    onClose:()=>{if(!finished)finish(null)}});
+  pay.onclick=async()=>{const st=uxBusyOn(pay);try{const r=await post('/api/public/checkouts/'+checkoutId+'/confirm',{commerceOrderId:checkoutId});finished=true;status.textContent='已确认，订单完成';finish(r);dlg.close()}catch(e){status.textContent=e.message||'确认失败，可稍后从订单重新发起'}finally{uxBusyOff(st)}};
+  cancel.onclick=async()=>{const st=uxBusyOn(cancel);try{await post('/api/public/checkouts/'+checkoutId+'/cancel',{});finished=true;status.textContent='订单已取消，积分占用已释放';finish(null);dlg.close()}catch(e){status.textContent=e.message||'取消失败'}finally{uxBusyOff(st)}};
+  return result;
+}
  window.signupNow=async function(){if(!currentAct||!currentOcc){toast('请先选择团期');return}if(Number(currentOcc.remaining)<bookingParticipants.length){toast('本团期剩余名额不足，请重新选择');return}const requireComplete=currentAct.participantPolicy?.allowIncompleteAtCheckout===false;
   for(let i=0;i<bookingParticipants.length;i++){const p=bookingParticipants[i];if(!p.name?.trim()){toast('请填写第 '+(i+1)+' 位参加人姓名');document.querySelector('#participantForms input')?.focus();return}if(!validPhone(p.phone)){toast('第 '+(i+1)+' 位参加人电话格式需要核对');return}if(requireComplete&&(!p.idType||!p.idNumber||!p.emergencyContactName||!validPhone(p.emergencyContactPhone))){toast('本活动要求付款前补齐第 '+(i+1)+' 位参加人的证件与紧急联系人资料');return}}
   // 校验放在锁外：资料没填全时立刻给提示，不该让「立即报名」闪一下忙态。
