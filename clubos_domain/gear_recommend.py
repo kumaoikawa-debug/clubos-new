@@ -3,7 +3,9 @@
 设计纪律（与项目既有的「引用类字段」规则一致）：
 
 1. **候选集合只能是商城里真实在售的商品**，引擎不做任何商品条目的生成或补全。
-   某一项清单在商城里没有对应装备时，如实标注「商城暂无对应装备」，而不是凑一个相近的顶上。
+   某一项清单在商城里没有精确对应装备时，不再只留一句「暂无」：
+   按 SUBSTITUTES 替代关系推荐**同类平替**，并且必须带上「平替」标记与说明，
+   让顾客明确知道这不是清单里那件东西 —— 不替、也不冒充。
 2. 匹配是确定性的：清单文本 → 需求标签，商品（名称 + 分类）→ 供给标签，两者求交集即为匹配。
    因此推荐免费、即时、可复现，而且结果能解释给运营看（"为什么推它"）。
 3. 引擎本身**不碰数据库**：候选商品由调用方查好传进来，便于离线回归测试与复用。
@@ -74,6 +76,25 @@ ACTIVITY_HINTS: dict[str, tuple[str, ...]] = {
 
 _CONTEXT_KEYS = ("title", "location", "date", "subtitle", "summary")
 
+# ---------------------------------------------------------------------------
+# 平替关系表：清单要的品类在商城缺货时，用同场景下功能最接近的品类顶上。
+# 刻意保守：只收录确实「能顶一阵」的替代，不给离谱的（鞋 → 背包这种不收）。
+# 顺序有意义：排在前面的替代品类优先被推荐。
+# ---------------------------------------------------------------------------
+SUBSTITUTES: dict[str, tuple[str, ...]] = {
+    "footwear": ("trekking", "clothing"),   # 鞋袜缺 → 徒步支撑（护膝/登山杖）、功能性衣物
+    "trekking": ("footwear", "clothing"),
+    "sun": ("clothing",),                   # 防晒缺 → 长袖/防晒衣物
+    "rain": ("clothing",),                  # 雨具缺 → 防风外套
+    "protection": ("clothing",),
+    "hydration": ("nutrition",),            # 饮水缺 → 能量补给
+    "nutrition": ("hydration",),
+    "shelter": ("lighting", "clothing"),    # 露营缺 → 照明、保暖衣物
+    "lighting": ("power",),                 # 照明缺 → 电源续航
+    "power": ("lighting",),
+    "comms": ("power",),
+}
+
 
 def _text_of(v: Any) -> str:
     return v.strip() if isinstance(v, str) else ""
@@ -124,6 +145,7 @@ class GearPick:
     reason: str
     tags: tuple[str, ...] = ()
     score: float = 0.0
+    substitute: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -137,6 +159,7 @@ class GearPick:
             "emoji": self.emoji,
             "reason": self.reason,
             "tags": list(self.tags),
+            "substitute": self.substitute,
         }
 
 
@@ -146,6 +169,8 @@ class ChecklistItem:
     tags: tuple[str, ...] = ()
     tag_labels: tuple[str, ...] = ()
     matches: tuple[GearPick, ...] = ()
+    substitutes: tuple[GearPick, ...] = ()
+    sub_note: str = ""
 
     @property
     def matched(self) -> bool:
@@ -158,6 +183,8 @@ class ChecklistItem:
             "tagLabels": list(self.tag_labels),
             "matched": self.matched,
             "matches": [m.as_dict() for m in self.matches],
+            "substitutes": [s.as_dict() for s in self.substitutes],
+            "subNote": self.sub_note,
         }
 
 
@@ -173,6 +200,8 @@ class GearPlan:
     def as_dict(self) -> dict[str, Any]:
         needs = len(self.items)
         matched = sum(1 for i in self.items if i.matched)
+        substituted = sum(1 for i in self.items
+                          if not i.matched and i.substitutes)
         return {
             "available": self.catalog_count > 0,
             "catalogCount": self.catalog_count,
@@ -182,6 +211,7 @@ class GearPlan:
             "coverage": {
                 "needs": needs,
                 "matched": matched,
+                "substituted": substituted,
                 "ratio": round(matched / needs, 4) if needs else 0.0,
             },
         }
@@ -296,8 +326,45 @@ class GearRecommendService:
             chosen = tuple(scored[:self.max_per_item])
             for c in chosen:
                 used.add(c.id)
+            # --- 平替：精确匹配落空时，按 SUBSTITUTES 找同类里最接近的真实在售商品 ---
+            subs: list[GearPick] = []
+            sub_note = ""
+            if not chosen and need:
+                # 替代品类按需求顺序去重；需求里已有的品类不算替代（那叫精确匹配）
+                fallbacks: list[str] = []
+                for t in need:
+                    for f in SUBSTITUTES.get(t, ()):
+                        if f not in need and f not in fallbacks:
+                            fallbacks.append(f)
+                if fallbacks:
+                    cand: list[GearPick] = []
+                    for p in rows:
+                        pid = int(p.get("id") or 0)
+                        tags = self.product_tags(str(p.get("name") or ""), str(p.get("category") or ""))
+                        if not tags or pid in used:
+                            continue
+                        hit_f = [t for t in fallbacks if t in tags]
+                        if not hit_f:
+                            continue
+                        pick = self._to_pick(p, need)
+                        # 命中的替代品类越靠前越贴近原需求（查它在 fallbacks 里的位次，
+                        # 不是在 hit_f 里 —— hit_f 只含该商品命中的标签，index 恒为 0）；
+                        # 名称直接命中再加分
+                        cand.append(GearPick(**{**pick.__dict__, "score": float(len(fallbacks) - fallbacks.index(hit_f[0]))}))
+                    if cand:
+                        cand.sort(key=lambda x: (-x.score, 0 if x.stock > 0 else 1, x.id))
+                        top = cand[0]
+                        hit_f = next(t for t in fallbacks if t in top.tags)
+                        need_label = self._labels(need)[0] if self._labels(need) else "该装备"
+                        fall_label = TAXONOMY[hit_f]["label"]
+                        top = GearPick(**{**top.__dict__, "substitute": True,
+                                          "reason": f"商城暂无「{need_label}」，推荐相近的「{fall_label}」类装备"})
+                        subs = [top]
+                        used.add(top.id)
+                        sub_note = f"商城暂无{need_label}，已按同类推荐"
             items.append(ChecklistItem(text=text, tags=need,
-                                       tag_labels=self._labels(need), matches=chosen))
+                                       tag_labels=self._labels(need), matches=chosen,
+                                       substitutes=tuple(subs), sub_note=sub_note))
 
         extras_rows = [p for p in rows
                        if int(p.get("id") or 0) not in used
@@ -315,6 +382,6 @@ class GearRecommendService:
 
 
 __all__ = [
-    "TAXONOMY", "ACTIVITY_HINTS", "GearPick", "ChecklistItem", "GearPlan",
+    "TAXONOMY", "ACTIVITY_HINTS", "SUBSTITUTES", "GearPick", "ChecklistItem", "GearPlan",
     "GearRecommendService", "normalize_checklist",
 ]

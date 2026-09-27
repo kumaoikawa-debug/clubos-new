@@ -662,18 +662,25 @@ function bookingHtml(a){
     <div id="paxForms"></div>
     <div class="w-block__foot">${pp.allowIncompleteAtCheckout===false?'本活动要求支付前完成全部报名资料。':'可先报名支付；身份证 / 紧急联系人等资料可在「我的订单」后补。'}${pp.insuranceRequired?' · 本活动需要保险资料。':''}${cur>=maxPax?` · 单笔最多 ${maxPax} 人`:''}</div>
     <input type="hidden" id="participantCount" value="${cur}"></div>`;
-  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${participantArea}${pointArea}${benefitArea}${earnNote}${refundPolicyBrief(a.refundPolicy)}<div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
+  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${pointArea}${benefitArea}${earnNote}${refundPolicyBrief(a.refundPolicy)}<div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
 }
-/* 团期卡：把「哪天 / 还剩几个 / 多少钱」三件事排成一眼可扫的一行。
+/* 团期卡：横向滑动的竖版卡片。竖排长列表在团期一多时把报名页拉得很长，
+   而且「哪天 / 多少钱」要上下扫着比；卡片固定宽、一次并排露出两张左右，
+   日期、类型、名额、价格各占一行，左右滑动 + scroll-snap 吸附即可比较。
    满员的团期**不可选**（而不是可选然后被后端拒），并且明确标出「已满」。 */
 function occCard(o,i){
   const full=Number(o.remaining||0)<=0;
   const on=currentOcc&&Number(currentOcc.id)===Number(o.id);
-  const label=o.label||o.start_at||'待定';
+  // label 常是「10月24日 · 标准团」的写法：拆成日期 + 团型徽标两段；
+  // 拆不开就整段当日期，不硬造结构。
+  const raw=String(o.label||o.start_at||'待定');
+  const parts=raw.split('·').map(s=>s.trim()).filter(Boolean);
+  const day=parts[0]||raw, kind=parts.slice(1).join(' · ');
   return `<div class="occ${on?' active':''}${full?' is-full':''}" data-occ="${o.id}"${full?'':' onclick="selectOcc('+o.id+',this)"'} tabindex="${full?'-1':'0'}" role="radio" aria-checked="${on?'true':'false'}" aria-disabled="${full?'true':'false'}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();if(!${full})this.click()}">
-    <div class="occ__pick" aria-hidden="true"></div>
-    <div class="occ__main"><strong>${esc(label)}</strong><div class="occ__sub">${full?'<em>已满</em>':`剩余 ${o.remaining} / ${o.capacity} 个名额`}</div></div>
-    <div class="occ__price">${money(o.price)}</div>
+    <div class="occ__top"><strong>${esc(day)}</strong>${kind?`<span class="occ__kind">${esc(kind)}</span>`:''}</div>
+    <div class="occ__sub">${full?'<em>已满</em>':`剩余 ${o.remaining} / ${o.capacity} 个名额`}</div>
+    <div class="occ__price">${money(o.price)}<span> / 人</span></div>
+    <span class="occ__check" aria-hidden="true">✓</span>
   </div>`;
 }
 function refundPolicyBrief(p){
@@ -739,7 +746,11 @@ function selectOcc(id,el){
   currentOcc=currentAct.occurrences.find(x=>x.id===id);
   if(!currentOcc||Number(currentOcc.remaining||0)<=0){toast('该团期已满，请选择其他团期');return}
   $$('.occ').forEach(x=>{x.classList.remove('active');x.setAttribute('aria-checked','false')});
-  el.classList.add('active');el.setAttribute('aria-checked','true');refreshQuote()
+  el.classList.add('active');el.setAttribute('aria-checked','true');
+  /* 横向卡片：点到的卡可能只露出一半，选中后把它滚到可视区中央
+     （block:'nearest' 保证不带动页面竖向滚动）。 */
+  if(el.scrollIntoView)try{el.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'})}catch(e){}
+  refreshQuote()
 }
 function pointBlock(kind,title,owner,capNote){
   const club=kind==='club';

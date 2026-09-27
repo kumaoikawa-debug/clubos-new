@@ -32,7 +32,12 @@
 .gear-main small{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--muted);margin-top:3px}
 .gear-price{font-style:normal;font-weight:850;font-size:13px;color:var(--text);white-space:nowrap}
 .gear-go{position:absolute;right:11px;top:50%;transform:translateY(-50%);color:#b3c2bc;font-size:17px;line-height:1}
-.gear-none{font-size:12px;color:var(--muted);padding:9px 12px;border:1px dashed var(--line);border-radius:10px}
+.gear-none{font-size:12px;color:var(--muted);padding:8px 11px;border:1px dashed var(--line);border-radius:10px;background:#fbfcfa}
+/* 平替推荐：清单项没有精确匹配时引擎给的「最接近的同类」。
+   虚线边 + 米色底 + 徽标，和精确匹配的实线卡明确区分开，
+   顾客一眼就知道这不是清单里那件东西（理由文案由引擎生成）。 */
+.gear-row--sub{border-style:dashed;border-color:#e3d4b4;background:#fffdf6}
+.gear-badge{flex:0 0 auto;font-size:10px;font-weight:800;line-height:1;padding:4px 7px;border-radius:999px;background:#f5e9cf;color:#8a6d2f;letter-spacing:.5px}
 .gear-missing{font-size:12px;color:var(--muted);margin-top:10px}
 .gear-extras{margin-top:16px;border-top:1px solid var(--line);padding-top:14px}
 .gear-extras-title{font-size:12px;font-weight:800;margin-bottom:9px}

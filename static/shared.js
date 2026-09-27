@@ -192,7 +192,7 @@ function renderPromo(detail,master={},opts={}){
   }
   return h+'</article>';
 }
-function gearRow(p,opts){
+function gearRow(p,opts,sub){
   // 价格走第二行：窄栏（C 端 560px 容器）下右挂价格会把商品名挤成两三行
   const base=Number(p.price||0),mp=Number(p.memberPrice||0);
   const hasMember=mp>0&&mp<base;
@@ -204,15 +204,18 @@ function gearRow(p,opts){
   const memberNote=hasMember
     ? ' · '+esc(p.memberTierName||'会员')+'价 省 '+esc(fmt(p.memberSavings||0))
     : '';
-  const inner='<span class="gear-emoji">'+esc(p.emoji||'🧰')+'</span>'
+  // 平替徽标放在最前面：顾客第一眼就要知道「这不是清单里那件东西」，
+  // 理由文案（为什么拿它顶上）由引擎写在 p.reason 里，一起放进第二行。
+  const badge=sub?'<span class="gear-badge">平替</span>':'';
+  const inner=badge+'<span class="gear-emoji">'+esc(p.emoji||'🧰')+'</span>'
     +'<span class="gear-main"><b>'+esc(p.name)+'</b>'
     +'<small>'+priceHtml+esc(p.reason||'')+(p.inStock?'':' · 暂时缺货')+memberNote+'</small></span>'
     +'<span class="gear-go">›</span>';
   // C 端 = 下单入口；俱乐部后台点进去是「本俱乐部商城里的这件商品」——
   // 推荐只能看不能买等于没落地，配上会员价才有意义。
   return opts.canBuy
-    ? '<button type="button" class="gear-row buyable" onclick="buy('+Number(p.id||0)+')" title="下单购买">'+inner+'</button>'
-    : '<button type="button" class="gear-row buyable" onclick="openGearProduct('+Number(p.id||0)+')" title="在装备商城里查看这件商品">'+inner+'</button>';
+    ? '<button type="button" class="gear-row buyable'+(sub?' gear-row--sub':'')+'" onclick="buy('+Number(p.id||0)+')" title="下单购买">'+inner+'</button>'
+    : '<button type="button" class="gear-row buyable'+(sub?' gear-row--sub':'')+'" onclick="openGearProduct('+Number(p.id||0)+')" title="在装备商城里查看这件商品">'+inner+'</button>';
 }
 /* 同一件装备会同时满足多项清单要求（「速干衣裤」与「防晒外套」都命中服装面料），
    整行重复出现会把清单拉长一倍，看起来像推荐错了。第二次出现收成一行只读引用，
@@ -239,26 +242,38 @@ function renderPacking(master,opts){
       if(id)seen[id]=1;
       return gearRow(p,o);
     }).join('');
+    // 平替：清单项没有精确匹配时引擎给的「最接近的同类」。徽标与理由由后端生成，
+    // 这里只负责渲染；同样计入 seen，避免它又在「其他在售装备」里出现一次。
+    const subs=(it.substitutes||[]).map(p=>{
+      const id=Number(p.id||0);
+      if(id&&seen[id])return gearRowDup(p);
+      if(id)seen[id]=1;
+      return gearRow(p,o,true);
+    }).join('');
     // 清单项本身认不出装备品类时（如"身份证"）不该说"商城没有"，那是两回事
-    const body=ms||((it.tags||[]).length?'<div class="gear-none">商城暂无对应装备</div>':'');
+    const body=ms||subs
+      ||((it.tags||[]).length?'<div class="gear-none">商城暂无对应装备，可看看下方其他在售装备</div>':'');
     return '<div class="pack-slot"><div class="pack-need">'+esc(it.text)+'</div>'
       +'<div class="pack-gear">'+body+'</div></div>';
   }).join('');
   const cov=g.coverage||{};
   const miss=[];
   items.forEach(it=>{
-    if((it.tags||[]).length&&!(it.matches||[]).length){
+    // 已经给了平替的项不再算「缺」：整页都在说"暂无"会让顾客以为这家店什么都没有
+    if((it.tags||[]).length&&!(it.matches||[]).length&&!(it.substitutes||[]).length){
       const l=(it.tagLabels||[])[0];
       if(l&&miss.indexOf(l)<0)miss.push(l);
     }
   });
   const md=g.memberDiscount||null;
+  const subCount=Number(cov.substituted||0);
   let head='<div class="gear-head"><span class="eyebrow">按清单搭配</span><span class="gear-summary">清单 '
     +Number(cov.needs||0)+' 项 · 商城可配 '+Number(cov.matched||0)+' 项'
+    +(subCount?' · 平替 '+subCount+' 项':'')
     +(md?' · <b>'+esc(md.tierName)+' '+esc(String(md.discountZhe))+' 折</b>':'')
     +'</span></div>';
   const missLine=miss.length
-    ? '<div class="gear-missing">商城暂无对应装备：'+esc(miss.join('、'))+(o.manage?'（可在商城上架补全）':'')+'</div>'
+    ? '<div class="gear-missing">以下品类商城暂无，也未找到相近装备：'+esc(miss.join('、'))+(o.manage?'（可在商城上架补全）':'')+'</div>'
     : '';
   // 「其他在售装备」是补充位：清单里已经出现过的商品不再重复列一次
   const extraRows=extras.filter(p=>!seen[Number(p.id||0)]).map(p=>gearRow(p,o)).join('');

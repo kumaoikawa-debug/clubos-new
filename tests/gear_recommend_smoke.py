@@ -2,7 +2,8 @@
 
 锁住的不变量：
   1. 候选只能是调用方传入的**真实在售商品**，引擎不会生成或补全商品条目；
-  2. 清单项在商城里没有对应装备时如实标注，不拿相近商品硬凑；
+  2. 清单项没有精确匹配时给**同类平替**：必须带 substitute 标记与说明文案，
+     且 matched 仍为 False（平替不冒充精确匹配）；实在没有相近品类才如实说「暂无」；
   3. 中文歧义单字不误判——「防水防滑徒步鞋」不能被当成饮水需求（否则会推水壶）；
   4. 同一清单项匹配多件时按契合度排序、数量有上限；
   5. 生产模式下 C 端详情接口必须放行 gearRecommendations，否则线上会被静默过滤掉。
@@ -74,13 +75,45 @@ print('== 2. 候选只能来自真实在售商品 ==')
 shown = {m['name'] for i in p['items'] for m in i['matches']} | {e['name'] for e in p['extras']}
 check('推荐里出现的商品都来自传入的候选集', shown <= {c['name'] for c in CATALOG}, shown)
 
-print('== 3. 没有对应装备时如实标注，不硬凑 ==')
+print('== 3. 没有精确匹配时给同类平替，且平替不冒充精确匹配 ==')
 p = plan({'checklist': ['防晒用品'], 'title': '徒步'})
 it = item_of(p, '防晒用品')
-check('防晒用品未匹配到任何商品（商城确实没有防晒件）', bool(it and not it['matched']),
+check('防晒用品未精确匹配（商城确实没有防晒件）', bool(it and not it['matched']),
       it['matches'] if it else None)
 check('认出了防晒品类', bool(it and it['tags'] == ['sun']), it['tags'] if it else None)
 check('清单原文原样保留', bool(it and it['text'] == '防晒用品'))
+# sun → clothing 的替代关系：防风软壳 / 羊毛基础层都算相近衣物
+subs = it['substitutes'] if it else []
+check('给了平替（衣物面料类）', bool(subs) and subs[0]['substitute'] is True,
+      [(s['name'], s['reason']) for s in subs])
+check('平替说明写清「暂无 + 相近品类」', bool(subs) and '暂无' in subs[0]['reason'] and '相近' in subs[0]['reason'],
+      subs[0]['reason'] if subs else '')
+check('coverage.substituted 计数正确', p['coverage'].get('substituted') == 1, p['coverage'])
+check('平替不再出现在其他在售装备里', all(e['id'] != subs[0]['id'] for e in p['extras']),
+      [e['name'] for e in p['extras']])
+
+print('== 3b. 平替按替代关系排序：鞋袜缺货优先推徒步支撑而非衣物 ==')
+p = plan({'checklist': ['防水防滑徒步鞋'], 'title': '徒步'})
+it = item_of(p, '防水防滑徒步鞋')
+subs = it['substitutes'] if it else []
+check('鞋袜的平替是徒步支撑（登山杖）', bool(subs) and subs[0]['name'] == '碳纤维折叠登山杖',
+      [(s['name'], s['reason']) for s in subs])
+
+print('== 3c. 完全没有相近品类时仍如实说「暂无」 ==')
+ONLY_PACK = [product(3, '22L 日行背包', '背包', 459)]
+p = plan({'checklist': ['防晒用品']}, ONLY_PACK)
+it = item_of(p, '防晒用品')
+check('背包替代不了防晒 → 无平替', bool(it and not it['matched'] and not it['substitutes']),
+      it if it else None)
+
+print('== 3d. 有精确匹配的清单项不产生平替 ==')
+p = plan({'checklist': ['单日小背包', '防晒用品']})
+for text in ('单日小背包', '防晒用品'):
+    it = item_of(p, text)
+    want_subs = text == '防晒用品'
+    check('%s 的平替仅在无精确匹配时出现' % text,
+          bool(it) and bool(it['substitutes']) == want_subs,
+          (it and [s['name'] for s in it['substitutes']]))
 
 print('== 4. 歧义单字回归：防水鞋 ≠ 饮水需求 ==')
 p = plan({'checklist': ['防水防滑徒步鞋'], 'title': '徒步'})
