@@ -819,6 +819,19 @@ def delete_activity(club_id:int,activity_id:int):
             for t in ('participant_checkins','participant_group_assignments','execution_event_logs',
                       'activity_notices','execution_groups','occurrence_leaders','occurrence_execution_settings'):
                 c.execute(f'DELETE FROM {t} WHERE occurrence_id IN ({marks})',occ)
+        # 参与者财务分摊与变更日志同样引用 registrations / registration_participants，
+        # 但这两张表没有 activity_id / club_id，只能按报名与参与者 id 删 —— 必须在
+        # 下面那轮删除之前清掉。漏掉它们的后果是整条删除抛 FOREIGN KEY constraint failed
+        # （线上表现为 500）。这个洞长期存在却没暴露：以前只要有未取消的报名就被 409
+        # 挡在前面，根本走不到这里；把 refunded 从护栏判据里去掉之后才第一次踩到。
+        reg_ids=[int(r['id']) for r in c.execute('SELECT id FROM registrations WHERE activity_id=? AND club_id=?',(activity_id,club_id)).fetchall()]
+        if reg_ids:
+            rm=','.join('?'*len(reg_ids))
+            part_ids=[int(r['id']) for r in c.execute(f'SELECT id FROM registration_participants WHERE registration_id IN ({rm})',reg_ids).fetchall()]
+            pm=','.join('?'*len(part_ids))
+            for t in ('participant_financial_allocations','participant_change_logs'):
+                c.execute(f'DELETE FROM {t} WHERE registration_id IN ({rm})',reg_ids)
+                if part_ids: c.execute(f'DELETE FROM {t} WHERE participant_id IN ({pm})',part_ids)
         for t in ('registration_participants','registrations','content_assets','activity_detail_versions'):
             c.execute(f'DELETE FROM {t} WHERE activity_id=? AND club_id=?',(activity_id,club_id))
         c.execute('DELETE FROM activity_occurrences WHERE activity_id=? AND club_id=?',(activity_id,club_id))

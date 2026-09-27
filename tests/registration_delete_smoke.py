@@ -107,6 +107,54 @@ expect_ok(aid, "级联删除用例可删")
 ck("报名行一并删除", not con.execute("SELECT 1 FROM registrations WHERE activity_id=?", (aid,)).fetchone())
 ck("团期行一并删除", not con.execute("SELECT 1 FROM activity_occurrences WHERE activity_id=?", (aid,)).fetchone())
 
+# 6. 参与者财务分摊 / 变更日志也必须一起清掉。
+#    这两条引用 registrations 与 registration_participants，但表自身没有 activity_id /
+#    club_id，只能按 registration_id / participant_id 删。它们不在删除清单里时，整条
+#    DELETE 会抛 FOREIGN KEY constraint failed —— 线上表现为「删活动 500」。
+#    这个洞长期存在却没人发现：只要还有未取消的报名就被 409 挡在前面，走不到级联这一步；
+#    把 refunded 从护栏判据里去掉之后才第一次被踩到，而且它是通用的 —— 任何有过参与者的
+#    活动都删不掉，不只是某一场测试活动。
+#    下面的对照组先证明「外键确实生效」，再证明 delete_activity 确实绕开了它，
+#    避免只报「看起来对了」。
+con.execute("PRAGMA foreign_keys=ON")
+
+
+def mkpart(aid, occ, rid):
+    cur = con.execute(
+        "INSERT INTO registration_participants(registration_id,activity_id,occurrence_id,club_id,payer_user_id,"
+        "linked_user_id,name,phone,relation_to_payer,status) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        (rid, aid, occ, CLUB, 1, 1, "用例参与者", "13800000000", "本人", "active"))
+    con.commit()
+    return cur.lastrowid
+
+
+aid, occ = mkact()
+mkreg(aid, occ, "cancelled")
+rid = con.execute("SELECT id FROM registrations WHERE activity_id=?", (aid,)).fetchone()[0]
+pid = mkpart(aid, occ, rid)
+con.execute("INSERT INTO participant_financial_allocations(registration_id,participant_id,original_amount,cash_paid)"
+            " VALUES(?,?,?,?)", (rid, pid, 198.0, 198.0))
+con.execute("INSERT INTO participant_change_logs(participant_id,registration_id,action,before_json,after_json,"
+            "actor_type,note) VALUES(?,?,?,?,?,?,?)", (pid, rid, "form_filled", "{}", "{}", "admin", "用例"))
+con.commit()
+
+# 对照组：按「修好之前」的顺序先删参与者，必须撞外键失败。
+con.execute("BEGIN")
+try:
+    con.execute("DELETE FROM registration_participants WHERE id=?", (pid,))
+    ck("对照组：外键约束确实生效", False, "孤儿分摊行没挡住删除")
+except sqlite3.IntegrityError as e:
+    ck("对照组：不先清分摊/变更日志就会外键失败", "FOREIGN KEY" in str(e), str(e))
+finally:
+    con.rollback()
+
+expect_ok(aid, "有财务分摊+变更日志的活动可删")
+ck("财务分摊行一并删除",
+   not con.execute("SELECT 1 FROM participant_financial_allocations WHERE registration_id=?", (rid,)).fetchone())
+ck("变更日志行一并删除",
+   not con.execute("SELECT 1 FROM participant_change_logs WHERE registration_id=?", (rid,)).fetchone())
+ck("参与者行一并删除", not con.execute("SELECT 1 FROM registration_participants WHERE id=?", (pid,)).fetchone())
+
 print()
 if FAILED:
     print("RESULT: %d FAILED" % len(FAILED))
