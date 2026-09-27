@@ -580,29 +580,41 @@ let LEADER_FORM=null;
 function refreshLeaderPane(){
   if(!currentActivity||!$('#sec-leaders'))return;
   $('#sec-leaders').outerHTML=renderLeaderCard(currentActivity,currentActivity.id);
+  // 整块重绘会把裁剪面板一起冲掉，但它背后是一个内存里的裁剪会话 ——
+  // 重新挂载即可，别让用户选好的图因为一次无关重绘就白选了。
+  mountLeaderCrop();
 }
 
 function toggleLeaderForm(mode,actId,leaderId){
   const same=LEADER_FORM&&LEADER_FORM.mode===mode&&Number(LEADER_FORM.actId)===Number(actId)
     &&(mode!=='edit'||Number(LEADER_FORM.leaderId)===Number(leaderId));
-  LEADER_FORM=same?null:{mode,actId:Number(actId),...(mode==='edit'?{leaderId:Number(leaderId),pendingFile:null}:{})};
+  dropLeaderDraft();   // 关掉旧表单：回收预览 URL、丢弃未提交的裁图与在途裁剪会话
+  LEADER_FORM=same?null:{mode,actId:Number(actId),
+    ...(mode==='edit'?{leaderId:Number(leaderId)}:{}),pendingFile:null,preview:null};
   refreshLeaderPane();
 }
 
 function leaderFormHtml(actId,r){
   const editing=LEADER_FORM.mode==='edit';
   const av=r.avatar_url||'';
+  // 本地预览优先：刚裁好的图还没上传（新增态更是连 id 都还没有），
+  // 不显示预览的话「选完图什么都没变」= 用户以为上传没响应。
+  const shown=(LEADER_FORM.preview||av);
   const specs=(currentActivity&&currentActivity.leaderPlan&&currentActivity.leaderPlan.specialties)||[];
   return `<div class="leader-inline" id="leaderInlineForm">
     <div class="leader-inline__head">
-      <span class="leader-av-wrap" id="leaderAvWrap">
-        ${leaderAvatar(r.name||'',av,'lg')}
-        <button type="button" class="leader-av-edit" data-ava-pick="1" title="上传 / 替换头像">✎</button>
+      <div class="leader-av-cell">
+        <button type="button" class="leader-av-pick" data-ava-pick title="上传头像">
+          <span class="leader-av-wrap" id="leaderAvWrap">${leaderAvatar(r.name||'',shown,'xl')}<span class="leader-av-cam" aria-hidden="true">${AVA_CAM_SVG}</span></span>
+        </button>
+        <div class="leader-av-meta">
+          <b>${editing?`编辑领队 · ${esc(r.name||'')}`:'新增领队'}</b>
+          <button type="button" class="leader-av-link" data-ava-pick data-ava-tip>${shown?'更换头像':'上传头像 · 可拖动缩放'}</button>
+        </div>
         <input type="file" accept="image/*" data-ava-input hidden>
-      </span>
-      <b>${editing?`编辑领队 · ${esc(r.name||'')}`:'新增领队'}</b>
-      ${editing?'':'<span class="leader-inline__hint">（先建档案，保存后可补头像）</span>'}
+      </div>
     </div>
+    <div class="leader-crop" id="leaderCrop" hidden></div>
     <div class="leader-inline__grid">
       <label>姓名 *<input name="name" value="${esc(r.name||'')}" required placeholder="如 王野"></label>
       <label>联系电话<input name="phone" value="${esc(r.phone||'')}" placeholder="手机号"></label>
@@ -619,6 +631,216 @@ function leaderFormHtml(actId,r){
       ${editing?'<span class="leader-inline__hint">停用后不再参与推荐，但历史带队记录会保留。</span>':''}
     </div>
   </div>`;
+}
+
+/* ===== 头像上传 + 裁剪（v0.28.1）=====
+   用户反馈两点：① 点头像没反应 ② 希望图片能调节、自动适配到最佳。
+
+   ① 的根因是入口本身是「隐藏交互」：✎ 只在 hover 才浮出（触屏永远看不到），
+      而可点的只有那枚蒙层、圆本身不是按钮；再加上选完图后圆里没有任何变化，
+      于是一次正常的选图在页面上完全无迹可寻 —— 看起来就是「上传没响应」。
+      现在：圆自己是 <button>、相机角标常显、旁边再给一行文字按钮，
+      三处入口指向同一个 file input；选完立刻在圆里显示裁好的预览。
+
+   ② 的「自动适配」= 进入即按 cover 居中铺满，横图再往上偏一点点
+      （人像主体通常偏上 —— 这是启发式，不是人脸检测，不要吹成智能裁脸）；
+      之后可拖动 / 滚轮 / 滑块微调，输出固定 512×512 方形 JPEG。 */
+const AVA_CAM_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5a2 2 0 0 1 2-2h1.6l1.2-1.8h8.4L17.4 6.5H19a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12" r="3.4"/></svg>';
+const AVA_CROP_SIZE=228;   // 取景框逻辑边长，与 CSS .leader-crop__stage 的 228px 一致
+const AVA_OUT=512;         // 输出边长：60px 显示下 4x 也清晰，体积仍在几十 KB
+let LEADER_CROP=null;      // {img,url,w,h,scale,ox,oy}，与 DOM 解耦，重绘后能重新挂载
+
+/* 「自动适配」的默认落点：cover 居中，横图再上移一点。
+   竖图 / 方图本来就撑满取景框，额外上移只会裁掉下巴，所以只在明显横图时生效。 */
+function autoCropOffsetY(w,h){
+  const base=Math.max(AVA_CROP_SIZE/w,AVA_CROP_SIZE/h);
+  return w>h*1.15?-h*base*0.08:0;
+}
+
+function openLeaderCrop(file){
+  if(!file)return;
+  if(!/^image\//.test(file.type||'')){showAlert({title:'这不是图片',message:'请选择 png / jpg / webp 之类的图片文件。'});return}
+  if(file.size>5*1024*1024){showAlert({title:'图片太大',message:'单张上限 5MB，先在相册里压缩一下再传。'});return}
+  const url=URL.createObjectURL(file);
+  const img=new Image();
+  img.onload=()=>{
+    if(!img.naturalWidth||!img.naturalHeight){URL.revokeObjectURL(url);showAlert({title:'这张图读不出来',message:'浏览器无法解码这个文件，换一张试试。'});return}
+    if(LEADER_CROP)URL.revokeObjectURL(LEADER_CROP.url);
+    LEADER_CROP={img,url,w:img.naturalWidth,h:img.naturalHeight,
+      scale:1,ox:0,oy:autoCropOffsetY(img.naturalWidth,img.naturalHeight)};
+    mountLeaderCrop();
+    const st=$('#leaderCrop');if(st&&st.scrollIntoView)st.scrollIntoView({block:'nearest',behavior:'smooth'});
+  };
+  img.onerror=()=>{URL.revokeObjectURL(url);showAlert({title:'这张图读不出来',message:'浏览器无法解码这个文件，换一张试试。'})};
+  img.src=url;
+}
+
+function cropGeom(){
+  const c=LEADER_CROP;
+  const base=Math.max(AVA_CROP_SIZE/c.w,AVA_CROP_SIZE/c.h)*c.scale;
+  return {base,x:AVA_CROP_SIZE/2+c.ox-c.w*base/2,y:AVA_CROP_SIZE/2+c.oy-c.h*base/2};
+}
+
+/* 图像必须始终盖满取景框，否则拖动会露出黑边（输出的方图会带一块空白） */
+function clampCrop(){
+  const c=LEADER_CROP;
+  const base=Math.max(AVA_CROP_SIZE/c.w,AVA_CROP_SIZE/c.h)*c.scale;
+  const mx=Math.max(0,(c.w*base-AVA_CROP_SIZE)/2),my=Math.max(0,(c.h*base-AVA_CROP_SIZE)/2);
+  c.ox=Math.max(-mx,Math.min(mx,c.ox));
+  c.oy=Math.max(-my,Math.min(my,c.oy));
+}
+
+function paintLeaderCrop(){
+  const cv=$('#leaderCropCv');
+  if(!cv||!LEADER_CROP)return;
+  const dpr=Math.min(window.devicePixelRatio||1,2),px=Math.round(AVA_CROP_SIZE*dpr);
+  // 画布像素固定、CSS 尺寸自适应：小屏取景框会被拉宽，1:1 的比例保证不变形
+  if(cv.width!==px){cv.width=px;cv.height=px}
+  const ctx=cv.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle='#0f1f19';ctx.fillRect(0,0,AVA_CROP_SIZE,AVA_CROP_SIZE);
+  const g=cropGeom();
+  // 缩照片时必须开高质量插值，否则细密画面会出摩尔纹
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  ctx.drawImage(LEADER_CROP.img,g.x,g.y,LEADER_CROP.w*g.base,LEADER_CROP.h*g.base);
+}
+
+function setCropScale(v){
+  if(!LEADER_CROP)return;
+  LEADER_CROP.scale=Math.max(1,Math.min(3.2,v));
+  clampCrop();paintLeaderCrop();
+  const z=$('#leaderCropZoom');if(z)z.value=Math.round(LEADER_CROP.scale*100);
+}
+
+function mountLeaderCrop(){
+  const box=$('#leaderCrop');if(!box)return;
+  if(!LEADER_CROP){box.hidden=true;box.innerHTML='';return}
+  box.hidden=false;
+  box.innerHTML=`
+    <div class="leader-crop__stage" id="leaderCropStage">
+      <canvas id="leaderCropCv"></canvas>
+      <div class="leader-crop__ring"></div>
+    </div>
+    <div class="leader-crop__side">
+      <div class="leader-crop__t">调整头像</div>
+      <div class="leader-crop__d">已自动适配并居中。按住拖动可以挪位置，滚轮或下面的滑块缩放 —— 圆圈范围内的就是最终头像。</div>
+      <label class="leader-crop__zoom"><i>缩放</i><input type="range" id="leaderCropZoom" min="100" max="320" step="1" value="${Math.round(LEADER_CROP.scale*100)}"></label>
+      <div class="leader-crop__row">
+        <button class="btn" type="button" data-crop-ok>使用这张</button>
+        <button class="btn ghost" type="button" data-crop-reset>自动适配</button>
+        <button class="btn ghost" type="button" data-crop-cancel>取消</button>
+      </div>
+    </div>`;
+  paintLeaderCrop();
+  const stage=$('#leaderCropStage'),zoom=$('#leaderCropZoom');
+  if(!stage)return;
+  let drag=null;
+  stage.addEventListener('pointerdown',e=>{
+    if(!LEADER_CROP)return;
+    stage.setPointerCapture(e.pointerId);stage.classList.add('is-drag');
+    drag={x:e.clientX,y:e.clientY};
+  });
+  stage.addEventListener('pointermove',e=>{
+    if(!drag||!LEADER_CROP)return;
+    // 小屏上取景框被拉伸过，按实际渲染宽度换算，手指移动 1px 图才跟得上
+    const r=stage.getBoundingClientRect();
+    const k=r.width>0?AVA_CROP_SIZE/r.width:1;
+    LEADER_CROP.ox+=(e.clientX-drag.x)*k;
+    LEADER_CROP.oy+=(e.clientY-drag.y)*k;
+    drag={x:e.clientX,y:e.clientY};
+    clampCrop();paintLeaderCrop();
+  });
+  const stop=()=>{drag=null;stage.classList.remove('is-drag')};
+  stage.addEventListener('pointerup',stop);
+  stage.addEventListener('pointercancel',stop);
+  stage.addEventListener('wheel',e=>{
+    if(!LEADER_CROP)return;
+    e.preventDefault();
+    setCropScale(LEADER_CROP.scale*(e.deltaY<0?1.08:1/1.08));
+  },{passive:false});
+  if(zoom)zoom.addEventListener('input',()=>setCropScale(Number(zoom.value)/100));
+}
+
+/* 只更新头像圆与那行提示，不整块重绘 —— 重绘会吃掉用户已经填好的字段，
+   也会把正在进行的裁剪会话的 DOM 一起掀掉。 */
+function paintLeaderAvatar(){
+  const box=$('#leaderInlineForm');if(!box)return;
+  const name=(box.querySelector('[name=name]')||{}).value||'';
+  const av=(LEADER_FORM&&LEADER_FORM.preview)||(box.querySelector('[name=avatarUrl]')||{}).value||'';
+  const wrap=box.querySelector('#leaderAvWrap');
+  if(wrap)wrap.innerHTML=leaderAvatar(name,av,'xl')+`<span class="leader-av-cam" aria-hidden="true">${AVA_CAM_SVG}</span>`;
+  const tip=box.querySelector('[data-ava-tip]');
+  if(tip)tip.textContent=av?'更换头像':'上传头像 · 可拖动缩放';
+}
+
+function leaderCropBlob(){
+  const out=document.createElement('canvas');
+  out.width=AVA_OUT;out.height=AVA_OUT;
+  const ctx=out.getContext('2d');
+  // 底色用白不用黑：透明 PNG 裁成 JPEG 时黑底会很难看，白底退化成普通白边更安全
+  ctx.fillStyle='#fff';ctx.fillRect(0,0,AVA_OUT,AVA_OUT);
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  const f=AVA_OUT/AVA_CROP_SIZE,g=cropGeom();
+  ctx.drawImage(LEADER_CROP.img,g.x*f,g.y*f,LEADER_CROP.w*g.base*f,LEADER_CROP.h*g.base*f);
+  return new Promise(res=>out.toBlob(b=>res(b),'image/jpeg',0.9));
+}
+
+function resetLeaderCrop(){
+  if(!LEADER_CROP)return;
+  LEADER_CROP.scale=1;LEADER_CROP.ox=0;
+  LEADER_CROP.oy=autoCropOffsetY(LEADER_CROP.w,LEADER_CROP.h);
+  const z=$('#leaderCropZoom');if(z)z.value='100';
+  paintLeaderCrop();
+}
+
+function cancelLeaderCrop(){
+  if(LEADER_CROP)URL.revokeObjectURL(LEADER_CROP.url);
+  LEADER_CROP=null;
+  const box=$('#leaderCrop');if(box){box.hidden=true;box.innerHTML=''}
+  // 取消 = 放弃这一次的选择，回到上传前的样子（编辑态还有原头像兜底）
+  if(LEADER_FORM){
+    if(LEADER_FORM.preview)URL.revokeObjectURL(LEADER_FORM.preview);
+    LEADER_FORM.preview=null;LEADER_FORM.pendingFile=null;
+  }
+  paintLeaderAvatar();
+}
+
+async function confirmLeaderCrop(){
+  if(!LEADER_CROP)return;
+  const blob=await leaderCropBlob();
+  URL.revokeObjectURL(LEADER_CROP.url);
+  LEADER_CROP=null;
+  const box=$('#leaderCrop');if(box){box.hidden=true;box.innerHTML=''}
+  if(!blob){toast('图片处理失败，换一张试试');return}
+  const file=new File([blob],'avatar.jpg',{type:'image/jpeg'});
+  if(LEADER_FORM){
+    if(LEADER_FORM.preview)URL.revokeObjectURL(LEADER_FORM.preview);
+    LEADER_FORM.preview=URL.createObjectURL(blob);
+    LEADER_FORM.pendingFile=file;
+  }
+  paintLeaderAvatar();
+  // 编辑态已经有 leaderId，可以直接传；新增态要等档案建好才有 id（见 submitLeaderForm）
+  if(LEADER_FORM&&LEADER_FORM.mode==='edit'&&Number(LEADER_FORM.leaderId)){
+    try{
+      const url=await uploadLeaderAvatar(Number(LEADER_FORM.leaderId),file);
+      if(url){
+        const b=$('#leaderInlineForm');
+        if(b){const h=b.querySelector('[name=avatarUrl]');if(h)h.value=url}
+        if(LEADER_FORM.preview)URL.revokeObjectURL(LEADER_FORM.preview);
+        LEADER_FORM.preview=null;LEADER_FORM.pendingFile=null;
+        paintLeaderAvatar();
+      }
+    }catch(err){showAlert({title:'头像上传失败',message:err.message})}
+  }else{
+    toast('头像已选好，保存后生效');
+  }
+}
+
+/* 关表单时把没提交的东西一起清掉，别把 objectURL 漏在内存里 */
+function dropLeaderDraft(){
+  if(LEADER_CROP){URL.revokeObjectURL(LEADER_CROP.url);LEADER_CROP=null}
+  if(LEADER_FORM&&LEADER_FORM.preview){URL.revokeObjectURL(LEADER_FORM.preview);LEADER_FORM.preview=null}
+  const box=$('#leaderCrop');if(box){box.hidden=true;box.innerHTML=''}
 }
 
 async function uploadLeaderAvatar(lid,file){
@@ -662,6 +884,7 @@ async function submitLeaderForm(){
         if(url)payload.avatarUrl=url;
       }
     });
+    dropLeaderDraft();   // 连同没提交的预览一起回收，别把 objectURL 留在内存里
     LEADER_FORM=null;
     await openActivity(actId);
   }catch(e){
@@ -673,62 +896,42 @@ async function submitLeaderForm(){
 document.addEventListener('click',e=>{
   const t=e.target;if(!t||!t.closest)return;
   if(t.closest('[data-lf-submit]')){e.preventDefault();submitLeaderForm();return}
-  if(t.closest('[data-lf-cancel]')){e.preventDefault();LEADER_FORM=null;refreshLeaderPane();return}
+  if(t.closest('[data-lf-cancel]')){e.preventDefault();dropLeaderDraft();LEADER_FORM=null;refreshLeaderPane();return}
+  if(t.closest('[data-crop-ok]')){e.preventDefault();confirmLeaderCrop();return}
+  if(t.closest('[data-crop-reset]')){e.preventDefault();resetLeaderCrop();return}
+  if(t.closest('[data-crop-cancel]')){e.preventDefault();cancelLeaderCrop();return}
   const pk=t.closest('[data-ava-pick]');
-  if(pk){const inp=pk.parentElement.querySelector('[data-ava-input]');if(inp)inp.click()}
+  if(pk){
+    // 两个入口（头像圆、文字按钮）共用同一个 cell 下的 file input
+    const cell=pk.closest('.leader-av-cell')||pk.parentElement;
+    const inp=cell&&cell.querySelector('[data-ava-input]');
+    if(inp)inp.click();
+  }
 });
 
-document.addEventListener('change',async e=>{
+document.addEventListener('change',e=>{
   const t=e.target;
   if(!t||!t.matches||!t.matches('[data-ava-input]'))return;
   const f=t.files&&t.files[0];
-  const wrap=t.parentElement;
-  t.value='';
-  if(!f){return}
-  if(!wrap||!$('#leaderInlineForm')||!LEADER_FORM){toast('请先在领队卡片里打开新增 / 编辑表单');return}
-  const tip=wrap.querySelector('.leader-av');
-  if(LEADER_FORM.mode==='edit'&&tip&&Number(LEADER_FORM.leaderId)){
-    try{
-      const url=await uploadLeaderAvatar(Number(LEADER_FORM.leaderId),f);
-      if(url){
-        const box=$('#leaderInlineForm');
-        if(box){const h=box.querySelector('[name=avatarUrl]');if(h)h.value=url}
-        toast('头像已更新');
-      }
-    }catch(err){showAlert({title:'头像上传失败',message:err.message})}
-  }else{
-    // 新增还没落库，先记住这个文件，等档案建好再传（见 submitLeaderForm）。
-    LEADER_FORM.pendingFile=f;
-    LEADER_FORM.pendingName=f.name;
-    toast('已选中头像，保存后生效');
-  }
-  // 上传完会整块重渲染领队区，不先把用户填过的内容接回来，
-  // 「先打字、再选头像」就会把辛苦填的备注和电话清空（实测复现过）。
-  const snap=leaderFormSnapshot();
-  refreshLeaderPane();
-  leaderFormRestore(snap);
+  t.value='';   // 不清空的话，第二次选同一个文件不会再触发 change
+  if(!f)return;
+  if(!$('#leaderInlineForm')||!LEADER_FORM){toast('请先在领队卡片里打开新增 / 编辑表单');return}
+  // 不再整块重绘：这里只把文件交给裁剪面板，后面的预览与上传都由它接手。
+  // 原先「重绘 + 快照还原」是为了躲开输入被冲掉，但那套写法解决不了预览问题，
+  // 反而每次都要重搭一遍 DOM —— 现在改成局部更新，那两个函数也就不需要了。
+  openLeaderCrop(f);
 });
 
-/* 内联表单是整块重绘的，任何一次 refreshLeaderPane 都可能吃掉用户已经填好的内容。
-   上传头像这条路径尤其容易撞上，所以统一用「快照 + 还原」兜住。 */
-function leaderFormSnapshot(){
-  if(!LEADER_FORM)return null;
-  const box=$('#leaderInlineForm');if(!box)return null;
-  const v={};
-  box.querySelectorAll('input,select,textarea').forEach(el=>{if(el.name)v[el.name]=el.value});
-  return v;
-}
-function leaderFormRestore(snap){
-  if(!snap||!LEADER_FORM)return;
+// 没头像时头像圆里显示的是姓名首字，改名字要跟着变（有头像时跳过，免得白白重拉一次图）
+document.addEventListener('input',e=>{
+  const t=e.target;
+  if(!t||!t.matches||!t.matches('#leaderInlineForm [name=name]'))return;
   const box=$('#leaderInlineForm');if(!box)return;
-  Object.keys(snap).forEach(k=>{
-    const el=box.querySelector(`[name="${k}"]`);
-    if(!el||el.type==='file')return;
-    // 头像地址刚被上传结果改写过，空的时候才回填旧值，别把新地址冲掉
-    if(k==='avatarUrl'&&el.value)return;
-    el.value=snap[k];
-  });
-}
+  const hasAv=(LEADER_FORM&&LEADER_FORM.preview)||(box.querySelector('[name=avatarUrl]')||{}).value;
+  if(hasAv)return;
+  const wrap=box.querySelector('#leaderAvWrap');
+  if(wrap)wrap.innerHTML=leaderAvatar(t.value,'','xl')+`<span class="leader-av-cam" aria-hidden="true">${AVA_CAM_SVG}</span>`;
+});
 
 function addLeader(actId){toggleLeaderForm('add',actId)}
 

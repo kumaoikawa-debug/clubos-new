@@ -309,8 +309,9 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .leader-av--lg{width:44px;height:44px;font-size:16px}
 .leader-av--xl{width:60px;height:60px;font-size:22px}
 .leader-av-wrap{position:relative;display:inline-flex;flex:0 0 auto}
-.leader-av-wrap .leader-av-edit{position:absolute;inset:0;border-radius:50%;background:#17342ccc;color:#fff;border:0;font-size:18px;line-height:1;cursor:pointer;opacity:0;transition:opacity .15s;display:flex;align-items:center;justify-content:center}
-.leader-av-wrap:hover .leader-av-edit,.leader-av-wrap:focus-within .leader-av-edit{opacity:1}
+/* 原 `.leader-av-edit`（hover 才浮出的 ✎ 蒙层）已删除：它是典型的隐藏交互 ——
+   触屏没有 hover，控件永远不出现；桌面上也只有那枚蒙层可点，圆本身不是按钮。
+   取而代之的是下方 .leader-av-pick + 常显 .leader-av-cam 角标。 */
 /* 头像回流到 chip / 推荐按钮里：圆角跟着容器走，别露出方角。 */
 .leader-chip .leader-av,.leader-rec .leader-av{width:22px;height:22px;font-size:10px}
 .leader-chip{padding-left:4px}
@@ -332,6 +333,61 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .leader-inline__foot{display:flex;gap:8px;align-items:center;margin-top:11px;flex-wrap:wrap}
 .leader-inline__hint{font-size:11px;color:#8a9a91}
 @media(max-width:640px){.leader-inline__grid{grid-template-columns:1fr}}
+
+/* ===== 头像上传控件（v0.28.1）=====
+   原来只有 hover 才浮出的 ✎ 是「隐藏交互」：触屏设备没有 hover，
+   控件永远不会出现；桌面上用户也只会去点头像本身，而可点的只有那枚
+   44×44 的圆角蒙层。两处叠加的结果就是「点上传头像没有任何响应」。
+   现在整块（圆 + 角标）是一个 <button>，相机角标常显，旁边还有一行
+   明确的可点文字 —— 三处入口指向同一个 file input。 */
+.leader-av-cell{display:flex;align-items:center;gap:11px;flex:0 0 auto;min-width:0}
+.leader-av-pick{position:relative;padding:0;border:0;background:none;line-height:0;cursor:pointer;border-radius:50%;flex:0 0 auto;
+  transition:transform .12s}
+.leader-av-pick:hover{transform:translateY(-1px)}
+.leader-av-pick:active{transform:translateY(0)}
+.leader-av-pick:focus-visible{outline:2px solid #2f6b48;outline-offset:3px}
+.leader-av-pick:hover .leader-av{filter:brightness(.88)}
+.leader-av-pick .leader-av{transition:filter .15s}
+/* 角标压在圆的右下角，白描边保证在任何底色上都能看清 */
+.leader-av-cam{position:absolute;right:-3px;bottom:-3px;width:20px;height:20px;border-radius:50%;background:#2f6b48;color:#fff;
+  display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 2px #f7faf5;pointer-events:none}
+.leader-av-cam svg{width:11px;height:11px;display:block}
+.leader-av-meta{display:flex;flex-direction:column;gap:3px;min-width:0}
+.leader-av-meta b{font-size:13px;color:#224c38}
+.leader-av-meta span{font-size:11px;color:#8a9a91}
+.leader-av-link{border:0;background:none;padding:0;font:inherit;font-size:11.5px;font-weight:800;color:#2f6b48;
+  cursor:pointer;text-align:left;text-decoration:underline;text-decoration-color:#bcd6c4;text-underline-offset:3px}
+.leader-av-link:hover{text-decoration-color:#2f6b48}
+
+/* 裁剪面板：内联展开，不弹层（与「详情预览里不要弹窗」保持一致） */
+.leader-crop{display:flex;gap:16px;align-items:flex-start;border:1px solid #dcebdc;background:#fff;border-radius:12px;
+  padding:12px;margin:2px 0 12px}
+.leader-crop[hidden]{display:none}
+.leader-crop__stage{position:relative;flex:0 0 auto;width:228px;height:228px;border-radius:12px;overflow:hidden;
+  background:#0f1f19;cursor:grab;touch-action:none;user-select:none}
+.leader-crop__stage.is-drag{cursor:grabbing}
+.leader-crop__stage canvas{display:block;width:100%;height:100%}
+/* 圆形取景遮罩：一张 radial-gradient 同时给出「圆内透明 + 圆外压暗」。
+   不要用 inset box-shadow 做这件事 —— 那是「在元素内部画阴影」，会从边缘向内
+   扩散、效果取决于半径，实测在 228px 的框上几乎看不出压暗；外阴影则会被
+   overflow:hidden 整个吃掉。gradient 是唯一一处写清楚「圆在哪」的地方。 */
+.leader-crop__ring{position:absolute;inset:0;pointer-events:none;
+  /* closest-side 不能省：radial-gradient 默认 farthest-corner，半径按对角线算，
+     同一个 50% 会画出一个只有框宽 70% 的小圆，和白色描边对不上。 */
+  background:radial-gradient(circle closest-side at 50% 50%,rgba(0,0,0,0) 0 99.2%,rgba(15,31,25,.58) 100%)}
+.leader-crop__ring::after{content:'';position:absolute;inset:0;border-radius:50%;border:2px solid rgba(255,255,255,.9)}
+.leader-crop__side{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px}
+.leader-crop__t{font-size:12px;font-weight:800;color:#224c38}
+.leader-crop__d{font-size:11px;color:#6b8a7b;line-height:1.6}
+.leader-crop__zoom{display:flex;align-items:center;gap:9px}
+.leader-crop__zoom i{font-style:normal;font-size:11px;color:#6b8a7b;flex:0 0 auto}
+.leader-crop__zoom input[type=range]{flex:1;min-width:0;accent-color:#2f6b48;height:20px}
+.leader-crop__row{display:flex;gap:8px;flex-wrap:wrap;margin-top:auto}
+.leader-crop__row .btn{padding:6px 13px;font-size:12px;min-height:32px}
+@media(max-width:640px){
+  .leader-crop{flex-direction:column;align-items:stretch}
+  .leader-crop__stage{width:100%;height:auto;aspect-ratio:1}
+}
 /* 命中区下限：卡片上的「编辑 / 删除」原为 44×23，低于 24px 的可点最小高度，容易点空。 */
 .act-op{padding:6px 11px;min-height:28px;display:inline-flex;align-items:center}
 .act-op:focus-visible{outline:2px solid #70a279;outline-offset:2px}
