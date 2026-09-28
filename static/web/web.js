@@ -671,11 +671,15 @@ function bookingHtml(a){
      早前这里是两个空的 number 输入框，等于把「我该抵多少」甩给顾客；更糟的是顾客乱填也看不出
      错在哪。数值一律来自同一套封顶规则，前端不自己算百分比 —— 否则会出现「页面说能抵 30、
      结账只抵 0」这种对不上的账。 */
-  const clubBox=e.acceptClubPoints?pointBlock('club','活动积分','本俱乐部资产 · 成本由俱乐部承担',p.clubPointsMaxDiscountPercent<100?`本活动最多抵活动金额的 ${p.clubPointsMaxDiscountPercent}%`:''):'';
-  const gearBox=e.acceptGearPoints?pointBlock('gear','装备积分','平台资产 · 抵扣由总平台补贴',p.gearPointsMaxDiscountAmount==null?'':`本活动最多补贴 ${money(p.gearPointsMaxDiscountAmount)}`):'';
+  /* 积分对顾客只是一件「这单能少付多少」的事。活动积分与装备积分在后端是两种不同资产、
+     成本归属也不同（一个俱乐部承担、一个平台补贴），但这两件事顾客都不需要知道 ——
+     他更不该为同一件事分别勾选两次。这里合并成一个开关：
+     勾上 = 两类各按系统算出的上限用满（最省），取消 = 都不用。
+     封顶依然全部来自后端 maxRedeemable，前端不自己算百分比，否则会出现
+     「页面说能抵 30、结账只抵 0」这种对不上的账。 */
   let pointArea='';
-  if(p.enabled && (clubBox||gearBox)){pointArea=`<div class="point-row">${clubBox}${gearBox}</div>`}
-  else if(!p.enabled){pointArea='<div class="notice" style="margin-top:14px">本活动不参与积分抵扣。</div>'}
+  if(p.enabled&&(e.acceptClubPoints||e.acceptGearPoints))pointArea=pointPanel();
+  else if(!p.enabled)pointArea='<div class="notice" style="margin-top:14px">本活动不参与积分抵扣。</div>';
   const earnNote=e.earnClubPoints?'<div class="notice" style="margin-top:10px">报名完成后，本次现金实付金额将按俱乐部规则累计活动积分。</div>':'';
   const benefitArea=`<div id="activityBenefitArea" style="margin-top:12px"></div>`;
   const pp=a.participantPolicy||{};
@@ -694,7 +698,7 @@ function bookingHtml(a){
     <div id="paxForms"></div>
     <div class="w-block__foot">${pp.allowIncompleteAtCheckout===false?'本活动要求支付前完成全部报名资料。':'可先报名支付；身份证 / 紧急联系人等资料可在「我的订单」后补。'}${pp.insuranceRequired?' · 本活动需要保险资料。':''}${cur>=maxPax?` · 单笔最多 ${maxPax} 人`:''}</div>
     <input type="hidden" id="participantCount" value="${cur}"></div>`;
-  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${pointArea}${benefitArea}${earnNote}${refundPolicyBrief(a.refundPolicy)}<div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
+  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${earnNote}${refundPolicyBrief(a.refundPolicy)}${pointArea}<div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
 }
 /* 团期卡：横向滑动的竖版卡片。竖排长列表在团期一多时把报名页拉得很长，
    而且「哪天 / 多少钱」要上下扫着比；卡片固定宽、一次并排露出两张左右，
@@ -772,7 +776,8 @@ async function loadActivityVouchers(){
   try{activityVouchers=await api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=activity`)}catch(e){activityVouchers=[]}
   const box=$('#activityBenefitArea');
   if(!activityVouchers.length){box.innerHTML='';return}
-  box.innerHTML=`<div class="point-box"><b>会员福利券</b><div class="sub">积分兑换后的福利券可在交易中真正核销，成本归属保持不变。</div><select id="benefitUse" onchange="refreshQuote()" style="width:100%;margin-top:8px;padding:10px;border-radius:10px"><option value="">本单不使用福利券</option>${activityVouchers.map(v=>`<option value="${esc(v.voucher_code)}">${esc(v.title)} · 抵 ${money(v.cash_value)} · ${v.funding_owner==='CLUB'?'俱乐部承担':'平台承担'}</option>`).join('')}</select></div>`
+  /* 福利券同样不写成本归属：顾客要判断的只是「用哪张更划算」。 */
+  box.innerHTML=`<div class="point-pay"><div class="point-pay__hd"><b>福利券</b><span class="point-pay__tag">${activityVouchers.length} 张可用</span></div><select id="benefitUse" onchange="refreshQuote()"><option value="">本单不使用福利券</option>${activityVouchers.map(v=>`<option value="${esc(v.voucher_code)}">${esc(v.title)} · 抵 ${money(v.cash_value)}</option>`).join('')}</select></div>`
 }
 function selectOcc(id,el){
   currentOcc=currentAct.occurrences.find(x=>x.id===id);
@@ -784,40 +789,55 @@ function selectOcc(id,el){
   if(el.scrollIntoView)try{el.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'})}catch(e){}
   refreshQuote()
 }
-function pointBlock(kind,title,owner,capNote){
-  const club=kind==='club';
-  return `<div class="point-box"><div class="point-box__hd"><b>${title}</b><label class="point-toggle"><input type="checkbox" id="${club?'clubUseToggle':'gearUseToggle'}" onchange="togglePoints('${kind}',this.checked)">用积分抵扣</label></div><div class="sub">${owner}${capNote?` · ${capNote}`:''}</div><div class="point-cap" id="${club?'clubUseCap':'gearUseCap'}">正在计算本单最多可抵多少…</div><input type="hidden" id="${club?'clubUse':'gearUse'}" value="0"></div>`
+/* 积分抵扣面板：一个开关 + 一句「本单可抵 ¥X」。
+   刻意不写成本归属、不写上限成因、不写可用余额 —— 那是结算侧的信息。
+   顾客站在付款页上只有两个问题：能省多少、这单用不用。 */
+function pointPanel(){
+  return `<div class="point-pay" id="pointsPanel">
+    <div class="point-pay__hd"><b>积分抵扣</b>
+      <label class="point-toggle"><input type="checkbox" id="pointsUseToggle" checked onchange="togglePoints(this.checked)">使用积分抵扣</label>
+    </div>
+    <div class="point-pay__cap" id="pointsUseCap">正在计算本单最多可抵多少…</div>
+    <input type="hidden" id="clubUse" value="0">
+    <input type="hidden" id="gearUse" value="0">
+  </div>`;
 }
-/* 勾选 = 用系统算出的上限；取消 = 归零。顾客不需要、也没机会填任何数字。 */
-function togglePoints(kind,on){
-  const box=$(kind==='club'?'#clubUse':'#gearUse');if(!box)return;
-  box.value=on?String(Number(box.dataset.max||0)):0;
+/* 两类积分共用一个开关：勾选 = 各用系统算出的上限，取消 = 都归零。
+   顾客不需要、也没机会填任何数字。 */
+function togglePoints(on){
+  const c=$('#clubUse'),g=$('#gearUse');if(!c||!g)return;
+  c.value=on?String(Number(c.dataset.max||0)):'0';
+  g.value=on?String(Number(g.dataset.max||0)):'0';
   refreshQuote();
 }
 /* 把 maxRedeemable 落到界面上，并回答一个「本单能不能收敛」的问题：
-   返回 true 表示当前提交值与勾选状态不一致（已就地修正），调用方需要重算一次报价。 */
-function syncPointConfirm(kind,mx){
-  const club=kind==='club',cb=$(club?'#clubUseToggle':'#gearUseToggle'),capEl=$(club?'#clubUseCap':'#gearUseCap'),box=$(club?'#clubUse':'#gearUse');
-  if(!cb||!capEl||!box)return false;
-  const max=Number(mx?.points||0),cash=Number(mx?.cash||0),balance=Number(mx?.balance||0);
-  box.dataset.max=String(max);
-  cb.disabled=max<=0;
-  if(max<=0){
-    capEl.innerHTML=mx&&mx.allowed===false?'本活动不支持用这类积分抵扣。':(balance<=0?'当前没有可用积分。':'本单暂无可抵扣额度。');
-  }else{
-    /* 说清上限卡在哪：两种成因句式保持一致，都写成「（…上限）」。
-       早前 balance 侧写「你的可用积分已全部用上」，在顾客还没勾选时就出现「已用上」，
-       读起来像已经扣了；括号里只陈述上限来源，不描述已发生的事。 */
-    const why=mx.limiter==='policy'?'（本活动抵扣上限）':(mx.limiter==='balance'?'（你的积分余额上限）':'');
-    capEl.innerHTML=`最多可抵 <b>${money(cash)}</b> · 使用 ${max} 积分${why}<div class="sub">可用 ${balance} 积分</div>`;
-  }
-  const want=cb.checked?String(max):'0';
-  if(String(box.value||'0')!==want){box.value=want;return true}
-  return false;
+   返回 true 表示当前提交值与勾选状态不一致（已就地修正），调用方需要重算一次报价。
+   mx = 后端给的两类积分上限 {club:{points,cash,balance}, gear:{...}} ——
+   两类各自封顶的规则不同（一个受活动规则、一个受平台补贴额度），但顾客只看到一个合计。 */
+function syncPointConfirm(mx){
+  const cb=$('#pointsUseToggle'),capEl=$('#pointsUseCap'),c=$('#clubUse'),g=$('#gearUse');
+  if(!cb||!capEl||!c||!g)return false;
+  const cm=(mx&&mx.club)||{},gm=(mx&&mx.gear)||{};
+  const cMax=Number(cm.points||0),gMax=Number(gm.points||0);
+  const cash=Number(cm.cash||0)+Number(gm.cash||0),pts=cMax+gMax;
+  c.dataset.max=String(cMax);g.dataset.max=String(gMax);
+  cb.disabled=cash<=0;
+  /* 只说结论、不解释成因：上限是被活动规则卡住还是被余额卡住，属于规则侧的事。
+     顾客看到「本单可抵 ¥66.66」已经够做决定；算不出来时给一句能行动的实话。 */
+  capEl.innerHTML=cash<=0
+    ?'当前没有可抵扣的积分。'
+    :`本单可抵 <b>${money(cash)}</b><i>用 ${pts} 积分</i>`;
+  const wc=cb.checked?String(cMax):'0',wg=cb.checked?String(gMax):'0';
+  let drifted=false;
+  if(String(c.value||'0')!==wc){c.value=wc;drifted=true}
+  if(String(g.value||'0')!==wg){g.value=wg;drifted=true}
+  return drifted;
 }
 async function refreshQuote(depth=0){if(!currentAct||!currentOcc||!$('#quoteBox'))return;let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';try{let q=await api(`/api/public/activities/${currentAct.id}/price-quote?occurrence_id=${currentOcc.id}&user_id=${USER}&club_points=${cp}&gear_points=${gp}&voucher_codes=${encodeURIComponent(voucher)}&participant_count=${bookingParticipants.length}`);/* 换团期/改人数/刚勾上都会让上限变化，这里把提交值收敛回系统算出的上限，
-   否则会出现「界面写着最多抵 ¥30、实际却按 0 抵扣下单」。depth 只是防呆上限，正常一到两次就稳定。 */let drifted=false;if(q.maxRedeemable){const a=syncPointConfirm('club',q.maxRedeemable.club);const b=syncPointConfirm('gear',q.maxRedeemable.gear);drifted=a||b}/* 抵扣行只在真的减了钱时才出现：没勾积分也画一行「活动积分抵扣 - ¥0」，
-   顾客会以为系统扣了什么、或者以为抵扣坏了 —— 零减项不是「零」这件事值得看的信息。 */let lines=`<div class="quote-box__hd">订单摘要</div><div class="quote-line"><span>活动费用（${q.participantCount} 人 × ${money(q.unitPrice)}）</span><span>${money(q.original)}</span></div>`;if(q.pointsPolicy?.effective?.acceptClubPoints&&Number(q.clubPointDiscount||0)>0)lines+=`<div class="quote-line"><span>活动积分抵扣（俱乐部承担）</span><span class="is-cut">- ${money(q.clubPointDiscount)}</span></div>`;if(q.pointsPolicy?.effective?.acceptGearPoints&&Number(q.platformPointSubsidy||0)>0)lines+=`<div class="quote-line"><span>装备积分补贴（平台承担）</span><span class="is-cut">- ${money(q.platformPointSubsidy)}</span></div>`;(q.benefits?.applied||[]).forEach(v=>{lines+=`<div class="quote-line"><span>${esc(v.title)}（${v.fundingOwner==='CLUB'?'俱乐部承担':'平台承担'}）</span><span class="is-cut">- ${money(v.cashValue)}</span></div>`});lines+=`<div class="quote-line total"><span>需支付</span><span>${money(q.payable)}</span></div>`;let balances=[];if(q.pointsPolicy?.effective?.acceptClubPoints)balances.push(`活动积分 ${q.wallet.clubPoints}`);if(q.pointsPolicy?.effective?.acceptGearPoints)balances.push(`装备积分 ${q.wallet.gearPoints}`);if(balances.length)lines+=`<div class="sub" style="color:#a9bbb4;margin-top:8px">可用：${balances.join(' · ')}</div>`;/* await 期间详情页可能已被「返回活动」清空（backList 会置空 currentAct/currentOcc），
+   否则会出现「界面写着最多抵 ¥30、实际却按 0 抵扣下单」。depth 只是防呆上限，正常一到两次就稳定。 */let drifted=false;if(q.maxRedeemable)drifted=syncPointConfirm(q.maxRedeemable)/* 抵扣行只在真的减了钱时才出现：没勾积分也画一行「积分抵扣 - ¥0」，
+   顾客会以为系统扣了什么、或者以为抵扣坏了 —— 零减项不是「零」这件事值得看的信息。
+   两类积分在这里合成一行「积分抵扣」：付账时顾客只需要看到一个减项，
+   不需要知道这笔钱最后由俱乐部承担还是由平台补贴（那属于结算侧，不是顾客要判断的事）。 */let lines=`<div class="quote-box__hd">订单摘要</div><div class="quote-line"><span>活动费用（${q.participantCount} 人 × ${money(q.unitPrice)}）</span><span>${money(q.original)}</span></div>`;const ptCut=Number(q.clubPointDiscount||0)+Number(q.platformPointSubsidy||0);if(ptCut>0)lines+=`<div class="quote-line"><span>积分抵扣</span><span class="is-cut">- ${money(ptCut)}</span></div>`;(q.benefits?.applied||[]).forEach(v=>{lines+=`<div class="quote-line"><span>${esc(v.title)}</span><span class="is-cut">- ${money(v.cashValue)}</span></div>`});lines+=`<div class="quote-line total"><span>需支付</span><span>${money(q.payable)}</span></div>`;/* await 期间详情页可能已被「返回活动」清空（backList 会置空 currentAct/currentOcc），
    容器没了就不能再往里写 —— 否则这里抛错，还会被下面的 catch 再抛一次。 */
 const qb=$('#quoteBox');if(!qb)return;qb.innerHTML=lines;
 /* 按钮上直接写清要付多少：顾客在点「立即报名」之前唯一真正想知道的就是这个数字，
@@ -906,9 +926,8 @@ async function loadMemberCenter(){
      而不是一句话糊在一起 —— 顾客要判断的是「这个值不值这么多积分」。 */
   if($('#memberBenefits'))$('#memberBenefits').innerHTML=(d.benefits||[]).map(x=>{
     const pt=x.points_type==='club'?'活动积分':'装备积分';
-    const owner=x.owner_type==='CLUB'?'俱乐部承担':'ClubOS 平台承担';
     return `<div class="w-bnf">
-      <div class="w-bnf__hd"><b>${esc(x.title)}</b>${badge(owner,x.owner_type==='CLUB'?'mute':'info')}</div>
+      <div class="w-bnf__hd"><b>${esc(x.title)}</b></div>
       ${x.description?`<p class="w-bnf__desc">${esc(x.description)}</p>`:''}
       <div class="w-bnf__ft">
         <div class="w-bnf__cost"><b>${x.points_cost}</b><span>${pt}</span>${x.cash_value?`<em>权益价值 ${money(x.cash_value)}</em>`:''}</div>
@@ -916,7 +935,7 @@ async function loadMemberCenter(){
       </div></div>`}).join('')||'<div class="w-empty">'+WI.gift+'<div>暂无可兑换福利</div></div>';
   if($('#memberRedemptions'))$('#memberRedemptions').innerHTML=(d.redemptions||[]).map(x=>`<div class="w-rdm">
       <div class="w-rdm__hd"><b>${esc(x.title)}</b>${badge(x.status==='issued'?'可使用':x.status==='held'?'结算中':x.status==='used'?'已使用':x.status,stTone(x.status))}</div>
-      <div class="w-rdm__meta">${x.points_spent} ${x.point_type==='club'?'活动积分':'装备积分'} · ${x.funding_owner==='CLUB'?'俱乐部承担':'平台承担'}</div>
+      <div class="w-rdm__meta">${x.points_spent} ${x.point_type==='club'?'活动积分':'装备积分'}</div>
       ${x.voucher_code?`<div class="w-rdm__code">券码 <code>${esc(x.voucher_code)}</code></div>`:''}
     </div>`).join('')||'<div class="w-empty">'+WI.ticket+'<div>还没有兑换记录</div></div>';
 }
