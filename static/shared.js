@@ -198,7 +198,13 @@ function renderPromo(detail,master={},opts={}){
       const ok=resolvedRefs(refs,mm);
       if(ok.length)h+=`<section class="ed-gallery count-${Math.min(ok.length,4)}">${ok.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
     }
-    else if(b.type==='timeline')h+=`<section class="ed-section ed-timeline"><div class="ed-section-head"><div class="ed-kicker">SCHEDULE</div><h2>${esc(b.title||'行程')}</h2></div><div class="timeline-list">${(b.items||[]).map(x=>`<div class="timeline-item"><time>${esc(x.time||'')}</time><p>${esc(x.text||x.content||'')}</p></div>`).join('')}</div></section>`;
+    else if(b.type==='timeline'){
+      /* 模型输出的行程项形状不稳定（字符串 / {time,text} / {day,schedule:[...]}），
+         过去只认 {time,text}，其他形状整段渲染成空行（用户截图实锤「行程区只有图片没有字」）。
+         统一走 itineraryRows 归一；归一后为空就整段不渲染，宁缺勿空。 */
+      const rows=itineraryRows(b.items||b.body||[]);
+      if(rows.length)h+=`<section class="ed-section ed-timeline"><div class="ed-section-head"><div class="ed-kicker">SCHEDULE</div><h2>${esc(b.title||b.headline||'行程')}</h2></div><div class="timeline-list">${rows.map(x=>`<div class="timeline-item"><time>${esc(x.time)}</time><p>${esc(x.text)}</p></div>`).join('')}</div></section>`;
+    }
     else if(b.type==='info')h+=`<section class="ed-section ed-info"><div class="ed-section-head"><div class="ed-kicker">GOOD TO KNOW</div><h2>${esc(b.title||'出发前知道')}</h2></div><div class="info-chips">${(b.items||[]).map(x=>`<div>${esc(x)}</div>`).join('')}</div></section>`;
     else if(b.type==='quote')h+=`<section class="ed-quote">“${esc(b.text||'')}”</section>`;
     else if(b.type==='divider')h+='<div class="ed-divider"></div>';
@@ -248,8 +254,12 @@ function renderPacking(master,opts){
   const items=g.items||[],extras=g.extras||[];
   if(!items.length&&!extras.length)return chips;
   const o={canBuy:!!opts.canBuy&&typeof window.buy==='function',manage:!!opts.manage};
+  /* 原则（2026-09-28 用户定）：推荐装备必须匹配商城，有货才显示、没货就不显示。
+     「商城暂无对应装备」占位与缺货品类提示是给老板看的运营信息（manage），
+     顾客看到的应当只有「清单 + 能买到的装备」——满屏"暂无"只会显得商城很空。 */
+  const visible=items.filter(it=>(it.matches||[]).length||(it.substitutes||[]).length);
   const seen={};                                          // 已完整展示过的商品 id
-  const slots=items.map(it=>{
+  const slot=(it)=>{
     const ms=(it.matches||[]).map(p=>{
       const id=Number(p.id||0);
       if(id&&seen[id])return gearRowDup(p);
@@ -269,16 +279,9 @@ function renderPacking(master,opts){
       ||((it.tags||[]).length?'<div class="gear-none">商城暂无对应装备，可看看下方其他在售装备</div>':'');
     return '<div class="pack-slot"><div class="pack-need">'+esc(it.text)+'</div>'
       +'<div class="pack-gear">'+body+'</div></div>';
-  }).join('');
+  };
+  const slots=(o.manage?items:visible).map(slot).join('');
   const cov=g.coverage||{};
-  const miss=[];
-  items.forEach(it=>{
-    // 已经给了平替的项不再算「缺」：整页都在说"暂无"会让顾客以为这家店什么都没有
-    if((it.tags||[]).length&&!(it.matches||[]).length&&!(it.substitutes||[]).length){
-      const l=(it.tagLabels||[])[0];
-      if(l&&miss.indexOf(l)<0)miss.push(l);
-    }
-  });
   const md=g.memberDiscount||null;
   const subCount=Number(cov.substituted||0);
   let head='<div class="gear-head"><span class="eyebrow">按清单搭配</span><span class="gear-summary">清单 '
@@ -286,15 +289,26 @@ function renderPacking(master,opts){
     +(subCount?' · 平替 '+subCount+' 项':'')
     +(md?' · <b>'+esc(md.tierName)+' '+esc(String(md.discountZhe))+' 折</b>':'')
     +'</span></div>';
-  const missLine=miss.length
-    ? '<div class="gear-missing">以下品类商城暂无，也未找到相近装备：'+esc(miss.join('、'))+(o.manage?'（可在商城上架补全）':'')+'</div>'
-    : '';
+  let missLine='';
+  if(o.manage){
+    const miss=[];
+    items.forEach(it=>{
+      // 已经给了平替的项不再算「缺」：整页都在说"暂无"会让顾客以为这家店什么都没有
+      if((it.tags||[]).length&&!(it.matches||[]).length&&!(it.substitutes||[]).length){
+        const l=(it.tagLabels||[])[0];
+        if(l&&miss.indexOf(l)<0)miss.push(l);
+      }
+    });
+    missLine=miss.length
+      ? '<div class="gear-missing">以下品类商城暂无，也未找到相近装备：'+esc(miss.join('、'))+'（可在商城上架补全）</div>'
+      : '';
+  }
   // 「其他在售装备」是补充位：清单里已经出现过的商品不再重复列一次
   const extraRows=extras.filter(p=>!seen[Number(p.id||0)]).map(p=>gearRow(p,o)).join('');
   const extra=extraRows
     ? '<div class="gear-extras"><div class="gear-extras-title">本场活动其他在售装备</div><div class="pack-gear">'+extraRows+'</div></div>'
     : '';
-  return head+'<div class="pack-plan">'+slots+'</div>'+missLine+extra;
+  return head+chips+'<div class="pack-plan">'+slots+'</div>'+missLine+extra;
 }
 /* 费用说明的键名中文化。fees 是 AI 生成时落库的自由对象，键名常是 newCustomer /
    member / note 这类英文标识符 —— 直接渲染出来，顾客看到的是「newCustomer 498元/人」。
@@ -323,11 +337,44 @@ function feeListHtml(fees){
     return '<div class="fee-row"><b>'+esc(label)+'</b><p>'+esc(String(v))+'</p></div>';
   }).join('')+'</div>';
 }
+/* 行程数据形状归一：模型（真模型尤其）会输出多种形状 ——
+   字符串（"D1：抵达报国寺…"）、{time,text|content|desc}、{day,schedule|items|list:[...]}。
+   过去渲染器只认 {time,text}，其他形状整段渲染成空行（2026-09-28 用户截图实锤：
+   master.itinerary 明明有完整两天行程，「详细行程」却是空的）。统一归一成 {time,text} 行。 */
+function itineraryRows(list){
+  const rows=[];
+  for(const x of (list||[])){
+    if(typeof x==='string'){if(x.trim())rows.push({time:'',text:x.trim()});continue}
+    if(!x||typeof x!=='object')continue;
+    const day=x.day||x.date||x.title||'';
+    const sched=x.schedule||x.items||x.list||x.details||x.arrange;
+    if(Array.isArray(sched)){
+      if(String(day).trim())rows.push({time:String(day).trim(),text:''});
+      for(const s of sched){
+        if(typeof s==='string'){if(s.trim())rows.push({time:'',text:s.trim()});continue}
+        if(s&&typeof s==='object')rows.push({time:String(s.time||s.period||'').trim(),text:String(s.text||s.content||s.desc||s.detail||s.description||'').trim()});
+      }
+      continue;
+    }
+    rows.push({time:String(x.time||x.period||'').trim(),text:String(x.text||x.content||x.desc||x.detail||x.description||'').trim()});
+  }
+  return rows.filter(r=>r.time||r.text);
+}
 /* detail.blocks 里已经排过行程时，结构化区不再重复渲染同一份 master.itinerary——
    此前「把一天安排得刚刚好」(promo timeline) 与「详细行程 ITINERARY」是同一份数据渲染两遍，
    同一页出现两次行程，是用户看到的"详情重复出现"。 */
-function promoHasItinerary(detail){return ((detail||{}).blocks||[]).some(b=>b&&b.type==='timeline'&&(b.items||[]).length)}
-function infoStackSkip(detail){return promoHasItinerary(detail)?['itinerary']:[]}
+function promoHasItinerary(detail){return ((detail||{}).blocks||[]).some(b=>b&&b.type==='timeline'&&itineraryRows(b.items||b.body||[]).length)}
+/* 跳过结构化「详细行程」的前提是 timeline 确实覆盖了同一份行程。
+   mock 时代两者是同一份数据，跳过没问题；真模型会各写各的——实测出现过
+   timeline 放编辑精选、master.itinerary 装着完整逐日行程却被跳过，
+   顾客整页看不到完整行程。所以只有 itinerary 文本确实被 timeline 覆盖时才跳过。 */
+function infoStackSkip(detail,master){
+  const tls=((detail||{}).blocks||[]).filter(b=>b&&b.type==='timeline');
+  if(!tls.length)return [];
+  const tlText=tls.map(b=>itineraryRows(b.items||b.body||[]).map(r=>(r.time+' '+r.text).trim()).join(' ')).join(' ');
+  const itText=itineraryRows((master||{}).itinerary).map(r=>(r.time+' '+r.text).trim()).join(' ');
+  return (itText&&tlText&&tlText.includes(itText.slice(0,120)))?['itinerary']:[];
+}
 /* 详情页很长，给一条页内跳转，避免"不知道下面还有什么"。用 scrollIntoView 而不是 <a href="#…">，
    避免和可能存在的 hash 路由打架。 */
 function jumpTo(id){const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}
@@ -338,7 +385,7 @@ function detailNavHtml(items){
 function renderInfoStack(master,opts={}){
   const skip=opts.skip||[],has=k=>skip.indexOf(k)<0;
   let h='<div class="info-stack polished">';
-  if(has('itinerary'))h+=`<details open><summary>详细行程 <span>ITINERARY</span></summary><div class="detail-list">${(master.itinerary||[]).map(x=>`<div><b>${esc(x.time||'')}</b><p>${esc(x.content||x.text||'')}</p></div>`).join('')||'<p class="sub">以最终活动通知为准</p>'}</div></details>`;
+  if(has('itinerary'))h+=`<details open><summary>详细行程 <span>ITINERARY</span></summary><div class="detail-list">${itineraryRows(master.itinerary).map(x=>`<div>${x.time?`<b>${esc(x.time)}</b>`:''}<p>${esc(x.text)}</p></div>`).join('')||'<p class="sub">以最终活动通知为准</p>'}</div></details>`;
   if(has('fees'))h+=`<details${has('itinerary')?'':' open'}><summary>费用说明 <span>PRICE</span></summary>${feeListHtml(master.fees)}</details>`;
   if(has('packing'))h+=`<details open><summary>出行清单 <span>PACKING</span></summary>${renderPacking(master,opts)}</details>`;
   return h+'</div>';

@@ -814,7 +814,14 @@ def update_activity(club_id:int,activity_id:int,payload:dict=Body(...)):
             except (TypeError,ValueError): raise HTTPException(400,'名额必须是整数')
             if v<0: raise HTTPException(400,'名额不能为负数')
             fields['capacity']=v
-        if not fields: raise HTTPException(400,'没有需要更新的字段')
+        # 出行清单是老板可以手动调整的运营事实（AI 只给初稿）：每行一项，写回 Activity Master。
+        # 它不是 activities 表的列，不进 SQL fields，只在下面写 master。
+        checklist_raw=payload.get('checklist')
+        checklist=None
+        if checklist_raw is not None:
+            if not isinstance(checklist_raw,list): raise HTTPException(400,'checklist 必须是字符串数组')
+            checklist=[str(x).strip() for x in checklist_raw if str(x).strip()][:30]
+        if not fields and checklist is None: raise HTTPException(400,'没有需要更新的字段')
         merged={**a,**fields}
         # Activity Master 是「事实」的权威载体，改了活动行就要一并对齐；
         # 否则 C 端详情与后台预览会出现两套日期/价格。
@@ -824,13 +831,14 @@ def update_activity(club_id:int,activity_id:int,payload:dict=Body(...)):
         if 'location' in fields: master['location']=fields['location'] or ''
         if 'price' in fields: master['price']=fields['price']
         if 'capacity' in fields: master['capacity']=fields['capacity']
+        if checklist is not None: master['checklist']=checklist
         # 只更新「当前工作副本」；历史版本快照保持不可变（恢复某一版时会随之恢复其文案）。
         detail=jload(a.get('detail_json'),{}) or {}
         _sync_detail_facts(detail,merged)
-        sets=','.join(f'{k}=?' for k in fields)
-        c.execute(f'UPDATE activities SET {sets},activity_master_json=?,detail_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
+        sets=','.join([f'{k}=?' for k in fields]+['activity_master_json=?','detail_json=?','updated_at=CURRENT_TIMESTAMP'])
+        c.execute(f'UPDATE activities SET {sets} WHERE id=? AND club_id=?',
                   (*fields.values(),jdump(master),jdump(detail),activity_id,club_id))
-    return {'ok':True,'updated':sorted(fields.keys())}
+    return {'ok':True,'updated':sorted(list(fields.keys())+(['checklist'] if checklist is not None else []))}
 
 
 @app.delete('/api/club/{club_id}/activities/{activity_id}')
