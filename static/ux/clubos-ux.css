@@ -46,6 +46,10 @@ body{background:var(--bg);font-size:14px}a{color:var(--brand)}:focus-visible{out
 /* Compact list rows (replaces ad-hoc inline styled divs). */
 .list-row{display:flex;align-items:center;gap:12px;padding:13px 4px;border-bottom:1px solid var(--line)}
 .list-row:last-child{border-bottom:0}.list-row:hover{background:#f7faf7}
+/* 可点的行是 div[role=button]：光有 hover 底色还不够，鼠标指针和键盘焦点环都得跟上，
+   否则用户不知道这行能点（用户反馈「这里还是不能改呀」的观感一半来自这里）。 */
+.list-row[role="button"]{cursor:pointer}
+.list-row[role="button"]:focus-visible{outline:2px solid var(--brand);outline-offset:-2px;border-radius:10px}
 .list-row__main{flex:1;min-width:0}.list-row__title{font-weight:700;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .list-row__sub{color:var(--muted);font-size:12px;margin-top:2px}.list-row__end{margin-left:auto;display:flex;align-items:center;gap:10px;flex-shrink:0}
 /* Stat tiles (refined metric block for dashboards). */

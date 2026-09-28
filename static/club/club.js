@@ -71,27 +71,26 @@ if(window.matchMedia&&matchMedia('(max-width:1180px)').matches)setTimeout(()=>pa
 
 function pointsPolicyCard(a){
   const p=a.pointsPolicy||{}; const e=p.effective||{};
-  const gearCap=p.gearPointsMaxDiscountAmount==null?'':p.gearPointsMaxDiscountAmount;
   return `<div class="card section" id="pointsPolicyCard">
-    <div class="panel-title"><div><h3>活动积分规则</h3><div class="sub">由俱乐部决定这场活动是否参与积分。团期默认继承整场活动规则。这里的活动积分与总平台装备积分（Gear Points）相互独立。</div></div><span class="tag ${p.enabled?'':'orange'}">${p.enabled?'已开启':'不参与积分'}</span></div>
+    <div class="panel-title"><div><h3>活动积分规则</h3><div class="sub">由俱乐部决定这场活动是否参与积分；团期默认继承整场活动规则。</div></div><span class="tag ${p.enabled?'':'orange'}">${p.enabled?'已开启':'不参与积分'}</span></div>
     <label style="display:flex;gap:10px;align-items:center;padding:10px 0"><input id="ppEnabled" type="checkbox" ${p.enabled?'checked':''}> <strong>这场活动参与积分体系</strong></label>
     <div class="grid g2" style="margin-top:4px">
       <div class="notice"><label><input id="ppEarn" type="checkbox" ${p.earnClubPoints?'checked':''}> 报名后产生活动积分</label><div class="sub" style="margin-top:6px">成本由本俱乐部承担；默认按俱乐部积分规则累计。</div></div>
       <div class="notice"><label><input id="ppClub" type="checkbox" ${p.acceptClubPoints?'checked':''}> 允许活动积分抵现金</label><div style="margin-top:8px"><span class="sub">本单最多抵活动金额</span> <input id="ppClubMax" type="number" min="0" max="100" step="1" value="${Number(p.clubPointsMaxDiscountPercent??100)}" style="width:80px"> %</div></div>
-      <div class="notice"><strong>C端实际生效</strong><div class="sub" style="margin-top:6px">累计活动积分：${e.earnClubPoints?'是':'否'} · 活动积分抵扣：${e.acceptClubPoints?'是':'否'} · 装备积分抵扣：${e.acceptGearPoints?'是':'否'}</div></div>
-      <div class="notice" style="background:#f3f5f2"><label><input id="ppGear" type="checkbox" ${p.acceptGearPoints?'checked':''} ${p.platformGearPointsAllowed?'':'disabled'}> 接收装备积分抵扣（总平台体系）</label><div style="margin-top:8px"><span class="sub">本单最多补贴 ¥</span> <input id="ppGearMax" type="number" min="0" step="1" placeholder="不限制" value="${gearCap}" style="width:100px" ${p.platformGearPointsAllowed?'':'disabled'}></div><div class="sub" style="margin-top:6px">装备积分（Gear Points）由 ClubOS 总平台发放与补贴，不是俱乐部的活动积分；总开关在总平台端。${p.platformGearPointsAllowed?'当前平台已开启，可选是否接收。':'当前平台已关闭，无法开启。'}</div></div>
+      <div class="notice"><strong>C端实际生效</strong><div class="sub" style="margin-top:6px">累计活动积分：${e.earnClubPoints?'是':'否'} · 活动积分抵扣：${e.acceptClubPoints?'是':'否'}</div></div>
     </div>
     <button class="btn secondary" style="margin-top:12px" onclick="savePointsPolicy(${a.id})">保存积分规则</button>
   </div>`
 }
 async function savePointsPolicy(id){
+  /* 装备积分（总平台体系）不在俱乐部后台配置：相关字段既不出现在界面上，
+     也不进 payload —— 后端 activity_points_policy.normalize_update 对缺失键
+     回退到当前值，平台侧设置不会被这里顺手改掉。 */
   const payload={
     enabled:$('#ppEnabled').checked,
     earnClubPoints:$('#ppEarn').checked,
     acceptClubPoints:$('#ppClub').checked,
-    clubPointsMaxDiscountPercent:Number($('#ppClubMax').value||0),
-    acceptGearPoints:$('#ppGear').checked,
-    gearPointsMaxDiscountAmount:$('#ppGearMax').value===''?null:Number($('#ppGearMax').value)
+    clubPointsMaxDiscountPercent:Number($('#ppClubMax').value||0)
   };
   try{await api(`/api/club/${CLUB}/activities/${id}/points-policy`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('活动积分规则已保存');await openActivity(id)}catch(e){showAlert({title:'操作失败',message:e.message})}
 }
@@ -339,33 +338,71 @@ async function requestVisibility(pid,action){
   try{await api(`/api/club/${CLUB}/mall/products/${pid}/visibility`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,note:f.note||''})});
     toast('申请已提交，等待总平台处理');await loadInventory()}catch(e){showAlert({title:'提交失败',message:e.message})}
 }
-/* 「积分策略」二级页：把每场活动的积分规则摊平在一张表里，点一行直接进编辑。
+/* 「积分策略」二级页：把每场活动的「活动积分规则」摊平在一张表里，点一行就地改。
    规则就落在 activities 的列上（见 app.py club_activities），所以列表接口带出来即可，
-   不用为每一行再打一次 points-policy。 */
+   不用为每一行再打一次 points-policy。
+   ★ 本页只配「俱乐部自己的活动积分」。总平台装备积分（Gear Points）是另一套体系、
+   另一个资金池，不在俱乐部后台出现（用户 2026-09-29 明确：这里只配俱乐部活动积分）。
+   ★ 点行必须就地弹窗。早先写的是 `onclick="openActivity(id)"`，而详情容器
+   `#activityDetail` 在 `#activities` 视图里 —— 站在本页时 `.view.active` 是 `#points`，
+   等于把内容写进一个 display:none 的 section，用户点「修改」页面毫无反应
+   （原话：「这里还是不能改呀」）。 */
+let pointsActivities=[];
 async function loadPointsPolicy(){
   skel('#pointsList',6);
-  let list=await api(`/api/club/${CLUB}/activities`);
-  let rule={};
-  try{rule=await api('/api/platform/points-policy')}catch(e){}
-  const gearOn=!!rule.gearPointsActivityRedeemEnabled;
-  // 2026-09-28 用户明确：本页主体是俱乐部自己的活动积分；Gear Points 是总平台体系，
-  // 只在页尾留一行只读状态（section 里的说明块由 index.html 提供），不再置顶大块展示。
-  $('#pointsPlatformRule').innerHTML='<strong>总平台 Gear Points 活动抵扣开关（只读）</strong><div class="sub" style="margin-top:6px">'+(gearOn?'已开启':'已关闭')+' —— 属于总平台装备积分体系，与上方各活动的活动积分无关；调整请在总平台端操作。</div>';
-  $('#pointsList').innerHTML=list.map(a=>{
+  const list=await api(`/api/club/${CLUB}/activities`);
+  pointsActivities=list||[];
+  $('#pointsList').innerHTML=pointsActivities.map(a=>{
     const tags=[];
     const enabled=Number(a.points_enabled??1)>0;
     if(enabled&&Number(a.earn_club_points??1)>0)tags.push('报名可获得');
     if(enabled&&Number(a.accept_club_points??1)>0)tags.push('可抵 '+Number(a.club_points_max_discount_percent??100)+'%');
-    // 装备积分是平台补贴，视觉上与俱乐部活动积分区分：灰底 tag，不冒充本页主体。
-    if(enabled&&Number(a.accept_gear_points??1)>0){
-      tags.push(gearOn?'<span class="tag">装备积分抵扣 · 平台补贴</span>':'<span class="tag">装备积分抵扣 · 平台未开启</span>');
-    }
-    const tagHtml=tags.length?tags.map(t=>t.startsWith('<span')?t:'<span class="tag info">'+esc(t)+'</span>').join(' '):'<span class="tag orange">不参与积分</span>';
-    return '<div class="list-row" role="button" tabindex="0" onclick="openActivity('+a.id+')">'
+    const tagHtml=tags.length?tags.map(t=>'<span class="tag info">'+esc(t)+'</span>').join(' '):'<span class="tag orange">不参与积分</span>';
+    return '<div class="list-row" role="button" tabindex="0" data-points-act="'+a.id+'" onclick="editActivityPoints('+a.id+')" aria-label="修改 '+esc(a.title)+' 的积分规则">'
       +'<div class="list-row__main"><div class="list-row__title">'+esc(a.title)+'</div>'
       +'<div class="list-row__sub">'+esc(a.event_date||'')+' · '+esc(a.location||'')+' · 报名 '+money(a.price||0)+'</div></div>'
       +'<div class="list-row__end">'+tagHtml+'<span class="sub">修改 ›</span></div></div>';
   }).join('')||'<div class="empty">还没有活动</div>';
+}
+/* 行是 div[role=button]，onclick 只绑 click、不绑键盘，Enter/Space 不会触发 —— 自己补一条通路。
+   事件委托绑在 document 上，列表重渲染后不用重绑。 */
+document.addEventListener('keydown',e=>{
+  if(e.key!=='Enter'&&e.key!==' ')return;
+  const row=e.target&&e.target.closest?e.target.closest('#pointsList [data-points-act]'):null;
+  if(!row)return;e.preventDefault();row.click();
+});
+/* 就地编辑一场活动的积分规则：只提交俱乐部活动积分的四个字段。
+   装备积分相关字段一律不进 payload —— 后端 activity_points_policy.normalize_update
+   对缺失键回退到当前值，所以平台侧设置不会被这里顺手改掉。 */
+async function editActivityPoints(id){
+  let p;
+  try{p=await api(`/api/club/${CLUB}/activities/${id}/points-policy`)}
+  catch(e){return showAlert({title:'读取积分规则失败',message:e.message})}
+  const act=(pointsActivities||[]).find(x=>Number(x.id)===Number(id))||{};
+  const f=await uxForm({
+    title:'本场活动的积分规则',
+    subtitle:act.title?act.title:('活动 #'+id),
+    hint:'只配俱乐部自己的活动积分：这场活动参不参与、报名送不送累计、能不能抵现金、最多抵多少。团期默认继承整场活动规则。',
+    fields:[
+      {name:'enabled',label:'这场活动参与积分体系',type:'select',full:true,value:p.enabled?'1':'0',options:[{value:'1',label:'参与'},{value:'0',label:'不参与'}]},
+      {name:'earnClubPoints',label:'报名后累计活动积分',type:'select',value:p.earnClubPoints?'1':'0',options:[{value:'1',label:'累计'},{value:'0',label:'不累计'}],help:'积分成本由本俱乐部承担。'},
+      {name:'acceptClubPoints',label:'允许活动积分抵现金',type:'select',value:p.acceptClubPoints?'1':'0',options:[{value:'1',label:'允许抵扣'},{value:'0',label:'不允许抵扣'}]},
+      {name:'clubPointsMaxDiscountPercent',label:'最多抵扣活动金额（%）',type:'number',full:true,min:0,max:100,step:1,value:String(Number(p.clubPointsMaxDiscountPercent??100)),help:'本单活动积分最多能抵掉活动金额的百分之多少，0 表示不能抵。'}
+    ],
+    submitText:'保存积分规则'
+  });
+  if(!f)return;
+  const payload={
+    enabled:f.enabled==='1',
+    earnClubPoints:f.earnClubPoints==='1',
+    acceptClubPoints:f.acceptClubPoints==='1',
+    clubPointsMaxDiscountPercent:Number(f.clubPointsMaxDiscountPercent||0)
+  };
+  try{
+    await api(`/api/club/${CLUB}/activities/${id}/points-policy`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    toast('活动积分规则已保存');
+    await loadPointsPolicy();
+  }catch(e){showAlert({title:'保存积分规则失败',message:e.message})}
 }
 async function loadCredits(){skel('#creditLedger',5);let d=await api(`/api/club/${CLUB}/credits`),sub=d.subscription||{};$('#creditAccount').innerHTML=`<div class="grid g4"><div class="stat-tile"><div class="k">当前可用</div><div class="v">${d.account?.balance||0}</div><div class="hint">AI Credits</div></div><div class="stat-tile"><div class="k">当前套餐</div><div class="v" style="font-size:22px">${esc(sub.plan_name||sub.plan_code||'未开通')}</div><div class="hint">月额度 ${d.account?.monthly_quota||0}</div></div><div class="stat-tile"><div class="k">本月已用</div><div class="v">${d.creditsConsumed||0}</div><div class="hint">成功调用 ${d.successfulCalls||0} 次</div></div><div class="stat-tile"><div class="k">待偿欠账</div><div class="v">${d.unresolvedDebt||0}</div><div class="hint">后续获得 Credits 自动优先抵扣</div></div></div><div class="notice section">大模型由<b>总平台统一接入并结算</b>，俱乐部不需要也无法配置模型或密钥；Credits 只决定计费，不决定模型质量——平台不会因为余额或套餐降低模型、减少图片或截断资料。</div>`;$('#creditTopups').innerHTML=(d.topupPackages||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}</div><div class="list-row__sub">${money(x.amount)} · 共 ${x.credits} Credits · 单价 ${unitCreditPrice(x.amount,x.credits)}</div><button class="btn secondary" style="margin-top:6px" onclick="buyCredits('${x.code}')">创建充值订单</button></div></div>`).join('')||'<div class="empty">暂无充值包</div>';$('#creditPendingOrders').innerHTML=(d.pendingOrders||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.order_type==='subscription'?'套餐':'充值'} ${x.credits} Credits</div><div class="list-row__sub">${money(x.amount)} · 待付款确认 · ${esc(x.period_key||x.package_code||'')}</div></div></div>`).join('')||'<div class="empty">暂无待付款账单</div>';$('#creditLedger').innerHTML=d.ledger.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.amount>0?'+':''}${x.amount}</div> · ${esc(x.note||x.type)}<div class="list-row__sub">${esc(x.type)} · ${x.created_at}</div></div></div>`).join('')}
 async function buyCredits(code){let r=await api(`/api/club/${CLUB}/credits/topups`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageCode:code})});toast(`充值订单已创建：${r.credits} Credits / ${money(r.amount)}，等待平台/支付确认`);loadCredits()}
