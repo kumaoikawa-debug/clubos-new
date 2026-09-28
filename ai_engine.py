@@ -17,7 +17,7 @@ SYSTEM = """你是 ClubOS 的 AI 活动内容主编（Editorial Director），�
 8. 输出严格 JSON，不要 Markdown，不要解释。
 """
 
-BLOCK_TYPES = "hero|lead|narrative|statement|media|gallery|facts|timeline|info|quote|divider|cta"
+BLOCK_TYPES = "hero|lead|narrative|statement|media|gallery|facts|timeline|info|quote|divider"
 
 
 def _guess(text:str,patterns:list[str],default=''):
@@ -237,7 +237,6 @@ def _mock_activity(source:dict[str,Any]):
         blocks.append({'type':'timeline','title':'这一天怎么走','items':[
             {'time':'08:00','text':'集合 / 签到'},{'time':'10:00','text':'进入当天核心体验'},{'time':'12:00','text':'午餐 / 休整'},{'time':'17:00','text':'结束行程 / 返程'}]})
     if remaining[8:]: blocks.append({'type':'media','mediaRefs':remaining[8:12],'layout':'mosaic'})
-    blocks.append({'type':'cta','headline':'想去，就把这一天留出来','text':'确认日期、费用与详细行程后即可报名。'})
 
     master={
         'title':title,'date':date,'location':location,
@@ -370,7 +369,7 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
 }}
 
 block 语义：
-hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=必要决策信息；quote=引用；divider=节奏；cta=报名收束。
+hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=必要决策信息；quote=引用；divider=节奏。
 任何 block 都可省略、重复、自由排序。不要为了“结构完整”机械凑章节。照片多时主动做视觉编排，照片少时不要硬凑图片。
 如果没有真正事实冲突，blocking_conflicts 必须为空，直接完成成品。"""
     gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,images=source.get('images'))
@@ -432,7 +431,7 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
 }}
 
 block 语义：
-hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=必要决策信息；quote=引用；divider=节奏；cta=报名收束。
+hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=必要决策信息；quote=引用；divider=节奏。
 任何 block 都可省略、重复、自由排序。不要为了「结构完整」机械凑章节。照片多时主动做视觉编排，照片少时不要硬凑图片。"""
     gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,images=source.get('images'))
     if gw:

@@ -219,7 +219,9 @@ function renderPromo(detail,master={},opts={}){
     else if(b.type==='info')h+=`<section class="ed-section ed-info"><div class="ed-section-head"><div class="ed-kicker">GOOD TO KNOW</div><h2>${esc(b.title||'出发前知道')}</h2></div><div class="info-chips">${(b.items||[]).map(x=>`<div>${esc(x)}</div>`).join('')}</div></section>`;
     else if(b.type==='quote')h+=`<section class="ed-quote">“${esc(b.text||'')}”</section>`;
     else if(b.type==='divider')h+='<div class="ed-divider"></div>';
-    else if(b.type==='cta')h+=`<section class="ed-cta"><div><div class="ed-kicker">READY TO GO</div><h2>${esc(b.headline||'立即报名')}</h2><p>${esc(b.text||'')}</p></div>${opts.hideButton?'':`<button class="btn light">选择团期并报名</button>`}</section>`;
+    // cta 块不再渲染（2026-09-28 用户反馈）：详情页中部出现「立即报名」大块很突兀，
+    // 页面底部本就有常驻报名入口。AI 若仍输出 cta 块，直接跳过不画。
+    else if(b.type==='cta'){/* skipped */}
   }
   return h+'</article>';
 }
