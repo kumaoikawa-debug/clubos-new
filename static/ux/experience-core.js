@@ -83,8 +83,20 @@
   const drop=field.closest('.drop');drop.classList.add('ux-file-drop');drop.setAttribute('role','group');drop.setAttribute('aria-label','活动素材');
   const help=document.createElement('div');help.className='ux-upload-help';help.innerHTML='<strong>支持的资料</strong><p>PPT / Word / PDF / 图片；可以上传多份资料，AI 会结合原始事实与图片组织动态内容。</p><div class="ux-upload-list" aria-live="polite">尚未选择文件</div>';
   drop.appendChild(help);
-  const render=()=>{const files=[...field.files];help.querySelector('.ux-upload-list').replaceChildren();if(!files.length){help.querySelector('.ux-upload-list').textContent='尚未选择文件';return}for(const f of files){const el=document.createElement('div');el.className='ux-file-chip';el.textContent=f.name+' · '+(f.size/1024/1024).toFixed(1)+' MB';help.querySelector('.ux-upload-list').append(el)} };
-  field.addEventListener('change',render);drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('dragover')});drop.addEventListener('dragleave',()=>drop.classList.remove('dragover'));drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('dragover');if(e.dataTransfer?.files?.length){field.files=e.dataTransfer.files;render()}});
+  /* ★ 累加，不替换。<input type=file> 的原生行为是「每次选择整体顶掉上一次」，
+     拖放旧代码也是 field.files=e.dataTransfer.files 直接整体覆盖 —— 用户先选几张现场照片、
+     再把方案 PPT 丢进来（或反过来），先选的全被清掉，「方案 + 照片混着丢」根本做不到
+     （线上实测用户卡死在这一步，且截图里 PPT 悄悄消失只剩 5 张照片）。
+     用持久 DataTransfer 当「袋子」：每次选择/拖放都合并进袋（同名+同大小+同修改时间视为
+     同一份去重），再整体回写 input.files；每个文件 chip 带 × 可单独移除；
+     拖放后也刷新就绪状态（旧代码只在 change 时刷，拖放不刷）。
+     浏览器不支持 DataTransfer 构造时退回旧的「整体替换」行为。 */
+  let bag=null;try{bag=new DataTransfer()}catch(err){}
+  const fkey=f=>f.name+'|'+f.size+'|'+f.lastModified;
+  const render=()=>{const files=[...field.files];const list=help.querySelector('.ux-upload-list');list.replaceChildren();if(!files.length){list.textContent='尚未选择文件';return}files.forEach((f,i)=>{const el=document.createElement('div');el.className='ux-file-chip';const label=document.createElement('span');label.textContent=f.name+' · '+(f.size/1024/1024).toFixed(1)+' MB';const x=document.createElement('button');x.type='button';x.className='ux-file-chip-x';x.setAttribute('aria-label','移除 '+f.name);x.textContent='×';x.addEventListener('click',()=>{if(!bag)return;bag.items.remove(i);field.files=bag.files;render();refresh()});el.append(label,x);list.append(el)})};
+  const addFiles=list=>{if(!bag){render();refresh();return}for(const f of list){if([...bag.files].some(x=>fkey(x)===fkey(f)))continue;try{bag.items.add(f)}catch(err){}}field.files=bag.files;render();refresh()};
+  field.addEventListener('change',()=>addFiles(field.files));
+  drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('dragover')});drop.addEventListener('dragleave',()=>drop.classList.remove('dragover'));drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('dragover');if(e.dataTransfer?.files?.length)addFiles(e.dataTransfer.files)});
   const notice=document.createElement('div');notice.className='ux-create-status';notice.setAttribute('aria-live','polite');textarea.parentElement.after(notice);
   const submit=document.getElementById('genBtn');const refresh=()=>{const ready=!!textarea.value.trim()||field.files.length>0;notice.textContent=ready?'资料已就绪。生成后可检查事实、编辑团期及发布。':'填写一句目标或上传一份资料，即可开始。';if(submit.disabled===ready)submit.disabled=!ready};textarea.addEventListener('input',refresh);field.addEventListener('change',refresh);refresh();
   form.addEventListener('submit',()=>{notice.innerHTML='<span class="ux-spinner" aria-hidden="true"></span>正在读取资料并生成活动内容。完成前请勿重复提交。';submit.disabled=true}, {capture:true});
