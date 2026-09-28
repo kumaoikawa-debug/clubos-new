@@ -1169,3 +1169,23 @@ CREATE TABLE IF NOT EXISTS club_product_visibility_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_club_prod_vis_club ON club_product_visibility_requests(club_id,status,id DESC);
 CREATE INDEX IF NOT EXISTS idx_club_prod_vis_product ON club_product_visibility_requests(product_id,id DESC);
+
+-- v0.29 · AI 生成的「异步任务」表
+-- 真模型带视觉读资料要跑几分钟，同步响应会被网关空闲超时掐断（前端只看到
+-- "Failed to fetch"，还被误翻译成上传失败）。改成提交即建 job、后台跑生成、
+-- 前端轮询：mock 模式秒回仍走同步，live 模式一律走这里。
+CREATE TABLE IF NOT EXISTS ai_generate_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',    -- queued / running / done / failed
+  stage TEXT NOT NULL DEFAULT '',           -- queued / generating / saving
+  error TEXT NOT NULL DEFAULT '',
+  activity_id INTEGER,
+  summary_json TEXT NOT NULL DEFAULT '{}',  -- {docFiles,textLength,imageCount} 供前端如实播报
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TEXT,
+  finished_at TEXT,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_club ON ai_generate_jobs(club_id,status,id DESC);

@@ -156,6 +156,23 @@ $('#createForm').onsubmit=async e=>{
   try{
     let fd=new FormData(e.target);
     let r=await api(`/api/club/${CLUB}/activities/ai-generate`,{method:'POST',body:fd});
+    /* live 模式改为异步任务：提交秒回 {jobId}，真模型生成要跑几分钟，同步等待会被
+       网关空闲超时掐断（2026-09-28 实测：14MB 上传 11s 就过网关，死的是等响应）。
+       mock 模式仍直接返回 activityId。两条路在此汇合。 */
+    if(r.jobId){
+      const started=Date.now();let done=false,misses=0;
+      while(!done){
+        await new Promise(res=>setTimeout(res,3000));
+        let j=null;
+        try{ j=await api(`/api/club/${CLUB}/activities/ai-generate/${r.jobId}`); misses=0; }
+        catch(pe){ if(++misses>6)throw new Error('进度查询连续失败，请刷新页面稍后在活动列表查看结果（任务仍在后台运行）。'); continue; }
+        const sec=Math.round((Date.now()-started)/1000);
+        b.textContent=`AI 正在生成（已等 ${sec} 秒，大资料约 1~5 分钟）…`;
+        if(j.status==='done'){done=true;r={activityId:j.activityId,source:j.source||r.source};}
+        else if(j.status==='failed'){throw new Error(j.error||'后台生成失败，已退还本次 AI Credits（如未扣）。');}
+        else if(Date.now()-started>10*60*1000){throw new Error('等待超时（10 分钟）。任务可能仍在后台运行，稍后刷新活动列表即可看到结果。');}
+      }
+    }
     modal('createModal',false);
     /* 反馈必须说清「系统读到了什么」。原来只报图片数：上传的 PPT 一个字都没读到时，
        图片数照样是 5，toast 还是绿油油的「已完成」，用户完全无法察觉方案没被读到。

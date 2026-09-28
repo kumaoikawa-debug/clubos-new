@@ -4,7 +4,7 @@ from sqlite3 import IntegrityError
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote, quote, urlsplit
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, Query, Header, Request
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, Query, Header, Request, BackgroundTasks
 from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -461,9 +461,54 @@ def _release_detail_version(c,version_id:int)->None:
     c.execute('DELETE FROM activity_detail_versions WHERE id=? AND status=\'pending\'',(version_id,))
 
 
+async def _run_generate_job(club_id:int,job_id:int,source:dict,refresh_facts:bool=False,direction:str=''):
+    """后台执行真模型生成（live 模式）。任何异常都落进 job.error，绝不能静默丢任务。"""
+    try:
+        with conn() as c:
+            c.execute('UPDATE ai_generate_jobs SET status="running",stage="generating",started_at=CURRENT_TIMESTAMP WHERE id=?',(job_id,))
+        result,usage=await generate_activity(club_id,source,direction=direction)
+        master=result['activity_master']; detail=result['detail']
+        with conn() as c:
+            c.execute('UPDATE ai_generate_jobs SET stage="saving" WHERE id=?',(job_id,))
+        charge_credits(club_id,'detail',usage.usage_id)
+        title=master.get('title') or 'AI生成活动'
+        with conn() as c:
+            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,price,capacity,activity_master_json,detail_json,source_json) VALUES(?,?,?,?,?,?,?,?,?,?)',(
+                club_id,title,'draft',master.get('date',''),master.get('location',''),float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source))))
+            aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+            vid,_n=_reserve_detail_version(c,club_id=club_id,activity_id=aid,origin='ai-generate')
+            _finalize_detail_version(c,version_id=vid,activity_id=aid,detail=detail,master=master,
+                                     credits=credit_cost('detail'),gateway=usage.provider,model=usage.model)
+            if master.get('date') and master.get('date')!='待发布':
+                c.execute('INSERT INTO activity_occurrences(activity_id,club_id,start_at,price,capacity,status,label) VALUES(?,?,?,?,?,?,?)',(
+                    aid,club_id,str(master.get('date')),float(master.get('price') or 0),int(master.get('capacity') or 0),'open','首发团期'))
+            c.execute('UPDATE ai_generate_jobs SET status="done",activity_id=?,finished_at=CURRENT_TIMESTAMP WHERE id=?',(aid,job_id))
+    except Exception as e:
+        with conn() as c:
+            c.execute('UPDATE ai_generate_jobs SET status="failed",error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?',(str(e)[:800] or e.__class__.__name__,job_id))
+
+@app.get('/api/club/{club_id}/activities/ai-generate/{job_id}')
+def ai_generate_job(club_id:int,job_id:int):
+    """前端轮询生成进度。只回本俱乐部的任务，字段白名单防泄漏。"""
+    club_or_404(club_id)
+    with conn() as c:
+        j=row(c.execute('SELECT id,status,stage,error,activity_id,summary_json,created_at,finished_at FROM ai_generate_jobs WHERE id=? AND club_id=?',(job_id,club_id)))
+    if not j: raise HTTPException(404,'任务不存在')
+    return {'jobId':j['id'],'status':j['status'],'stage':j['stage'],'error':j['error'] or '',
+            'activityId':j['activity_id'],'source':jload(j['summary_json'],{}),
+            'createdAt':j['created_at'],'finishedAt':j['finished_at']}
+
 @app.post('/api/club/{club_id}/activities/ai-generate')
-async def ai_generate(club_id:int,prompt:str=Form(''),files:list[UploadFile]=File(default=[])):
+async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Form(''),files:list[UploadFile]=File(default=[])):
     club_or_404(club_id); ensure_credits(club_id,'detail')
+    # live 模式下真模型要跑几分钟，同步响应会被网关空闲超时掐断（2026-09-28 实测：
+    # 上传 14MB 请求体 11s 就能完整过网关，吞吐根本不是瓶颈；死的是几分钟的同步等待）。
+    # 所以 live 一律改异步任务；mock 秒回，保持同步不破坏回归脚本。
+    live_mode=effective_gateway_mode()[0]=='live'
+    if live_mode:
+        with conn() as c:
+            pending=c.execute('SELECT COUNT(*) FROM ai_generate_jobs WHERE club_id=? AND status IN ("queued","running")',(club_id,)).fetchone()[0]
+        if pending: raise HTTPException(409,'已有一次 AI 生成正在进行中，请等它完成（或刷新页面查看结果）再提交新的。')
     batch=UPLOAD/str(club_id)/uuid.uuid4().hex
     try:
         saved=save_uploads(files,batch,max_total_bytes=20*1024*1024 if IS_PROD else None)
@@ -495,33 +540,35 @@ async def ai_generate(club_id:int,prompt:str=Form(''),files:list[UploadFile]=Fil
         raise HTTPException(422,f'《{_names}》里没有可读取的文字内容：这份方案的文字可能全部做成了图片。'
                                 'AI 无法按方案生成，请补一句活动说明（名称/日期/地点/人数），'
                                 '或换一份带文字的方案再试。')
-    try: result,usage=await generate_activity(club_id,source)
-    except AIGatewayError as e: raise HTTPException(502,str(e))
-    master=result['activity_master']; detail=result['detail']
-    # Only genuine conflicts can block publish; generation itself still returns the result.
-    charge_credits(club_id,'detail',usage.usage_id)
-    title=master.get('title') or 'AI生成活动'
-    with conn() as c:
-        c.execute('INSERT INTO activities(club_id,title,status,event_date,location,price,capacity,activity_master_json,detail_json,source_json) VALUES(?,?,?,?,?,?,?,?,?,?)',(
-            club_id,title,'draft',master.get('date',''),master.get('location',''),float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source))))
-        aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
-        # 第一版也进版本历史，之后任何一版都能被恢复，而不只是「上一版」。
-        vid,_n=_reserve_detail_version(c,club_id=club_id,activity_id=aid,origin='ai-generate')
-        _finalize_detail_version(c,version_id=vid,activity_id=aid,detail=detail,master=master,
-                                 credits=credit_cost('detail'),gateway=usage.provider,model=usage.model)
-        # If the source has one clear date/price, create an initial sellable occurrence automatically.
-        if master.get('date') and master.get('date')!='待发布':
-            c.execute('INSERT INTO activity_occurrences(activity_id,club_id,start_at,price,capacity,status,label) VALUES(?,?,?,?,?,?,?)',(
-                aid,club_id,str(master.get('date')),float(master.get('price') or 0),int(master.get('capacity') or 0),'open','首发团期'))
-    # 前端要能如实告诉老板「这次到底读到了什么」：几份资料、多少字方案、几张图。
-    # 只报图片数是远远不够的 —— 上传的 PPT 一个字都没读到时，图片数照样是 5，
-    # 界面上看起来一切正常，用户根本没法判断方案有没有被读到（本轮实测踩到过）。
     _text_len=len((source.get('text') or '').strip())
     _doc_exts={'.pptx','.docx','.pdf','.txt','.md'}
     _doc_files=[f for f in (source.get('files') or []) if str(f.get('ext') or '') in _doc_exts]
-    return {'activityId':aid,'activityMaster':master,'detail':detail,'gatewayMode':effective_gateway_mode()[0],
-            'source':{'files':source['files'],'imageCount':len(source['images']),'media':source['media_manifest'],
-                      'textLength':_text_len,'docFiles':_doc_files,'noText':_text_len==0}}
+    summary={'files':source['files'],'imageCount':len(source['images']),'media':source['media_manifest'],
+             'textLength':_text_len,'docFiles':_doc_files,'noText':_text_len==0}
+    if not live_mode:
+        # mock：秒回，保持旧的同步契约，回归脚本直接拿 activityId。
+        try: result,usage=await generate_activity(club_id,source)
+        except AIGatewayError as e: raise HTTPException(502,str(e))
+        master=result['activity_master']; detail=result['detail']
+        charge_credits(club_id,'detail',usage.usage_id)
+        title=master.get('title') or 'AI生成活动'
+        with conn() as c:
+            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,price,capacity,activity_master_json,detail_json,source_json) VALUES(?,?,?,?,?,?,?,?,?,?)',(
+                club_id,title,'draft',master.get('date',''),master.get('location',''),float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source))))
+            aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+            vid,_n=_reserve_detail_version(c,club_id=club_id,activity_id=aid,origin='ai-generate')
+            _finalize_detail_version(c,version_id=vid,activity_id=aid,detail=detail,master=master,
+                                     credits=credit_cost('detail'),gateway=usage.provider,model=usage.model)
+            if master.get('date') and master.get('date')!='待发布':
+                c.execute('INSERT INTO activity_occurrences(activity_id,club_id,start_at,price,capacity,status,label) VALUES(?,?,?,?,?,?,?)',(
+                    aid,club_id,str(master.get('date')),float(master.get('price') or 0),int(master.get('capacity') or 0),'open','首发团期'))
+        return {'activityId':aid,'activityMaster':master,'detail':detail,'gatewayMode':'mock','source':summary}
+    # live：入队 + 后台生成，前端拿 jobId 轮询。
+    with conn() as c:
+        cur=c.execute('INSERT INTO ai_generate_jobs(club_id,status,stage,summary_json) VALUES(?,"queued","queued",?)',(club_id,jdump(summary)))
+        jid=int(cur.lastrowid)
+    background_tasks.add_task(_run_generate_job,club_id,jid,source)
+    return {'jobId':jid,'stage':'queued','source':summary}
 
 @app.get('/api/club/{club_id}/ai-mode')
 def club_ai_mode(club_id:int):
