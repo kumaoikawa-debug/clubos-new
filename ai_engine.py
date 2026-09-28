@@ -342,6 +342,16 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
   它们无法对应到商城在售装备。证件、个人药品这类非装备个人物品放在最后，最多两三项。
 - 若资料含逐日行程，detail.blocks 必须包含一个 timeline block（items=[{{"time":"...","text":"..."}}]，与 itinerary 同形状）。
 
+文案与排版契约（详情页的吸引力来自文字，不只是图片；2026-09-28 用户反馈「图片好看但文字没气势」）：
+- 每段 narrative：eyebrow 用 2~6 字场景词（如「日出之前」「海拔4200米」「篝火燃起来时」）；
+  headline 是一句有画面感的话（8~16 字），不要「关于X」「介绍X」式标题；
+  body 拆成 1~3 个独立短句（用 \\n 分隔），每句 ≤30 字，写动作、感官、光线与具体数字——
+  禁止「美丽的风景」「难忘的旅程」「放松身心」这类放到任何活动上都成立的空话。
+- 每段 narrative 可带 pull 字段：一句独立金句（≤14 字，这一节最想让人记住的话），页面会渲染成品牌色强调行。
+- 全页穿插 1~2 个 statement block（整页大字观点句，≤18 字）与至多 1 个 quote block：
+  金句必须从本次活动的真实体验里长出来（地名/海拔/动作/时刻），不许放之四海皆准。
+- lead 是开场引言：两句以内。第一句给画面，第二句给出发的理由。
+
 返回 JSON：
 {{
   "activity_master":{{
@@ -354,7 +364,7 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
     "coreSellingIdea":"",
     "editorialIntent":{{"opening":"","visualWeight":"","reason":""}},
     "blocks":[
-      {{"type":"{BLOCK_TYPES}","headline":"可选","body":"可选","text":"可选","mediaRefs":["img_01"]}}
+      {{"type":"{BLOCK_TYPES}","eyebrow":"narrative 用场景眉题","headline":"可选","body":"可选，可用 \\n 分段","pull":"可选金句(≤14字)","text":"可选","mediaRefs":["img_01"]}}
     ]
   }}
 }}
@@ -404,6 +414,11 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
 媒体清单（只能引用这些 ref）：
 {media}
 
+文案与排版契约（与首次生成同一标准；吸引力来自文字，不只是图片）：
+- narrative：eyebrow 用 2~6 字场景词；headline 有画面感（8~16 字）；body 拆成 1~3 个独立短句（\\n 分隔），
+  每句 ≤30 字，写动作、感官、光线与具体数字，禁止空话套话；每段可带 pull 金句（≤14 字）。
+- 全页穿插 1~2 个 statement 大字观点句（≤18 字）与至多 1 个 quote，金句必须从真实体验里长出来。
+
 返回 JSON：
 {{
   "detail":{{
@@ -411,7 +426,7 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
     "coreSellingIdea":"",
     "editorialIntent":{{"opening":"","visualWeight":"","reason":""}},
     "blocks":[
-      {{"type":"{BLOCK_TYPES}","headline":"可选","body":"可选","text":"可选","mediaRefs":["img_01"]}}
+      {{"type":"{BLOCK_TYPES}","eyebrow":"narrative 用场景眉题","headline":"可选","body":"可选，可用 \\n 分段","pull":"可选金句(≤14字)","text":"可选","mediaRefs":["img_01"]}}
     ]
   }}
 }}

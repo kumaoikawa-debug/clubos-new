@@ -873,6 +873,35 @@
 .web-shell .timeline-list{border-top-color:var(--w-line)}
 .web-shell .timeline-item{border-bottom-color:var(--w-line)}
 
+/* ── 2026-09-28 编辑排版升级 ──────────────────────────────────────────────────
+   用户反馈：①出行清单是一排通栏灰盒，「太丑」；②图片好看但文字平铺「没有吸引力」。
+   下面三组改动只动 C 端观感（全部 .web-shell 前缀），不动数据结构。 */
+
+/* 1) 清单 chips：通栏灰盒 → 轻量圆 pills，可配到的项带品牌色 ✓。
+      视线动线：先扫清单（✓=能一键配齐），再往下看装备行。 */
+.web-shell .info-chips{display:flex;flex-wrap:wrap;gap:8px}
+.web-shell .info-chips>div{background:#f7f9f7;border:1px solid var(--w-line);border-radius:999px;
+  padding:7px 13px;font-size:12.5px;line-height:1.4;color:var(--w-ink2);min-height:0}
+.web-shell .info-chips>div.ok{background:#eef5f0;border-color:#cfdfd5;color:#274a38;font-weight:600}
+.web-shell .info-chips>div.ok::before{content:'✓';color:var(--w-brand);font-weight:800;margin-right:6px;font-size:11.5px}
+/* 2) 装备区的「清单项」标题：去掉独立灰盒，收成带 ✓ 的小节标题，
+      清单本身已在 pills 里出现过，这里只承担分组职责。 */
+.web-shell .pack-need{background:transparent;border:0;border-radius:0;padding:2px 0 0;
+  color:var(--w-ink);font-size:13px;font-weight:700;display:flex;align-items:center;gap:7px;line-height:1.4}
+.web-shell .pack-need::before{content:'✓';color:var(--w-brand);font-size:12px;font-weight:800}
+/* 3) 正文排版：标题更大更有对比，段落支持多段与金句（ed-pull），呼吸感来自行高与段距。 */
+.web-shell .ed-copy h2,.web-shell .ed-section h2{font-size:21px;font-weight:750;line-height:1.3;
+  letter-spacing:.01em;margin:4px 0 10px;color:var(--w-ink)}
+.web-shell .ed-copy p{font-size:14.5px;line-height:1.95;color:var(--w-ink2)}
+.web-shell .ed-copy p+p{margin-top:9px}
+.web-shell .ed-lead p{font-size:17.5px;line-height:1.9;color:var(--w-ink);font-weight:550}
+.web-shell .ed-pull{margin:12px 0 2px;padding:2px 0 2px 12px;border-left:3px solid var(--w-brand);
+  color:var(--w-brand);font-size:16px;font-weight:700;line-height:1.55;letter-spacing:.02em}
+.web-shell .ed-narrative .ed-kicker{color:var(--w-brand);font-weight:650}
+/* 金句/大字观点：字号再抬一档（移动端 560px 容器里 19px 不够「大字」的感觉） */
+.web-shell .ed-statement span{font-size:21px;font-weight:700;letter-spacing:.02em}
+.web-shell .ed-quote{font-size:18px;font-weight:600;color:var(--w-ink)}
+
 /* ── 装备详情页 ───────────────────────────────────────────────────────────────
    底部购买栏是 sticky 而不是 fixed：fixed 要自己算安全区、还要防住和 .web-nav 重叠，
    sticky 停在视口底即可，用 --w-navh 把它抬到导航上方。 */

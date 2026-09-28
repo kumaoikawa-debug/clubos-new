@@ -169,6 +169,14 @@ function esc(v=''){return String(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt
 function mediaMap(master){let m={};for(const x of master?.media||[]){if(typeof x==='string'){if(x)m[x]=m[x]||{ref:x};continue}if(x?.ref)m[x.ref]=x}return m}
 function resolvedRefs(refs,map){return (refs||[]).filter(r=>r&&map[r]&&map[r].url)}
 function mediaHtml(ref,map,cls=''){const x=map[ref];if(!x?.url)return `<div class="editorial-media missing ${cls}"><span>${esc(ref||'image')}</span></div>`;return `<figure class="editorial-media ${cls}"><img src="${esc(x.url)}" alt="" loading="lazy"></figure>`}
+/* 文案段落归一：真模型会把 body 写成数组或多句一段（\n 分隔）。过去整段 esc 进一个 <p>，
+   编辑排版的多段节奏全部丢失（用户截图实锤「文字平铺没有吸引力」）。
+   数组 → 逐段；字符串 → 按 \n 拆；空段丢弃；渲染不出任何段落就不输出。 */
+function edParas(v){
+  const arr=(Array.isArray(v)?v:String(v||'').split(/\n+/))
+    .map(s=>String(s).trim()).filter(Boolean);
+  return arr.map(s=>`<p>${esc(s)}</p>`).join('');
+}
 function renderPromo(detail,master={},opts={}){
   const mm=mediaMap(master);let h='<article class="editorial">';
   // 头图兜底：block 自己没写 ref（或 ref 解析不到 url）时，用媒体清单里第一张真实存在的照片。
@@ -180,13 +188,16 @@ function renderPromo(detail,master={},opts={}){
       const url=heroRef&&mm[heroRef]?mm[heroRef].url:'';
       const bg=url?` style="background-image:linear-gradient(180deg,rgba(7,17,14,.12),rgba(7,17,14,.74)),url('${esc(url)}')"`:'';
       h+=`<section class="ed-hero${url?' has-photo':''}"${bg}><div class="ed-hero-copy"><div class="ed-kicker">${esc(b.kicker||master.location||'OUTDOOR EXPERIENCE')}</div><h1>${esc(b.headline||master.title||'活动')}</h1><p>${esc(b.subtitle||'')}</p></div></section>`;
-    }else if(b.type==='lead')h+=`<section class="ed-lead"><p>${esc(b.text||b.body||'')}</p></section>`;
+    }    else if(b.type==='lead')h+=`<section class="ed-lead">${edParas(b.text||b.body||'')}</section>`;
     else if(b.type==='statement')h+=`<section class="ed-statement"><span>${esc(b.text||'')}</span></section>`;
     else if(b.type==='facts')h+=`<section class="ed-facts">${(b.items||[]).map(x=>`<div><small>${esc(x.label||'')}</small><strong>${esc(x.value||x)}</strong></div>`).join('')}</section>`;
     else if(b.type==='narrative'){
       const ok=resolvedRefs(refs,mm);
       const media=ok.length?`<div class="ed-narrative-media">${ok.map(r=>mediaHtml(r,mm)).join('')}</div>`:'';
-      h+=`<section class="ed-narrative ${ok.length?'has-media':''}"><div class="ed-copy">${b.eyebrow?`<div class="ed-kicker">${esc(b.eyebrow)}</div>`:''}<h2>${esc(b.headline||'')}</h2><p>${esc(b.body||b.text||'')}</p></div>${media}</section>`;
+      /* 文案升级（2026-09-28 用户反馈「图片好看但文字没气势」）：
+         body 支持多段（数组或 \n 分隔），pull 是独立金句行——编辑排版的节奏全靠这两样。 */
+      const pull=b.pull?`<p class="ed-pull">${esc(b.pull)}</p>`:'';
+      h+=`<section class="ed-narrative ${ok.length?'has-media':''}${pull?' has-pull':''}"><div class="ed-copy">${b.eyebrow?`<div class="ed-kicker">${esc(b.eyebrow)}</div>`:''}<h2>${esc(b.headline||'')}</h2>${edParas(b.body||b.text||'')}${pull}</div>${media}</section>`;
     }else if(b.type==='media'){
       // 解析不到 url 的 ref 直接不排版：宁可少一张图，也不要满屏灰色占位块。
       const ok=resolvedRefs(refs,mm);
@@ -248,8 +259,16 @@ function gearRowDup(p){
 function renderPacking(master,opts){
   opts=opts||{};
   const list=master.checklist||[];
-  const chips='<div class="info-chips">'+(list.map(x=>'<div>'+esc(x)+'</div>').join('')||'<div>出发前由俱乐部通知</div>')+'</div>';
+  /* chips 不再是哑的纯文本：哪几项商城真能配到，就要在清单里直接标出来——
+     顾客先扫一眼清单（✓ 的=能一键配齐），再往下看装备行，视线动线才是通的。 */
   const g=opts.gear;
+  const okTexts=new Set(((g&&g.items)||[])
+    .filter(it=>(it.matches||[]).length||(it.substitutes||[]).length)
+    .map(it=>String(it.text||'').trim()));
+  const chips='<div class="info-chips pack-chips">'+(list.map(x=>{
+    const ok=okTexts.has(String(x).trim());
+    return '<div'+(ok?' class="ok" title="商城有可搭配装备"':'')+'>'+esc(x)+'</div>';
+  }).join('')||'<div>出发前由俱乐部通知</div>')+'</div>';
   if(!g||!g.available)return chips;                       // 商城没有在售装备：不编造推荐，保持原样
   const items=g.items||[],extras=g.extras||[];
   if(!items.length&&!extras.length)return chips;
