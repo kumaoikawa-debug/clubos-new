@@ -28,8 +28,12 @@ def extract_text(path: Path) -> str:
                 if txt.strip(): parts.append(txt.strip())
                 if getattr(shape,'has_table',False):
                     for rr in shape.table.rows:
-                        parts.append(' | '.join(c.text.strip() for c in rr.cells))
-            out.append(f"[Slide {i}]\n"+'\n'.join(parts))
+                        row=' | '.join(c.text.strip() for c in rr.cells)
+                        if row.strip(): parts.append(row)
+            # 只在确实有文字时才落 [Slide N] 标记：纯图片页（设计稿式方案）不该产生
+            # 任何"看起来像内容"的字符，否则会让「上传了文档却读不到字」的 422 拦截被绕过，
+            # 也会把空标记当成噪声喂给 AI。
+            if parts: out.append(f"[Slide {i}]\n"+'\n'.join(parts))
         return '\n\n'.join(out)
     if ext == '.docx':
         d=Document(str(path)); out=[p.text for p in d.paragraphs if p.text.strip()]

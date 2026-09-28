@@ -68,7 +68,15 @@
   const body=document.querySelector('.web-content');body?.addEventListener('click',e=>{const target=e.target.closest('.web-card[onclick]');if(target&&e.target.closest('button,a,input'))e.stopPropagation()});
  }
  function initCreate(){
-  if(!isAdmin||!location.pathname.startsWith('/club'))return;
+  /* 端判定必须走 uxPage()。这里过去写 `!location.pathname.startsWith('/club')`，
+     但后端 `/` 与 `/club` 服务同一份 club/index.html（app.py 的 root()），
+     从根域名打开时该判断为假 → 整段创建增强直接 return：
+     「上传资料」区没有拖拽、没有文件清单、没有就绪校验。
+     用户把 PPT/方案拖进那个看着像拖放区的框里毫无反应（连 dragover 高亮都没有），
+     只有点「选取文件」选中的照片进了表单 —— 结果是后端只收到照片、读不到一个字，
+     却仍然"成功"生成一份全是占位文案的活动，用户完全不知道方案没被读到。
+     实测：线上根路径下 initCreate 不执行、拖拽无效；改判据后恢复正常。 */
+  if(uxPage()!=='club')return;
   const modal=document.getElementById('createModal'),form=document.getElementById('createForm');if(!modal||!form)return;
   const field=form.elements.namedItem('files'),textarea=form.elements.namedItem('prompt');
   if(!field||!textarea)return;

@@ -472,6 +472,19 @@ async def ai_generate(club_id:int,prompt:str=Form(''),files:list[UploadFile]=Fil
     except (ValueError,zipfile.BadZipFile) as e:
         shutil.rmtree(batch,ignore_errors=True)
         raise HTTPException(413,str(e))
+    # 上传了「文档类」资料，却一个字都没读出来 —— 必须当场说清楚，绝不能静默产出成品。
+    # 这类资料（PPT/Word/PDF）的正文若被做成图片（设计稿式方案），提取文本就是空的；
+    # 以前这里不检查，于是系统照样"成功"生成一份全是通用占位文案的活动，用户白等一次、
+    # 还搭上一次 Credits，且完全不知道方案根本没被读到（实测复现过：资源上传成功、
+    # 图片提取正常、文本为空、标题落到兜底值）。只传照片、不传文档是合法用法，不在此列。
+    _doc_exts={'.pptx','.docx','.pdf','.txt','.md'}
+    _doc_files=[f for f in (source.get('files') or []) if str(f.get('ext') or '') in _doc_exts]
+    if _doc_files and not (source.get('text') or '').strip():
+        shutil.rmtree(batch,ignore_errors=True)
+        _names='、'.join(str(f.get('name') or '方案') for f in _doc_files[:3])
+        raise HTTPException(422,f'《{_names}》里没有可读取的文字内容：这份方案的文字可能全部做成了图片。'
+                                'AI 无法按方案生成，请补一句活动说明（名称/日期/地点/人数），'
+                                '或换一份带文字的方案再试。')
     try: result,usage=await generate_activity(club_id,source)
     except AIGatewayError as e: raise HTTPException(502,str(e))
     master=result['activity_master']; detail=result['detail']
@@ -490,7 +503,15 @@ async def ai_generate(club_id:int,prompt:str=Form(''),files:list[UploadFile]=Fil
         if master.get('date') and master.get('date')!='待发布':
             c.execute('INSERT INTO activity_occurrences(activity_id,club_id,start_at,price,capacity,status,label) VALUES(?,?,?,?,?,?,?)',(
                 aid,club_id,str(master.get('date')),float(master.get('price') or 0),int(master.get('capacity') or 0),'open','首发团期'))
-    return {'activityId':aid,'activityMaster':master,'detail':detail,'gatewayMode':effective_gateway_mode()[0],'source':{'files':source['files'],'imageCount':len(source['images']),'media':source['media_manifest']}}
+    # 前端要能如实告诉老板「这次到底读到了什么」：几份资料、多少字方案、几张图。
+    # 只报图片数是远远不够的 —— 上传的 PPT 一个字都没读到时，图片数照样是 5，
+    # 界面上看起来一切正常，用户根本没法判断方案有没有被读到（本轮实测踩到过）。
+    _text_len=len((source.get('text') or '').strip())
+    _doc_exts={'.pptx','.docx','.pdf','.txt','.md'}
+    _doc_files=[f for f in (source.get('files') or []) if str(f.get('ext') or '') in _doc_exts]
+    return {'activityId':aid,'activityMaster':master,'detail':detail,'gatewayMode':effective_gateway_mode()[0],
+            'source':{'files':source['files'],'imageCount':len(source['images']),'media':source['media_manifest'],
+                      'textLength':_text_len,'docFiles':_doc_files,'noText':_text_len==0}}
 
 @app.get('/api/club/{club_id}/ai-mode')
 def club_ai_mode(club_id:int):
