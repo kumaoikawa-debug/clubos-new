@@ -633,34 +633,33 @@ function showActivityList(){
   history.replaceState({},'',location.pathname);
 }
 function backList(){showActivityList()}
-/* 带队领队：后端已按团期把「谁带队」算好（public_activity.leaders），前端只负责展示。
-   顾客挑团期时最想知道的就是「谁带」，所以放在报名卡之前而不是塞在页尾。
-   只展示姓名 / 角色 / 头像三样 —— 领队手机号是俱乐部内部联络信息，后端压根不下发，
-   前端也不去要；没安排领队的团期如实写「待定」，不拿别的字段顶上。
-   一个团期都没有、也没指派过谁时整块不显示：空壳卡片只会让顾客以为页面缺了东西。 */
-function leaderChip(x){
+/* 带队领队：后端已算好「这场活动由哪些领队带队」（public_activity.leaders，活动级扁平数组、
+   已去重、只含已指派的人，见 app.py::_public_leaders）。前端只负责展示，不按团期再分组 ——
+   顾客在报名页挑的是「这场活动谁带」，团期只是同一场的不同日期，按团期拆开会变成名字堆。
+   只展示 姓名 / 角色 / 资质 / 擅长 / 常驻城市 / 头像 六样，手机号属内部联络信息后端压根不下发。
+   没有任何领队被指派时整块不显示：空壳卡片只会让顾客以为页面缺了东西。 */
+function leaderCard(x){
   const initial=esc(String(x.name||'领').trim().slice(0,1)||'领');
   const av=x.avatarUrl
     ? `<img src="${esc(x.avatarUrl)}" alt="" loading="lazy">`
     : `<span class="w-lead__ph" aria-hidden="true">${initial}</span>`;
-  return `<span class="w-lead__chip"><span class="w-lead__av">${av}</span>`
-    +`<span class="w-lead__who"><b>${esc(x.name||'领队')}</b><i>${esc(x.role||'领队')}</i></span></span>`;
+  const meta=[];
+  if(x.credential)meta.push(esc(x.credential));
+  if(x.baseCity)meta.push('常驻 '+esc(x.baseCity));
+  const metaHtml=meta.length?`<div class="w-lead__meta">${meta.join(' · ')}</div>`:'';
+  const tags=(x.specialties||[]).slice(0,4).map(s=>`<span class="w-lead__tag">${esc(s)}</span>`).join('');
+  const tagsHtml=tags?`<div class="w-lead__tags">${tags}</div>`:'';
+  return `<div class="w-lead__card"><span class="w-lead__av">${av}</span>`
+    +`<div class="w-lead__body"><div class="w-lead__who"><b>${esc(x.name||'领队')}</b>`
+    +`<i>${esc(x.role||'领队')}</i></div>${metaHtml}${tagsHtml}</div></div>`;
 }
 function leadersHtml(a){
   const list=a.leaders||[];
-  const occs=a.occurrences||[];
-  if(!occs.length&&!list.length)return '';
-  const rows=(occs.length?occs.map(o=>({id:o.id,label:o.label||o.start_at}))
-                         :list.map(g=>({id:g.occurrenceId,label:g.label})))
-    .map(o=>{
-      const g=list.find(x=>Number(x.occurrenceId)===Number(o.id))||{leaders:[]};
-      const people=(g.leaders||[]).map(leaderChip).join('');
-      return `<div class="w-lead__row"><div class="w-lead__when">${esc(o.label||'团期')}</div>`
-        +`<div class="w-lead__people">${people||'<span class="w-lead__tbd">领队待定 · 确定后显示在这里</span>'}</div></div>`;
-    }).join('');
-  const any=list.some(g=>(g.leaders||[]).length);
+  if(!list.length)return '';
+  const cards=list.map(leaderCard).join('');
   return `<section class="w-block w-lead"><div class="w-block__head"><div><b>带队领队</b>`
-    +`<div class="w-block__hint">${any?'由本俱乐部领队带队，出发前会在订单里给出集合与联络方式。':'团期已经排好，领队还在安排中；确定后显示在这里。'}</div></div></div>${rows}</section>`;
+    +`<div class="w-block__hint">由本俱乐部领队带队，出发前会在订单里给出集合与联络方式。</div></div></div>`
+    +`<div class="w-lead__grid">${cards}</div></section>`;
 }
 function bookingHtml(a){
   const p=a.pointsPolicy||{}; const e=p.effective||{};

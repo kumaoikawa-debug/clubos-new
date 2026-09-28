@@ -1464,24 +1464,41 @@ def _public_leader_avatar_url(club_id:int,leader_id,avatar_url):
 
 
 def _public_leaders(c,activity_id:int,club_id:int)->list:
-    """C 端活动详情的「带队领队」：按团期分组，只含**已经指派**的人。
+    """C 端活动详情的「带队领队」：**活动级**的一份去重名单，只含**已经指派**的人。
 
-    字段收敛到 姓名 / 角色 / 头像 三样 —— 手机号是俱乐部内部联络信息，
-    俱乐部端 _leader_plan_for 里带 phone 是给经营者看的，这里绝不下发；
-    也**不下发推荐名单**（顾客不需要知道「本来还考虑过谁」）。
+    为什么是活动级而不是按团期分组：顾客在报名页挑的是「这场活动谁带」，团期只是同一场
+    活动的不同日期；同一个人被派到两个团期就印两遍，卡片区立刻变成名字堆。团期维度的
+    排班（谁带哪一场）属于领队端 / 俱乐部执行视图的信息，不必搬到 C 端报名页。
+
+    字段走白名单，只挑明确要展示的列（不做 SELECT *，免得以后加列就顺手泄漏出去）：
+      姓名 / 指派角色 / 名册身份 / 擅长标签 / 常驻城市 / 头像
+    手机号是俱乐部内部联络信息，俱乐部端 _leader_plan_for 带 phone 是给经营者看的，
+    这里绝不下发；也**不下发推荐名单**（顾客不需要知道「本来还考虑过谁」）。
+
+    执行端手工填人名的临时增援没有 leader_id，关联不上名册 → 后四项如实为空，
+    前端缺哪项就不印哪项，不拿别的字段顶出一个看着很满的卡片。
     """
-    occ=rows(c.execute('SELECT id,label,start_at FROM activity_occurrences WHERE activity_id=? AND club_id=? AND status="open" ORDER BY start_at',(activity_id,club_id)))
-    assigned={}
-    for r in rows(c.execute('''SELECT ol.occurrence_id,ol.name,ol.role,ol.leader_id,l.avatar_url
+    seen=set();out=[]
+    for r in rows(c.execute('''SELECT ol.leader_id,ol.name,ol.role,
+                                      l.role AS credential,l.specialties,l.base_city,l.avatar_url
                                FROM occurrence_leaders ol
                                JOIN activity_occurrences o ON o.id=ol.occurrence_id
                                LEFT JOIN club_leaders l ON l.id=ol.leader_id
-                               WHERE o.activity_id=? AND ol.club_id=? ORDER BY ol.id''',(activity_id,club_id))):
-        assigned.setdefault(int(r['occurrence_id']),[]).append({
-            'name':r.get('name') or '领队','role':r.get('role') or '领队',
+                               WHERE o.activity_id=? AND ol.club_id=? AND o.status="open"
+                               ORDER BY o.start_at,ol.id''',(activity_id,club_id))):
+        name=str(r.get('name') or '').strip() or '领队'
+        key=(int(r['leader_id']) if r.get('leader_id') else 0,name)
+        if key in seen:continue
+        seen.add(key)
+        specs=jload(r.get('specialties'),[])
+        out.append({
+            'name':name,
+            'role':str(r.get('role') or '').strip() or '领队',
+            'credential':str(r.get('credential') or '').strip() or None,
+            'specialties':[str(x).strip() for x in specs if str(x).strip()] if isinstance(specs,list) else [],
+            'baseCity':str(r.get('base_city') or '').strip() or None,
             'avatarUrl':_public_leader_avatar_url(club_id,r.get('leader_id'),r.get('avatar_url'))})
-    return [{'occurrenceId':int(o['id']),'label':o.get('label') or o.get('start_at'),
-             'startAt':o.get('start_at'),'leaders':assigned.get(int(o['id']),[])} for o in occ]
+    return out
 
 
 @app.get('/api/public/leaders/{leader_id}/avatar.{ext}')
@@ -1520,9 +1537,11 @@ def public_activity(activity_id:int):
     if IS_PROD:
         # Public activity is not a dump of private activity_master_json (internalData).
         a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy','gearRecommendations','leaders')}
-        # 领队只放行展示必需的三样：手机号一类内部联络信息即便将来被写进这张表，也出不去。
-        a['leaders']=[{**g,'leaders':[{k:v for k,v in x.items() if k in ('name','role','avatarUrl')}
-                                      for x in (g.get('leaders') or [])]} for g in (a.get('leaders') or [])]
+        # 领队只放行展示必需的六样：手机号一类内部联络信息即便将来被写进这张表，也出不去。
+        # leaders 已经是活动级的扁平数组（见 _public_leaders），逐项过白名单即可。
+        a['leaders']=[{k:v for k,v in x.items()
+                       if k in ('name','role','credential','specialties','baseCity','avatarUrl')}
+                      for x in (a.get('leaders') or [])]
         master=a.get('activityMaster') or {}
         if isinstance(master,dict):
             public_keys={'title','date','location','price','capacity','itinerary','fees','checklist','services','media'}
