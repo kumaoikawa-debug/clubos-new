@@ -99,7 +99,17 @@ def auth_logout(request:Request):
     response.delete_cookie('clubos_csrf',path='/')
     return response
 
-app.mount('/static',StaticFiles(directory=STATIC),name='static')
+class _RevalidateStatic(StaticFiles):
+    """静态资源强制协商缓存：响应带 Cache-Control: no-cache，浏览器每次都带 ETag
+    回源验证，文件没变就 304（不费流量，变了立刻生效）。
+    过去响应没有 Cache-Control，浏览器按启发式缓存直接吃本地旧 JS ——
+    发布新代码后用户页面长期跑旧版本（多日团期上线当天就复现过）。"""
+    def file_response(self,*a,**k):
+        resp=super().file_response(*a,**k)
+        resp.headers['Cache-Control']='no-cache'
+        return resp
+
+app.mount('/static',_RevalidateStatic(directory=STATIC),name='static')
 
 
 def club_or_404(club_id:int):
