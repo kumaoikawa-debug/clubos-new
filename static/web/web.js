@@ -62,7 +62,7 @@ function badge(text,tone){return text?`<span class="w-bdg w-bdg--${tone||'mute'}
 /* ── 骨架屏 ───────────────────────────────────────────────────────────────── */
 function wSkBars(n,w){let o='';for(let i=0;i<n;i++)o+=`<div class="w-sk__bar${w?' style="width:'+w+'"':''}"></div>`;return o}
 function wSkMini(n){let o='';for(let i=0;i<n;i++)o+=`<div class="w-sk-card" style="aspect-ratio:4/3.1"></div>`;return o}
-function wSkReel(n){let o='';for(let i=0;i<n;i++)o+=`<div class="w-sk-card" style="flex:0 0 76%;aspect-ratio:3/4.15"></div>`;return o}
+function wSkReel(n){let o='';for(let i=0;i<n;i++)o+=`<div class="w-sk-card" style="flex:0 0 84%;max-width:330px;aspect-ratio:3/4.15"></div>`;return o}
 function wSkRows(n){let o='';for(let i=0;i<n;i++)o+=`<div class="w-sk-row">${wSkBars(2,'62%')}</div>`;return o}
 
 /* ── 首页 ─────────────────────────────────────────────────────────────────── */
@@ -181,22 +181,33 @@ function renderActivityList(){
   const g=activityGroups().find(x=>x.k===ACT_GROUP);
   let list=g?ACT_ALL.filter(g.test):ACT_ALL.slice();
   if(q)list=list.filter(x=>((x.title||'')+' '+(x.location||'')).toLowerCase().includes(q));
+  // 最近出发的排最前：列表是「翻卡片挑一场走」，按 id 倒序会把 11 月排在 10 月前面。
+  // 日期解析不出来的（老数据/「待发布」）沉到最后，不参与比较。
+  list=list.slice().sort((a,b)=>{
+    const ka=wDate(a.event_date),kb=wDate(b.event_date);
+    const va=ka?ka.y*10000+ka.m*100+ka.d:99999999,vb=kb?kb.y*10000+kb.m*100+kb.d:99999999;
+    return va-vb;
+  });
   box.innerHTML=list.map(reelCard).join('');
   const cnt=$('#actCount');
   if(cnt)cnt.textContent=ACT_ALL.length?`共 ${list.length} 场可报名${q?` · 关键词「${q}」`:''}`:'暂时没有已发布的活动';
   const emp=$('#activityEmpty');
   if(emp)emp.innerHTML=list.length?'':`<div class="w-empty">${WI.empty}<div>没有符合条件的活动</div><div style="margin-top:6px">换个时间档位，或清空搜索词再看看。</div></div>`;
 }
+/* 卡片是「一张翻阅杂志」：日期 + 价格压在图片顶部两端，标题居中落在图上三分之一处，
+   下面是地点/名额、查看详情。整卡只有图片和白字，不再叠灰底信息条。 */
 function reelCard(x){
   const cov=x.cover||'',d=wDate(x.event_date);
   return `<article class="w-reel__card${cov?'':' is-fallback'}" onclick="openAct(${x.id})" tabindex="0" role="button" aria-label="${esc(x.title)} 详情">
     ${cov?`<div class="w-reel__media" style="background-image:url('${esc(cov)}')"></div>`:''}
     <div class="w-reel__scrim"></div>
-    <span class="w-reel__price">${money(x.price)}</span>
-    ${x.capacity?`<span class="w-reel__seat">限 ${x.capacity} 人</span>`:''}
+    <div class="w-reel__badges">
+      ${d?`<span class="w-reel__date">${wDay(x.event_date)}</span>`:'<span class="w-reel__date">即将出发</span>'}
+      <span class="w-reel__price">${money(x.price)} <em>/ 人起</em></span>
+    </div>
     <div class="w-reel__copy">
       <h3>${esc(x.title)}</h3>
-      <div class="w-reel__meta">${esc(x.location||'户外')}${d?' · '+wDay(x.event_date):''}</div>
+      <div class="w-reel__meta">${esc(x.location||'户外')}${x.capacity?' · 限 '+x.capacity+' 人':''}</div>
       <span class="w-reel__cta">查看详情</span>
     </div>
     <div class="w-reel__brand">REMOTE OUTDOOR CLUB</div>
