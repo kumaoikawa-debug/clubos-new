@@ -81,7 +81,7 @@
   const field=form.elements.namedItem('files'),textarea=form.elements.namedItem('prompt');
   if(!field||!textarea)return;
   const drop=field.closest('.drop');drop.classList.add('ux-file-drop');drop.setAttribute('role','group');drop.setAttribute('aria-label','活动素材');
-  const help=document.createElement('div');help.className='ux-upload-help';help.innerHTML='<strong>支持的资料</strong><p>PPT / Word / PDF / 图片；可以上传多份资料，AI 会结合原始事实与图片组织动态内容。</p><div class="ux-upload-list" aria-live="polite">尚未选择文件</div>';
+  const help=document.createElement('div');help.className='ux-upload-help';help.innerHTML='<strong>支持的资料</strong><p>PPT / Word / PDF / 图片；可以上传多份资料，AI 会结合原始事实与图片组织动态内容。手机拍摄的大图会自动压缩后再上传，不必手动缩小。</p><div class="ux-upload-list" aria-live="polite">尚未选择文件</div>';
   drop.appendChild(help);
   /* ★ 累加，不替换。<input type=file> 的原生行为是「每次选择整体顶掉上一次」，
      拖放旧代码也是 field.files=e.dataTransfer.files 直接整体覆盖 —— 用户先选几张现场照片、
@@ -93,13 +93,54 @@
      浏览器不支持 DataTransfer 构造时退回旧的「整体替换」行为。 */
   let bag=null;try{bag=new DataTransfer()}catch(err){}
   const fkey=f=>f.name+'|'+f.size+'|'+f.lastModified;
-  const render=()=>{const files=[...field.files];const list=help.querySelector('.ux-upload-list');list.replaceChildren();if(!files.length){list.textContent='尚未选择文件';return}files.forEach((f,i)=>{const el=document.createElement('div');el.className='ux-file-chip';const label=document.createElement('span');label.textContent=f.name+' · '+(f.size/1024/1024).toFixed(1)+' MB';const x=document.createElement('button');x.type='button';x.className='ux-file-chip-x';x.setAttribute('aria-label','移除 '+f.name);x.textContent='×';x.addEventListener('click',()=>{if(!bag)return;bag.items.remove(i);field.files=bag.files;render();refresh()});el.append(label,x);list.append(el)})};
-  const addFiles=list=>{if(!bag){render();refresh();return}for(const f of list){if([...bag.files].some(x=>fkey(x)===fkey(f)))continue;try{bag.items.add(f)}catch(err){}}field.files=bag.files;render();refresh()};
+  const mb=n=>(n/1048576).toFixed(1);
+  /* ★ 线上网关上传吞吐实测只有 ~20-60KB/s：几张手机原图（每张 8-14MB）根本传不完，
+     网关超时掐断并返回非 JSON 错误页 → 前端只能弹裸的「请求失败」（2026-09-28 用户实测）。
+     AI 识别素材根本不需要原图：进袋前把大图在浏览器里压成长边 ≤1600px 的 JPEG（q≈0.8），
+     体积通常降 10-30 倍；已经很小、压不小（压缩后反而更大）、或解码失败（如 HEIC）就保留原件。
+     PPT/Word/PDF 属于必须完整上传的文档，不在此列。 */
+  const compressImage=async f=>{
+    if(!/^image\/(jpe?g|png|webp|bmp)$/i.test(f.type)||f.size<=800*1024)return f;
+    try{
+      const bmp=await createImageBitmap(f);
+      const scale=Math.min(1,1600/Math.max(bmp.width,bmp.height));
+      const cv=document.createElement('canvas');
+      cv.width=Math.max(1,Math.round(bmp.width*scale));cv.height=Math.max(1,Math.round(bmp.height*scale));
+      const cx=cv.getContext('2d');cx.fillStyle='#ffffff';cx.fillRect(0,0,cv.width,cv.height);cx.drawImage(bmp,0,0,cv.width,cv.height);
+      if(bmp.close)bmp.close();
+      const blob=await new Promise(res=>cv.toBlob(res,'image/jpeg',0.8));
+      if(!blob||blob.size>=f.size)return f;
+      const out=new File([blob],f.name.replace(/\.(jpe?g|png|webp|bmp|tiff?)$/i,'')+'.jpg',{type:'image/jpeg',lastModified:f.lastModified});
+      out.__srcKey=fkey(f);out.__origSize=f.size;
+      return out;
+    }catch(err){return f}
+  };
+  const srcKeys=new Set();
+  const render=()=>{const files=[...field.files];const list=help.querySelector('.ux-upload-list');list.replaceChildren();if(!files.length){list.textContent='尚未选择文件';return}files.forEach((f,i)=>{const el=document.createElement('div');el.className='ux-file-chip';const label=document.createElement('span');label.textContent=f.__origSize?f.name+' · '+mb(f.size)+' MB（已自动压缩，原图 '+mb(f.__origSize)+' MB）':f.name+' · '+mb(f.size)+' MB';const x=document.createElement('button');x.type='button';x.className='ux-file-chip-x';x.setAttribute('aria-label','移除 '+f.name);x.textContent='×';x.addEventListener('click',()=>{if(!bag)return;const removed=[...bag.files][i];bag.items.remove(i);srcKeys.delete(removed&&(removed.__srcKey||fkey(removed)));field.files=bag.files;render();refresh()});el.append(label,x);list.append(el)})};
+  /* 压缩是异步的：用 promise 链把每一批选择/拖放串行化，避免两批并发交错写袋。
+     去重三层：袋内同名同大小（fkey）、压缩产物自带的来源键（__srcKey）、以及
+     历史来源键集合 srcKeys（同一张照片先压缩进袋后再原样重选，不会变出重复一份）。 */
+  let pump=Promise.resolve();
+  const addFiles=list=>{
+    const items=[...list];
+    pump=pump.then(async()=>{
+      for(const f of items){
+        const sk=fkey(f);
+        if([...bag.files].some(x=>fkey(x)===sk||(x.__srcKey&&x.__srcKey===sk)))continue;
+        if(srcKeys.has(sk))continue;
+        const out=await compressImage(f);
+        srcKeys.add(sk);srcKeys.add(fkey(out));
+        try{bag.items.add(out)}catch(err){}
+      }
+      if(bag)field.files=bag.files;
+      render();refresh();
+    }).catch(()=>{});
+  };
   field.addEventListener('change',()=>addFiles(field.files));
   drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('dragover')});drop.addEventListener('dragleave',()=>drop.classList.remove('dragover'));drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('dragover');if(e.dataTransfer?.files?.length)addFiles(e.dataTransfer.files)});
   const notice=document.createElement('div');notice.className='ux-create-status';notice.setAttribute('aria-live','polite');textarea.parentElement.after(notice);
-  const submit=document.getElementById('genBtn');const refresh=()=>{const ready=!!textarea.value.trim()||field.files.length>0;notice.textContent=ready?'资料已就绪。生成后可检查事实、编辑团期及发布。':'填写一句目标或上传一份资料，即可开始。';if(submit.disabled===ready)submit.disabled=!ready};textarea.addEventListener('input',refresh);field.addEventListener('change',refresh);refresh();
-  form.addEventListener('submit',()=>{notice.innerHTML='<span class="ux-spinner" aria-hidden="true"></span>正在读取资料并生成活动内容。完成前请勿重复提交。';submit.disabled=true}, {capture:true});
+  const submit=document.getElementById('genBtn');const refresh=()=>{const files=[...field.files];const ready=!!textarea.value.trim()||files.length>0;const total=files.reduce((s,f)=>s+f.size,0);notice.textContent=ready?(`资料已就绪：${textarea.value.trim()?'':'仅上传资料'}${files.length?`${files.length} 份文件 · 共 ${mb(total)} MB`:''}。生成后可检查事实、编辑团期及发布。`):'填写一句目标或上传一份资料，即可开始。';if(submit.disabled===ready)submit.disabled=!ready};textarea.addEventListener('input',refresh);field.addEventListener('change',refresh);refresh();
+  form.addEventListener('submit',()=>{const files=[...field.files];const total=files.reduce((s,f)=>s+f.size,0);notice.innerHTML=`<span class="ux-spinner" aria-hidden="true"></span>正在上传 ${files.length} 份资料（共 ${mb(total)} MB）并生成活动内容，${total>4*1048576?'资料较大，可能需要一两分钟，':'请稍候，'}完成前请勿重复提交。`;submit.disabled=true}, {capture:true});
   const obs=new MutationObserver(()=>{if(!submit.disabled)refresh()});obs.observe(submit,{attributes:true,attributeFilter:['disabled']});
   modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-label','AI 创建活动');
  }
