@@ -121,9 +121,14 @@ button.is-busy::after,.btn.is-busy::after{content:'';position:absolute;top:0;bot
 .act-op--danger{color:#a33b2c;border-color:#eed6d0}
 .act-op--danger:hover{background:#fdf3f1;border-color:#ddab9f}
 /* 详情页页内跳转：详情页很长，给一条不占位的锚点条，避免"不知道下面还有什么"。 */
-.detail-nav{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 2px}
-.detail-nav__item{font-size:12px;font-weight:700;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:#fff;color:#3c674c;cursor:pointer;transition:background .15s,border-color .15s}
+/* 详情页内导航：sticky 吸顶 + 横向滚动 + scrollspy 当前态（2026-09-28 重做）。
+   原来 6 个小 pills 无当前态、点击目标 ~27px、跳转后不知道自己在哪。 */
+.detail-nav{position:sticky;top:0;z-index:24;display:flex;gap:7px;margin:12px 0 2px;padding:9px 2px;overflow-x:auto;scrollbar-width:none;background:var(--bg);-webkit-overflow-scrolling:touch}
+.detail-nav::-webkit-scrollbar{display:none}
+.detail-nav__item{font-size:12.5px;font-weight:700;min-height:38px;padding:0 15px;border-radius:999px;border:1px solid var(--line);background:#fff;color:#3c674c;cursor:pointer;white-space:nowrap;flex:0 0 auto;transition:background .15s,border-color .15s,color .15s,box-shadow .15s}
 .detail-nav__item:hover{border-color:#8fbd9a;background:#f4f8f2}
+.detail-nav__item.active{background:var(--brand);border-color:var(--brand);color:#fff;box-shadow:0 6px 16px #153d2830}
+[id^="sec-"]{scroll-margin-top:64px}
 /* 会员价：把「加入会员更便宜」直接写在商品行上（原价划线保留）。 */
 .gear-was{text-decoration:line-through;color:#9aa8a0;font-weight:600;margin:0 5px 0 2px;font-size:11px}
 /* 从出行清单跳到商城后，把对应的那件商品高亮出来，否则用户不知道跳到了哪。 */

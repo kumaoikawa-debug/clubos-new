@@ -73,13 +73,13 @@ function pointsPolicyCard(a){
   const p=a.pointsPolicy||{}; const e=p.effective||{};
   const gearCap=p.gearPointsMaxDiscountAmount==null?'':p.gearPointsMaxDiscountAmount;
   return `<div class="card section" id="pointsPolicyCard">
-    <div class="panel-title"><div><h3>活动积分规则</h3><div class="sub">由俱乐部决定这场活动是否参与积分。团期默认继承整场活动规则。</div></div><span class="tag ${p.enabled?'':'orange'}">${p.enabled?'已开启':'不参与积分'}</span></div>
+    <div class="panel-title"><div><h3>活动积分规则</h3><div class="sub">由俱乐部决定这场活动是否参与积分。团期默认继承整场活动规则。这里的活动积分与总平台装备积分（Gear Points）相互独立。</div></div><span class="tag ${p.enabled?'':'orange'}">${p.enabled?'已开启':'不参与积分'}</span></div>
     <label style="display:flex;gap:10px;align-items:center;padding:10px 0"><input id="ppEnabled" type="checkbox" ${p.enabled?'checked':''}> <strong>这场活动参与积分体系</strong></label>
     <div class="grid g2" style="margin-top:4px">
       <div class="notice"><label><input id="ppEarn" type="checkbox" ${p.earnClubPoints?'checked':''}> 报名后产生活动积分</label><div class="sub" style="margin-top:6px">成本由本俱乐部承担；默认按俱乐部积分规则累计。</div></div>
       <div class="notice"><label><input id="ppClub" type="checkbox" ${p.acceptClubPoints?'checked':''}> 允许活动积分抵现金</label><div style="margin-top:8px"><span class="sub">本单最多抵活动金额</span> <input id="ppClubMax" type="number" min="0" max="100" step="1" value="${Number(p.clubPointsMaxDiscountPercent??100)}" style="width:80px"> %</div></div>
-      <div class="notice"><label><input id="ppGear" type="checkbox" ${p.acceptGearPoints?'checked':''} ${p.platformGearPointsAllowed?'':'disabled'}> 允许装备积分抵现金</label><div style="margin-top:8px"><span class="sub">本单最多补贴 ¥</span> <input id="ppGearMax" type="number" min="0" step="1" placeholder="不限制" value="${gearCap}" style="width:100px" ${p.platformGearPointsAllowed?'':'disabled'}></div><div class="sub" style="margin-top:6px">${p.platformGearPointsAllowed?'成本由 ClubOS 总平台承担。':'总平台当前已关闭活动场景的 Gear Points 补贴。'}</div></div>
       <div class="notice"><strong>C端实际生效</strong><div class="sub" style="margin-top:6px">累计活动积分：${e.earnClubPoints?'是':'否'} · 活动积分抵扣：${e.acceptClubPoints?'是':'否'} · 装备积分抵扣：${e.acceptGearPoints?'是':'否'}</div></div>
+      <div class="notice" style="background:#f3f5f2"><label><input id="ppGear" type="checkbox" ${p.acceptGearPoints?'checked':''} ${p.platformGearPointsAllowed?'':'disabled'}> 接收装备积分抵扣（总平台体系）</label><div style="margin-top:8px"><span class="sub">本单最多补贴 ¥</span> <input id="ppGearMax" type="number" min="0" step="1" placeholder="不限制" value="${gearCap}" style="width:100px" ${p.platformGearPointsAllowed?'':'disabled'}></div><div class="sub" style="margin-top:6px">装备积分（Gear Points）由 ClubOS 总平台发放与补贴，不是俱乐部的活动积分；总开关在总平台端。${p.platformGearPointsAllowed?'当前平台已开启，可选是否接收。':'当前平台已关闭，无法开启。'}</div></div>
     </div>
     <button class="btn secondary" style="margin-top:12px" onclick="savePointsPolicy(${a.id})">保存积分规则</button>
   </div>`
@@ -348,17 +348,19 @@ async function loadPointsPolicy(){
   let rule={};
   try{rule=await api('/api/platform/points-policy')}catch(e){}
   const gearOn=!!rule.gearPointsActivityRedeemEnabled;
-  $('#pointsPlatformRule').innerHTML='<div class="notice"><strong>总平台总开关</strong><div class="sub" style="margin-top:6px">Gear Points 用于活动报名抵扣：'+(gearOn?'已开启':'已关闭')+'。关掉之后，本页「允许装备积分抵现金」会变灰且无法开启。</div></div>';
+  // 2026-09-28 用户明确：本页主体是俱乐部自己的活动积分；Gear Points 是总平台体系，
+  // 只在页尾留一行只读状态（section 里的说明块由 index.html 提供），不再置顶大块展示。
+  $('#pointsPlatformRule').innerHTML='<strong>总平台 Gear Points 活动抵扣开关（只读）</strong><div class="sub" style="margin-top:6px">'+(gearOn?'已开启':'已关闭')+' —— 属于总平台装备积分体系，与上方各活动的活动积分无关；调整请在总平台端操作。</div>';
   $('#pointsList').innerHTML=list.map(a=>{
     const tags=[];
     const enabled=Number(a.points_enabled??1)>0;
     if(enabled&&Number(a.earn_club_points??1)>0)tags.push('报名可获得');
     if(enabled&&Number(a.accept_club_points??1)>0)tags.push('可抵 '+Number(a.club_points_max_discount_percent??100)+'%');
+    // 装备积分是平台补贴，视觉上与俱乐部活动积分区分：灰底 tag，不冒充本页主体。
     if(enabled&&Number(a.accept_gear_points??1)>0){
-      if(!gearOn)tags.push('装备积分（总平台已关闭）');
-      else tags.push('装备积分可抵');
+      tags.push(gearOn?'<span class="tag">装备积分抵扣 · 平台补贴</span>':'<span class="tag">装备积分抵扣 · 平台未开启</span>');
     }
-    const tagHtml=tags.length?tags.map(t=>'<span class="tag info">'+esc(t)+'</span>').join(' '):'<span class="tag orange">不参与积分</span>';
+    const tagHtml=tags.length?tags.map(t=>t.startsWith('<span')?t:'<span class="tag info">'+esc(t)+'</span>').join(' '):'<span class="tag orange">不参与积分</span>';
     return '<div class="list-row" role="button" tabindex="0" onclick="openActivity('+a.id+')">'
       +'<div class="list-row__main"><div class="list-row__title">'+esc(a.title)+'</div>'
       +'<div class="list-row__sub">'+esc(a.event_date||'')+' · '+esc(a.location||'')+' · 报名 '+money(a.price||0)+'</div></div>'

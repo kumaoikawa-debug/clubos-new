@@ -398,10 +398,30 @@ function infoStackSkip(detail,master){
 }
 /* 详情页很长，给一条页内跳转，避免"不知道下面还有什么"。用 scrollIntoView 而不是 <a href="#…">，
    避免和可能存在的 hash 路由打架。 */
-function jumpTo(id){const el=document.getElementById(id);if(el)el.scrollIntoView({behavior:'smooth',block:'start'})}
+function jumpTo(id){const el=document.getElementById(id);if(!el)return;el.scrollIntoView({behavior:'smooth',block:'start'});
+  // 点击立即高亮，不等 observer 追上来（长页面滚动中途 observer 会连跳几档）。
+  document.querySelectorAll('.detail-nav__item').forEach(b=>b.classList.toggle('active',b.dataset.dnav===id));}
 function detailNavHtml(items){
   if(!items||!items.length)return '';
-  return '<div class="detail-nav">'+items.map(([id,label])=>`<button type="button" class="detail-nav__item" onclick="jumpTo('${id}')">${esc(label)}</button>`).join('')+'</div>';
+  // 调用方拿到返回值后立刻 innerHTML；延迟初始化 scrollspy 落在赋值之后。
+  setTimeout(initDetailNav,80);
+  return '<div class="detail-nav">'+items.map(([id,label])=>`<button type="button" class="detail-nav__item" data-dnav="${id}" onclick="jumpTo('${id}')">${esc(label)}</button>`).join('')+'</div>';
+}
+/* scrollspy：滚动到哪个区块，导航就高亮到哪一项；激活项自动横向滚进可视区。 */
+function initDetailNav(){
+  const nav=document.querySelector('.detail-nav');if(!nav)return;
+  const btns=[...nav.querySelectorAll('.detail-nav__item')];if(!btns.length)return;
+  if(window.__dnavObs)window.__dnavObs.disconnect();
+  const setActive=id=>{btns.forEach(b=>{const on=b.dataset.dnav===id;b.classList.toggle('active',on);
+    if(on&&nav.scrollWidth>nav.clientWidth){const x=b.offsetLeft-(nav.clientWidth-b.offsetWidth)/2;nav.scrollTo({left:Math.max(0,x),behavior:'smooth'});}});};
+  setActive(btns[0].dataset.dnav);
+  const secs=btns.map(b=>document.getElementById(b.dataset.dnav)).filter(Boolean);
+  const obs=new IntersectionObserver(es=>{
+    const vis=es.filter(e=>e.isIntersecting).sort((a,b)=>a.boundingClientRect.top-b.boundingClientRect.top)[0];
+    if(vis)setActive(vis.target.id);
+  },{rootMargin:'-12% 0px -68% 0px'});
+  secs.forEach(s=>obs.observe(s));
+  window.__dnavObs=obs;
 }
 function renderInfoStack(master,opts={}){
   const skip=opts.skip||[],has=k=>skip.indexOf(k)<0;
