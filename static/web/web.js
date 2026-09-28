@@ -643,8 +643,12 @@ function leaderCard(x){
   const av=x.avatarUrl
     ? `<img src="${esc(x.avatarUrl)}" alt="" loading="lazy">`
     : `<span class="w-lead__ph" aria-hidden="true">${initial}</span>`;
+  /* 资质与角色相同时不重复印：名册里 role='领队' 而指派角色也常是'领队'，
+     两个都印会变成「领队 chip + 领队 · 常驻 X」的复读。真实数据里资质是头衔/证书，
+     与指派角色不同时才有信息量。 */
+  const cred=String(x.credential||'').trim();
   const meta=[];
-  if(x.credential)meta.push(esc(x.credential));
+  if(cred&&cred!==String(x.role||'').trim())meta.push(esc(cred));
   if(x.baseCity)meta.push('常驻 '+esc(x.baseCity));
   const metaHtml=meta.length?`<div class="w-lead__meta">${meta.join(' · ')}</div>`:'';
   const tags=(x.specialties||[]).slice(0,4).map(s=>`<span class="w-lead__tag">${esc(s)}</span>`).join('');
