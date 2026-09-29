@@ -1,7 +1,9 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   C 端四块改版覆盖层（web.js 之后加载，同名 window.X 赢 —— 项目「后加载覆盖优先」
+   C 端改版覆盖层（web.js 之后加载，同名 window.X 赢 —— 项目「后加载覆盖优先」
    约定；函数声明在同一文件内赢，跨文件后加载的 window.X 赋值也赢，均不报错。）
-   四块：① 首页纯活动瀑布流 ② 活动页主推轮播+瀑布流 ③ 业务介绍区（后台开关）
+   四块：① 首页满屏 hero（一屏一张大图 + 底部文案 + 描边按钮），下滑是活动瀑布流
+        ② 活动页主题卡 peek 轮播（中间一张竖版大卡、左右露出相邻卡片边）+ 瀑布流
+        ③ 业务介绍区（后台开关）
         ④ 我的页会员中心化（活动积分/装备积分/优惠券 + 三类订单 + 积分商城）
    ═══════════════════════════════════════════════════════════════════════════ */
 'use strict';
@@ -11,10 +13,12 @@ const CLUB=window.CLUB||1,money=window.money||(v=>'¥'+(Number(v||0)%1?Number(v)
 /* 旧加载器引用必须在任何 window.X 覆盖赋值之前捕获 —— 覆盖后再取 window.loadMemberCenter
    拿到的就是本文件自己的新实现，递归套娃会 stack overflow。 */
 const _oldMemberCenter=window.loadMemberCenter,_oldWallet=window.loadWallet;
-/* 瀑布流卡片：封面 + 日期徽章压图 + 标题 + 地点·名额·价格。没封面走渐变兜底，
-   不造灰假图块（顾客会把灰块当成「图挂了」）。 */
+const day=x=>window.wDay?wDay(x.event_date):'';
+
+/* ── 瀑布流卡片（首页 / 活动页共用）：双列，封面 + 日期角标 + 标题 + 地点·价格。
+   没封面走渐变兜底，不造灰假图块（顾客会把灰块当成「图挂了」）。 */
 function feedCard(x){
-  const cov=x.cover||'',d=window.wDay?wDay(x.event_date):'';
+  const cov=x.cover||'',d=day(x);
   return `<button class="w-fd" type="button" onclick="openAct(${Number(x.id)})" aria-label="${esc(x.title)} 详情">
     <div class="w-fd__media${cov?'':' is-fallback'}">${cov?`<img src="${esc(cov)}" alt="" loading="lazy">`:''}</div>
     ${d?`<span class="w-fd__date">${esc(d)}</span>`:''}
@@ -24,71 +28,119 @@ function feedCard(x){
     </div>
   </button>`;
 }
-/* 主推轮播：取有封面的前 5 场；底部细线指示器只在真有多于一场时画 ——
-   只有一场时「01 / 01」+ 一根满格条是纯噪音，还暗示「后面还有」（其实没有）。 */
-function heroSlide(x,i){
-  const cov=x.cover||'';
-  return `<div class="w-hero__slide">
+
+/* ── ① 首页满屏 hero ─────────────────────────────────────────────────────
+   参考图（始祖鸟首页）：一张照片占满首屏，文案压在底部 —— 小字标签 / 大标题 /
+   时间地点 / 描边方框按钮，四行止。高度由 CSS 的 .w-hero--full 控制（100svh 减
+   底部导航），这里不写像素，免得和导航高度各算一套、两处对不上。
+   不在 hero 上放价格/名额：首页要的是「想去看一眼」，不是「先比一次价」；
+   价格留给下面的瀑布流卡片，那里才是选购的场景。
+   标题用 h1 而不是 h2 —— 旧实现写的 <h2> 不匹配 CSS 的 .w-hero h1，
+   30px 大标题从来没生效过（首页标题一直是被浏览器默认字号的 h2 顶着）。 */
+function homeSlide(x,i){
+  const cov=x.cover||'',sub=[day(x),x.location||''].filter(Boolean).join(' · ');
+  return `<div class="w-hero__slide${cov?'':' is-fallback'}">
     ${cov?`<div class="w-hero__media" style="background-image:url('${esc(cov)}')"></div>`:'<div class="w-hero__media"></div>'}
     <div class="w-hero__scrim"></div>
     <div class="w-hero__copy">
-      <div class="w-hero__eyebrow">${i===0?'本期主推 · FEATURED':'UPCOMING · 招募中'}</div>
+      <div class="w-hero__eyebrow">${i===0?'本期主推':'即将出发'}</div>
+      <h1>${esc(x.title)}</h1>
+      ${sub?`<p class="w-hero__sub">${esc(sub)}</p>`:''}
+      <button class="w-hero__cta" type="button" onclick="openAct(${Number(x.id)})">即刻探索</button>
+    </div>
+  </div>`;
+}
+
+/* ── ② 活动页主题卡：peek 轮播 ───────────────────────────────────────────
+   参考图（松赞主题卡）：中间一张竖版大卡，左右各露出相邻卡片的边 —— 一眼看出
+   「可以左右滑」，而不是「只有这一张」。文案压在卡片中下部**居中**，与首页 hero
+   的左对齐刻意区分：两屏的层次要能一眼分开，否则滑过来像"又回到首页"。 */
+function themeCard(x,i){
+  const cov=x.cover||'',meta=[day(x),x.location||''].filter(Boolean).join(' · ');
+  return `<button class="w-theme__card${cov?'':' is-fallback'}" type="button" onclick="openAct(${Number(x.id)})" aria-label="${esc(x.title)} 详情">
+    ${cov?`<div class="w-theme__media" style="background-image:url('${esc(cov)}')"></div>`:'<div class="w-theme__media"></div>'}
+    <div class="w-theme__scrim"></div>
+    <div class="w-theme__copy">
+      <div class="w-theme__eyebrow">${i===0?'本期主推':'精选线路'}</div>
       <h2>${esc(x.title)}</h2>
-      <div class="w-hero__facts"><span>${esc(x.location||'户外')}</span><span>${money(x.price)} / 人</span></div>
-      <button class="w-hero__cta" type="button" onclick="openAct(${Number(x.id)})">查看详情</button>
-    </div></div>`;
+      ${meta?`<div class="w-theme__meta">${esc(meta)}</div>`:''}
+      <div class="w-theme__price">${money(x.price)}<em> / 人</em></div>
+    </div>
+    <span class="w-theme__cue" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6 9.8 6 5.4 6-5.4"/></svg></span>
+  </button>`;
 }
-function bindCaro(box){
-  const n=box.children.length,bar=box.parentElement.querySelector('.w-caro__meter i'),cnt=box.parentElement.querySelector('.w-caro__count');
-  const sync=()=>{const i=Math.max(0,Math.min(n-1,Math.round(box.scrollLeft/Math.max(1,box.clientWidth))));
-    if(bar)bar.style.width=((i+1)/n*100)+'%';if(cnt)cnt.textContent=`${String(i+1).padStart(2,'0')} / ${String(n).padStart(2,'0')}`};
-  box.addEventListener('scroll',()=>{clearTimeout(box._wt);box._wt=setTimeout(sync,60)},{passive:true});sync();
+
+/* 轮播指示同步。bar / cnt 由调用方传入：首页与活动页的指示元素不在同一处，
+   写死一个选择器必然有一边永远不动。步长按「第一张卡宽 + 卡间距」算，不能用
+   box.clientWidth —— peek 轮播的相邻卡是露出来的，clientWidth 里含着它们的宽度，
+   用它当步长页码会一直算错。滚动停下 60ms 再量，否则 iOS 惯性滚动期间每帧读一次
+   scrollLeft，指示器会乱跳。 */
+function bindCaro(box,bar,cnt){
+  const n=box.children.length;if(!n)return;
+  const step=()=>{
+    const a=box.children[0],b=box.children[1];if(!a)return box.clientWidth||1;
+    const gap=b?Math.max(0,b.getBoundingClientRect().left-a.getBoundingClientRect().right):0;
+    return Math.max(1,a.getBoundingClientRect().width+gap);
+  };
+  const sync=()=>{
+    const s=step(),i=Math.max(0,Math.min(n-1,Math.round(box.scrollLeft/s)));
+    if(bar)bar.style.width=((i+1)/n*100)+'%';
+    if(cnt)cnt.textContent=`${String(i+1).padStart(2,'0')} / ${String(n).padStart(2,'0')}`;
+  };
+  box.addEventListener('scroll',()=>{clearTimeout(box._wt);box._wt=setTimeout(sync,60)},{passive:true});
+  sync();
 }
-/* ── ① 首页：hero + 全部活动瀑布流（最新上架倒序；id 自增 = 上架顺序，最稳）── */
+
+/* ── ① 首页：满屏 hero + 全部活动瀑布流（最新上架倒序；id 自增 = 上架顺序，最稳）── */
 window.loadHome=async function(){
   const hero=$('#homeHero'),feed=$('#homeFeed');
-  if(hero&&!hero.children.length)hero.innerHTML='<div class="w-sk"><div class="w-sk__bar" style="height:min(58vh,440px);border-radius:0"></div></div>';
+  if(hero&&!hero.children.length)hero.innerHTML='<div class="w-sk" style="padding:0;height:100%"><div class="w-sk__bar" style="height:100%;border-radius:0"></div></div>';
   if(feed&&!feed.children.length)feed.innerHTML='<div class="w-sk-row"></div><div class="w-sk-row"></div>';
   try{
     const acts=await api(`/api/public/clubs/${CLUB}/activities`);
     window.ACT_ALL=acts;
     const list=(acts||[]).slice().sort((a,b)=>Number(b.id||0)-Number(a.id||0));
     if(hero)hero.innerHTML=list.length
-      ?'<div class="w-hero__track">'+list.slice(0,5).map((x,i)=>heroSlide(x,i)).join('')+'</div>'
-        +(list.length>1?'<div class="w-caro__meter"><i></i></div><div class="w-caro__count"></div>':'')
-      :'<div class="w-hero__slide is-fallback"><div class="w-hero__media"></div><div class="w-hero__scrim"></div><div class="w-hero__copy"><div class="w-hero__eyebrow">远拓户外</div><h2>去户外，找到下一场。</h2><div class="w-hero__sub">俱乐部正在筹备新的线路，稍后再来看看。</div></div></div>';
-    if(hero&&hero.querySelector('.w-hero__track'))bindCaro(hero.querySelector('.w-hero__track'));
+      ?'<div class="w-hero__track">'+list.slice(0,5).map(homeSlide).join('')+'</div>'
+        +(list.length>1?'<div class="w-hero__meter"><i></i></div><div class="w-hero__count"></div>':'')
+      :'<div class="w-hero__slide is-fallback"><div class="w-hero__media"></div><div class="w-hero__scrim"></div><div class="w-hero__copy"><div class="w-hero__eyebrow">远拓户外</div><h1>去户外，找到下一场。</h1><p class="w-hero__sub">俱乐部正在筹备新的线路，稍后再来看看。</p></div></div>';
+    const t=hero&&hero.querySelector('.w-hero__track');
+    if(t&&list.length>1)bindCaro(t,hero.querySelector('.w-hero__meter i'),hero.querySelector('.w-hero__count'));
     if(feed)feed.innerHTML=list.length?list.map(feedCard).join(''):'<div class="w-empty">俱乐部正在筹备新的活动，稍后再来看看。</div>';
-    /* 旧首页的 #homeGear / #homeFeatured 节点已删；旧 loadHome 对它们都有 if 守卫，
-       这里不再引用。旧函数在同文件是函数声明赢，但 loadHome 由 wv() 在运行时按
-       window.loadHome 解析 —— 本文件后加载，赋值赢。 */
   }catch(e){if(feed)feed.innerHTML='<div class="w-empty">活动加载失败，请稍后重试</div>'}
 };
-/* ── ② 活动页：主推横滑轮播 + 全部活动瀑布流 ─────────────────────────────── */
+
+/* ── ② 活动页：主题卡 peek 轮播 + 全部活动瀑布流 ─────────────────────────
+   只把有封面的活动做成主题卡：没封面时那张卡是一块深色渐变，放在 C 位等于告诉
+   顾客「这家的活动连张图都没有」。宁可少两张卡，也不把兜底图摆到台面上。 */
 window.loadActivities=async function(){
   const car=$('#actFeatured'),box=$('#publicActivities'),emp=$('#activityEmpty');
-  if(car&&!car.children.length)car.innerHTML='<div class="w-sk"><div class="w-sk__bar" style="height:200px"></div></div>';
+  if(car&&!car.children.length)car.innerHTML='<div class="w-sk"><div class="w-sk__bar" style="height:380px"></div></div>';
   if(box&&!box.children.length)box.innerHTML='<div class="w-sk-row"></div><div class="w-sk-row"></div>';
   try{
     const acts=await api(`/api/public/clubs/${CLUB}/activities`);
     window.ACT_ALL=acts;
     const list=(acts||[]).slice().sort((a,b)=>Number(b.id||0)-Number(a.id||0));
-    if(car){const f=list.filter(x=>x.cover).slice(0,5);
-      car.innerHTML=f.length
-        ?'<div class="w-caro__track">'+f.map((x,i)=>heroSlide(x,i)).join('')+'</div>'+(f.length>1?'<div class="w-caro__meter"><i></i></div><div class="w-caro__count"></div>':'')
-        :'';
+    if(car){
+      const f=list.filter(x=>x.cover).slice(0,5);
       car.style.display=f.length?'':'none';
-      const t=car.querySelector('.w-caro__track');if(t&&f.length>1)bindCaro(t);
+      car.innerHTML=f.length
+        ?'<div class="w-theme__track">'+f.map(themeCard).join('')+'</div>'
+          +(f.length>1?'<div class="w-theme__meter"><i></i></div>':'')
+        :'';
+      const t=car.querySelector('.w-theme__track');
+      if(t&&f.length>1)bindCaro(t,car.querySelector('.w-theme__meter i'));
     }
     if(box)box.innerHTML=list.length?list.map(feedCard).join(''):'';
     if(emp)emp.innerHTML=list.length?'':'<div class="w-empty">暂时没有可报名的活动<br>换个时间再来看看</div>';
   }catch(e){if(box)box.innerHTML=''}
 };
+
 /* ── ③ 业务介绍区：clubs.biz_section_json（后台开关 + 自定义内容）──────────
    注意取值对象：这一屏的容器就是 #wability 本身（<section id="wability"> 里只有
    一个 <div id="bizIntro">），没有 #wbiz 这层壳。早先按 #wbiz 取不到节点 →
    整个函数提前 return，业务区永远不渲染、开关点了也没反应。
-   老板没配时连导航入口一起收起来：点进去看一块空白，比如口还在更糟。 */
+   老板没配时连导航入口一起收起来：点进去看一块空白，比没有入口还糟。 */
 function bizCard(x){
   return `<div class="w-biz__item">
     ${x.image?`<img src="${esc(x.image)}" alt="" loading="lazy" onerror="this.remove()">`:''}
@@ -114,10 +166,10 @@ window.loadWability=async function(){
      不让顾客对着空白页。 */
   if(!on&&sec.style.display==='block')wv('wactivities');
 };
+
 /* ── ④ 我的页：会员中心化（参考 JPG：积分三格 + 宫格入口 + 订单/福利）────── */
-const ORD_MAP=window.ORD_ST||{};
 window.loadMemberCenter=async function(){
-  const A=$('#meAvatar'),N=$('#meName'),T=$('#meTier'),L=$('#memberLevel');
+  const A=$('#meAvatar');
   if(A&&!A.dataset.done)A.textContent=(window.USER_NAME||'户').slice(0,1);
   /* 积分/等级/订单全部走旧加载器（web.js 原生 loadMemberCenter/loadWallet 写的就是
      #clubPts/#gearPts/#memberLevel 这批 id，端点真实存在）。之前这里调的
@@ -128,6 +180,7 @@ window.loadMemberCenter=async function(){
 };
 window.loadMemberInfo=window.loadMemberCenter;
 window.openMemberCard=window.openMemberCard||function(){wv('wme')};
+
 /* ── 视图切换挂载：切到哪块就加载哪块（幂等，重复切不重复拉）──────────────── */
 const _wv=window.wv;
 window.wv=function(id,btn){

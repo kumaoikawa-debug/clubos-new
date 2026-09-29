@@ -19,20 +19,22 @@
 
   <div class="web-content">
 
-    <!-- ── 首页：hero 轮播 + 全部活动瀑布流（去装备精选/本月精选标题）────────
+    <!-- ── 首页：满屏 hero（一屏一张大图）+ 全部活动瀑布流 ──────────────────
+         .w-hero--full 的高度由 CSS 给（100svh 减底部导航），这里不再写像素；
+         骨架屏跟着撑满同一高度，免得加载完照片时页面"跳一下"。
          #homeFeed 由 web-biz.js 的 loadHome() 填充：全部活动按最新上架倒序的瀑布流，
          没有封面时走兜底渐变卡。#homeFeatured/#homeGear 已删 —— 旧 web.js 的
          loadHome 对它们都有 null 守卫，删节点不会报错。 -->
     <section id="whome" class="wview">
-      <div class="w-hero" id="homeHero"><div class="w-sk" style="padding:0"><div class="w-sk__bar" style="height:min(84vh,660px);border-radius:0"></div></div></div>
+      <div class="w-hero w-hero--full" id="homeHero"><div class="w-sk" style="padding:0;height:100%"><div class="w-sk__bar" style="height:100%;border-radius:0"></div></div></div>
       <div class="w-pad w-waterfall" id="homeFeed"></div>
-      <div style="height:10px"></div>
     </section>
 
-    <!-- ── 活动：顶部主推横滑轮播 + 全部活动瀑布流 ─────────────────────────
+    <!-- ── 活动：顶部主题卡 peek 轮播 + 全部活动瀑布流 ──────────────────────
+         主题卡 = 中间一张竖版大卡、左右各露出相邻卡片的边（.w-theme__*）；
          文字介绍、搜索框、时间胶囊（全部/本月/下月）全部删除 —— 顾客要的是
-         「往下滑看活动」，不是先读一段介绍再筛一遍。#publicActivities 保留：
-         experience-core.js 靠它定位，删掉 = 装饰层静默失效。 -->
+         「左右翻主题、往下看活动」，不是先读一段介绍再筛一遍。
+         #publicActivities 保留：experience-core.js 靠它定位，删掉 = 装饰层静默失效。 -->
     <section id="wactivities" class="wview" style="display:none">
       <div id="activityList">
         <div class="w-carousel" id="actFeatured"></div>

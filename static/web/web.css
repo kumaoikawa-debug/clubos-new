@@ -1057,4 +1057,104 @@
   color:#fff;font-size:11.5px;font-weight:600;cursor:pointer;
 }
 .w-me__center svg{width:13px;height:13px;flex:0 0 13px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   首页满屏 hero + 活动页主题卡 peek 轮播（2026-09-30）
+   参考图：始祖鸟首页（一张照片占满首屏 · 文案压底部 · 描边方框按钮）
+          / 松赞主题卡（中间一张竖版大卡 · 左右露出相邻卡片的边）
+   两屏必须一眼可分：首页是左对齐大标题 + 描边按钮的通栏照片；活动页是居中排版、
+   带圆角与投影的卡片。滑过去像「又回到首页」，这次改版就算白做。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 首页 hero 占满首屏 ─────────────────────────────────────────────────
+   高度 = 100svh − 底部导航。顶栏在首页是绝对定位浮层（见文件开头
+   `.is-home .web-top`），不占高度，所以照片能从屏幕最顶端一路铺到导航上沿，
+   这才是"打开满屏"。
+   用 svh 不用 vh：移动端地址栏收起/展开时 vh 会跳，hero 跟着抖一段。
+   --w-navh 在全局是 70px（留了余量），导航实测是 66px + 安全区 —— 差这 4px
+   会在照片和导航之间露出一条缝，所以这里按实测值重定义一次（只影响 hero 内部）。 */
+.web-shell .w-hero--full{
+  --w-navh:calc(66px + env(safe-area-inset-bottom,0px));
+  height:calc(100svh - var(--w-navh));min-height:460px;overflow:hidden;
+}
+.web-shell .w-hero--full .w-hero__track{height:100%}
+.web-shell .w-hero--full .w-hero__slide{height:100%;min-height:0}
+.web-shell .w-hero--full .w-hero__copy{padding:0 24px 46px}
+.web-shell .w-hero--full .w-hero__eyebrow{
+  font-size:10.5px;letter-spacing:.24em;text-transform:none;color:rgba(255,255,255,.72);
+}
+/* 标题字号跟视口走：长标题在窄屏上要能自己收一档，别硬撑着换行成两行半。
+   (0,2,1) 压过文件里 `.w-hero h1` 的 30px 与移动端断点里的 26px。 */
+.web-shell .w-hero--full h1{
+  margin:12px 0 0;font-size:min(9.2vw,34px);line-height:1.2;letter-spacing:-.02em;font-weight:600;
+}
+.web-shell .w-hero--full .w-hero__sub{
+  margin-top:10px;font-size:13px;letter-spacing:.01em;color:rgba(255,255,255,.82);
+}
+/* 按钮必须是方角 1px 描边。追加段里那条 `.w-hero__cta{margin-top:10px;background:#fff;
+   border:0;border-radius:999px}` 是留给活动卡片的白色胶囊，它 specificity 更低但
+   background/border 会漏过来 → 首页按钮变成白胶囊，参考图里那个方框就没了。
+   所以这里把外观四项全部显式写一遍，不留继承口子。 */
+.web-shell .w-hero--full .w-hero__cta{
+  margin-top:24px;padding:12px 26px;font-size:13px;letter-spacing:.1em;
+  background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.7);
+  border-radius:2px;color:#fff;
+}
+/* hero 到瀑布流的过渡：留一口气，别让照片直接切到白底列表 */
+.web-shell #homeHero + .w-waterfall{padding-top:14px}
+
+/* ── ② 活动页主题卡：peek 轮播 ────────────────────────────────────────────
+   track 两侧各留 12% 内边距，卡片占**内容区的 100%**（= 屏幕的 76%）+
+   scroll-snap-align:center → 当前卡居中、左右各露出一截相邻卡（"还能往两边滑"
+   的视觉提示）。这里必须写 100% 而不是 76%：76% 是相对 track 的内容区算的，
+   内容区本身已经只有 76vw，再取 76% 会缩成 58vw，卡片变小、两侧露出过多。 */
+.web-shell #actFeatured{padding:2px 0 4px}
+.web-shell .w-theme__track{
+  display:flex;gap:12px;overflow-x:auto;scroll-snap-type:x mandatory;
+  padding:4px 12% 8px;scrollbar-width:none;-webkit-overflow-scrolling:touch;
+}
+.web-shell .w-theme__track::-webkit-scrollbar{display:none}
+.web-shell .w-theme__card{
+  position:relative;flex:0 0 100%;scroll-snap-align:center;aspect-ratio:3/4;
+  border:0;padding:0;border-radius:20px;overflow:hidden;background:#e8ece9;
+  cursor:pointer;text-align:center;box-shadow:0 16px 36px rgba(16,28,22,.18);
+}
+.web-shell .w-theme__media{position:absolute;inset:0;background-size:cover;background-position:center;background-color:#1d2a24}
+.web-shell .w-theme__card.is-fallback .w-theme__media{
+  background-image:
+    radial-gradient(120% 90% at 18% 8%,rgba(31,107,74,.55),transparent 58%),
+    radial-gradient(90% 80% at 88% 96%,rgba(196,85,43,.42),transparent 60%),
+    linear-gradient(158deg,#16201b,#232f28 52%,#101713);
+}
+.web-shell .w-theme__scrim{
+  position:absolute;inset:0;
+  background:linear-gradient(180deg,rgba(8,12,10,.24) 0%,rgba(8,12,10,.06) 32%,rgba(8,12,10,.58) 72%,rgba(8,12,10,.9) 100%);
+}
+.web-shell .w-theme__copy{position:absolute;left:0;right:0;bottom:0;z-index:2;padding:0 20px 52px;color:#fff}
+.web-shell .w-theme__eyebrow{font-size:10px;letter-spacing:.2em;color:rgba(255,255,255,.74)}
+.web-shell .w-theme__copy h2{
+  margin:10px 0 0;font-size:22px;line-height:1.28;font-weight:600;letter-spacing:-.01em;
+  color:#fff;text-shadow:0 2px 16px rgba(0,0,0,.34);
+}
+.web-shell .w-theme__meta{margin-top:9px;font-size:12.5px;color:rgba(255,255,255,.88)}
+.web-shell .w-theme__price{margin-top:4px;font-size:12px;color:rgba(255,255,255,.7)}
+.web-shell .w-theme__price em{font-style:normal;font-size:10.5px;opacity:.85}
+/* 「▼」= 本屏还有下文（往下滑是瀑布流）。用内联 svg 不用字符，字形不受系统影响；
+   尺寸必须显式写 —— 见本文件上方「内联 svg 必须显式定尺寸」那条教训。 */
+.web-shell .w-theme__cue{position:absolute;left:50%;bottom:15px;transform:translateX(-50%);z-index:2;opacity:.72;color:#fff}
+.web-shell .w-theme__cue svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+/* 指示器：短横线，深灰绿填充。用品牌绿实心太跳，抢主题卡的视线。 */
+.web-shell .w-theme__meter{width:54px;height:3px;margin:10px auto 2px;border-radius:99px;background:rgba(22,36,28,.14);overflow:hidden}
+.web-shell .w-theme__meter i{display:block;height:100%;width:0;border-radius:99px;background:#2c5a45;transition:width .22s}
+/* 主题卡与瀑布流之间留一口气 —— 直接贴上去会被读成"轮播的第二屏" */
+.web-shell #actFeatured + .w-waterfall{padding-top:12px}
+
+/* ── ③ 底部导航：格数自适应 ────────────────────────────────────────────────
+   导航写死了 grid-template-columns:repeat(5,1fr)。业务介绍没配时「户外能力」被
+   收起（display:none），只剩 4 个按钮却仍按 5 列排 —— 右边空出一整列，四个入口
+   全挤在左侧 4/5。改成等宽自增列，4 格 5 格都能铺满。
+   （管的是列轨，不是 display:none 的按钮本身。） */
+.web-shell .web-nav{
+  grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:1fr;
+}
 .w-me__svc .w-sec__head h2{font-size:15px;color:#16241c}
