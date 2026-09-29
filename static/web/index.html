@@ -19,32 +19,24 @@
 
   <div class="web-content">
 
-    <!-- ── 首页：全屏照片 hero 轮播 + 精选横滑 ────────────────────────────
-         #homeHero 由 loadHome() 填充（取主推活动的封面图）；没有封面时 hero 走深色渐变兜底。 -->
+    <!-- ── 首页：hero 轮播 + 全部活动瀑布流（去装备精选/本月精选标题）────────
+         #homeFeed 由 web-biz.js 的 loadHome() 填充：全部活动按最新上架倒序的瀑布流，
+         没有封面时走兜底渐变卡。#homeFeatured/#homeGear 已删 —— 旧 web.js 的
+         loadHome 对它们都有 null 守卫，删节点不会报错。 -->
     <section id="whome" class="wview">
       <div class="w-hero" id="homeHero"><div class="w-sk" style="padding:0"><div class="w-sk__bar" style="height:min(84vh,660px);border-radius:0"></div></div></div>
-      <div class="w-sec">
-        <div class="w-pad w-sec__head"><div><h2>本月精选</h2><p>俱乐部正在招募的活动</p></div><button class="w-more" type="button" onclick="wv('wactivities')">全部活动<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13"/><path d="m12.4 6 6 6-6 6"/></svg></button></div>
-        <div class="w-hscroll" id="homeFeatured"></div>
-      </div>
-      <div class="w-sec">
-        <div class="w-pad w-sec__head"><div><h2>装备精选</h2><p>平台统一发货与售后</p></div><button class="w-more" type="button" onclick="wv('wmall')">全部装备<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h13"/><path d="m12.4 6 6 6-6 6"/></svg></button></div>
-        <div class="w-hscroll" id="homeGear"></div>
-      </div>
+      <div class="w-pad w-waterfall" id="homeFeed"></div>
       <div style="height:10px"></div>
     </section>
 
-    <!-- ── 活动：搜索 + 时间胶囊 + 竖向长卡横滑 ──────────────────────────
-         #activityList 是列表区整体（含头部与胶囊），详情打开时整块让位给 #publicDetail，
-         否则会出现「标题还在、reel 不见了」的半截页面。 -->
+    <!-- ── 活动：顶部主推横滑轮播 + 全部活动瀑布流 ─────────────────────────
+         文字介绍、搜索框、时间胶囊（全部/本月/下月）全部删除 —— 顾客要的是
+         「往下滑看活动」，不是先读一段介绍再筛一遍。#publicActivities 保留：
+         experience-core.js 靠它定位，删掉 = 装饰层静默失效。 -->
     <section id="wactivities" class="wview" style="display:none">
       <div id="activityList">
-        <div class="w-pad w-sec">
-          <div class="w-sec__head"><div><h2>活动</h2><p id="actCount">正在读取活动…</p></div></div>
-          <label class="w-field"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.4"/><path d="m16 16 4.2 4.2"/></svg><input id="actSearch" type="search" placeholder="搜索活动名称或地点" aria-label="搜索活动"></label>
-        </div>
-        <div class="w-chips" id="activityChips"></div>
-        <div class="w-reel" id="publicActivities"></div>
+        <div class="w-carousel" id="actFeatured"></div>
+        <div class="w-waterfall" id="publicActivities"></div>
         <div id="activityEmpty"></div>
       </div>
       <div id="publicDetail"></div>
@@ -72,23 +64,13 @@
       <div id="productDetail"></div>
     </section>
 
-    <!-- ── 户外能力：暂未开放（做成有信息量的承诺页，而不是一块空白） ──── -->
+    <!-- ── 业务介绍：俱乐部老板可自定义的板块（后台开关 + 自定义内容）──────
+         数据来自 clubs.biz_section_json（后台 PATCH 开关 + 内容）。
+         关闭或没配内容时整块不渲染 —— 空壳板块比没有板块更伤信任。
+         旧「户外能力」的履历/技能/装备块全部移除：那是伪造的能力值，
+         后端没有 skill 表，前端不得编造能力。 -->
     <section id="wability" class="wview" style="display:none">
-      <div class="w-ability">
-        <div class="w-ability__hero">
-          <span class="w-ability__badge">REAL DATA · 真实记录</span>
-          <h2>你的户外履历，值得被记录</h2>
-          <p>这里不生成任何虚构标签：内容是你在俱乐部的真实报名与真实购买记录。参加得越多、装备越齐，推荐给你的档期自然越对得上。</p>
-        </div>
-        <div id="wabilitySummary" class="w-ability__stats"></div>
-        <div class="w-ability__list">
-          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6.5" cy="6.5" r="2.6"/><circle cx="17.5" cy="17.5" r="2.6"/><path d="M9.1 6.5h5.4a3 3 0 0 1 0 6H9.5a3 3 0 0 0 0 6h5.4"/></svg><div><b>线路履历</b><span id="wabilityRouteHint">按你报名过的活动如实列出。</span></div></div>
-          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="9" r="5"/><path d="m8.6 13.4-1.3 7 4.7-2.6 4.7 2.6-1.3-7"/></svg><div><b>技能标签</b><span id="wabilitySkillHint">从你实际参加过的活动归纳。</span></div></div>
-          <div class="w-ability__item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0v11H6z"/><path d="M6 13h12"/><path d="M10.4 3.4h3.2"/></svg><div><b>装备掌握</b><span id="wabilityGearHint">你真正买过、用过的装备。</span></div></div>
-        </div>
-        <div id="wabilityRoutes" class="w-ability__blocks"></div>
-        <div class="grid g2 section"><div id="wabilitySkills" class="card"></div><div id="wabilityGear" class="card"></div></div>
-      </div>
+      <div class="w-biz" id="bizIntro"></div>
     </section>
 
     <!-- ── 我的：深色照片底 + 毛玻璃会员卡，下滑接订单与福利 ──────────────
@@ -103,10 +85,11 @@
         <div class="w-me__card">
           <div class="w-me__id">
             <div class="w-me__avatar" id="meAvatar">远</div>
-            <div class="w-me__who">
-              <div class="w-me__name"><span id="meName">户外会员</span><span class="w-me__tier" id="meTier">普通会员</span></div>
-              <div class="w-me__sub w-me__legacy" id="memberLevel">正在读取会员信息…</div>
-            </div>
+          <div class="w-me__who">
+            <div class="w-me__name"><span id="meName">户外会员</span><span class="w-me__tier" id="meTier">普通会员</span></div>
+            <div class="w-me__sub w-me__legacy" id="memberLevel">正在读取会员信息…</div>
+            <button class="w-me__center" type="button" onclick="openMemberCard()">会员中心<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></button>
+          </div>
             <!-- 图标是「卡」不是二维码：点开是真实的会员信息，没有可被扫码核销的签名码，
                  竖一个扫不动的码比不放更伤信任。 -->
             <button class="w-me__qr" type="button" onclick="openMemberCard()" aria-label="查看会员信息"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.8" y="5" width="18.4" height="14" rx="2.6"/><path d="M2.8 9.6h18.4"/><path d="M6.4 14.6h4"/></svg></button>
@@ -116,10 +99,13 @@
             <div class="w-me__bar"><i id="meUpBar" style="width:0%"></i></div>
             <div class="w-me__legacy" id="memberTierPerks" style="margin-top:9px"></div>
           </div>
+          <!-- 积分三格（对齐会员中心 JPG）：活动积分 / 装备积分 / 可用券。
+               #clubPts/#gearPts 保留原 id —— loadWallet() 按 id 写这两个数；
+               #couponCnt 由 web-biz.js 从福利接口带出，没有券时显示 0，不造假数据。 -->
           <div class="w-me__pts">
-            <span>可用积分</span><b id="clubPts">—</b><em>活动积分</em>
-            <span aria-hidden="true" style="margin:0 2px 0 10px;color:rgba(255,255,255,.34)">|</span>
-            <b id="gearPts" style="font-size:20px">—</b><em>装备积分</em>
+            <div><b id="clubPts">—</b><span>活动积分</span></div>
+            <div><b id="gearPts">—</b><span>装备积分</span></div>
+            <div><b id="couponCnt">0</b><span>可用券</span></div>
           </div>
           <div class="w-me__grid" id="meGrid"></div>
           <div class="w-me__svc">
@@ -159,6 +145,7 @@
 
 <script src="/static/shared.js"></script>
 <script src="/static/web/web.js"></script>
+<script src="/static/web/web-biz.js"></script>
 <script src="/static/ux/clubos-ux.js"></script>
 <script src="/static/ux/workflows-web.js"></script>
 <script src="/static/ux/qr-local.js"></script>

@@ -992,3 +992,52 @@
 @media(max-width:520px){
   .web-shell .w-lead__grid{grid-template-columns:1fr;gap:10px}
 }
+
+/* ═══ C端四块改版（web-biz.js 配套）：瀑布流 / 主推轮播 / 业务区 / 会员中心 ═══ */
+/* 活动瀑布流：2 列 CSS columns 实现，卡片 break-inside:avoid —— 不用 JS 量高度，
+   iOS 惯性滚动期间每帧量 offsetHeight 会掉帧。 */
+.w-waterfall{columns:2;column-gap:10px;padding:0 12px 16px}
+.w-waterfall>.w-fd{break-inside:avoid;margin:0 0 10px;width:100%}
+.w-fd{display:block;position:relative;border:0;padding:0;background:none;text-align:left;cursor:pointer;border-radius:14px;overflow:hidden}
+.w-fd__media{aspect-ratio:3/4;background:#e8ece9 center/cover no-repeat;border-radius:14px}
+.w-fd__media img{width:100%;height:100%;object-fit:cover;display:block}
+.w-fd__media.is-fallback{background:linear-gradient(160deg,#2f4a3c,#16241c)}
+.w-fd__date{position:absolute;top:10px;left:10px;background:rgba(255,255,255,.92);color:#1c2b22;font-size:11px;font-weight:600;padding:3px 8px;border-radius:999px}
+.w-fd__copy{padding:9px 2px 0}
+.w-fd__copy h3{font-size:13.5px;line-height:1.4;margin:0;color:#16241c;overflow-wrap:anywhere}
+.w-fd__meta{display:flex;justify-content:space-between;align-items:baseline;margin-top:5px;font-size:11px;color:#6b7a70}
+.w-fd__meta b{font-size:14px;color:#16241c}.w-fd__meta b em{font-style:normal;font-size:10px;color:#8a978e}
+/* 主推轮播：横向 scroll-snap，指示器只有真有多于一场时才渲染（JS 控制） */
+.w-carousel,.w-caro-wrap{position:relative}
+.w-caro__track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.w-caro__track::-webkit-scrollbar{display:none}
+.w-caro__track>.w-hero__slide{flex:0 0 100%;scroll-snap-align:center;position:relative;min-height:220px;border-radius:16px;overflow:hidden}
+.w-caro__track .w-hero__media{position:absolute;inset:0;background:#22352a center/cover no-repeat}
+.w-caro__track .w-hero__scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(10,20,14,.05),rgba(10,20,14,.72))}
+.w-caro__track .w-hero__copy{position:relative;z-index:1;padding:18px 16px 16px;color:#fff}
+.w-hero__eyebrow{font-size:10px;letter-spacing:.14em;opacity:.85;text-transform:uppercase}
+.w-caro__track h2{margin:6px 0 4px;font-size:18px;line-height:1.3}
+.w-hero__facts{display:flex;gap:10px;font-size:11.5px;opacity:.92}
+.w-hero__cta{margin-top:10px;background:#fff;color:#16241c;border:0;border-radius:999px;padding:7px 16px;font-size:12px;font-weight:600}
+.w-caro__meter{position:absolute;left:16px;right:16px;bottom:12px;height:3px;background:rgba(255,255,255,.28);border-radius:2px;z-index:1}
+.w-caro__meter i{display:block;height:100%;width:0;background:#fff;border-radius:2px;transition:width .18s}
+.w-caro__count{position:absolute;right:16px;bottom:7px;font-size:10px;color:rgba(255,255,255,.85);z-index:1}
+/* 业务介绍区（clubs.biz_section_json 开关控制，关 = 整块 display:none） */
+.w-biz{padding:14px 12px 4px}
+.w-biz__head h2{margin:0 0 4px;font-size:16px;color:#16241c}
+.w-biz__head p{margin:0 0 10px;font-size:12px;color:#6b7a70;line-height:1.55}
+.w-biz__list{display:grid;gap:10px}
+.w-biz__item{display:flex;gap:12px;align-items:flex-start;background:#fff;border-radius:14px;padding:12px;box-shadow:0 1px 4px rgba(22,36,28,.06)}
+.w-biz__item img{width:52px;height:52px;border-radius:10px;object-fit:cover;flex:0 0 auto}
+.w-biz__copy b{display:block;font-size:13.5px;color:#16241c}
+.w-biz__copy span{display:block;margin-top:3px;font-size:12px;color:#6b7a70;line-height:1.5}
+/* 我的页 · 会员中心化：积分三格 + 宫格入口（活动积分/装备积分/优惠券 + 三类订单 + 积分商城） */
+.w-me__pts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
+.w-me__pts>div{background:rgba(255,255,255,.1);border-radius:12px;padding:10px 8px;text-align:center;color:#fff}
+.w-me__pts b{display:block;font-size:18px;line-height:1.2}
+.w-me__pts span{font-size:10.5px;opacity:.8}
+.w-me__grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
+.w-me__grid button{background:rgba(255,255,255,.1);border:0;border-radius:12px;padding:10px 4px;color:#fff;font-size:10.5px;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer}
+.w-me__grid svg{width:20px;height:20px;fill:none;stroke:#fff;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.w-me__center{margin-top:12px;width:100%;background:rgba(255,255,255,.12);border:0;border-radius:999px;padding:9px;color:#fff;font-size:12.5px;font-weight:600;cursor:pointer}
+.w-me__svc .w-sec__head h2{font-size:15px;color:#16241c}
