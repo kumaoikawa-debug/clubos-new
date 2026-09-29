@@ -1157,4 +1157,94 @@
 .web-shell .web-nav{
   grid-template-columns:none;grid-auto-flow:column;grid-auto-columns:1fr;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   多机型适配（2026-09-30）
+   ---------------------------------------------------------------------------
+   覆盖 iPhone SE(320×568) ~ 15 Pro Max(430×932) 全系、常见 Android(360×740 /
+   412×915)、iPad 竖屏(768)。三类问题各治一处：
+   ① 异形屏安全区 —— index.html 的 viewport 已带 viewport-fit=cover，所以 env()
+      在刘海/灵动岛/挖孔机上才有真值；先把它们落成 --w-sa* 变量，无安全区的设备
+      取 0，与改动前完全等价（消费端一律带 `,0px` 兜底，见下）。
+   ② 矮视口（横屏手机）—— 固定 min-height 会把 hero 顶得比视口还高、CTA 被推到屏
+      外；3:4 主题卡在横屏能算出 700px 高的卡。改成「不超过可用高度」。
+   ③ 极窄屏（≤360）—— 字号与边距收一档；「升级条件」标签不再被右侧文案挤成两行。
+   本节一律写在文件末尾，靠「同 specificity 后写者胜」覆盖上面的旧值。
+   ★ 改这里的顶栏选择器别写成裸 `.web-top`：会输给上面 `.web-shell .web-top`(0,2,0)。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── ① 安全区 ────────────────────────────────────────────────────────────── */
+.web-shell{
+  --w-sat:env(safe-area-inset-top,0px);
+  --w-sab:env(safe-area-inset-bottom,0px);
+  --w-sal:env(safe-area-inset-left,0px);
+  --w-sar:env(safe-area-inset-right,0px);
+  /* iOS 横屏会自动放大文字（auto），把横屏布局撑歪；锁 100% 不锁用户的双指缩放 */
+  -webkit-text-size-adjust:100%;text-size-adjust:100%;
+}
+/* 顶栏：刘海/灵动岛不能压住搜索与头像。首页时顶栏是压在 hero 上的浮层，
+   同样必须让位，否则沉浸态的标题正好落在灵动岛上。 */
+.web-shell .web-top{
+  padding-top:calc(12px + var(--w-sat,0px));
+  padding-left:calc(14px + var(--w-sal,0px));
+  padding-right:calc(14px + var(--w-sar,0px));
+}
+/* 底部导航：横屏时左右也有安全区，首末两个入口否则会被圆角切掉 */
+.web-shell .web-nav{
+  padding-left:calc(4px + var(--w-sal,0px));
+  padding-right:calc(4px + var(--w-sar,0px));
+  padding-bottom:calc(7px + var(--w-sab,0px));
+}
+.web-shell .web-content{padding-bottom:calc(74px + var(--w-sab,0px))}
+/* 顶栏点击目标 36 → 38（本项目约定下限 38px） */
+.web-shell .web-top__btn{width:38px;height:38px;flex:0 0 38px}
+
+/* ── ② 矮视口 / 横屏 ─────────────────────────────────────────────────────── */
+/* hero 高度先按 vh 兜底再按 svh 覆盖：不支持 svh 的旧内核（部分 X5/WebView）
+   会丢弃第二条声明，仍拿到一个可用值；支持 svh 的浏览器里地址栏收起/展开时
+   hero 不再跟着跳。min-height 用 min() 夹住，横屏时不会超过可用高度。 */
+.web-shell .w-hero--full{
+  --w-navh:calc(66px + var(--w-sab,0px));
+  height:calc(100vh - var(--w-navh));
+  height:calc(100svh - var(--w-navh));
+  min-height:min(460px,calc(100vh - var(--w-navh)));
+  min-height:min(460px,calc(100svh - var(--w-navh)));
+}
+@media (max-height:560px){
+  .web-shell .w-hero--full .w-hero__copy{padding-bottom:30px}
+  .web-shell .w-hero--full h1{margin-top:8px;font-size:min(6.4vh,28px)}
+  .web-shell .w-hero--full .w-hero__sub{margin-top:6px}
+  .web-shell .w-hero--full .w-hero__cta{margin-top:14px;padding:9px 20px}
+  /* 横屏里 aspect-ratio:3/4 会算出比视口还高的卡，改固定高度 */
+  .web-shell .w-theme__card{aspect-ratio:auto;height:min(430px,calc(100vh - 210px))}
+}
+/* iOS Safari 会把 <16px 的输入框整页放大（聚焦一次页面就缩不回来）。
+   只对触屏设备抬到 16px，桌面端输入框保持原字号。 */
+@media (hover:none) and (pointer:coarse){
+  .web-shell .w-field input,.web-shell .w-fld input{font-size:16px}
+}
+/* 长标题在固定高度的主题卡里必须收口，否则四五行把卡撑破、压掉价格 */
+.web-shell .w-theme__copy h2{
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;
+}
+
+/* ── ③ 极窄屏 ≤360（iPhone SE 1 / 老 Android）──────────────────────────── */
+@media (max-width:360px){
+  .web-shell .w-hero--full .w-hero__copy{padding:0 20px 38px}
+  .web-shell .w-hero--full h1{font-size:min(8.6vw,30px)}
+  .web-shell .w-hero--full .w-hero__eyebrow{font-size:9.5px;letter-spacing:.18em}
+  .web-shell .w-hero--full .w-hero__sub{font-size:12px}
+  .web-shell .w-hero--full .w-hero__cta{margin-top:18px;padding:11px 22px;font-size:12.5px}
+  .web-shell .w-theme__track{padding-left:10%;padding-right:10%}
+  .web-shell .w-theme__copy{padding:0 16px 44px}
+  .web-shell .w-theme__copy h2{font-size:19px}
+  .web-shell .w-theme__meta{font-size:11.5px}
+  .web-shell .w-waterfall{padding-left:10px;padding-right:10px;column-gap:8px}
+  .web-shell .w-fd__copy h3{font-size:12.5px}
+}
+/* 「升级条件」标签在 320~390 上都被右侧文案挤成「升级条/件」两行 ——
+   标签不换行，让文案自己折。与屏宽无关，放全局。 */
+.web-shell .w-me__uphead{align-items:flex-start}
+.web-shell .w-me__uphead>span:first-child{flex:0 0 auto;white-space:nowrap}
+.web-shell .w-me__uphead>span:last-child{text-align:right;min-width:0}
 .w-me__svc .w-sec__head h2{font-size:15px;color:#16241c}
