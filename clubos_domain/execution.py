@@ -30,7 +30,7 @@ class ActivityExecutionService:
             (SELECT COUNT(*) FROM registration_participants p JOIN registrations r ON r.id=p.registration_id
              WHERE p.occurrence_id=o.id AND p.status='active' AND r.status='paid' AND p.form_status!='complete') incomplete_participants,
             (SELECT COUNT(*) FROM registration_participants p JOIN registrations r ON r.id=p.registration_id
-             WHERE p.occurrence_id=o.id AND p.status='active' AND r.status='paid' AND p.insurance_status IN ('pending','submitted','failed')) insurance_pending,
+             WHERE p.occurrence_id=o.id AND p.status='active' AND r.status='paid' AND p.insurance_status IN ('pending','submitted','enrolling','cancelling','failed','cancel_failed')) insurance_pending,
             (SELECT COUNT(*) FROM participant_checkins ci WHERE ci.occurrence_id=o.id AND ci.checkin_type='departure' AND ci.status='checked_in') checked_in
             FROM activity_occurrences o JOIN activities a ON a.id=o.activity_id
             WHERE o.club_id=? ORDER BY o.start_at''', (club_id,)).fetchall()
@@ -220,22 +220,30 @@ class ActivityExecutionService:
         return dict(c.execute("SELECT * FROM participant_checkins WHERE participant_id=? AND checkin_type='departure'", (participant_id,)).fetchone())
 
     def batch_insurance_submit(self, c, *, club_id: int, occurrence_id: int, participant_ids: list[int], provider: str = "") -> dict[str, Any]:
-        self._occurrence(c, club_id=club_id, occurrence_id=occurrence_id)
+        occ = self._occurrence(c, club_id=club_id, occurrence_id=occurrence_id)
+        activity = c.execute('SELECT * FROM activities WHERE id=?', (occ['activity_id'],)).fetchone()
+        if not activity:
+            raise LookupError("活动不存在")
+        activity = dict(activity); occ = dict(occ)
         ids = [int(x) for x in participant_ids]
         if not ids:
             ids = [int(r[0]) for r in c.execute('''SELECT p.id FROM registration_participants p JOIN registrations r ON r.id=p.registration_id
                  WHERE p.club_id=? AND p.occurrence_id=? AND p.status='active' AND r.status='paid' AND p.insurance_status IN ('pending','failed')''',
                  (club_id, occurrence_id)).fetchall()]
-        updated = 0
+        from clubos_domain.insurance import InsuranceOrchestrator
+        orch = InsuranceOrchestrator()
+        updated = 0; failed = 0
         for pid in ids:
-            p = c.execute("SELECT id FROM registration_participants WHERE id=? AND club_id=? AND occurrence_id=? AND status='active'", (pid, club_id, occurrence_id)).fetchone()
+            p = c.execute("SELECT * FROM registration_participants WHERE id=? AND club_id=? AND occurrence_id=? AND status='active'", (pid, club_id, occurrence_id)).fetchone()
             if not p:
                 continue
-            c.execute('''UPDATE registration_participants SET insurance_status='submitted',insurance_provider=COALESCE(?,insurance_provider),updated_at=CURRENT_TIMESTAMP WHERE id=?''',
-                      (provider or None, pid))
-            updated += 1
-        self._log(c, occurrence_id, "insurance_batch_submitted", f"club:{club_id}", {"count": updated, "provider": provider})
-        return {"ok": True, "updated": updated}
+            res = orch.enroll_participant(c, participant=dict(p), occurrence=occ, activity=activity, policy=None)
+            if res.get("ok"):
+                updated += 1
+            else:
+                failed += 1
+        self._log(c, occurrence_id, "insurance_batch_submitted", f"club:{club_id}", {"updated": updated, "failed": failed, "provider": provider})
+        return {"ok": True, "updated": updated, "failed": failed}
 
     def dashboard(self, c, *, club_id: int, occurrence_id: int) -> dict[str, Any]:
         occ = self._occurrence(c, club_id=club_id, occurrence_id=occurrence_id)
@@ -250,7 +258,7 @@ class ActivityExecutionService:
             (club_id, occurrence_id)).fetchall()]
         total = len(participants)
         incomplete = sum(1 for p in participants if p.get("form_status") != "complete")
-        insurance_pending = sum(1 for p in participants if p.get("insurance_status") in {"pending", "submitted", "failed"})
+        insurance_pending = sum(1 for p in participants if p.get("insurance_status") in {"pending", "submitted", "enrolling", "cancelling", "failed", "cancel_failed"})
         checked_in = sum(1 for p in participants if p.get("checkin_status") == "checked_in")
         no_show = sum(1 for p in participants if p.get("checkin_status") == "no_show")
         unassigned_vehicle = sum(1 for p in participants if not p.get("vehicle_group"))

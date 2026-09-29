@@ -201,6 +201,10 @@ CREATE TABLE IF NOT EXISTS registration_participants (
   insurance_provider TEXT,
   insurance_policy_no TEXT,
   insured_at TEXT,
+  effective_at TEXT,
+  expire_at TEXT,
+  premium_amount REAL NOT NULL DEFAULT 0,
+  premium_refunded REAL NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',
   refund_status TEXT NOT NULL DEFAULT 'none',
   refund_request_id TEXT,
@@ -215,6 +219,28 @@ CREATE TABLE IF NOT EXISTS registration_participants (
   FOREIGN KEY (linked_user_id) REFERENCES users(id)
 );
 CREATE INDEX IF NOT EXISTS idx_participants_registration ON registration_participants(registration_id);
+
+CREATE TABLE IF NOT EXISTS insurance_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  participant_id INTEGER NOT NULL,
+  registration_id INTEGER NOT NULL,
+  occurrence_id INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'processing',
+  effective_at TEXT,
+  expire_at TEXT,
+  premium_amount REAL NOT NULL DEFAULT 0,
+  provider TEXT,
+  policy_no TEXT,
+  error TEXT,
+  provider_payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (participant_id) REFERENCES registration_participants(id)
+);
+CREATE INDEX IF NOT EXISTS idx_insurance_jobs_participant ON insurance_jobs(participant_id, action, status);
+CREATE INDEX IF NOT EXISTS idx_insurance_jobs_registration ON insurance_jobs(registration_id, action, status);
 CREATE INDEX IF NOT EXISTS idx_participants_occurrence ON registration_participants(occurrence_id,status);
 CREATE INDEX IF NOT EXISTS idx_participants_club ON registration_participants(club_id,status);
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
-import json, uuid
+import json, uuid, logging
 from dataclasses import dataclass
 from typing import Any
 from clubos_domain.product_stock import variant_of, write_variant_stock
+
+logger = logging.getLogger("checkout")
 
 @dataclass
 class CheckoutIntent:
@@ -193,6 +195,14 @@ class CheckoutEngine:
             participant_ids=self.participants.create_for_registration(
                 c,registration_id=rid,activity=activity,occurrence=occ,participants=payload.get('participants') or [],
                 payer_user_id=int(intent['user_id']))
+        # 保险自动化：支付成功后自动向保险方投保（失败只置 failed + 写审计，不阻断主流程）
+        if self.participants and participant_ids:
+            try:
+                from clubos_domain.insurance import InsuranceOrchestrator
+                InsuranceOrchestrator().enroll_pending_for_registration(
+                    c, registration_id=rid, occurrence=occ, activity=activity)
+            except Exception as _e:
+                logger.warning("auto-enroll insurance failed registration=%s: %s", rid, _e)
         self.points.materialize_redemptions(c,intent_id=intent['id'],order_kind='activity',order_id=rid,club_id=int(activity['club_id']))
         if self.benefits:
             self.benefits.consume_vouchers(c,intent_id=intent['id'],order_kind='activity',order_id=rid)

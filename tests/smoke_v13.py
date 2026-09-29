@@ -47,9 +47,15 @@ for p in ps:
     ok('post',f"/api/club/1/execution-groups/{car1['id']}/assign",json={'participantId':p['id']})
     ok('post',f"/api/club/1/execution-groups/{grp['id']}/assign",json={'participantId':p['id']})
 
-# insurance batch + individual insured
-batch=ok('post',f'/api/club/1/occurrences/{oid}/insurance/batch-submit',json={'provider':'示例户外险'}).json()
-assert batch['updated']==2
+# 保险自动化：支付成功时已自动投保（无需手工批量提交）；逐人保单号仍可由手动覆盖
+with app.conn() as dbc:
+    ps_auto=[dict(r) for r in dbc.execute('SELECT * FROM registration_participants WHERE registration_id=?',(rid,)).fetchall()]
+assert all(x['insurance_status']=='insured' for x in ps_auto),[x['insurance_status'] for x in ps_auto]
+assert all((x.get('insurance_policy_no') or '').startswith('MOCK-POL-') for x in ps_auto)
+# 手动批量投保作为「投保失败」重试兜底：先把一人置 failed 再批量重投
+ok('patch',f"/api/club/1/participants/{ps[0]['id']}/insurance",json={'status':'failed'})
+batch=ok('post',f'/api/club/1/occurrences/{oid}/insurance/batch-submit',json={'participantIds':[ps[0]['id']]}).json()
+assert batch['updated']==1 and batch['failed']==0
 for i,p in enumerate(ps,1):
     ok('patch',f"/api/club/1/participants/{p['id']}/insurance",json={'status':'insured','provider':'示例户外险','policyNo':f'V13-{i:03d}'})
 

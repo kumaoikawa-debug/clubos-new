@@ -1,6 +1,8 @@
 from __future__ import annotations
-import uuid, json
+import uuid, json, logging
 from typing import Any
+
+logger = logging.getLogger("refund_lifecycle")
 
 
 class RefundLifecycleEngine:
@@ -274,6 +276,17 @@ class RefundLifecycleEngine:
         point_result=self.points.reverse_activity_participant(c,registration=reg,participant=participant,allocation=allocation)
         cash=float(rr.get('cash_amount') or 0); retained=float(rr.get('retained_cash_amount') or 0)
         c.execute("UPDATE registration_participants SET status='refunded',refund_status='succeeded',refunded_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(participant['id'],))
+        # 保险自动化：参加人退款成功后自动退保（出发前全额退、出发后不退；不阻断退款主流程）
+        try:
+            occ = c.execute('SELECT * FROM activity_occurrences WHERE id=?', (reg['occurrence_id'],)).fetchone()
+            if occ:
+                act = c.execute('SELECT * FROM activities WHERE id=?', (occ['activity_id'],)).fetchone()
+                from clubos_domain.insurance import InsuranceOrchestrator, insurance_bearer
+                InsuranceOrchestrator().cancel_for_participant(
+                    c, participant=participant, occurrence=dict(occ),
+                    bearer=insurance_bearer(dict(act)) if act else 'club')
+        except Exception as _e:
+            logger.warning("auto-cancel insurance (participant) failed pid=%s: %s", participant['id'], _e)
         c.execute("UPDATE participant_financial_allocations SET refund_cash_amount=?,retained_cash_amount=?,refunded_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE participant_id=?",(cash,retained,participant['id']))
         c.execute('DELETE FROM participant_group_assignments WHERE participant_id=?',(participant['id'],))
         if reg.get('occurrence_id'):
@@ -308,7 +321,21 @@ class RefundLifecycleEngine:
         # v0.11: cancellation fee only applies to cash. Non-cash assets are fully restored.
         self.points.reverse_activity_registration(c, registration=reg)
         restored = self.benefits.restore_order_vouchers(c, order_kind='activity', order_id=int(reg['id'])) if self.benefits else 0
+        # 保险自动化：整单退款前先捕获仍在保的参加人，退款成功后逐一对接保险方退保
+        to_cancel = [dict(p) for p in c.execute(
+            "SELECT * FROM registration_participants WHERE registration_id=? AND status='active' AND insurance_status IN ('insured','enrolling')",
+            (reg['id'],)).fetchall()]
         c.execute("UPDATE registration_participants SET status='refunded',refund_status='succeeded',refunded_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE registration_id=? AND status='active'",(reg['id'],))
+        if to_cancel:
+            try:
+                occ = c.execute('SELECT * FROM activity_occurrences WHERE id=?', (reg['occurrence_id'],)).fetchone() if reg.get('occurrence_id') else None
+                act = c.execute('SELECT * FROM activities WHERE id=?', (occ['activity_id'],)).fetchone() if occ else None
+                from clubos_domain.insurance import InsuranceOrchestrator, insurance_bearer
+                InsuranceOrchestrator().cancel_participants(
+                    c, participants=to_cancel, occurrence=dict(occ) if occ else {},
+                    bearer=insurance_bearer(dict(act)) if act else 'club')
+            except Exception as _e:
+                logger.warning("auto-cancel insurance (registration) failed rid=%s: %s", reg['id'], _e)
         pct=max(0.0,min(100.0,float(rr.get('refund_percent') or 0)))
         for ar in c.execute('SELECT * FROM participant_financial_allocations WHERE registration_id=? AND refunded_at IS NULL ORDER BY participant_id',(reg['id'],)).fetchall():
             ar=dict(ar); rc=round(float(ar.get('cash_paid') or 0)*pct/100.0,2); rt=round(float(ar.get('cash_paid') or 0)-rc,2)

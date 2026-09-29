@@ -10,6 +10,7 @@ DEFAULT_POLICY = {
     "requiredAtCheckout": ["name", "phone"],
     "requiredBeforeDeparture": ["name", "phone", "idType", "idNumber", "emergencyContactName", "emergencyContactPhone"],
     "insuranceRequired": True,
+    "insuranceBearer": "club",
     "allowParticipantReplacement": True,
     "replacementCutoffHours": 24,
 }
@@ -52,6 +53,7 @@ class ParticipantService:
         data["replacementCutoffHours"] = max(0, int(data.get("replacementCutoffHours") or 0))
         data["allowIncompleteAtCheckout"] = bool(data.get("allowIncompleteAtCheckout", True))
         data["insuranceRequired"] = bool(data.get("insuranceRequired", True))
+        data["insuranceBearer"] = data.get("insuranceBearer") if data.get("insuranceBearer") in ("club", "customer") else "club"
         data["allowParticipantReplacement"] = bool(data.get("allowParticipantReplacement", True))
         data["requiredAtCheckout"] = list(data.get("requiredAtCheckout") or ["name", "phone"])
         data["requiredBeforeDeparture"] = list(data.get("requiredBeforeDeparture") or data["requiredAtCheckout"])
@@ -274,7 +276,7 @@ class ParticipantService:
         if not before or int(before["club_id"]) != int(club_id):
             raise LookupError("参加人不存在")
         status = str(payload.get("status") or "insured")
-        if status not in {"pending", "submitted", "insured", "failed", "not_required"}:
+        if status not in {"pending", "submitted", "insured", "enrolling", "cancelling", "cancelled", "cancel_failed", "failed", "not_required"}:
             raise ValueError("无效保险状态")
         provider = str(payload.get("provider") or "").strip() or None
         policy_no = str(payload.get("policyNo") or "").strip() or None

@@ -406,6 +406,34 @@ def _run_compat_migrations(c):
     _backfill_v021_finance(c)
     _backfill_v023_ai_credits(c)
     _backfill_media_urls(c)
+    # v0.28 保险自动化：参加人参保/退保时间窗口 + 保费 + 审计表
+    _ensure_column(c, 'registration_participants', 'effective_at', 'effective_at TEXT')
+    _ensure_column(c, 'registration_participants', 'expire_at', 'expire_at TEXT')
+    _ensure_column(c, 'registration_participants', 'premium_amount', 'premium_amount REAL NOT NULL DEFAULT 0')
+    _ensure_column(c, 'registration_participants', 'premium_refunded', 'premium_refunded REAL NOT NULL DEFAULT 0')
+    c.executescript('''
+    CREATE TABLE IF NOT EXISTS insurance_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id INTEGER NOT NULL,
+      participant_id INTEGER NOT NULL,
+      registration_id INTEGER NOT NULL,
+      occurrence_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'processing',
+      effective_at TEXT,
+      expire_at TEXT,
+      premium_amount REAL NOT NULL DEFAULT 0,
+      provider TEXT,
+      policy_no TEXT,
+      error TEXT,
+      provider_payload_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (participant_id) REFERENCES registration_participants(id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_insurance_jobs_participant ON insurance_jobs(participant_id, action, status);
+    CREATE INDEX IF NOT EXISTS idx_insurance_jobs_registration ON insurance_jobs(registration_id, action, status);
+    ''')
 
 
 def _backfill_media_urls(c):

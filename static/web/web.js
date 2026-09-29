@@ -42,7 +42,7 @@ function wCovCls(x){return 'cov-'+((Number(x&&x.id||0)%6)+1);}
    payment_status。缺这两个键时 badge 会把英文枚举原样显示给用户。 */
 const ORD_ST={paid:'已支付',pending:'待支付',unpaid:'待支付',pending_payment:'待支付',payment_failed:'支付未完成',refunded:'已退款',cancelled:'已取消',canceled:'已取消',closed:'已关闭',completed:'已完成',refunding:'退款中',partial_refunded:'部分退款',processing:'处理中'};
 const RF_ST={none:'',rejected:'已驳回',pending:'审核中',approved:'已通过',processing:'处理中',refunded:'已退款'};
-const INS_ST={pending:'待处理',processing:'办理中',done:'已投保',insured:'已投保',completed:'已投保',failed:'投保失败',not_required:'无需保险'};
+const INS_ST={pending:'待投保',processing:'办理中',enrolling:'投保中',done:'已投保',insured:'已投保',completed:'已投保',cancelling:'退保中',cancelled:'已退保',failed:'投保失败',cancel_failed:'退保失败',not_required:'无需保险'};
 const AS_TYPE={refund_only:'仅退款',return_refund:'退货退款',exchange:'换货'};
 const AS_ST={pending:'待审核',reviewing:'审核中',approved:'已通过',rejected:'已驳回',awaiting_return:'待寄回',returned:'已寄回',refunded:'已退款',exchanging:'换货中',exchanged:'已换货',completed:'已完成',closed:'已关闭'};
 const st=map=>v=>map[String(v||'')]||(v?String(v):'');

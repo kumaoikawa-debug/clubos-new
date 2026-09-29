@@ -3289,6 +3289,46 @@ def commerce_refund_succeeded(payload:dict=Body(...), x_clubos_commerce_secret:s
     return {'ok':True,'eventKey':event_key,'result':result}
 
 
+@app.post('/api/insurance/webhook')
+def insurance_webhook(payload:dict=Body(...), x_insurance_webhook_secret:str|None=Header(default=None)):
+    """保险公司异步承保/退保回执。幂等：按 policyNo 回写参加人与 insurance_jobs；重复回调安全。
+
+    适用场景：真实保险方在投保/退保受理后立即返回保单号、随后异步回执确认承保/退保成功。
+    Mock 提供方同步承保，不会触发本接口；本接口作为对账与异步确认的安全兜底。
+    """
+    expected=os.getenv('INSURANCE_WEBHOOK_SECRET','').strip()
+    if expected and x_insurance_webhook_secret != expected: raise HTTPException(401,'invalid insurance webhook secret')
+    policy_no=str(payload.get('policyNo') or '').strip()
+    action=str(payload.get('action') or '').strip().lower()
+    status=str(payload.get('status') or '').strip().lower()
+    if not policy_no or action not in ('enroll','cancel') or status not in ('success','failed'):
+        raise HTTPException(400,'policyNo, action(enroll|cancel), status(success|failed) required')
+    effective_at=str(payload.get('effectiveAt') or '') or None
+    expire_at=str(payload.get('expireAt') or '') or None
+    premium=float(payload.get('premium') or 0) or None
+    with conn() as c:
+        participants=[dict(r) for r in c.execute('SELECT * FROM registration_participants WHERE insurance_policy_no=?',(policy_no,)).fetchall()]
+        if not participants:
+            return {'ok':True,'idempotent':True,'note':'no matching participant'}
+        for p in participants:
+            pid=int(p['id'])
+            if action=='enroll' and status=='success':
+                c.execute('''UPDATE registration_participants SET insurance_status='insured',
+                    effective_at=COALESCE(?,effective_at),expire_at=COALESCE(?,expire_at),
+                    premium_amount=COALESCE(?,premium_amount),insured_at=COALESCE(insured_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP WHERE id=?''',
+                    (effective_at,expire_at,premium,pid))
+            elif action=='enroll' and status=='failed':
+                c.execute("UPDATE registration_participants SET insurance_status='failed',updated_at=CURRENT_TIMESTAMP WHERE id=?",(pid,))
+            elif action=='cancel' and status=='success':
+                c.execute("UPDATE registration_participants SET insurance_status='cancelled',updated_at=CURRENT_TIMESTAMP WHERE id=?",(pid,))
+            elif action=='cancel' and status=='failed':
+                c.execute("UPDATE registration_participants SET insurance_status='cancel_failed',updated_at=CURRENT_TIMESTAMP WHERE id=?",(pid,))
+        c.execute('''UPDATE insurance_jobs SET status=?,provider_payload_json=COALESCE(?,provider_payload_json),updated_at=CURRENT_TIMESTAMP
+                    WHERE policy_no=? AND action=?''',
+                  ('done' if status=='success' else 'failed', jdump(payload), policy_no, action))
+    return {'ok':True,'policyNo':policy_no,'action':action,'status':status,'participants':len(participants)}
+
+
 @app.post('/api/commerce/events/order-refunded')
 def commerce_order_refunded(payload:dict=Body(...), x_clubos_commerce_secret:str|None=Header(default=None)):
     # Backward-compatible Medusa gear-refund event. New integrations should use refund-succeeded with refundRequestId.
