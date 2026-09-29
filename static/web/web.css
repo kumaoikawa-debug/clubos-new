@@ -1001,7 +1001,15 @@
 .w-fd{display:block;position:relative;border:0;padding:0;background:none;text-align:left;cursor:pointer;border-radius:14px;overflow:hidden}
 .w-fd__media{aspect-ratio:3/4;background:#e8ece9 center/cover no-repeat;border-radius:14px}
 .w-fd__media img{width:100%;height:100%;object-fit:cover;display:block}
-.w-fd__media.is-fallback{background:linear-gradient(160deg,#2f4a3c,#16241c)}
+/* 没封面的活动：与首页 hero / 活动页主题卡**同一套光**（深绿底 + 左上冷光 + 右下暖光），
+   不留灰块、也不是一块死绿。三处兜底用同一条公式，顾客才会读成「品牌版式」，
+   而不是「这几张图挂了」。 */
+.w-fd__media.is-fallback{
+  background-image:
+    radial-gradient(120% 78% at 16% 4%,rgba(31,107,74,.52),transparent 60%),
+    radial-gradient(96% 70% at 88% 98%,rgba(196,85,43,.36),transparent 62%),
+    linear-gradient(158deg,#1d2b24,#26332b 54%,#121b16);
+}
 .w-fd__date{position:absolute;top:10px;left:10px;background:rgba(255,255,255,.92);color:#1c2b22;font-size:11px;font-weight:600;padding:3px 8px;border-radius:999px}
 .w-fd__copy{padding:9px 2px 0}
 .w-fd__copy h3{font-size:13.5px;line-height:1.4;margin:0;color:#16241c;overflow-wrap:anywhere}

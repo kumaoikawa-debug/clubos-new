@@ -122,7 +122,14 @@ window.loadActivities=async function(){
     window.ACT_ALL=acts;
     const list=(acts||[]).slice().sort((a,b)=>Number(b.id||0)-Number(a.id||0));
     if(car){
-      const f=list.filter(x=>x.cover).slice(0,5);
+      /* 有封面的优先做主题卡；**一张都没封面时也要把板块摆出来**（走兜底视觉）。
+         早先这里是「filter(x=>x.cover)，空了就 display:none」——线上两条活动都没配
+         封面，于是活动页只剩瀑布流，老板打开一看：「这个板块没有改呀」。整块消失
+         比兜底图糟得多：顾客还会以为这页坏了。
+         有真图时仍只显示真图的 —— 一屏里真照片和色块混着，比全兜底更掉价。 */
+      const withCover=list.filter(x=>x.cover);
+      const f=(withCover.length?withCover:list).slice(0,5);
+      car.classList.toggle('is-fallback',!withCover.length);
       car.style.display=f.length?'':'none';
       car.innerHTML=f.length
         ?'<div class="w-theme__track">'+f.map(themeCard).join('')+'</div>'
