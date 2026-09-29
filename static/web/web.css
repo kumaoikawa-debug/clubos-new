@@ -1037,7 +1037,24 @@
 .w-me__pts b{display:block;font-size:18px;line-height:1.2}
 .w-me__pts span{font-size:10.5px;opacity:.8}
 .w-me__grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:12px}
-.w-me__grid button{background:rgba(255,255,255,.1);border:0;border-radius:12px;padding:10px 4px;color:#fff;font-size:10.5px;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer}
-.w-me__grid svg{width:20px;height:20px;fill:none;stroke:#fff;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.w-me__center{margin-top:12px;width:100%;background:rgba(255,255,255,.12);border:0;border-radius:999px;padding:9px;color:#fff;font-size:12.5px;font-weight:600;cursor:pointer}
+/* 只给宫格按钮（.w-me__cell）上样式：#meService 也带 .w-me__grid 类，写成
+   `.w-me__grid button` 会连里面的 .w-me__row 深层链接行一起改成竖排大卡片
+   —— (0,1,1) 压过 .w-me__row 的 (0,1,0)，行式布局与右箭头「›」全部失效，
+   三行紧凑链接渲染成三张占半屏的居中大块。 */
+.w-me__grid .w-me__cell{background:rgba(255,255,255,.1);border:0;border-radius:12px;padding:10px 4px;color:#fff;font-size:10.5px;display:flex;flex-direction:column;align-items:center;gap:6px;cursor:pointer}
+.w-me__grid .w-me__cell svg{width:20px;height:20px;fill:none;stroke:#fff;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+/* ★★ 内联 svg 必须显式定尺寸，漏一条就是线上事故：
+   `.w-me__center` 里的箭头 svg 只有 viewBox 没有 width/height，CSS 又漏写规则
+   → 替换元素回到 width:100% / 高度按 viewBox 等比 ≈ 488×488；再叠上本行的
+   border-radius:999px，按钮直接渲染成一个直径 488 的浅色大圆，而 `<path>` 未闭合时
+   fill 默认 black（不是 currentColor）→ 圆里一个巨大黑三角，把整张会员卡撑爆、
+   下面三格积分与宫格入口全被顶到屏幕外（2026-09-29 线上截图事故）。
+   凡是在按钮/容器里塞 <svg viewBox>，同一个文件里必然要有一条 `X svg{width…}`。 */
+.w-me__center{
+  display:inline-flex;align-items:center;gap:4px;
+  margin-top:9px;padding:6px 12px;
+  background:rgba(255,255,255,.14);border:0;border-radius:999px;
+  color:#fff;font-size:11.5px;font-weight:600;cursor:pointer;
+}
+.w-me__center svg{width:13px;height:13px;flex:0 0 13px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 .w-me__svc .w-sec__head h2{font-size:15px;color:#16241c}
