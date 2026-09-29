@@ -434,6 +434,9 @@ def _run_compat_migrations(c):
     CREATE INDEX IF NOT EXISTS idx_insurance_jobs_participant ON insurance_jobs(participant_id, action, status);
     CREATE INDEX IF NOT EXISTS idx_insurance_jobs_registration ON insurance_jobs(registration_id, action, status);
     ''')
+    # v0.29 C 端「业务介绍」可配置区：俱乐部自定义（团建/研学/企业团、租装备……），
+    # C 端户外能力页读它；未配置 = NULL → 前端整节隐藏（空壳板块比没有更伤信任）。
+    _ensure_column(c, 'clubs', 'biz_section_json', 'biz_section_json TEXT')
 
 
 def _backfill_media_urls(c):

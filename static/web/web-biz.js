@@ -84,25 +84,35 @@ window.loadActivities=async function(){
     if(emp)emp.innerHTML=list.length?'':'<div class="w-empty">暂时没有可报名的活动<br>换个时间再来看看</div>';
   }catch(e){if(box)box.innerHTML=''}
 };
-/* ── ③ 业务介绍区：clubs.biz_section_json（后台开关 + 自定义内容）────────── */
+/* ── ③ 业务介绍区：clubs.biz_section_json（后台开关 + 自定义内容）──────────
+   注意取值对象：这一屏的容器就是 #wability 本身（<section id="wability"> 里只有
+   一个 <div id="bizIntro">），没有 #wbiz 这层壳。早先按 #wbiz 取不到节点 →
+   整个函数提前 return，业务区永远不渲染、开关点了也没反应。
+   老板没配时连导航入口一起收起来：点进去看一块空白，比如口还在更糟。 */
 function bizCard(x){
   return `<div class="w-biz__item">
-    ${x.image?`<img src="${esc(x.image)}" alt="" loading="lazy">`:''}
+    ${x.image?`<img src="${esc(x.image)}" alt="" loading="lazy" onerror="this.remove()">`:''}
     <div class="w-biz__copy"><b>${esc(x.title||'')}</b>${x.desc?`<span>${esc(x.desc)}</span>`:''}</div>
   </div>`;
 }
 window.loadWability=async function(){
-  const sec=$('#wbiz'),box=$('#bizIntro');if(!sec||!box)return;
+  const sec=$('#wability'),box=$('#bizIntro');
+  if(!sec||!box)return;
+  const navBtn=document.querySelector('.web-nav button[data-wv="wability"]');
+  let b=null;
   try{
     const c=await api(`/api/public/clubs/${CLUB}`);
-    let b=null;try{b=c.biz_section?JSON.parse(c.biz_section):null}catch(e){}
-    const on=b&&b.enabled&&(b.items||[]).length;
-    sec.style.display=on?'':'none';
-    if(on)box.innerHTML=`<div class="w-biz__head"><h2>${esc(b.title||'业务介绍')}</h2>${b.intro?`<p>${esc(b.intro)}</p>`:''}</div>
-      <div class="w-biz__list">${b.items.map(bizCard).join('')}</div>`;
-    /* 旧 loadWability 写的 #wabilitySummary 等 id 已从 HTML 删除；旧函数有 if 守卫，
-       不再调用它。 */
-  }catch(e){sec&&(sec.style.display='none')}
+    try{b=c.biz_section?JSON.parse(c.biz_section):null}catch(e){b=null}
+  }catch(e){b=null}
+  const on=!!(b&&b.enabled&&(b.items||[]).length);
+  if(navBtn)navBtn.style.display=on?'':'none';
+  box.innerHTML=on
+    ?`<div class="w-biz__head"><h2>${esc(b.title||'业务介绍')}</h2>${b.intro?`<p>${esc(b.intro)}</p>`:''}</div>`
+      +`<div class="w-biz__list">${b.items.map(bizCard).join('')}</div>`
+    :'';
+  /* 正停在这一屏且内容被关掉（后台刚关 / 直接落到这一屏）→ 退回活动页，
+     不让顾客对着空白页。 */
+  if(!on&&sec.style.display==='block')wv('wactivities');
 };
 /* ── ④ 我的页：会员中心化（参考 JPG：积分三格 + 宫格入口 + 订单/福利）────── */
 const ORD_MAP=window.ORD_ST||{};
@@ -130,6 +140,9 @@ window.wv=function(id,btn){
   }catch(e){}
   return r;
 };
-/* 首次进入也挂一次（wv 首调发生在 web.js 的 start 里，本文件后加载已接管） */
-if(document.readyState!=='loading')loadHome();else document.addEventListener('DOMContentLoaded',loadHome);
+/* 首次进入也挂一次（wv 首调发生在 web.js 的 start 里，本文件后加载已接管）。
+   loadWability 也在这里跑一次：导航入口的显示与否要在**页面加载时**就定下来，
+   否则老板没配业务介绍时，「户外能力」入口会一直挂在那儿，点进去才发现是空的。 */
+if(document.readyState!=='loading'){loadHome();loadWability()}
+else document.addEventListener('DOMContentLoaded',()=>{loadHome();loadWability()});
 })();

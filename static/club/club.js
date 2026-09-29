@@ -1,6 +1,6 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
-window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='credits'){await loadCredits();await loadAIUsage()};if(v==='analytics')await loadClubBI();if(v==='payaccount')await loadPayAccount();if(v==='points')await loadPointsPolicy()}
+window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='credits'){await loadCredits();await loadAIUsage()};if(v==='analytics')await loadClubBI();if(v==='payaccount')await loadPayAccount();if(v==='points')await loadPointsPolicy();if(v==='biz')await loadBizSection()}
 async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`AI Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>'}
 /* ===== 活动中心：可搜索的活动栏 + 右侧成品预览（2026-09-26）=====
    过去 #activityRows 里又套了一层 .act-grid：外层网格只给内层一个格子宽，
@@ -1291,3 +1291,85 @@ async function loadAIUsage(){
   }catch(e){ box.innerHTML='<div class="empty">读取失败：'+esc(e.message)+'</div>' }
 }
 
+
+/* ===== 业务介绍（C 端「户外能力」页的可配置区 · 2026-09-29）=================
+   很多俱乐部除了常规线路，还有团建、研学、企业团、装备租赁等业务。老板在这里开关并
+   自定义；打开后出现在 C 端，关闭时 C 端整块不渲染 —— 空壳板块比没有板块更伤信任。
+   条目增删改一律「写穿」（改完立刻 PATCH 并在响应上重渲染），不留「忘了点保存」的状态。 */
+let bizCfg=null;
+async function loadBizSection(){
+  const form=$('#bizForm');if(!form)return;
+  if(!bizCfg)skel('#bizItems',2);
+  let cfg;
+  try{cfg=await api(`/api/club/${CLUB}/biz-section`)}
+  catch(e){form.innerHTML='<div class="sub">读取失败：'+esc(e.message||'请重试')+'</div>';return}
+  bizCfg=Object.assign({enabled:false,title:'业务介绍',intro:'',items:[]},cfg||{});
+  if(!Array.isArray(bizCfg.items))bizCfg.items=[];
+  renderBiz();
+}
+function renderBiz(){
+  const form=$('#bizForm'),list=$('#bizItems'),tag=$('#bizStateTag');
+  const c=bizCfg||{enabled:false,title:'业务介绍',intro:'',items:[]};
+  if(tag){tag.className='tag'+(c.enabled?' info':'');tag.textContent=c.enabled?'已开启 · C 端可见':'已关闭 · C 端不显示'}
+  if(form)form.innerHTML=
+    '<label class="list-row" style="gap:10px;align-items:center;cursor:pointer">'
+      +'<input type="checkbox" id="bizEnabled"'+(c.enabled?' checked':'')+' onchange="bizToggle(this.checked)">'
+      +'<div class="list-row__main"><div class="list-row__title">在 C 端展示业务介绍</div>'
+      +'<div class="list-row__sub">关闭时 C 端整块不渲染，不留空白。</div></div></label>'
+    +'<div style="margin-top:12px"><div class="sub">板块标题</div>'
+      +'<input id="bizTitle" maxlength="40" style="width:100%;margin-top:6px" value="'+esc(c.title||'')+'" placeholder="业务介绍"></div>'
+    +'<div style="margin-top:12px"><div class="sub">一句话简介（可空）</div>'
+      +'<textarea id="bizIntro" rows="2" maxlength="200" style="width:100%;margin-top:6px" placeholder="例如：除周末线路外，我们也承接企业团建与亲子研学。">'+esc(c.intro||'')+'</textarea></div>'
+    +'<div style="margin-top:12px"><button class="btn" type="button" onclick="saveBizSection()">保存开关与文案</button></div>';
+  if(!list)return;
+  list.innerHTML=(c.items||[]).map((it,i)=>'<div class="list-row">'
+    +'<div class="list-row__main"><div class="list-row__title">'+esc(it.title||'')+'</div>'
+    +'<div class="list-row__sub">'+esc(it.desc||'（无说明）')+(it.image?' · 有图':'')+'</div></div>'
+    +'<div class="list-row__end"><button class="btn ghost" type="button" onclick="editBizItem('+i+')">编辑</button> '
+    +'<button class="btn ghost" type="button" onclick="deleteBizItem('+i+')">删除</button></div></div>').join('')
+    ||'<div class="empty">还没有条目。加一条「企业团建」试试。</div>';
+}
+function bizToggle(on){if(!bizCfg)return;bizCfg.enabled=!!on;renderBiz();persistBiz()}
+/* 只把这一屏的四个字段发上去：后端 normalize 对缺失键回退当前值，
+   所以这里逐字段提交不会顺手覆盖掉别的东西。 */
+async function persistBiz(){
+  if(!bizCfg)return;
+  const t=$('#bizTitle'),i=$('#bizIntro');
+  if(t)bizCfg.title=t.value;
+  if(i)bizCfg.intro=i.value;
+  try{
+    const cfg=await api(`/api/club/${CLUB}/biz-section`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:bizCfg.enabled,title:bizCfg.title,intro:bizCfg.intro,items:bizCfg.items})});
+    bizCfg=Object.assign({enabled:false,title:'业务介绍',intro:'',items:[]},cfg||{});
+    if(!Array.isArray(bizCfg.items))bizCfg.items=[];
+    renderBiz();
+    toast(bizCfg.enabled?'已保存 · C 端可见':'已保存 · C 端不显示');
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
+}
+async function saveBizSection(){await persistBiz()}
+async function addBizItem(){
+  if((bizCfg?.items||[]).length>=8)return showAlert({title:'最多 8 条',message:'条目太多会让 C 端这一屏变成广告墙，建议合并同类业务。'});
+  const f=await uxForm({title:'添加业务',subtitle:'比如企业团建、亲子研学、装备租赁',fields:[
+    {name:'title',label:'业务名称',required:true,placeholder:'企业团建'},
+    {name:'desc',label:'一句话说明',type:'textarea',placeholder:'10–50 人的团队定制，含场地、教练与装备'},
+    {name:'image',label:'配图地址（可空）',placeholder:'/static/uploads/xxx.jpg 或 https://…'}],submitText:'添加'});
+  if(!f)return;
+  bizCfg.items=bizCfg.items||[];bizCfg.items.push({title:f.title||'',desc:f.desc||'',image:f.image||''});
+  await persistBiz();
+}
+async function editBizItem(i){
+  const it=(bizCfg?.items||[])[Number(i)];if(!it)return;
+  const f=await uxForm({title:'编辑业务',fields:[
+    {name:'title',label:'业务名称',required:true,value:it.title||''},
+    {name:'desc',label:'一句话说明',type:'textarea',value:it.desc||''},
+    {name:'image',label:'配图地址（可空）',value:it.image||''}],submitText:'保存'});
+  if(!f)return;
+  bizCfg.items[Number(i)]={title:f.title||'',desc:f.desc||'',image:f.image||''};
+  await persistBiz();
+}
+async function deleteBizItem(i){
+  const it=(bizCfg?.items||[])[Number(i)];if(!it)return;
+  const ok=await uxConfirm({title:'删除业务条目',message:'确定删除「'+(it.title||'')+'」？删除后 C 端不再显示。',confirmText:'删除',danger:true});
+  if(!ok)return;
+  bizCfg.items.splice(Number(i),1);
+  await persistBiz();
+}

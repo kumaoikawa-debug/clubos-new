@@ -15,6 +15,7 @@ from ai_billing import ensure_credits, charge_credits, credit_cost
 from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config,
                         update_platform_provider_config, test_provider_connection, effective_gateway_mode)
 from clubos_domain.club_analytics import ClubBusinessIntelligence
+from clubos_domain import club_biz
 from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine, GearRecommendService, LeaderRecommendService
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
@@ -1523,8 +1524,40 @@ def public_club(club_id:int):
     x=club_or_404(club_id)
     if IS_PROD:
         if x['status']!='active':raise HTTPException(404,'not found')
-        return {k:x.get(k) for k in ('id','name','city')}
-    return x
+        out={k:x.get(k) for k in ('id','name','city')}
+    else:
+        out=dict(x)
+    # 业务介绍区：未配置或关闭 → None，C 端整节隐藏（空壳板块比没有板块更伤信任）。
+    # 图片在这里就换成公开代理地址（生产 /static/uploads/* 是 404）。
+    out.pop('biz_section_json',None)
+    out['biz_section']=club_biz.public_json(club_id,x)
+    return out
+
+@app.get('/api/club/{club_id}/biz-section')
+def get_club_biz_section(club_id:int):
+    return club_biz.from_club(club_or_404(club_id))
+
+@app.patch('/api/club/{club_id}/biz-section')
+def update_club_biz_section(club_id:int,payload:dict=Body(...)):
+    x=club_or_404(club_id)
+    try: cfg=club_biz.normalize(payload,club_biz.from_club(x))
+    except ValueError as e: raise HTTPException(400,str(e))
+    with conn() as c:
+        c.execute('UPDATE clubs SET biz_section_json=? WHERE id=?',(club_biz.dumps(cfg),club_id))
+    return cfg
+
+@app.get('/api/public/clubs/{club_id}/biz-media/{asset_path:path}')
+def public_club_biz_media(club_id:int,asset_path:str):
+    # 只放行「业务介绍配置里真实引用过」的文件，不是对 /static/uploads 通配开放。
+    x=club_or_404(club_id)
+    if IS_PROD and x['status']!='active':raise HTTPException(404,'not found')
+    original='/static/'+unquote(asset_path)
+    if original not in club_biz.media_paths(club_biz.from_club(x)):raise HTTPException(404,'not found')
+    file_path=_safe_media_path(original)
+    if not file_path or not file_path.is_file():raise HTTPException(404,'not found')
+    response=FileResponse(file_path)
+    response.headers['Cache-Control']='public, max-age=300'
+    return response
 
 @app.get('/api/public/clubs/{club_id}/activities')
 def public_activities(club_id:int):
