@@ -165,6 +165,13 @@ function modal(id,on=true){
   _uxModalSessions.set(id,uxDialogSession(el,{onEscape:()=>modal(id,false),initialFocus:'textarea,input:not([type=file]),select'}));
 }
 function toast(msg){let el=document.createElement('div');el.textContent=msg;el.className='toast';document.body.appendChild(el);setTimeout(()=>el.remove(),2400)}
+/* 数据加载失败的统一错误态：把残留骨架换成明确提示 + 重试入口。
+   各端很多加载函数此前没有 try/catch，接口一旦报错就永远停在骨架，用户无从判断是网络还是系统问题。 */
+function loaderError(sel,e,tip){
+  const box=document.querySelector(sel); if(!box)return;
+  box.innerHTML='<div class="notice warn">'+(tip||'加载失败')+'：'+esc((e&&e.message)||e||'未知错误')
+    +'<div class="sub" style="margin-top:8px"><button class="btn ghost" type="button" onclick="location.reload()">刷新重试</button></div></div>';
+}
 function esc(v=''){return String(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
 function mediaMap(master){let m={};for(const x of master?.media||[]){if(typeof x==='string'){if(x)m[x]=m[x]||{ref:x};continue}if(x?.ref)m[x.ref]=x}return m}
 function resolvedRefs(refs,map){return (refs||[]).filter(r=>r&&map[r]&&map[r].url)}

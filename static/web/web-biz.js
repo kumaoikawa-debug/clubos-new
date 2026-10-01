@@ -107,7 +107,12 @@ window.loadHome=async function(){
     const t=hero&&hero.querySelector('.w-hero__track');
     if(t&&list.length>1)bindCaro(t,hero.querySelector('.w-hero__meter i'),hero.querySelector('.w-hero__count'));
     if(feed)feed.innerHTML=list.length?list.map(feedCard).join(''):'<div class="w-empty">俱乐部正在筹备新的活动，稍后再来看看。</div>';
-  }catch(e){if(feed)feed.innerHTML='<div class="w-empty">活动加载失败，请稍后重试</div>'}
+  }catch(e){
+    /* hero 不能停在骨架条：失败时降级成「去户外」兜底文案，整页仍是完整可用的视觉，
+       而不是半屏灰条。feed 给明确失败提示 + 重新加载入口（复用原生 loadHome）。 */
+    if(hero)hero.innerHTML='<div class="w-hero__slide is-fallback"><div class="w-hero__media"></div><div class="w-hero__scrim"></div><div class="w-hero__copy"><div class="w-hero__eyebrow">远拓户外</div><h1>去户外，找到下一场。</h1><p class="w-hero__sub">网络开了小差，稍后再来看看。</p></div></div>';
+    if(feed)feed.innerHTML='<div class="w-empty">活动加载失败，请稍后重试<button class="w-retry" type="button" onclick="loadHome()">重新加载</button></div>';
+  }
 };
 
 /* ── ② 活动页：主题卡 peek 轮播 + 全部活动瀑布流 ─────────────────────────
@@ -140,7 +145,7 @@ window.loadActivities=async function(){
     }
     if(box)box.innerHTML=list.length?list.map(feedCard).join(''):'';
     if(emp)emp.innerHTML=list.length?'':'<div class="w-empty">暂时没有可报名的活动<br>换个时间再来看看</div>';
-  }catch(e){if(box)box.innerHTML=''}
+  }catch(e){ if(box)box.innerHTML='<div class="w-empty">活动加载失败，请稍后重试<button class="w-retry" type="button" onclick="loadActivities()">重新加载</button></div>'; if(emp)emp.innerHTML=''; }
 };
 
 /* ── ③ 业务介绍区：clubs.biz_section_json（后台开关 + 自定义内容）──────────

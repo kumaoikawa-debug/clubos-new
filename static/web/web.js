@@ -146,11 +146,11 @@ function miniGear(x){
 
 /* ── 活动列表 ─────────────────────────────────────────────────────────────── */
 async function loadActivities(){
-  const box=$('#publicActivities');
+  skel('#publicActivities',4);try{const box=$('#publicActivities');
   if(box&&!box.children.length)box.innerHTML=wSkReel(2);
   ACT_ALL=await api(`/api/public/clubs/${CLUB}/activities`);
   renderActivityChips();renderActivityList();
-}
+}catch(e){loaderError('#publicActivities',e,'loadActivities 加载失败')}}
 /* 筛选项按「本月 / 下月 / 更远」分：活动是有关键时间窗的，顾客真正在问的是「最近哪场能去」，
    不是按品类浏览。没有活动的档位直接禁用 —— 不做点进去空一片的入口。 */
 function activityGroups(){
@@ -216,11 +216,11 @@ function reelCard(x){
 
 /* ── 装备商城 ─────────────────────────────────────────────────────────────── */
 async function loadMall(){
-  const box=$('#publicProducts');
+  skel('#publicProducts',4);try{const box=$('#publicProducts');
   if(box&&!box.children.length)box.innerHTML=wSkMini(4);
   MALL_ALL=await api(`/api/public/clubs/${CLUB}/mall/products`);
   renderMall();
-}
+}catch(e){loaderError('#publicProducts',e,'loadMall 加载失败')}}
 /* 左侧竖栏是分类，右侧 tab 是排序 —— 参考图那种「男士/女士/鞋履 + 软壳夹克/三合一」是两级品类，
    我们库里没有第二层，硬造一层只会让老板在后台多维护一堆没意义的字段。这里把它变成顾客真会用的排序。 */
 const MALL_SORTS=[
@@ -867,7 +867,7 @@ const WABILITY_KEYS=[['徒步',/徒步|越野|walk|trail/i],['登山',/登山|�
   ['露营',/露营|营地|帐篷|宿营/i],['滑雪',/滑雪|雪场|单板|双板/i],['皮划艇',/皮划艇|皮艇|舟/i],
   ['桨板',/桨板|SUP|冲浪/i],['骑行',/骑行|自行车|单车/i],['跑步',/跑|马拉松|越野跑/i],['航海',/帆|船/i]];
 async function loadWability(){
-  const box=$('#wabilityRoutes');
+  skel('#wabilityRoutes',4);try{const box=$('#wabilityRoutes');
   if(box&&!box.children.length)box.innerHTML='<div class="w-sk"><div style="height:52px;border-radius:10px;background:#eef2ef"></div>'.repeat(2)+'</div>';
   let d=await api(`/api/public/clubs/${CLUB}/member-center?user_id=${USER}`);
   const h=d.activityHistory||[],g=d.gearOwned||[];
@@ -908,9 +908,9 @@ async function loadWability(){
       +(x.variants.length>1?' · '+esc(x.variants.join(' / ')):'')+'</div></div>'
       +'<div style="font-size:12px;font-weight:600;white-space:nowrap">'+money(x.spend)+'</div></div>').join('')
       :'<div class="w-empty" style="padding:26px 12px">暂无。在装备商城买过东西后，这里会列出你真实用过的装备。</div>');
-}
+}catch(e){loaderError('#wabilityRoutes',e,'loadWability 加载失败')}}
 async function loadMemberCenter(){
-  const mbox=$('#memberBenefits'),rbox=$('#memberRedemptions');
+  skel('#memberBenefits',4);try{const mbox=$('#memberBenefits'),rbox=$('#memberRedemptions');
   if(mbox&&!mbox.children.length)mbox.innerHTML=wSkRows(2);
   if(rbox&&!rbox.children.length)rbox.innerHTML=wSkRows(1);
   let d=await api(`/api/public/clubs/${CLUB}/member-center?user_id=${USER}`),w=d.wallet||{};
@@ -949,7 +949,7 @@ async function loadMemberCenter(){
       <div class="w-rdm__meta">${x.points_spent} ${x.point_type==='club'?'活动积分':'装备积分'}</div>
       ${x.voucher_code?`<div class="w-rdm__code">券码 <code>${esc(x.voucher_code)}</code></div>`:''}
     </div>`).join('')||'<div class="w-empty">'+WI.ticket+'<div>还没有兑换记录</div></div>';
-}
+}catch(e){loaderError('#memberBenefits',e,'loadMemberCenter 加载失败')}}
 async function redeemBenefit(id){if(!(await showConfirm({title:'兑换会员福利',message:'确认兑换这项会员福利？',confirmText:'确认兑换'})))return;try{let r=await api(`/api/public/clubs/${CLUB}/benefits/${id}/redeem`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:USER})});await showAlert({title:'兑换成功',message:`券码：${r.voucherCode}\n使用 ${r.pointsSpent} ${r.pointsType==='club'?'活动积分':'装备积分'}`});loadMemberCenter()}catch(e){showAlert({title:'兑换失败',message:e.message})}}
 async function loadWallet(){try{let d=await api(`/api/public/users/${USER}/wallet?club_id=${CLUB}`);if($('#clubPts'))$('#clubPts').textContent=d.clubPoints;if($('#gearPts'))$('#gearPts').textContent=d.gearPoints}catch(e){}}
 
@@ -960,7 +960,7 @@ function refundStateText(x){
    早前每条订单是一段用 border-bottom 拼的裸 div，参加人那行还带一个 👤 emoji 和
    「保险 pending」这种后端枚举 —— 顾客没法从里面读出「我这单现在要做什么」。 */
 async function loadOrders(){
-  const abox=$('#activityOrders'),gbox=$('#gearOrders');
+  skel('#activityOrders',4);try{const abox=$('#activityOrders'),gbox=$('#gearOrders');
   if(abox&&!abox.children.length)abox.innerHTML=wSkRows(1);
   if(gbox&&!gbox.children.length)gbox.innerHTML=wSkRows(1);
   let d=await api(`/api/public/users/${USER}/order-center?club_id=${CLUB}`);
@@ -1025,7 +1025,7 @@ async function loadOrders(){
       <div class="w-ord__ops"><button class="w-act" type="button" onclick="resumeCheckout('${esc(x.checkoutId)}','${esc(x.orderKind==='gear'?'gear':'activity')}')">继续支付</button><button class="w-act w-act--danger" type="button" onclick="cancelPendingCheckout('${esc(x.checkoutId)}')">取消订单</button></div>
     </div>`).join('')||'<div class="w-empty">'+WI.receipt+'<div>没有待支付订单</div><div style="margin-top:4px">未完成付款的订单会出现在这里</div></div>';
   }
-}
+}catch(e){loaderError('#activityOrders',e,'loadOrders 加载失败')}}
 async function editParticipant(regId,pid){
   const d=await api(`/api/public/registrations/${regId}/participants`),p=(d.participants||[]).find(x=>x.id===pid);if(!p)return;
   const v=await showForm({title:'编辑报名资料',submitText:'保存',fields:[{name:'idType',label:'证件类型',value:p.id_type||'身份证'},{name:'idNumber',label:'证件号码',value:p.id_number||''},{name:'ec',label:'紧急联系人',value:p.emergency_contact_name||''},{name:'ep',label:'紧急联系人电话',value:p.emergency_contact_phone||''}]});if(!v)return;
