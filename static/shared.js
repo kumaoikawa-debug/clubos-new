@@ -304,7 +304,7 @@ function renderPacking(master,opts){
     }).join('');
     // 清单项本身认不出装备品类时（如"身份证"）不该说"商城没有"，那是两回事
     const body=ms||subs
-      ||((it.tags||[]).length?'<div class="gear-none">商城暂无对应装备，可看看下方其他在售装备</div>':'');
+      ||((it.tags||[]).length?'<div class="gear-none">商城暂无对应装备，可看看下方推荐装备</div>':'');
     return '<div class="pack-slot"><div class="pack-need">'+esc(it.text)+'</div>'
       +'<div class="pack-gear">'+body+'</div></div>';
   };
@@ -334,7 +334,7 @@ function renderPacking(master,opts){
   // 「其他在售装备」是补充位：清单里已经出现过的商品不再重复列一次
   const extraRows=extras.filter(p=>!seen[Number(p.id||0)]).map(p=>gearRow(p,o)).join('');
   const extra=extraRows
-    ? '<div class="gear-extras"><div class="gear-extras-title">本场活动其他在售装备</div><div class="pack-gear">'+extraRows+'</div></div>'
+    ? '<div class="gear-extras"><div class="gear-extras-title">本次活动推荐装备</div><div class="pack-gear">'+extraRows+'</div></div>'
     : '';
   return head+chips+'<div class="pack-plan">'+slots+'</div>'+missLine+extra;
 }
