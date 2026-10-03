@@ -418,18 +418,27 @@ function feeValueHtml(v,depth){
   if(typeof v==='object'){
     const keys=Object.keys(v).filter(k=>v[k]!=null&&v[k]!=='');
     if(!keys.length)return '';
-    // price/currency/unit 这类键合成一行「¥498 · 积分」，不逐个字段占行
+    // price/currency/unit 这类「值本身就是价格/币种」的键合成一行「498 · 积分」，不逐个字段占行
     const inline=keys.filter(k=>FEE_INLINE_KEYS.has(String(k).replace(/[_\-\s]/g,'').toLowerCase())&&typeof v[k]!=='object');
     const inlineTxt=inline.map(k=>esc(String(v[k]))).filter(Boolean).join(' · ');
     const rest=keys.filter(k=>inline.indexOf(k)<0);
-    let html=inlineTxt?'<p class="fee-lead">'+inlineTxt+'</p>':'';
-    if(rest.length)html+='<div class="fee-nest">'+rest.map(k=>{
+    const parts=[];
+    if(inlineTxt)parts.push('<p class="fee-lead">'+inlineTxt+'</p>');
+    if(rest.length)parts.push('<div class="fee-nest">'+rest.map(k=>{
       const label=FEE_CN[String(k)]||FEE_CN[String(k).replace(/[_\-\s]/g,'').toLowerCase()]||k;
-      const inner=feeValueHtml(v[k],depth+1);
+      const raw=v[k];
+      /* ★ 标量必须包一层 <p>：裸文本节点在 flex 容器里是**匿名 flex 项**，
+         拿不到 `.fee-row>*:last-child{flex:1 1 auto;min-width:0}`，宽度会按内容参差
+         —— 2026-10-03 实测「说明」被压成 22px 换行、同组「条件」294px。 */
+      const inner=(raw!=null&&typeof raw!=='object')?('<p>'+esc(String(raw))+'</p>'):feeValueHtml(raw,depth+1);
       if(!inner)return '';
       return '<div class="fee-row'+(depth?' sub':'')+'"><b>'+esc(label)+'</b>'+inner+'</div>';
-    }).join('')+'</div>';
-    return html;
+    }).join('')+'</div>');
+    if(!parts.length)return '';
+    /* ★ 多块（内联价格 + 子行）必须包成**一个**容器再返回。
+       否则父行变成「标签 + 价格 + 子行」三个并列 flex 子项，全挤在同一行
+       （2026-10-03 实测：新客价行里 498 与「包含」并排）。 */
+    return parts.length===1?parts[0]:'<div class="fee-nest">'+parts.join('')+'</div>';
   }
   return esc(String(v));
 }
@@ -447,9 +456,11 @@ function feeListHtml(fees){
   if(!pairs.length)return '<p class="sub">费用以活动通知与最终确认为准</p>';
   return '<div class="fee-list">'+pairs.map(([k,v])=>{
     const label=k?(FEE_CN[String(k)]||FEE_CN[String(k).replace(/[_\-\s]/g,'').toLowerCase()]||k):'';
-    const inner=feeValueHtml(v,0);
+    // 顶层值传 depth=1：这样 feeValueHtml 展开出的子行才会带 `.sub`（缩进 + 76px 标签列）
+    let inner=feeValueHtml(v,1);
     if(!inner)return '';
-    if(!label)return '<div class="fee-row"><p>'+inner+'</p></div>';
+    if(inner.charAt(0)!=='<')inner='<p>'+inner+'</p>';   // 扁平标量也包 <p>，成为合法 flex 项
+    if(!label)return '<div class="fee-row">'+inner+'</div>';
     return '<div class="fee-row"><b>'+esc(label)+'</b>'+inner+'</div>';
   }).join('')+'</div>';
 }
