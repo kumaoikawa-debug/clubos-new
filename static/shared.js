@@ -197,7 +197,17 @@ function renderPromo(detail,master={},opts={}){
       h+=`<section class="ed-hero${url?' has-photo':''}"${bg}><div class="ed-hero-copy"><div class="ed-kicker">${esc(b.kicker||master.location||'OUTDOOR EXPERIENCE')}</div><h1>${esc(b.headline||master.title||'活动')}</h1><p>${esc(b.subtitle||'')}</p></div></section>`;
     }    else if(b.type==='lead')h+=`<section class="ed-lead">${edParas(b.text||b.body||'')}</section>`;
     else if(b.type==='statement')h+=`<section class="ed-statement"><span>${esc(b.text||'')}</span></section>`;
-    else if(b.type==='facts')h+=`<section class="ed-facts">${(b.items||[]).map(x=>`<div><small>${esc(x.label||'')}</small><strong>${esc(x.value||x)}</strong></div>`).join('')}</section>`;
+    /* facts 的 value 必须是标量。真模型可能给对象/数组（2026-10-03：esc(x.value||x)
+       遇到对象会把它 String() 成 JSON 印在页面上）。这里只渲染标量，
+       对象/数组用 feeValueHtml 展开，绝不把 JSON 文本漏给顾客。 */
+    else if(b.type==='facts')h+=`<section class="ed-facts">${(b.items||[]).map(x=>{
+      let v=(x&&typeof x==='object'&&!Array.isArray(x))?x.value:x;
+      let shown;
+      if(v==null)v=(x&&typeof x==='object')?feeValueHtml(x,1):x;
+      else if(typeof v==='object')shown=feeValueHtml(v,1);
+      else shown=esc(String(v));
+      return `<div><small>${esc((x&&x.label)||'')}</small><strong>${shown==null?'':shown}</strong></div>`;
+    }).join('')}</section>`;
     else if(b.type==='narrative'){
       const ok=resolvedRefs(refs,mm);
       const media=ok.length?`<div class="ed-narrative-media">${ok.map(r=>mediaHtml(r,mm)).join('')}</div>`:'';
@@ -352,17 +362,71 @@ const FEE_CN={
   includes:'包含',included:'包含',excludes:'不包含',excluded:'不包含',
   extra:'额外费用',extras:'额外费用',optional:'可选费用',
   gear:'装备租赁',rental:'装备租赁',insurance:'保险费',transport:'交通费',
-  meal:'餐费',meals:'餐费',accommodation:'住宿费',ticket:'门票费',guide:'领队费'
+  meal:'餐费',meals:'餐费',accommodation:'住宿费',ticket:'门票费',guide:'领队费',
+  /* 真模型（通义千问）爱用的结构化键，2026-10-03 用户截图里裸露成 price/currency/condition/benefit。
+     补这一批是因为模型输出形状是「自由对象」，键名集合比人工枚举宽得多 ——
+     与 ENUM_CN 同一取舍：表里没有的键原样显示，宁可见到原始键名也不编错中文。 */
+  price:'价格',amount:'金额',currency:'币种',unit:'单位',perPerson:'每人',per_person:'每人',
+  discount:'优惠',discounts:'优惠',coupon:'优惠券',voucher:'代金券',
+  condition:'条件',benefit:'权益',benefits:'权益',gift:'赠品',shoppingGift:'购物赠礼',
+  shopping_gift:'购物赠礼',giftCondition:'赠礼条件',giftBenefit:'赠礼权益',
+  deadline:'截止时间',validUntil:'有效期至',usage:'使用方式',limit:'限制',
+  refundable:'是否可退',refund:'退款规则',depositNote:'定金说明',payment:'付款方式'
 };
-/* 费用说明：把 fees 对象渲染成可读的键值行，而不是一整块 JSON 代码。数组走 chips。 */
+/* 费用说明里「值本身就是价格/币种」的键：直接并进父行的值，不单独占一行。
+   否则会出现「价格 498」下面又一行「币种 积分」这种把读者当数据字段看的排版。 */
+const FEE_INLINE_KEYS=new Set(['price','amount','currency','unit','perPerson','per_person']);
+/* 费用说明：把 fees 对象渲染成可读的键值行，而不是一整块 JSON 代码。数组走 chips。
+   真模型（通义千问等）输出的是**嵌套对象** —— fees.newCustomer = {price, includes:[...]}
+   2026-10-03 用户截图实锤：只处理一层时 `JSON.stringify(v)` 把
+   {"price":498,"includes":["icebreaker 200 Oasis T恤…"]} 原样印在页面上。
+   规则：递归展开成子行，**任何一层都不许再出现 JSON 文本**。 */
+function feeValueHtml(v,depth){
+  depth=depth||0;
+  if(v==null||v==='')return '';
+  if(Array.isArray(v)){
+    const items=v.map(x=>feeValueHtml(x,depth+1)).filter(Boolean);
+    if(!items.length)return '';
+    // 纯文本数组走 chips；元素本身是对象则已经渲染成子块，直接顺序铺开
+    if(items.every(s=>s.indexOf('<div')!==0))return '<div class="info-chips">'+items.map(s=>'<div>'+s+'</div>').join('')+'</div>';
+    return '<div class="fee-nest">'+items.join('')+'</div>';
+  }
+  if(typeof v==='object'){
+    const keys=Object.keys(v).filter(k=>v[k]!=null&&v[k]!=='');
+    if(!keys.length)return '';
+    // price/currency/unit 这类键合成一行「¥498 · 积分」，不逐个字段占行
+    const inline=keys.filter(k=>FEE_INLINE_KEYS.has(String(k).replace(/[_\-\s]/g,'').toLowerCase())&&typeof v[k]!=='object');
+    const inlineTxt=inline.map(k=>esc(String(v[k]))).filter(Boolean).join(' · ');
+    const rest=keys.filter(k=>inline.indexOf(k)<0);
+    let html=inlineTxt?'<p class="fee-lead">'+inlineTxt+'</p>':'';
+    if(rest.length)html+='<div class="fee-nest">'+rest.map(k=>{
+      const label=FEE_CN[String(k)]||FEE_CN[String(k).replace(/[_\-\s]/g,'').toLowerCase()]||k;
+      const inner=feeValueHtml(v[k],depth+1);
+      if(!inner)return '';
+      return '<div class="fee-row'+(depth?' sub':'')+'"><b>'+esc(label)+'</b>'+inner+'</div>';
+    }).join('')+'</div>';
+    return html;
+  }
+  return esc(String(v));
+}
 function feeListHtml(fees){
-  fees=fees||{};const keys=Object.keys(fees).filter(k=>fees[k]!=null&&fees[k]!=='');
-  if(!keys.length)return '<p class="sub">费用以活动通知与最终确认为准</p>';
-  return '<div class="fee-list">'+keys.map(k=>{const v=fees[k];
-    const label=FEE_CN[String(k)]||FEE_CN[String(k).replace(/[_\-\s]/g,'').toLowerCase()]||k;
-    if(Array.isArray(v))return '<div class="fee-row"><b>'+esc(label)+'</b><div class="info-chips">'+v.map(x=>'<div>'+esc(String(x))+'</div>').join('')+'</div></div>';
-    if(typeof v==='object')return '<div class="fee-row"><b>'+esc(label)+'</b><p>'+esc(JSON.stringify(v))+'</p></div>';
-    return '<div class="fee-row"><b>'+esc(label)+'</b><p>'+esc(String(v))+'</p></div>';
+  fees=fees||{};
+  // fees 本身可能是数组或单个对象（模型输出形状不固定），统一成键值对再渲染
+  let pairs=[];
+  if(Array.isArray(fees)){
+    fees.forEach((x,i)=>{if(x!=null&&x!=='')pairs.push([String(i),x])});
+  }else if(typeof fees==='object'){
+    pairs=Object.keys(fees).filter(k=>fees[k]!=null&&fees[k]!=='').map(k=>[k,fees[k]]);
+  }else if(fees!==''&&fees!=null){
+    pairs=[['',fees]];
+  }
+  if(!pairs.length)return '<p class="sub">费用以活动通知与最终确认为准</p>';
+  return '<div class="fee-list">'+pairs.map(([k,v])=>{
+    const label=k?(FEE_CN[String(k)]||FEE_CN[String(k).replace(/[_\-\s]/g,'').toLowerCase()]||k):'';
+    const inner=feeValueHtml(v,0);
+    if(!inner)return '';
+    if(!label)return '<div class="fee-row"><p>'+inner+'</p></div>';
+    return '<div class="fee-row"><b>'+esc(label)+'</b>'+inner+'</div>';
   }).join('')+'</div>';
 }
 /* 行程数据形状归一：模型（真模型尤其）会输出多种形状 ——

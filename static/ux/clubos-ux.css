@@ -76,10 +76,28 @@ body{background:var(--bg);font-size:14px}a{color:var(--brand)}:focus-visible{out
 .ux-create-engine.live{background:#e3f3df;color:#1f6b3f;border-color:#cfe8cf}
 .ux-create-engine.mock{background:#fdf0d8;color:#8a6212;border-color:#f0e2be}
 .fee-list{display:grid;gap:2px}
-.fee-row{display:grid;grid-template-columns:92px 1fr;gap:10px;align-items:start;padding:7px 0;border-bottom:1px solid var(--line)}
 .fee-row:last-child{border-bottom:0}
 .fee-row b{font-size:12px;color:#455b4c;font-weight:780}
 .fee-row p{margin:0;color:var(--text);font-size:13px;line-height:1.55}
+/* 费用区：用 flex 而不是 grid。
+   实测（2026-10-03）grid 版只有「包含」行被压成 102px（cols="92px 0px"、pill 逐字
+   竖排 471px 高），其余行正常 —— chips 的 intrinsic 宽度参与了 grid 尺寸计算把行拉扁，
+   且 `.web-shell .info-chips` 另有 `grid-template-columns:1fr`，两个 grid 上下文互相干扰。
+   flex 版实测「包含」行 357px / chips 高 117px，pill 正常连排。
+   判据：改这类「标签+值」两列布局前，先量 getBoundingClientRect().width，
+   出现某行宽度显著小于同组其他行就是被 intrinsic 撑坏了，别靠猜。 */
+.fee-row{display:flex;align-items:flex-start;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)}
+.fee-row>b{flex:0 0 92px}
+.fee-row>*:last-child{flex:1 1 auto;min-width:0}
+.fee-list .info-chips{display:flex;flex-wrap:wrap;gap:8px;min-width:0}
+.fee-list .info-chips>div{max-width:100%;white-space:normal;word-break:break-word}
+/* 嵌套费用子行（真模型给 fees.newCustomer={price,includes:[...]} 这类两层结构，2026-10-03）。
+   复用 .fee-row 的网格但缩进一档，让「价格 / 包含 / 说明」读起来是同一项的子属性。 */
+.fee-nest{display:grid;gap:2px;min-width:0}
+.fee-lead{margin:0 0 4px;color:var(--text);font-size:14px;font-weight:760;letter-spacing:.01em}
+.fee-row.sub{padding:3px 0 3px 10px;border-bottom:0;border-left:2px solid var(--line)}
+.fee-row.sub>b{flex:0 0 76px;color:#6a7d70;font-weight:680}
+.fee-row.sub p,.fee-row.sub .info-chips>div{font-size:12.5px}
 @media(prefers-reduced-motion:reduce){.skeleton::after{animation:none}.act-card{transition:none}}
 /* Native-dialog replacement layer: confirm / alert / structured form dialogs reuse .ux-dialog. */
 .ux-dialog{position:relative}
