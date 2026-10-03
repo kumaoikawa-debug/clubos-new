@@ -172,16 +172,40 @@ function loaderError(sel,e,tip){
   box.innerHTML='<div class="notice warn">'+(tip||'加载失败')+'：'+esc((e&&e.message)||e||'未知错误')
     +'<div class="sub" style="margin-top:8px"><button class="btn ghost" type="button" onclick="location.reload()">刷新重试</button></div></div>';
 }
-function esc(v=''){return String(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+/* ★ 全站文本渲染的总闸门。真模型给对象/数组时 String() 会得到 "[object Object]"，
+   直接印到顾客眼前（2026-10-03 实锤）。所有文案最终都要过这里，所以**在这一层一次性收口**：
+   对象/数组先经 edPlain() 归一成纯文本再转义。标量输入的行为完全不变。 */
+function esc(v=''){
+  if(v!=null&&typeof v==='object')v=edPlain(v);
+  return String(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
 function mediaMap(master){let m={};for(const x of master?.media||[]){if(typeof x==='string'){if(x)m[x]=m[x]||{ref:x};continue}if(x?.ref)m[x.ref]=x}return m}
 function resolvedRefs(refs,map){return (refs||[]).filter(r=>r&&map[r]&&map[r].url)}
 function mediaHtml(ref,map,cls=''){const x=map[ref];if(!x?.url)return `<div class="editorial-media missing ${cls}"><span>${esc(ref||'image')}</span></div>`;return `<figure class="editorial-media ${cls}"><img src="${esc(x.url)}" alt="" loading="lazy"></figure>`}
+/* 把任意形状的值归一成**纯文本**，且任何形状都不许产出 "[object Object]"。
+   真模型（通义千问等）输出的字段形状不稳定：同一处可能给字符串、字符串数组，
+   也可能给对象数组（[{text:'…'},{para:'…'}]）。直接 String() 就会把
+   "[object Object]" 印到页面上 —— 与 fees 嵌套对象是同一类洞（2026-10-03）。
+   取字段的优先级按模型实测高频键排，取不到就递归把所有字符串值拼出来。 */
+const ED_TEXT_KEYS=['text','content','desc','detail','description','value','para','p','item','title','body','summary','copy'];
+function edPlain(v){
+  if(v==null)return '';
+  if(typeof v==='string')return v;
+  if(typeof v==='number'||typeof v==='boolean')return String(v);
+  if(Array.isArray(v))return v.map(edPlain).filter(Boolean).join('\n');
+  if(typeof v==='object'){
+    for(const k of ED_TEXT_KEYS){const s=v[k];if(typeof s==='string'&&s.trim())return s}
+    return Object.keys(v).map(k=>edPlain(v[k])).filter(Boolean).join('\n');
+  }
+  return '';
+}
 /* 文案段落归一：真模型会把 body 写成数组或多句一段（\n 分隔）。过去整段 esc 进一个 <p>，
    编辑排版的多段节奏全部丢失（用户截图实锤「文字平铺没有吸引力」）。
-   数组 → 逐段；字符串 → 按 \n 拆；空段丢弃；渲染不出任何段落就不输出。 */
+   数组 → 逐段；字符串 → 按 \n 拆；空段丢弃；渲染不出任何段落就不输出。
+   走 edPlain 归一：对象数组也能拆成正常段落，而不是 [object Object]。 */
 function edParas(v){
-  const arr=(Array.isArray(v)?v:String(v||'').split(/\n+/))
-    .map(s=>String(s).trim()).filter(Boolean);
+  const raw=Array.isArray(v)?v.map(edPlain).join('\n'):edPlain(v);
+  const arr=String(raw||'').split(/\n+/).map(s=>s.trim()).filter(Boolean);
   return arr.map(s=>`<p>${esc(s)}</p>`).join('');
 }
 function renderPromo(detail,master={},opts={}){
