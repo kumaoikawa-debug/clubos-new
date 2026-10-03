@@ -32,6 +32,22 @@ def _image_refs(source, n=None):
     return refs if n is None else refs[:n]
 
 
+# 只有真实照片能进 C 端。品牌 logo / 字标 / 空白幻灯片底图 / 地图天气截图 / 扁平赞助商海报
+# 会跟着 PPT 一起被抽出来，解析期已由 document_parser._image_kind 标成 kind='logo'。
+# 这里按 ref 过滤。kind 缺失（老资料/PDF 渲染页）按照片处理，保持向后兼容。
+def _photo_refs(source:dict[str,Any])->list[str]:
+    imgs=[x for x in (source.get('images') or []) if isinstance(x,dict) and x.get('ref')]
+    return [x['ref'] for x in imgs if (x.get('kind') or 'photo')=='photo']
+
+
+# 「出行清单」由平台侧 renderPacking(master) 按 master.checklist 渲染（static/shared.js），
+# 那一块才带商城匹配、平替与会员价。AI 若再出一块「装备建议」，同一份清单就会在页面上
+# 出现两遍（2026-10-03 用户反馈「两个地方都有装备推荐」）。所以生成侧一律不出这类块，
+# 标题命中下列词的 info 块由 _sanitize_blocks 在出口剔除——mock 与 live 两条路都收口。
+_GEAR_BLOCK_TITLES=('装备建议','装备清单','出行清单','携带清单','携带物品','着装建议','行李清单',
+                    '物品清单','建议装备','推荐装备','装备推荐','必备清单','自备物品','建议携带')
+
+
 # ---------------------------------------------------------------------------
 # 文本清洗：结构标记 / 行内噪声
 #
@@ -437,15 +453,24 @@ def _generic_beats(hl:list[dict[str,str]],text:str,location:str)->list[dict[str,
     return beats
 
 
-def _sanitize_blocks(blocks:list[dict[str,Any]])->list[dict[str,Any]]:
-    """最终防线：清掉残留的结构标记与「写给编辑自己看」的元话语。
+def _sanitize_blocks(blocks:list[dict[str,Any]],allowed_refs:set[str]|None=None)->list[dict[str,Any]]:
+    """最终防线：清掉残留的结构标记、「写给编辑自己看」的元话语，以及不该上屏的图片。
 
     block 是给 C 端读者看的成品。[Slide 9]、「AI应根据照片自己判断哪些瞬间值得放大」
-    这类字符串一旦上屏，就是最刺眼的事故——这里统一收口，任何出口都不许漏。
+    这类字符串一旦上屏，就是最刺眼的事故；品牌 logo / 字标 / 空白底图被当成活动照片，
+    同样是事故。这里统一收口，任何出口都不许漏。
+
+    allowed_refs：允许出现在成品里的图片 ref 集合（真实照片）。传 None 表示不按图片过滤。
     """
     out=[]
     for b in blocks or []:
         if not isinstance(b,dict): continue
+        btype=str(b.get('type') or '')
+        # 「出行清单」已由平台 renderPacking(master) 按 master.checklist 渲染（带商城匹配与会员价）。
+        # 生成侧再出一块「装备建议」= 同一份清单在页面上出现两遍，这里直接剔除。
+        if btype=='info':
+            ttl=str(b.get('title') or b.get('headline') or '')
+            if any(g in ttl for g in _GEAR_BLOCK_TITLES): continue
         nb={}
         for k,v in b.items():
             if isinstance(v,str): nb[k]=_clean_text(v)
@@ -457,6 +482,10 @@ def _sanitize_blocks(blocks:list[dict[str,Any]])->list[dict[str,Any]]:
                     else: nv.append(it)
                 nb[k]=nv
             else: nb[k]=v
+        # 图片只留真实照片；纯图片块被清空后整块丢弃（文字块保留，只是没有配图）
+        if allowed_refs is not None and isinstance(nb.get('mediaRefs'),list):
+            nb['mediaRefs']=[r for r in nb['mediaRefs'] if r in allowed_refs]
+            if btype in ('media','gallery') and not nb['mediaRefs']: continue
         texts=[str(nb.get(k) or '') for k in ('headline','subtitle','body','text')]
         if any(p in t for t in texts for p in _META_PHRASES): continue
         out.append(nb)
@@ -471,7 +500,10 @@ def _mock_activity(source:dict[str,Any]):
     任何情况下都不得把 [Slide N]、「AI应根据照片…」这类中间字符串泄露到 C 端。
     """
     text=_strip_markers(source.get('text','') or '')
-    imgs=_image_refs(source)
+    # 只用真实照片：品牌 logo / 字标 / 空白底图 / 截图在解析期已被标成 kind='logo'。
+    # 不做「一张照片都没有就退回全部图片」的兜底——那等于把品牌 logo 又放回头图，
+    # 正是用户明确要求不要出现的东西；没有照片时 hero 交给平台封面/底色兜底。
+    imgs=_photo_refs(source)
     st=_extract_structured(source)
     prof=_profile_for(text) or {}
     hl=st.get('highlights') or []
@@ -536,8 +568,10 @@ def _mock_activity(source:dict[str,Any]):
     info+=services
     if info: blocks.append({'type':'info','title':'服务与保障','items':info[:10]})
 
+    # 出行清单已由平台侧 renderPacking(master) 按 master.checklist 渲染（带商城匹配 / 平替 /
+    # 会员价），这里绝不另出一块「装备建议」——否则同一份清单在页面上出现两遍。
+    # checklist 仍然写进 master，供平台那一块使用。
     checklist=_merge_checklist(list(prof.get('checklist') or [])+list(st.get('checklist') or []))
-    if checklist: blocks.append({'type':'info','title':'装备建议','items':checklist[:12]})
 
     if remaining[6:]: blocks.append({'type':'media','mediaRefs':remaining[6:10],'layout':'mosaic'})
 
@@ -570,7 +604,9 @@ def media_catalog(source:dict[str,Any],master:dict[str,Any]|None=None)->list[dic
     于是前端 mediaMap 拿不到任何 url：所有图片退化成灰色占位块、头图退化成纯色块。
     这里以 source 的媒体清单为准重建，模型在 blocks 里只被允许「引用」ref。
     """
-    keys=('ref','name','url','width','height','orientation','source','page')
+    # kind 由解析期判定（photo / logo）：它既让 live 提示词能要求「只用 photo」，
+    # 也让前端在需要时能知道某张图是品牌标而不是照片。缺失按 photo 处理。
+    keys=('ref','name','url','width','height','orientation','source','page','kind')
     catalog={}
     def add(x):
         if not isinstance(x,dict):return
@@ -659,8 +695,20 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
 原始资料（保留原始上下文）：
 {source.get('text','')}
 
-媒体清单（只能引用这些 ref）：
+媒体清单（只能引用这些 ref；kind='photo' 才是真实照片）：
 {media}
+
+图片选用铁律（2026-10-03 用户反馈）：
+- 只能引用 kind='photo' 的 ref。kind='logo' 的是品牌标志 / 字标横幅 / 空白幻灯片底图 /
+  地图与天气截图 / 扁平赞助商海报——它们是资料的排版残留，不是活动照片，出现在成品里就是事故。
+- 品牌 logo 一律不得出现在详情页任何位置（hero / gallery / media 都不行）。活动确实需要品牌
+  标识时，那是「单独上传 logo / 封面」的事，不由你从资料里挑图。
+- 没有可用照片时不要硬排图，用文字把吸引力撑起来。
+
+装备清单不要重复（2026-10-03 用户反馈）：
+- 严禁输出 title 为「装备建议 / 出行清单 / 装备清单 / 携带清单 / 着装建议」之类的 info block。
+  平台会在详情页下方单独渲染「出行清单」（带商城匹配、平替与会员价）。你再出一块，
+  同一份清单就会在页面上出现两遍。checklist 只写进 activity_master，不要做成 block。
 
 字段硬性契约（违反会导致前端渲染成空）：
 - itinerary 必须是数组，每项形如 {{"time":"Day 1 08:00-12:00","text":"成都集合出发 → 康定城区"}}。
@@ -705,6 +753,7 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
 任何 block 都可省略、重复、自由排序。不要为了“结构完整”机械凑章节。照片多时主动做视觉编排，照片少时不要硬凑图片。
 如果没有真正事实冲突，blocking_conflicts 必须为空，直接完成成品。"""
     gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,images=source.get('images'))
+    photos=set(_photo_refs(source))
     if gw:
         data=gw.data if isinstance(gw.data,dict) else {}
         # 模型只负责「引用」ref，媒体条目本身必须以真实上传/磁盘资料为准。
@@ -714,10 +763,11 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
         if catalog or not isinstance(master.get('media'),list):master['media']=catalog
         data['activity_master']=master
         if isinstance(data.get('detail'),dict):
-            data['detail']['blocks']=_sanitize_blocks(data['detail'].get('blocks') or [])
+            # 提示词已要求只用照片，这里再兜一层：模型若引用了品牌 logo / 空白图的 ref，直接剔除
+            data['detail']['blocks']=_sanitize_blocks(data['detail'].get('blocks') or [],allowed_refs=photos)
         return data,gw
     data=_mock_activity(source)
-    data['detail']['blocks']=_sanitize_blocks(_rotate_layout(data['detail'].get('blocks') or [],max(0,version_no-1)))
+    data['detail']['blocks']=_sanitize_blocks(_rotate_layout(data['detail'].get('blocks') or [],max(0,version_no-1)),allowed_refs=photos)
     return data,record_mock_usage(club_id,'detail',prompt,data)
 
 
@@ -744,8 +794,14 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
 原始资料（只用于取用真实细节，不是重新提取事实）：
 {source.get('text','')}
 
-媒体清单（只能引用这些 ref）：
+媒体清单（只能引用这些 ref；kind='photo' 才是真实照片）：
 {media}
+
+图片与清单铁律（与首次生成同一标准）：
+- 只能引用 kind='photo' 的 ref。kind='logo' 的是品牌标志 / 字标横幅 / 空白底图 / 截图 /
+  扁平赞助商海报，一律不得出现在详情页任何位置；品牌标识只能靠「单独上传 logo / 封面」解决。
+- 严禁输出 title 为「装备建议 / 出行清单 / 装备清单 / 携带清单 / 着装建议」之类的 info block：
+  平台会在详情页下方单独渲染「出行清单」，重复出块会让同一份清单出现两遍。
 
 文案与排版契约（与首次生成同一标准；吸引力来自文字，不只是图片）：
 - narrative：eyebrow 用 2~6 字场景词；headline 有画面感（8~16 字）；body 拆成 1~3 个独立短句（\\n 分隔），
@@ -769,15 +825,16 @@ block 语义：
 hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=必要决策信息；quote=引用；divider=节奏。
 任何 block 都可省略、重复、自由排序。不要为了「结构完整」机械凑章节。照片多时主动做视觉编排，照片少时不要硬凑图片。"""
     gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,images=source.get('images'))
+    photos=set(_photo_refs(source))
     if gw:
         payload=gw.data or {}
         detail=payload.get('detail') if isinstance(payload.get('detail'),dict) else payload
         if isinstance(detail,dict):
-            detail['blocks']=_sanitize_blocks(detail.get('blocks') or [])
+            detail['blocks']=_sanitize_blocks(detail.get('blocks') or [],allowed_refs=photos)
         return {'activity_master':master,'detail':detail},gw
     data=_mock_activity(source)
     detail=data['detail']
-    detail['blocks']=_sanitize_blocks(_rotate_layout(detail.get('blocks') or [],max(0,version_no-1)))
+    detail['blocks']=_sanitize_blocks(_rotate_layout(detail.get('blocks') or [],max(0,version_no-1)),allowed_refs=photos)
     if direction.strip(): detail['directionNote']=direction.strip()
     return {'activity_master':master,'detail':detail},record_mock_usage(club_id,'detail',prompt,data)
 
@@ -796,13 +853,17 @@ poster: 返回 headline, subheadline, facts[], sellingPoints[], cta, preferredMe
 recap: 只有提供真实 actualActivityData / 现场素材时才能叙述实际发生事件；资料不足时明确返回 needsActualData=true，不编造。
 严格 JSON。"""
     gw=await generate_json(club_id=club_id,task_type=channel,system_prompt=SYSTEM,user_prompt=prompt)
+    # 渠道成品（海报 / 小红书九宫格）同样只能用真实照片：品牌 logo 与空白底图不能上去
+    photos={m.get('ref') for m in activity_master.get('media',[]) if isinstance(m,dict)
+            and m.get('ref') and (m.get('kind') or 'photo')=='photo'}
     if gw:
         data=gw.data or {}
         if cover_url: data['coverUrl']=cover_url
-        if isinstance(data.get('blocks'),list): data['blocks']=_sanitize_blocks(data['blocks'])
+        if isinstance(data.get('blocks'),list): data['blocks']=_sanitize_blocks(data['blocks'],allowed_refs=photos)
         return data,gw
     title=activity_master.get('title','活动');idea=detail.get('coreSellingIdea','')
-    gallery=[m.get('ref') for m in activity_master.get('media',[]) if m.get('ref')]
+    gallery=[m.get('ref') for m in activity_master.get('media',[]) if isinstance(m,dict)
+             and m.get('ref') and (m.get('kind') or 'photo')=='photo']
     if channel=='wechat':data={'title':title,'summary':idea,'coverUrl':cover_url,'blocks':detail.get('blocks',[])[:6]+[{'type':'cta','headline':'查看活动详情并报名'}]}
     elif channel=='xhs':data={'titleOptions':[title,f"周末去{activity_master.get('location','山里')}，这次不赶行程"],'hook':idea,'body':idea+'\n\n具体日期、费用和报名信息见活动详情。','tags':['户外','周末去哪儿','自然'],'imageSequence':([cover_url] if cover_url else [])+gallery[:8],'coverUrl':cover_url}
     elif channel=='poster':data={'headline':title,'subheadline':idea,'facts':[activity_master.get('date',''),activity_master.get('location','')],'sellingPoints':[idea],'cta':'扫码查看详情与报名','preferredMediaRefs':([cover_url] if cover_url else [])+gallery[:1],'coverUrl':cover_url}

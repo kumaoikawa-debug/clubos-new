@@ -1,5 +1,6 @@
 from __future__ import annotations
-import mimetypes, re, shutil, zipfile
+import math, mimetypes, re, shutil, zipfile
+from collections import Counter
 from pathlib import Path
 from typing import Iterable
 import fitz
@@ -50,7 +51,48 @@ def normalize_text(text: str) -> str:
     return re.sub(r'\n{3,}', '\n\n', text).strip()
 
 
-def image_meta(path: Path, public_url: str | None = None, source: str | None = None, page: int | None = None):
+# ---------------------------------------------------------------------------
+# 图片分类：把「真实照片」和「品牌 logo / 字标 / 空白底图 / 截图 / 扁平海报」分开
+#
+# 上传的方案里，品牌 logo（如 icebreaker 标志）、字标横幅（icebreaker / Move to natural）、
+# 空白幻灯片底图、地图与天气截图、赞助商海报，都会作为嵌入图片被一起抽出来。以前它们与
+# 真实照片混在同一个清单里按顺序取用，于是头图变成了品牌 logo、图集里全是纯黑图。
+# 现在在解析期就给每张图打标，AI 只允许引用 kind='photo' 的图片。
+#
+# 三个判据都是尺度无关的（不依赖分辨率与文件大小 —— 高像素照片的「字节/像素」反而更低，
+# 用体积判断会把 3000px 的手机照误判成扁平图）：
+#   * 短边 < 300        → logo / 图标 / 缩略图
+#   * 主色占比 > 0.5    → 单色底 + 少量线条：字标、空白页、色块海报
+#   * 色彩熵 < 2.5 bit  → 用色过少（图标网格、线稿、纯文字页），不可能是照片
+# 实测（一份 26 张图的真实方案）：真实照片短边 ≥ 366 / 主色占比 ≤ 0.42 / 熵 ≥ 3.59；
+# 品牌 logo 与字标短边 59~277 / 主色占比 0.77~1.0 / 熵 -0.0~1.41；地图·天气截图
+# 主色占比 0.59~0.82。三类阈值都有余量。
+# ---------------------------------------------------------------------------
+def _image_kind(im: Image.Image) -> str:
+    """'photo' = 可当活动照片用；'logo' = 品牌标 / 扁平图 / 空白底 / 截图，不进 C 端。
+
+    判不出来时一律返回 'photo'：漏掉一张 logo，好过整份资料一张图都不剩。"""
+    try:
+        w, h = im.size
+        if min(w, h) < 300:
+            return 'logo'
+        raw = im.convert('RGB').resize((64, 64)).tobytes()
+        buckets: Counter = Counter()
+        for i in range(0, len(raw), 3):
+            buckets[(raw[i] >> 5, raw[i + 1] >> 5, raw[i + 2] >> 5)] += 1
+        total = sum(buckets.values()) or 1
+        if buckets.most_common(1)[0][1] / total > 0.5:
+            return 'logo'
+        entropy = -sum((v / total) * math.log2(v / total) for v in buckets.values())
+        if entropy < 2.5:
+            return 'logo'
+        return 'photo'
+    except Exception:
+        return 'photo'
+
+
+def image_meta(path: Path, public_url: str | None = None, source: str | None = None, page: int | None = None,
+               classify: bool = True):
     try:
         with Image.open(path) as im:
             return {
@@ -58,6 +100,9 @@ def image_meta(path: Path, public_url: str | None = None, source: str | None = N
                 'width':im.width,'height':im.height,
                 'orientation':'landscape' if im.width>im.height else 'portrait' if im.height>im.width else 'square',
                 'source':source or path.name,'page':page,
+                # classify=False 用于 PDF 渲染页：整页就是用户上传的内容本身，
+                # 不是「混在资料里的零散配图」，不该被当成 logo 过滤掉。
+                'kind': _image_kind(im) if classify else 'photo',
             }
     except Exception:
         return None
@@ -160,6 +205,7 @@ def parse_sources(paths: Iterable[Path], user_text: str='', static_root: Path | 
         t=extract_text(p)
         if t.strip(): texts.append(f"[文件: {p.name}]\n{t}")
         extracted=[]
+        is_page_render=p.suffix.lower()=='.pdf'
         if p.suffix.lower() in {'.pptx','.docx'}:
             extracted=_extract_office_media(p,batch_dir/'extracted')
         elif p.suffix.lower()=='.pdf':
@@ -169,7 +215,7 @@ def parse_sources(paths: Iterable[Path], user_text: str='', static_root: Path | 
             if static_root:
                 try: rel='/static/'+str(img.relative_to(static_root)).replace('\\','/')
                 except Exception: pass
-            m=image_meta(img,rel,source=p.name,page=idx)
+            m=image_meta(img,rel,source=p.name,page=idx,classify=not is_page_render)
             if m: images.append(m)
     # Give every image a stable ref the model can cite.
     for i,img in enumerate(images,1): img['ref']=f'img_{i:02d}'
@@ -177,5 +223,5 @@ def parse_sources(paths: Iterable[Path], user_text: str='', static_root: Path | 
         'text':normalize_text('\n\n'.join(texts)),
         'images':images,
         'files':files,
-        'media_manifest':[{'ref':x['ref'],'name':x['name'],'url':x.get('url',''),'width':x['width'],'height':x['height'],'source':x.get('source'),'page':x.get('page')} for x in images]
+        'media_manifest':[{'ref':x['ref'],'name':x['name'],'url':x.get('url',''),'width':x['width'],'height':x['height'],'source':x.get('source'),'page':x.get('page'),'kind':x.get('kind','photo')} for x in images]
     }

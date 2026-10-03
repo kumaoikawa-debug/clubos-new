@@ -4,12 +4,13 @@ from sqlite3 import IntegrityError
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote, quote, urlsplit
+from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, Query, Header, Request, BackgroundTasks
 from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from db import init_db, conn, row, rows, jdump, jload, setting
-from document_parser import save_uploads, parse_sources
+from document_parser import save_uploads, parse_sources, _image_kind
 from ai_engine import generate_activity, generate_channel, regenerate_detail, detail_outline
 from ai_billing import ensure_credits, charge_credits, credit_cost
 from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config,
@@ -271,8 +272,11 @@ def club_activities(club_id:int):
 # 因此生成时把 source 落进 activities.source_json，并为每一版留一份不可变快照；
 # detail_version_id 指向当前生效的那一版，「恢复」只换指针，不调 AI、不扣 Credits。
 def _source_for_storage(source:dict)->dict:
-    """落盘用的原始资料。不存本机绝对路径（换工作区/换机器就失效），读取时按 /static 反查磁盘。"""
-    images=[{k:x.get(k) for k in ('ref','name','url','width','height','orientation','source','page')}
+    """落盘用的原始资料。不存本机绝对路径（换工作区/换机器就失效），读取时按 /static 反查磁盘。
+
+    images 持久化 'kind'（photo/logo）：离线生成器的 _photo_refs 据此过滤品牌 logo / 空白图，
+    避免详情页把 logo 当真实照片排进 hero/gallery（老板要求"详情页不出现品牌 logo"）。"""
+    images=[{k:x.get(k) for k in ('ref','name','url','width','height','orientation','source','page','kind')}
             for x in source.get('images') or []]
     return {'text':source.get('text',''),'files':source.get('files') or [],'images':images,
             'media_manifest':source.get('media_manifest') or []}
@@ -288,7 +292,12 @@ def _source_from_storage(stored:dict|None)->dict|None:
             candidate=STATIC/url[len('/static/'):]
             if candidate.exists(): path=str(candidate)
         if not path: missing+=1; continue          # 图片已不在磁盘：不送视觉模型，但 ref 仍可被排版引用
-        item=dict(x); item['path']=path; images.append(item)
+        item=dict(x); item['path']=path
+        # 老活动落盘时还没存 kind：这里按磁盘图片重算（photo/logo），保证 regenerate 走新分类逻辑。
+        if item.get('kind') not in ('photo','logo'):
+            try: item['kind']=_image_kind(Image.open(path))
+            except Exception: item['kind']='photo'
+        images.append(item)
     out=dict(stored); out['images']=images; out['_resolved']=len(images); out['_missing']=missing
     return out
 
