@@ -80,7 +80,15 @@ _GEO_HEAD_STOP=set('片座条道个处块段些这那整满半每各前后上下
                    '种群排列张幅点层步米公小大老新高深远近多少一二三四五六七八九十'
                    '与到着过走穿从向往在由经达去来回归出入沿顺登爬翻越看望有无是的了和'
                    '跟及或并而把被让使给自至又再还就才只都也很太更最行进抵绕靠邻近距奔'
-                   '赴览游攀hofer是能会将可使须应被所对该其们时分秒年天周月')
+                   '赴览游攀hofer是能会将可使须应被所对该其们时分秒年天周月'
+                   '散漫环绕驱弥消吹笼锁压')
+# 这些字是「散/漫/环/绕…」这类动词首字，几乎不会是专名首字；
+# 它们 + 地理后缀只会拼出动词短语（驱散山间、漫山遍野、环山公路、绕山而行），不是地名。
+# 实测假阳性③：「一锅暖意，驱散山间微寒」里的「散山」被当成编造地名报了出来。
+_GEO_RIGHT_RELATIONAL=set('间中上下前后里畔边脚腰顶口头尾侧心面底内外东西南北端梢陲沿际')
+# 地理后缀后紧跟这些「关系后缀」→ 整个「汉字+后缀」是方位短语而非专名。
+# 例：「驱散山间微寒」→ 山后是「间」→ 散山是动词短语；「寺中/湖畔/村口/谷底/坡顶/桥下/关外/寨内」同理。
+# 这是比首字黑名单更通用的护栏：只要后缀处于方位短语里，就绝不可能是独立地名。
 
 
 # ---------------------------------------------------------------------------
@@ -115,11 +123,17 @@ def hallucinated_places(text:str,source_text:str)->list[str]:
     """
     src=str(source_text or '')
     if not src: return []
+    t=str(text or '')
     out=[]
-    for term in sorted(set(_GEO_RE.findall(str(text or '')))):
+    for term in sorted(set(_GEO_RE.findall(t))):
         if term in _GENERIC_GEO: continue
         if term[0] in _GEO_HEAD_STOP: continue   # 「一片山药」里的「片山」不是地名
         if term in src: continue          # 原文出现过（子串即可）就不算编造
+        # 地理后缀后紧跟关系后缀（间/中/上/下/畔/口/底…）→ 是方位短语不是专名。
+        # 「驱散山间微寒」→ 山后是「间」→ 散山是动词短语，不能报编造地名。
+        i=t.find(term)
+        if i>=0 and i+len(term)<len(t) and t[i+len(term)] in _GEO_RIGHT_RELATIONAL:
+            continue
         out.append(term)
     return out
 
