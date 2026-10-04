@@ -1,10 +1,42 @@
 from __future__ import annotations
 import json, uuid, logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 from clubos_domain.product_stock import variant_of, write_variant_stock
 
 logger = logging.getLogger("checkout")
+
+def occurrence_start_deadline(raw):
+    """把团期出发时间解析成 datetime。
+
+    只写了日期没写时刻的团期（如 '2026-09-19'）按当天 23:59:59 计 —— 当天还能报名，
+    不该被当成过期；写了时刻的就按时刻算。解析不出来返回 None（无法判断就放行，
+    交给人工兜底，而不是把正常团期误杀）。
+    """
+    s=str(raw or '').strip()
+    if not s: return None
+    s=s.replace('T',' ')
+    for fmt in ('%Y-%m-%d %H:%M:%S','%Y-%m-%d %H:%M','%Y-%m-%d'):
+        try:
+            d=datetime.strptime(s,fmt)
+            if fmt=='%Y-%m-%d': return d.replace(hour=23,minute=59,second=59)
+            return d
+        except ValueError:
+            continue
+    try: return datetime.fromisoformat(str(raw).strip())
+    except Exception: return None
+
+def occurrence_expired(occurrence,now=None):
+    """团期是否已经出发。名额之外必须再校验时间 ——
+
+    之前只校验剩余名额：一场 9 月出发的团期到 10 月仍然能下单付款，
+    顾客付完钱立刻看到「活动已开始，不可退款」：钱付了、活动错过了、还退不了。
+    这是一条真金白银的漏斗，不是显示问题。
+    """
+    d=occurrence_start_deadline((occurrence or {}).get('start_at'))
+    if d is None: return False
+    return d < (now or datetime.now())
 
 @dataclass
 class CheckoutIntent:
@@ -40,12 +72,37 @@ class CheckoutEngine:
     def _new_id(self):
         return "chk_" + uuid.uuid4().hex
 
+    def _member_gear_discount(self,c,*,club_id:int,user_id:int,gross:float=0.0):
+        """返回 (折扣率, 折扣金额)。
+
+        会员等级是按俱乐部运营的，装备折扣 gear_discount 也配在俱乐部等级上
+        （1.0 无折扣 / 0.95 九五折）。查不到等级、或配了非法值，一律按原价 ——
+        宁可不打折，也不能自己造一个折扣出来。
+        """
+        try:
+            r=c.execute('''SELECT t.gear_discount AS gd FROM club_members m
+                           JOIN club_member_tiers t ON t.id=m.current_tier_id
+                           WHERE m.user_id=? AND m.club_id=? AND t.status='active' ''',(user_id,club_id)).fetchone()
+            rate=1.0
+            if r is not None:
+                raw=r['gd'] if 'gd' in r.keys() else (r[0] if len(r) else None)
+                if raw is not None:
+                    v=float(raw)
+                    if 0<v<=1: rate=v
+            gross=float(gross or 0.0)
+            return rate,(round(gross*(1.0-rate),2) if rate<1 else 0.0)
+        except Exception as e:
+            logger.warning("member gear discount lookup failed (club=%s user=%s): %s",club_id,user_id,e)
+            return 1.0,0.0
+
     def create_activity_intent(self, c, *, activity:dict, occurrence:dict, user_id:int,
                                requested_club_points:int=0, requested_gear_points:int=0,
                                voucher_codes:list[str]|None=None, participants:list[dict]|None=None,
                                participant_policy:dict|None=None):
         participants = list(participants or [])
         participant_count = max(1, len(participants))
+        if occurrence_expired(occurrence):
+            raise ValueError("该团期已出发，无法再报名；请选择其他团期或联系俱乐部")
         if int(occurrence['sold']) + participant_count > int(occurrence['capacity']):
             raise OverflowError(f"该团期剩余名额不足，当前需要 {participant_count} 个名额")
         wallet = self.wallet_snapshot(c, user_id, int(activity['club_id']))
@@ -94,13 +151,26 @@ class CheckoutEngine:
     def create_gear_intent(self,c,*,club_id:int,user_id:int,items:list[dict],resolved_products:list[tuple[dict,int]],
                            requested_gear_points:int=0,voucher_codes:list[str]|None=None):
         original=sum(float(p['price'])*q for p,q in resolved_products)
+        # 会员等级装备折扣：俱乐部后台按等级配置了 gear_discount（1.0 无折扣 / 0.95 九五折）。
+        # 之前这里根本没读它 —— C 端会员中心白纸黑字写着「装备商城 9.5 折」、
+        # 商品页也写着「会员折扣自动生效」，结算却按原价收钱，
+        # 等于向顾客承诺了一个并不存在的价格。折扣先于积分抵扣生效：
+        # 先按会员价降价，再在会员价上抵积分，否则「先抵积分再打折」会少折一份。
+        rate,member_discount=self._member_gear_discount(c,club_id=club_id,user_id=user_id,gross=original)
+        original=round(original-member_discount,2)
         wallet=self.wallet_snapshot(c,user_id,club_id)
         # Club Points never pay for platform gear. Gear Points are platform funded.
         quote=self.points.quote(amount=original,club_points_balance=0,gear_points_balance=wallet['gearPoints'],
                                 requested_club_points=0,requested_gear_points=requested_gear_points,
                                 allow_club_points=False,allow_gear_points=True)
         intent_id=self._new_id()
-        benefit_quote={'clubDiscount':0.0,'platformSubsidy':0.0,'totalDiscount':0.0,'applied':[]}
+        benefit_quote={'clubDiscount':0.0,'platformSubsidy':0.0,'totalDiscount':0.0,'applied':[],
+                       # 会员等级折扣由平台承担：装备订单本来就禁止用「俱乐部承担」的福利券
+                       # （见下面的 clubDiscount 校验），俱乐部佣金仍按商品原价计提，
+                       # 俱乐部不会因自己把等级折扣设得大方而做到亏本。
+                       # 单独列出来是为了让 C 端把它显示成一行「会员折扣」，而不是混在券里说不清。
+                       'memberGearDiscount':member_discount,'memberGearDiscountRate':rate,
+                       'grossAmount':round(original+member_discount,2)}
         if self.benefits and voucher_codes:
             benefit_quote=self.benefits.hold_vouchers(
                 c,intent_id=intent_id,voucher_codes=voucher_codes,user_id=user_id,
@@ -168,6 +238,8 @@ class CheckoutEngine:
         activity=c.execute('SELECT * FROM activities WHERE id=? AND status="published"',(int(payload['activityId']),)).fetchone()
         if not occ or not activity: raise ValueError('活动或团期已不可售')
         occ=dict(occ); activity=dict(activity)
+        # 建单到付款之间可能跨过出发时间（结算单不会自动过期），这里再拦一次。
+        if occurrence_expired(occ): raise ValueError('该团期已出发，无法完成报名；请联系俱乐部处理')
         participant_count=max(1,int(intent.get('participant_count') or len(payload.get('participants') or []) or 1))
         if int(occ['sold']) + participant_count > int(occ['capacity']): raise OverflowError('该团期剩余名额不足')
 
@@ -281,8 +353,13 @@ class CheckoutEngine:
                 c.execute('INSERT INTO ai_credit_ledger(club_id,type,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?)',
                           (intent['club_id'],'mall_reward',reward,'gear_order',str(oid),'装备商城销售奖励'))
         c.execute('UPDATE checkout_intents SET result_id=? WHERE id=?',(str(oid),intent['id']))
+        # 会员折扣回传给 C 端：顾客在小票上要看到「原价多少、会员省了多少、实付多少」，
+        # 否则九折打了等于没打 —— 他只会看到一个数字，不知道自己占到了会员的便宜。
+        gross=round(sum(float(p['price'])*q for p,q in resolved),2)
+        member_cut=round(max(0.0,gross-float(intent['original_amount'] or 0)),2)
         result={'ok':True,'kind':'gear','checkoutId':intent['id'],'orderId':oid,'gearPointsEarned':earned,
                 'clubCommission':round(commission,2),'clubAIReward':reward,'cashPaid':intent['cash_amount'],
+                'grossAmount':gross,'memberGearDiscount':member_cut,
                 'platformPointSubsidy':intent['platform_point_subsidy'],
                 'platformBenefitSubsidy':float(intent.get('platform_benefit_subsidy') or 0),
                 'commerceOrderId':commerce_order_id}

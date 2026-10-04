@@ -935,7 +935,10 @@
 .w-pd__dots i.on{background:#fff;width:14px;border-radius:99px}
 .w-pd__count{position:absolute;right:12px;bottom:12px;padding:4px 9px;border-radius:99px;background:rgba(18,23,20,.34);color:#fff;font-size:11px;font-variant-numeric:tabular-nums;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
 .w-pd__head{padding:16px 16px 15px;background:#fff}
-.w-pd__price{font-size:27px;font-weight:750;color:var(--w-accent);letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1}
+.w-pd__price{font-size:27px;font-weight:750;color:var(--w-accent);letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+/* 会员价：原价划掉 + 一枚「会员价」角标。只标数字不标来由，顾客会怀疑是不是改了价。 */
+.w-pd__was{font-size:14px;font-weight:500;color:var(--w-mute);text-decoration:line-through}
+.w-pd__mem{font-size:11px;font-weight:700;font-style:normal;line-height:1;padding:4px 7px;border-radius:999px;color:#0f7a55;background:rgba(15,122,85,.12)}
 .w-pd__name{margin:7px 0 5px;font-size:17px;font-weight:650;line-height:1.42}
 .w-pd__meta{font-size:12px;color:var(--w-muted)}
 .w-pd__block{margin-top:10px;padding:15px 16px;background:#fff}

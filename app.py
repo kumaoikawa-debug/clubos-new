@@ -2225,12 +2225,41 @@ def signup(activity_id:int,payload:dict=Body(...)):
 
 
 @app.get('/api/public/registrations/{registration_id}/participants')
+def _attach_checkin_status(c,participants):
+    """给参加人补上签到状态（就地改字典，返回同一批对象）。
+
+    C 端以前完全看不到自己签上没签上，只能等工作人员口头告知 —— 顾客付了钱、
+    人也到了现场，理应能自己确认这件事，而不是全靠人传话。
+    注意：自助扫码签到是另一件事（要 C 端出码 + 执行端扫码两侧配套），这里只做「看得见」。
+    """
+    pids=[int(p['id']) for p in (participants or []) if p.get('id') is not None]
+    if not pids: return participants
+    ph=','.join('?'*len(pids))
+    def _latest(where_extra,args):
+        return {int(r['participant_id']):dict(r) for r in c.execute(
+            f'''SELECT ci.* FROM participant_checkins ci
+                JOIN (SELECT participant_id,MAX(id) AS mid FROM participant_checkins
+                      WHERE participant_id IN ({ph}){where_extra} GROUP BY participant_id) m
+                  ON ci.id=m.mid''',args)}
+    # 「签到」默认是出发集合（departure）—— 执行端统计已签到人数也是按这个口径，
+    # C 端不能按另一套口径显示，否则会出现「我这显示已签到、他那显示没到」。
+    latest=_latest(" AND checkin_type='departure'",pids)
+    fallback=_latest('',pids)
+    for p in (participants or []):
+        rec=latest.get(int(p['id'])) or fallback.get(int(p['id']))
+        p['checkinStatus']=(rec or {}).get('status') or 'not_checked_in'
+        p['checkedAt']=(rec or {}).get('checked_at')
+        p['checkinType']=(rec or {}).get('checkin_type')
+    return participants
+
 def public_registration_participants(registration_id:int):
     with conn() as c:
         reg=row(c.execute('SELECT * FROM registrations WHERE id=?',(registration_id,)))
         if not reg: raise HTTPException(404,'报名记录不存在')
-        return {'registrationId':registration_id,'participantPolicy':jload(reg.get('participant_policy_snapshot_json'),{}),
-                **participant_service.summary_for_registration(c,registration_id)}
+        out={'registrationId':registration_id,'participantPolicy':jload(reg.get('participant_policy_snapshot_json'),{}),
+             **participant_service.summary_for_registration(c,registration_id)}
+        _attach_checkin_status(c,out.get('participants') or [])
+        return out
 
 @app.patch('/api/public/registrations/{registration_id}/participants/{participant_id}')
 def public_update_participant(registration_id:int,participant_id:int,payload:dict=Body(...)):
@@ -2457,13 +2486,24 @@ def public_products(club_id:int):
     return club_products(club_id)
 
 @app.get('/api/public/clubs/{club_id}/mall/products/{product_id}')
-def public_product(club_id:int, product_id:int):
+def public_product(club_id:int, product_id:int, user_id:int|None=None):
     # 详情页要能被单独打开（刷新、分享出去的链接），所以不能只靠列表缓存。
     if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
     with conn() as c:
         p=row(c.execute('SELECT id,name,sku,price,stock,status,image_url,category FROM products WHERE id=? AND status="active"',(product_id,)))
         if not p: raise HTTPException(404,'商品不存在')
-        return _with_extras(c,[p])[0]
+        out=_with_extras(c,[p])[0]
+        # 会员价要能被看见：会员中心写着「装备商城 X 折 —— 在装备商城里直接看到会员价」，
+        # 商品页却只显示原价，等于承诺了一个看不见的价格。带 user_id 时把会员价一并回传。
+        if user_id:
+            rate,_=checkout_engine._member_gear_discount(c,club_id=club_id,user_id=int(user_id),gross=float(out.get('price') or 0))
+            if rate<1:
+                out['gearDiscount']=rate
+                out['memberPrice']=round(float(out.get('price') or 0)*rate,2)
+                for v in (out.get('variants') or []):
+                    if v.get('price') is not None:
+                        v['memberPrice']=round(float(v['price'])*rate,2)
+        return out
 
 @app.post('/api/public/clubs/{club_id}/gear-orders')
 def create_gear_order(club_id:int,payload:dict=Body(...)):
@@ -2572,6 +2612,7 @@ def user_order_center(user_id:int,club_id:int=1):
         for x in activity_orders:
             ps=participant_service.summary_for_registration(c,int(x['id']))
             x.update(ps)
+            _attach_checkin_status(c,x.get('participants') or [])
             a=row(c.execute('SELECT * FROM activities WHERE id=?',(x['activity_id'],)))
             occ=row(c.execute('SELECT * FROM activity_occurrences WHERE id=?',(x['occurrence_id'],))) if x.get('occurrence_id') else None
             # Full-order refund is available only before any participant-level refund begins.

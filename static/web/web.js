@@ -44,15 +44,27 @@ const ORD_ST={paid:'已支付',pending:'待支付',unpaid:'待支付',pending_pa
 const RF_ST={none:'',rejected:'已驳回',pending:'审核中',approved:'已通过',processing:'处理中',refunded:'已退款'};
 const INS_ST={pending:'待投保',processing:'办理中',enrolling:'投保中',done:'已投保',insured:'已投保',completed:'已投保',cancelling:'退保中',cancelled:'已退保',failed:'投保失败',cancel_failed:'退保失败',not_required:'无需保险'};
 const AS_TYPE={refund_only:'仅退款',return_refund:'退货退款',exchange:'换货'};
-const AS_ST={pending:'待审核',reviewing:'审核中',approved:'已通过',rejected:'已驳回',awaiting_return:'待寄回',returned:'已寄回',refunded:'已退款',exchanging:'换货中',exchanged:'已换货',completed:'已完成',closed:'已关闭'};
+/* 售后状态：键必须覆盖 clubos_domain/after_sales.py 的 ACTIVE_STATUSES + FINAL_STATUSES。
+   之前这张表里没有 pending_review，st() 的回退把英文枚举原样显示给了顾客
+   （「仅退款 pending_review」）—— 看不懂的枚举比没有状态更糟，顾客会以为出了故障。 */
+const AS_ST={requested:'已提交',pending:'待审核',pending_review:'待审核',reviewing:'审核中',
+  approved:'已通过',approved_pending_refund:'待退款',refund_processing:'退款中',refund_pending:'待退款',
+  awaiting_return:'待寄回',return_in_transit:'退回途中',returned:'已寄回',
+  refunded:'已退款',exchanging:'换货中',exchange_pending_shipment:'待换货发出',exchanged:'已换货',
+  completed:'已完成',rejected:'已驳回',cancelled:'已取消',canceled:'已取消',closed:'已关闭'};
+/* 签到状态：键覆盖 execution_service.checkin 写入的取值 + 未签到的默认值。
+   缺键会回退成英文枚举（售后状态踩过同一个坑），顾客看不懂。 */
+const CK_ST={not_checked_in:'未签到',checked_in:'已签到',late:'迟到',absent:'未参加',leave:'请假',cancelled:'已取消'};
 const st=map=>v=>map[String(v||'')]||(v?String(v):'');
-const ordSt=st(ORD_ST),rfSt=st(RF_ST),insSt=st(INS_ST),asType=st(AS_TYPE),asSt=st(AS_ST);
+const ordSt=st(ORD_ST),rfSt=st(RF_ST),insSt=st(INS_ST),asType=st(AS_TYPE),asSt=st(AS_ST),ckSt=st(CK_ST);
 /* 状态色调：只分四档（成功 / 进行中 / 警示 / 中性），不按业务枚举逐个配色 ——
    枚举会随版本增加，色调档位不会。 */
 function stTone(v){
   const k=String(v||'');
   if(['paid','completed','refunded','approved','done','insured','exchanged','issued','returned'].includes(k))return 'ok';
-  if(['pending','processing','reviewing','refunding','awaiting_return','exchanging','unpaid','held'].includes(k))return 'wait';
+  if(['pending','processing','reviewing','refunding','awaiting_return','exchanging','unpaid','held',
+      'requested','pending_review','approved_pending_refund','refund_processing','refund_pending',
+      'return_in_transit','exchange_pending_shipment'].includes(k))return 'wait';
   if(['rejected','cancelled','canceled','closed','failed'].includes(k))return 'off';
   if(['partial_refunded','return_refund','refund_only','exchange'].includes(k))return 'warn';
   return 'mute';
@@ -298,6 +310,14 @@ function productVariants(x){
 }
 function productPrice(x,v){return v&&v.price!=null?Number(v.price):Number(x.price||0)}
 function productStock(x,v){return v?Number(v.stock||0):Number(x.stock||0)}
+/* 会员价：详情接口带 user_id 回源时会给 memberPrice（各规格也各带一份）。
+   没有就按原价 —— 前端不自己乘折扣率，否则页面算的和结算算的不是同一个数，
+   又会出现「页面说九折、结账按原价」这种对不上的账。 */
+function memberPriceOf(x,v){
+  if(v&&v.memberPrice!=null)return Number(v.memberPrice);
+  if(x&&x.memberPrice!=null)return Number(x.memberPrice);
+  return productPrice(x,v);
+}
 function curVariant(){
   if(!P_CUR)return null;
   return productVariants(P_CUR).find(v=>String(v.id)===String(P_VID))||null;
@@ -319,7 +339,12 @@ async function openProduct(id){
   let p=MALL_ALL.find(x=>String(x.id)===String(id));
   /* 详情页可能被直接打开或刷新（分享出去的链接），列表缓存里不一定有，
      这时候回源拉一次；拉不到才降级。 */
-  if(!p){try{p=await api(`/api/public/clubs/${CLUB}/mall/products/${id}`)}catch(e){p=null}}
+  /* 缓存里的商品是列表接口给的，没有会员价（会员价跟人走，不能进列表缓存），
+     所以只要缺会员价就回源补一次 —— 否则商品页那句「会员折扣自动生效」
+     就成了看不见的空头承诺。 */
+  if(!p||p.memberPrice==null){
+    try{p=await api(`/api/public/clubs/${CLUB}/mall/products/${id}?user_id=${USER}`)}catch(e){if(!p)p=null}
+  }
   if(!p){
     box.innerHTML=`<div class="w-pad"><div class="w-empty" style="padding:64px 0">${WI.empty}<div>这件装备暂时看不了</div><div style="margin-top:6px">可能已下架，或者链接失效。</div><button class="w-act" type="button" style="margin-top:14px" onclick="showMallList()">返回装备列表</button></div></div>`;
     return;
@@ -338,6 +363,9 @@ function productDetailHtml(){
   const p=P_CUR;if(!p)return '';
   const imgs=productImages(p),vs=productVariants(p),v=curVariant();
   const price=productPrice(p,v),stock=productStock(p,v),out=stock<=0;
+  /* 会员价要明着写出来：只写「会员折扣自动生效」而不给数字，
+     顾客在结算前根本不知道自己到底省了多少，那句承诺等于没说。 */
+  const mp=memberPriceOf(p,v),isMem=mp<price-0.004;
   const sku=p.sku?String(p.sku):'';
   return `<button class="w-back" type="button" onclick="showMallList()">${WI.back}返回装备</button>
   <div class="w-pd__gal" id="pdGal">
@@ -346,7 +374,7 @@ function productDetailHtml(){
     ${imgs.length>1?`<div class="w-pd__dots" id="pdDots">${imgs.map((_,i)=>'<i'+(i===0?' class="on"':'')+'></i>').join('')}</div><div class="w-pd__count" id="pdCount">1/${imgs.length}</div>`:''}
   </div>
   <div class="w-pd__head">
-    <div class="w-pd__price">${money(price)}</div>
+    <div class="w-pd__price">${money(mp)}${isMem?`<s class="w-pd__was">${money(price)}</s><i class="w-pd__mem">会员价</i>`:''}</div>
     <h2 class="w-pd__name">${esc(p.name)}</h2>
     <div class="w-pd__meta">${esc(p.category||'装备')}${sku?' · 货号 '+esc(sku):''}</div>
   </div>
@@ -374,7 +402,7 @@ function productDetailHtml(){
     </div>
   </div>
   <div class="w-pd__cta">
-    <div class="w-pd__sum"><span>合计</span><b id="pdTotal">${money(price*P_QTY)}</b></div>
+    <div class="w-pd__sum"><span>合计${isMem?'（会员价）':''}</span><b id="pdTotal">${money(mp*P_QTY)}</b></div>
     <button class="w-pd__buy" type="button"${out?' disabled':''} onclick="buyProduct()">${out?'暂时缺货':'立即购买'}</button>
   </div>`;
 }
@@ -393,7 +421,7 @@ function setProductQty(n){
   if(!P_CUR)return;
   const stock=productStock(P_CUR,curVariant());
   P_QTY=Math.min(Math.max(1,Number(n)||1),Math.max(1,stock));
-  const v=curVariant(),price=productPrice(P_CUR,v);
+  const v=curVariant(),price=memberPriceOf(P_CUR,v);
   const q=$('#pdQty');if(q)q.textContent=P_QTY;
   const t=$('#pdTotal');if(t)t.textContent=money(price*P_QTY);
   const box=$('#productDetail');
@@ -631,7 +659,9 @@ async function openAct(id){/* 不先切视图的话，详情会被渲染进一�
 let a=await api(`/api/public/activities/${id}`);currentAct=a;
 /* 默认团期必须是**第一个还有余位**的：早前固定取 occurrences[0]，售罄的第一个团期会被默认选中，
    顾客直接点报名就被后端拒，还看不出为什么。全满时留 null，由 signupNow 给出明确提示。 */
-currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0)||null;
+/* 默认选中也要跳过已出发的团期：否则一进详情页按钮就是「立即报名 ¥xxx」，
+   顾客点下去才被告知不能报。 */
+currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0&&!occExpired(o))||null;
 bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${money(a.price)} / 人</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
 /* 回到活动列表。两个入口共用：详情页的「返回活动」、底部「活动」tab。 */
 function showActivityList(){
@@ -715,17 +745,31 @@ function bookingHtml(a){
    而且「哪天 / 多少钱」要上下扫着比；卡片固定宽、一次并排露出两张左右，
    日期、类型、名额、价格各占一行，左右滑动 + scroll-snap 吸附即可比较。
    满员的团期**不可选**（而不是可选然后被后端拒），并且明确标出「已满」。 */
+/* 团期是否已经出发：与后端 occurrence_expired 同一口径（只写了日期没写时刻的按当天 23:59:59 算，
+   即当天仍可报名）。前端不判的话，顾客能选中一个已经出发的团期并一路填完资料走到付款，
+   付完才被后端拒 —— 那笔钱就算拦下来了，体验也已经坏掉了。 */
+function occExpired(o){
+  const s=String((o&&o.start_at)||'').trim(); if(!s)return false;
+  const t=s.replace('T',' ');
+  const m=t.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ ](\d{2}):(\d{2})(?::(\d{2}))?)?$/);
+  let d;
+  if(m)d=new Date(+m[1],+m[2]-1,+m[3],m[4]?+m[4]:23,m[5]?+m[5]:59,m[6]?+m[6]:59);
+  else d=new Date(t);
+  return !!d&&!isNaN(d.getTime())&&d.getTime()<Date.now();
+}
 function occCard(o,i){
   const full=Number(o.remaining||0)<=0;
+  const gone=occExpired(o);
+  const blocked=full||gone;
   const on=currentOcc&&Number(currentOcc.id)===Number(o.id);
   // label 常是「10月24日 · 标准团」的写法：拆成日期 + 团型徽标两段；
   // 拆不开就整段当日期，不硬造结构。
   const raw=String(o.label||o.start_at||'待定');
   const parts=raw.split('·').map(s=>s.trim()).filter(Boolean);
   const day=parts[0]||raw, kind=parts.slice(1).join(' · ');
-  return `<div class="occ${on?' active':''}${full?' is-full':''}" data-occ="${o.id}"${full?'':' onclick="selectOcc('+o.id+',this)"'} tabindex="${full?'-1':'0'}" role="radio" aria-checked="${on?'true':'false'}" aria-disabled="${full?'true':'false'}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();if(!${full})this.click()}">
+  return `<div class="occ${on?' active':''}${blocked?' is-full':''}" data-occ="${o.id}"${blocked?'':' onclick="selectOcc('+o.id+',this)"'} tabindex="${blocked?'-1':'0'}" role="radio" aria-checked="${on?'true':'false'}" aria-disabled="${blocked?'true':'false'}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();if(!${blocked})this.click()}">
     <div class="occ__top"><strong>${esc(day)}</strong>${kind?`<span class="occ__kind">${esc(kind)}</span>`:''}</div>
-    <div class="occ__sub">${full?'<em>已满</em>':`剩余 ${o.remaining} / ${o.capacity} 个名额`}</div>
+    <div class="occ__sub">${gone?'<em>已出发</em>':full?'<em>已满</em>':`剩余 ${o.remaining} / ${o.capacity} 个名额`}</div>
     <div class="occ__price">${money(o.price)}<span> / 人</span></div>
     <span class="occ__check" aria-hidden="true">✓</span>
   </div>`;
@@ -792,7 +836,8 @@ async function loadActivityVouchers(){
 }
 function selectOcc(id,el){
   currentOcc=currentAct.occurrences.find(x=>x.id===id);
-  if(!currentOcc||Number(currentOcc.remaining||0)<=0){toast('该团期已满，请选择其他团期');return}
+  if(!currentOcc||occExpired(currentOcc)){toast('该团期已出发，请选择其他团期');return}
+  if(Number(currentOcc.remaining||0)<=0){toast('该团期已满，请选择其他团期');return}
   $$('.occ').forEach(x=>{x.classList.remove('active');x.setAttribute('aria-checked','false')});
   el.classList.add('active');el.setAttribute('aria-checked','true');
   /* 横向卡片：点到的卡可能只露出一半，选中后把它滚到可视区中央
@@ -977,7 +1022,7 @@ async function loadOrders(){
         <span class="w-pax-row__ic">${WI.pax}</span>
         <div class="w-pax-row__main">
           <div class="w-pax-row__nm"><b>${esc(p.name)}</b>${refunded?badge('已退出','off'):''}</div>
-          <div class="w-pax-row__meta">${esc(p.phone||'')}${refunded?'':` · 资料${p.form_status==='complete'?'完整':'待补'} · 保险 ${insSt(p.insurance_status||'pending')}`}</div>
+          <div class="w-pax-row__meta">${esc(p.phone||'')}${refunded?'':` · 资料${p.form_status==='complete'?'完整':'待补'} · 保险 ${insSt(p.insurance_status||'pending')} · 签到 ${ckSt(p.checkin_status||p.checkinStatus)}`}</div>
           ${refunded?'':`<div class="w-pax-row__ops">
             <button class="w-act w-act--sm" type="button" onclick="editParticipant(${x.id},${p.id})">补资料</button>
             <button class="w-act w-act--sm" type="button" onclick="replaceParticipant(${x.id},${p.id})">转名额</button>
