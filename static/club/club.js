@@ -98,7 +98,7 @@ function _occRange(o){
 async function openActivity(id){try{_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','AI 详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="panel-title"><div><div class="eyebrow">AI EDITORIAL PREVIEW</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期</div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:'<span class="tag">已发布</span>'}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}" target="_blank" style="text-decoration:none">打开C端</a>${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="notice" style="margin:10px 0 18px">AI 自己决定页面叙事、图片节奏和区块顺序；这里没有模板 A/B/C。</div><div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(title)}${tag}</div><div class="list-row__sub">${esc(sub)}</div></div></div>`}).join('')||'<div class="empty">暂无团期</div>'}</div>`;/* 「这份详情到底是不是按资料生成的」必须一眼看得见。资料里一个字都没读到过
    （master.sourceSummary 为空）时，页面上全是通用兜底文案，用户只会觉得系统坏了；
    这里如实标注来源，并直接给出两个补救入口，而不是让人自己猜。 */
-if(a.activityMaster&&!String(a.activityMaster.sourceSummary||'').trim()){
+if(a.activityMaster&&a.activityMaster.createdVia!=='manual'&&!String(a.activityMaster.sourceSummary||'').trim()){
   const w=document.createElement('div');w.className='notice warn';w.style.margin='0 0 16px';
   w.innerHTML='<strong>这场活动没有读到方案文字</strong><div class="sub" style="margin-top:6px">'
     +'当前的标题 / 日期 / 地点 / 行程是通用兜底内容，不是上传的方案（方案文字可能全做成了图片，或当时只上传了照片）。'
@@ -232,6 +232,28 @@ $('#createForm').onsubmit=async e=>{
   }
   finally{b.disabled=false;b.textContent='AI直接生成详情'}
 };
+/* 手工新建活动：不走 AI、不消耗 Credits 的第二条创建路径。只落活动事实，生成一份最小可渲染的
+   master+detail（facts 区块），让 C 端与俱乐部端立刻能编辑、能加团期、能发布；发布前可随时改。
+   走 uxForm 而非新建一个 HTML 弹窗：少一套弹窗层、复用同一套校验/焦点/保持逻辑。 */
+async function createActivityManual(){
+  const d=await uxForm({title:'手工新建活动',
+    subtitle:'不调用 AI、不消耗 Credits。先落活动事实，发布前可随时编辑；之后还能用 AI 重新生成文案。',
+    fields:[
+      {name:'title',label:'活动名称',type:'text',required:true,full:true,placeholder:'例如：10月24日 蓥华山轻徒步'},
+      {name:'eventDate',label:'出发时间',type:'datetime',required:true,defaultTime:'08:00',help:'用于生成首个团期；只填日期时按 08:00 出发。'},
+      {name:'location',label:'集合地 / 目的地',type:'text',placeholder:'如：成都 邛崃 兴福寺'},
+      {name:'price',label:'活动价格（元）',type:'number',min:0,step:.01,value:0},
+      {name:'capacity',label:'总名额（人）',type:'number',min:0,step:1,value:20},
+      {name:'summary',label:'一句话介绍（可选）',type:'textarea',full:true,placeholder:'例如：轻装穿越竹林与寺观，适合入门徒步。'}
+    ],submitText:'创建草稿'});
+  if(!d)return;
+  try{
+    const r=await api(`/api/club/${CLUB}/activities`,{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({title:d.title,eventDate:d.eventDate,location:d.location,price:d.price,capacity:d.capacity,summary:d.summary})});
+    toast('已创建草稿，可继续编辑后发布');
+    await loadDash();go('activities');await openActivity(r.activityId);await loadActivities();
+  }catch(e){showAlert({title:'创建失败',message:e.message})}
+}
 /* ===== AI 内容中心：生成 → 直接出成品（公众号图文 / 小红书卡片 / 海报）=====
    过去 genChannel 把接口返回的 JSON 塞进 <pre>，老板拿到的是一堆代码。
    现在交给 static/channel-render.js 渲染成能直接用的成品，并可复制 / 下载。 */

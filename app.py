@@ -580,6 +580,50 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
     background_tasks.add_task(_run_generate_job,club_id,jid,source)
     return {'jobId':jid,'stage':'queued','source':summary}
 
+@app.post('/api/club/{club_id}/activities')
+def create_activity_manual(club_id:int,payload:dict=Body(...)):
+    """手工新建活动（草稿）—— 不经过 AI、不消耗 Credits 的第二条创建路径。
+
+    与 ai-generate 的区别：这里只落「活动事实」（名称/日期/地点/价格/名额/一句话介绍），
+    生成一份最小可渲染的 Activity Master + detail（facts 区块），让 C 端与俱乐部端立刻
+    能编辑、能加团期、能发布。之后可用 PATCH /activities/{id} 补经营细节，
+    或补一张封面；没有原始资料时 canRegenerate 为 False（本就无档可依），属预期。
+    """
+    club_or_404(club_id)
+    title=str(payload.get('title') or '').strip()
+    if not title: raise HTTPException(400,'活动名称不能为空')
+    title=title[:80]
+    event_date=str(payload.get('eventDate') or '').strip() or None
+    location=str(payload.get('location') or '').strip() or None
+    try: price=float(payload.get('price') or 0)
+    except (TypeError,ValueError): raise HTTPException(400,'价格必须是数字')
+    if price<0: raise HTTPException(400,'价格不能为负数')
+    try: capacity=int(payload.get('capacity') or 0)
+    except (TypeError,ValueError): raise HTTPException(400,'名额必须是整数')
+    if capacity<0: raise HTTPException(400,'名额不能为负数')
+    summary=str(payload.get('summary') or '').strip()[:300]
+    # 团期 start_at 至少要能解析出「日期+时间」（C 端 _occRange 依赖 HH:mm），只给日期时补一个默认出发时间。
+    occ_start=event_date
+    if occ_start and not re.search(r'\d{1,2}:\d{2}',occ_start): occ_start+=' 08:00'
+    master={'title':title,'date':event_date or '待定','location':location or '待定',
+            'price':price,'capacity':capacity,'checklist':[],'createdVia':'manual'}
+    detail={'title':title,'summary':summary,'blocks':[]}
+    if summary: detail['blocks'].append({'type':'lead','text':summary})
+    detail['blocks'].append({'type':'facts','items':[
+        {'label':'日期','value':event_date or '待定'},
+        {'label':'地点','value':location or '待定'},
+        {'label':'价格','value':(f'¥{price:g}' if price else '待定')},
+        {'label':'名额','value':(f'{capacity} 人' if capacity else '待定')},
+    ]})
+    with conn() as c:
+        cur=c.execute('INSERT INTO activities(club_id,title,status,event_date,location,price,capacity,activity_master_json,detail_json) VALUES(?,?,?,?,?,?,?,?,?)',
+            (club_id,title,'draft',event_date,location,price,capacity,jdump(master),jdump(detail)))
+        aid=int(cur.lastrowid)
+        if occ_start:
+            c.execute('INSERT INTO activity_occurrences(activity_id,club_id,start_at,price,capacity,status,label) VALUES(?,?,?,?,?,?,?)',
+                (aid,club_id,occ_start,price,capacity,'open','首发团期'))
+    return {'ok':True,'activityId':aid}
+
 @app.get('/api/club/{club_id}/ai-mode')
 def club_ai_mode(club_id:int):
     """俱乐部端只读：当前 AI 生成走真实大模型还是演示引擎。
