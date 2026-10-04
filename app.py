@@ -1684,6 +1684,12 @@ def public_activity(activity_id:int):
     a['pointsPolicy']=activity_points_policy.from_activity(a).as_dict()
     a['refundPolicy']=activity_refund_policy.from_activity(a).as_dict()
     a['participantPolicy']=participant_service.from_activity(a).as_dict()
+    # 品牌 logo / 字标 / 空白底图属俱乐部内部素材；无论 PROD 还是 demo，C 端公开接口一律不曝光。
+    # 仅放行 kind='photo' 的真实照片（kind 缺失的按照片处理，避免误删）。
+    _m=a.get('activityMaster')
+    if isinstance(_m,dict) and isinstance(_m.get('media'),list):
+        _m['media']=[m for m in _m['media']
+                     if isinstance(m,dict) and str(m.get('kind','')).lower() not in ('logo',)]
     if IS_PROD:
         # Public activity is not a dump of private activity_master_json (internalData).
         a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy','gearRecommendations','leaders')}
@@ -1699,6 +1705,7 @@ def public_activity(activity_id:int):
             approved=[]
             for media in master.get('media',[]):
                 if not isinstance(media,dict):continue
+                if str(media.get('kind','')).lower()=='logo':continue   # 双保险：logo 在前一步已剔除，这里再拦一道
                 source=str(media.get('url',''))
                 if _safe_media_path(source):
                     safe={k:v for k,v in media.items() if k in ('ref','width','height','alt','url')}
@@ -1757,7 +1764,7 @@ def public_activity_media(activity_id:int,asset_path:str):
     if not file_path:raise HTTPException(404,'not found')
     # 白名单必须与详情页看到的同一份清单：媒体 url 缺失时这里会误判 404，C 端整页图片打不开。
     master=_repair_master_media(jload(a['activity_master_json'],{}),_activity_source(a)[0])
-    allowed={str(m.get('url')) for m in master.get('media',[]) if isinstance(m,dict)}
+    allowed={str(m.get('url')) for m in master.get('media',[]) if isinstance(m,dict) and str(m.get('kind','')).lower()!='logo'}
     cover=str(a.get('cover') or '')
     if cover: allowed.add(cover)
     if original not in allowed or not file_path.is_file():raise HTTPException(404,'not found')
