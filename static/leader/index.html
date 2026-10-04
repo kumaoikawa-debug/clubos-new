@@ -14,4 +14,14 @@
 .leader-card__id u{text-decoration:none;font-size:10.5px;color:#8a9a91}
 .leader-card__tel{display:inline-block;margin-top:8px;font-size:12.5px;font-weight:700;color:#2f6b48;text-decoration:none;border:1px solid #cfe0cf;background:#eef5ec;border-radius:999px;padding:3px 11px}
 .leader-card__tel:hover{background:#e3efe0}
+/* 可点行（领队挑场次）：整行是 <a>，必须去掉链接默认色/下划线，否则一排蓝色下划线很难看；
+   键盘焦点环也要给，光有 hover 底色用户不知道能点。 */
+.list-row--tap{color:inherit;text-decoration:none;cursor:pointer}
+.list-row--tap .list-row__title{white-space:normal}
+.list-row--tap:focus-visible{outline:2px solid var(--brand);outline-offset:-2px;border-radius:10px}
+.list-row__chev{color:#9fb0a7;font-size:19px;line-height:1;font-weight:700}
+/* 场次行里的领队小头像叠排（与页头 leader-stack 同款，尺寸收小到 22px 适配行高） */
+.leader-mini{display:inline-flex;vertical-align:-4px;margin-right:5px}
+.leader-mini>*{margin-left:-6px;border:1.5px solid #eef2f0;border-radius:50%;display:inline-flex}
+.leader-mini>*:first-child{margin-left:0}
 @media(max-width:520px){.leader-cards{grid-template-columns:1fr}}</style><link rel="stylesheet" href="/static/ux/clubos-ux.css"></head><body><div class="leader-shell"><div class="leader-head"><div class="eyebrow">LEADER EXECUTION</div><h2 id="ltitle" style="margin:4px 0">活动执行</h2><div id="lmeta" class="sub"></div></div><div id="leaderBody"></div></div><script src="/static/shared.js"></script><script src="/static/leader/leader.js"></script><script src="/static/ux/clubos-ux.js"></script><script src="/static/ux/leader-experience.js"></script></body></html>

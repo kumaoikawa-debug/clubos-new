@@ -1289,6 +1289,28 @@ def club_insurance_export(club_id:int,occurrence_id:int):
     return StreamingResponse(iter([data.encode('utf-8')]),media_type='text/csv; charset=utf-8',headers={'Content-Disposition':f'attachment; filename="insurance-occurrence-{occurrence_id}.csv"'})
 
 # Leader mobile execution view. Demo uses club_id query; production must replace with authenticated leader assignment.
+#
+# 领队落地页（2026-10-04 用户实测）：裸开 /leader 只回一句「缺少 occurrence 参数」，
+# 领队在车上/山里单手打开就是一个死页面 —— 必须有个「今天我要带哪几场」的入口。
+# 这里复用俱乐部的 list_occurrences（同一份域数据），但**走字段白名单**：
+# 领队不需要 price/sold/capacity 这类经营字段（leader_brief 也刻意不含经营数据）。
+_LEADER_OCC_FIELDS=('id','activity_id','activity_title','activity_location','start_at','end_at',
+                    'label','execution_status','named_participants','insurance_pending','checked_in')
+
+@app.get('/api/leader/occurrences')
+def leader_occurrences(club_id:int=1,leader_id:int=0):
+    with conn() as c:
+        out=[]
+        for it in execution_service.list_occurrences(c,club_id=club_id):
+            row={k:it.get(k) for k in _LEADER_OCC_FIELDS}
+            ls=execution_service.list_leaders(c,int(it['id']))
+            # 带 leader_id 时只回「我的场」——生产环境应按登录领队过滤。
+            if leader_id: ls=[l for l in ls if int(l.get('leader_id') or 0)==leader_id]
+            row['leaders']=[{'name':l.get('name'),'role':l.get('role'),'phone':l.get('phone'),
+                             'avatar_url':l.get('avatar_url')} for l in ls]
+            out.append(row)
+        return out
+
 @app.get('/api/leader/occurrences/{occurrence_id}')
 def leader_occurrence(occurrence_id:int,club_id:int=1):
     with conn() as c:
