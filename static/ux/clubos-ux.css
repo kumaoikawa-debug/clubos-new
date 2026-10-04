@@ -435,3 +435,8 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .act-saved__x{flex:0 0 auto;border:0;background:transparent;color:#6b8578;font-size:15px;line-height:1;padding:3px 5px;border-radius:8px}
 .act-saved__x:hover{background:#dceee2;color:#1d5c3d}
 .act-saved__x:focus-visible{outline:2px solid #70a279;outline-offset:1px}
+/* 分享活动弹窗：二维码 + 链接 + 可复制文案 */
+.ux-share{display:grid;justify-items:center;gap:12px}
+.ux-share-qr{width:min(240px,86%);max-height:250px;image-rendering:pixelated;border:1px solid #e0eae0;border-radius:13px;aspect-ratio:1;background:#fff}
+.ux-share-link{display:block;background:#f4f7f3;border-radius:9px;padding:10px;max-width:100%;word-break:break-all;overflow-wrap:anywhere;font-size:11px;color:#58715e}
+.ux-share-cap{white-space:pre-wrap;background:#f4f7f3;border-radius:9px;padding:10px;max-width:100%;font-size:12px;color:#3c5a48;text-align:left;line-height:1.6}
