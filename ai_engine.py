@@ -49,6 +49,131 @@ _GEAR_BLOCK_TITLES=('装备建议','装备清单','出行清单','携带清单',
 
 
 # ---------------------------------------------------------------------------
+# 事实回检（2026-10-04 用户反馈「把方案包装成有吸引力的活动详情」后加的出口闸门）：
+# 模型为了把文案写得好看，会顺手改写专名 —— 实测资料写「icebreaker」，成品音译成「冰破」。
+# 顾客会认错品牌、会照着错地名导航，属事故级。提示词里已下保真铁律，这里再加一道出口回检：
+#   ① 品牌名音译 → 直接还原成资料里的原始写法（映射明确，可自动修，已单测）；
+#   ② 成品里出现、但资料里**查无此名**的地名 → 不猜、不替换，写进 uncertainties 让运营核对。
+# ⚠ 事实澄清（别再被之前的错误结论带偏）：兴福寺方案详情里出现的「草寺庙」**不是模型编的**，
+#   是 Slide 9 行程表格原文就写着「到达草寺庙后森林区域午餐」；模型忠实照抄了。
+#   那属于「原文自己前后不一致」，正则判定不可靠（详见 _GEO_HEAD_STOP 下方说明），
+#   已改为要求模型写进 uncertainties，不在这里判。
+# ---------------------------------------------------------------------------
+# 模型实测过的音译/意译别名 → 资料里的原始写法。命中就整体替换，不做模糊匹配。
+_BRAND_ALIASES={'冰破':'icebreaker','破冰':'icebreaker','破冰者':'icebreaker',
+                '冰破者':'icebreaker','始祖鸟':"ARC'TERYX",'乐斯菲斯':'TheNorthFace'}
+# 地名后缀：用于从文本里抓「疑似地名」。只用来**发现**，不用来判定。
+_GEO_TAIL=('寺','庙','山','峰','沟','湖','镇','村','坪','谷','坡','坝','溪','桥','关','寨')
+# 只取「1 个汉字 + 后缀」的两字词做子串比对。不要贪心取 5 字前缀——中文没有词边界，
+# 实测 `[\u4e00-\u9fa5]{1,5}(寺|庙)` 会把动词吞进去，把「徒步至草寺庙」整段当成地名，
+# 于是真的「草寺」反而没被单独认出来。子串比对更稳：只要原文里出现过就不算编造。
+_GEO_RE=re.compile(r'[\u4e00-\u9fa5](?:'+'|'.join(_GEO_TAIL)+')')
+# 通用词：这些「汉字+后缀」在任何活动里都会出现，不是专名，不能报。
+_GENERIC_GEO={'寺庙','山林','山河','山水','山村','山谷','山坡','溪流','桥梁','城镇','山峰',
+              '湖畔','海边','江边','河岸','森林','公园','景区','营地','山野','山间','田间',
+              '寺院','山地','山道','河道','沟谷','坡地','村镇','寨子','关隘','坪地'}
+# 这些字几乎不会是专名首字，出现在「汉字+后缀」前面基本都是量词/修饰语/动词。
+# 实测假阳性①：「有人夹起一片山药」里的「片山」被当成编造的地名报了出来。
+# 实测假阳性②：「穿过寺庙与山林，沿着山道走到村镇」里的「与山/着山/到村/过寺」。
+# 汉语没有词边界，动词 + 后缀就会拼出伪专名 —— 只能靠首字黑名单挡。
+_GEO_HEAD_STOP=set('片座条道个处块段些这那整满半每各前后上下里外中间边旁对同全名位次'
+                   '种群排列张幅点层步米公小大老新高深远近多少一二三四五六七八九十'
+                   '与到着过走穿从向往在由经达去来回归出入沿顺登爬翻越看望有无是的了和'
+                   '跟及或并而把被让使给自至又再还就才只都也很太更最行进抵绕靠邻近距奔'
+                   '赴览游攀hofer是能会将可使须应被所对该其们时分秒年天周月')
+
+
+# ---------------------------------------------------------------------------
+# 「原文里的专名前后不一致」为什么**不做**正则自动检测（试过、已回退，别再走一遍）：
+# 兴福寺方案实测：Slide 8「石笋寺-兴福寺」、Slide 9 表格「到达草寺庙后森林区域午餐」、
+# Slide 2 又写兴福寺曾名「石庙子」。一台徒步活动同时有起点寺、终点寺、古称是**正常**的。
+#   ① 第一版按「同一后缀下出现多个专名 = 笔误」判定 → 把正常的「石笋寺→兴福寺」判成笔误；
+#   ② 第二版改成「列出原文所有专名让运营过目」→ 汉语没有词边界，正则把「午间在寺」
+#      「起一片山」「协会高山」「客户沟」（来自"客户沟通"）都当专名列了出来，噪声比信号多。
+# 根因：**专名识别需要分词/语义，正则做不到**。这种「是不是同一个地方的两种写法」是
+# 判断题，交给模型（提示词里已要求它把原文可疑专名写进 uncertainties），不要用阈值硬猜。
+# 保留确定性闸门只做两件有把握的事：品牌名还原（映射明确）、成品里查无出处的专名告警。
+# ---------------------------------------------------------------------------
+
+
+def restore_brand_names(text:str,source_text:str)->str:
+    """把模型音译/意译的品牌名还原成资料里的原始写法。"""
+    if not text or not source_text: return text
+    out=str(text)
+    for alias,canonical in _BRAND_ALIASES.items():
+        if alias in out and canonical.lower() in source_text.lower():
+            out=out.replace(alias,canonical)
+    return out
+
+
+def hallucinated_places(text:str,source_text:str)->list[str]:
+    """成品里出现、但原始资料里查无此名的地名/寺庙名 —— 模型编造或改写过的。
+
+    判据：成品里的「汉字+地理后缀」两字词，只要**不是原始资料的连续子串**，且不是
+    「寺庙/山林」这类通用词，就认为是模型编出来的。子串比对而不是分词——中文没有
+    词边界，靠正则切词会把「徒步至草寺庙」整段当成一个地名，反而漏掉真凶「草寺」。
+    """
+    src=str(source_text or '')
+    if not src: return []
+    out=[]
+    for term in sorted(set(_GEO_RE.findall(str(text or '')))):
+        if term in _GENERIC_GEO: continue
+        if term[0] in _GEO_HEAD_STOP: continue   # 「一片山药」里的「片山」不是地名
+        if term in src: continue          # 原文出现过（子串即可）就不算编造
+        out.append(term)
+    return out
+
+
+def _map_strings(node:Any,fn)->Any:
+    if isinstance(node,str): return fn(node)
+    if isinstance(node,dict): return {k:_map_strings(v,fn) for k,v in node.items()}
+    if isinstance(node,list): return [_map_strings(v,fn) for v in node]
+    return node
+
+
+def apply_fact_guard(data:dict[str,Any],source_text:str)->list[str]:
+    """出口事实回检：① 品牌名音译还原成资料原始写法；② 资料里查无此名的地名收集成告警。
+
+    返回可疑地名列表，并同步写进 master['uncertainties']（俱乐部端可见，便于运营核对）。
+    internalData 是内部经营资料，**不做任何改写**，避免把运营口径改坏。
+    """
+    src=str(source_text or '')
+    if not src or not isinstance(data,dict): return []
+    def fix(t:str)->str: return restore_brand_names(t,src)
+    det=data.get('detail'); mast=data.get('activity_master')
+    if isinstance(det,dict): data['detail']=_map_strings(det,fix)
+    if isinstance(mast,dict):
+        for k in list(mast.keys()):
+            if k=='internalData': continue
+            mast[k]=_map_strings(mast[k],fix)
+    # 收集可疑地名（只看 C 端可见部分）
+    parts=[]
+    def collect(n):
+        if isinstance(n,str): parts.append(n)
+        elif isinstance(n,dict):
+            for kk,vv in n.items():
+                if kk=='internalData': continue
+                collect(vv)
+        elif isinstance(n,list):
+            for vv in n: collect(vv)
+    collect(data.get('detail') or {})
+    if isinstance(mast,dict): collect({k:v for k,v in mast.items() if k!='internalData'})
+    suspects=set()
+    for t in parts: suspects.update(hallucinated_places(t,src))
+    out=sorted(suspects)
+    notes=[f'地名「{s}」在原始方案里查无此名，疑似改写/编造，请核对' for s in out]
+    # 「原文自己前后写法不一致」不在这里判（正则做不到专名识别，试过两版都退回，见文首说明）。
+    # 那件事由模型在 uncertainties 里写出来 —— 提示词已明确要求。
+    if notes and isinstance(mast,dict):
+        un=mast.get('uncertainties')
+        if not isinstance(un,list): un=[]
+        for note in notes:
+            if note not in un: un.append(note)
+        mast['uncertainties']=un
+    return out
+
+
+# ---------------------------------------------------------------------------
 # 文本清洗：结构标记 / 行内噪声
 #
 # 上传的方案里，[Slide N] / [Page N] / [文件: xxx] 只是解析骨架，用来切分段落；
@@ -705,6 +830,24 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
   标识时，那是「单独上传 logo / 封面」的事，不由你从资料里挑图。
 - 没有可用照片时不要硬排图，用文字把吸引力撑起来。
 
+★★ 事实保真铁律（2026-10-04 用户反馈：包装要好看，但**不许编**）：
+- 专有名词一律逐字照抄原文，禁止音译、意译、美化或凭空生成。**资料里没出现过的地名/
+  寺庙名/山峰名/路线名，一个字都不许出现在成品里** —— 编出来的地名顾客会按它导航，是事故。
+  原文怎么写就怎么写，哪怕你自己觉得它写错了：行程表格写「草寺庙」就照抄「草寺庙」，
+  不许擅自改成别处出现过的「石笋寺」。
+- 品牌名保留原始写法。资料写「icebreaker」就写「icebreaker」，**不要音译成「冰破」、
+  意译成「破冰者」**，也不要随意大小写。品牌名写错是商务事故。
+- 数字（距离/累计爬升/时长/价格/积分/人数/海拔）必须与原文**完全一致**，不得四舍五入、
+  不得换算、不得凭印象补。原文没有的数字就不要写在 facts/timeline 里。
+- 行程地点若原文只给了「A-B」两个端点（如「石笋寺-兴福寺」），就照抄这两个端点，
+  不要自行推导中间站点。
+- 若原文**自己前后不一致**（同一份资料里 Slide 8 写「石笋寺」、行程表格里又写「草寺庙」），
+  你照抄不改，同时把疑虑写进 activity_master.uncertainties，例如：
+  「原文对同一地点出现两种写法：石笋寺 / 草寺庙，请确认正式名称」。没有疑虑就留空数组。
+  你不负责判定哪个写法对，只负责把矛盾原样交还给运营。
+- 标题：从方案里提炼一个**有吸引力的活动名**（≤20 字，如「兴福寺徒步 × 森林颂钵」），
+  **不要照抄用户提的需求描述**（那种长句子是给 AI 看的，不是给顾客看的标题）。
+
 装备清单不要重复（2026-10-03 用户反馈）：
 - 严禁输出 title 为「装备建议 / 出行清单 / 装备清单 / 携带清单 / 着装建议」之类的 info block。
   平台会在详情页下方单独渲染「出行清单」（带商城匹配、平替与会员价）。你再出一块，
@@ -765,6 +908,8 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
         if isinstance(data.get('detail'),dict):
             # 提示词已要求只用照片，这里再兜一层：模型若引用了品牌 logo / 空白图的 ref，直接剔除
             data['detail']['blocks']=_sanitize_blocks(data['detail'].get('blocks') or [],allowed_refs=photos)
+        # 事实回检：品牌名音译还原 + 编造地名告警（模型包装文案时会顺手改专名）
+        apply_fact_guard(data,str(source.get('text') or ''))
         return data,gw
     data=_mock_activity(source)
     data['detail']['blocks']=_sanitize_blocks(_rotate_layout(data['detail'].get('blocks') or [],max(0,version_no-1)),allowed_refs=photos)
@@ -831,6 +976,9 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
         detail=payload.get('detail') if isinstance(payload.get('detail'),dict) else payload
         if isinstance(detail,dict):
             detail['blocks']=_sanitize_blocks(detail.get('blocks') or [],allowed_refs=photos)
+        # 事实回检（换一版同样会改写专名，不能只在首次生成时守）
+        apply_fact_guard({'activity_master':master if isinstance(master,dict) else {},'detail':detail},
+                         str(source.get('text') or ''))
         return {'activity_master':master,'detail':detail},gw
     data=_mock_activity(source)
     detail=data['detail']
