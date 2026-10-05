@@ -107,6 +107,9 @@ class CommerceRefundEngine:
             c.execute("UPDATE gear_orders SET status='refunded',refund_status='succeeded',after_sales_status='refunded',refunded_at=CURRENT_TIMESTAMP,refunded_cash_total=?,refunded_goods_total=? WHERE id=?",(new_cash,new_goods,oid))
         else:
             c.execute("UPDATE gear_orders SET refund_status='partial',after_sales_status='completed',refunded_cash_total=?,refunded_goods_total=? WHERE id=?",(new_cash,new_goods,oid))
+        # 同步推进售后单本身的状态（此前只更新了 gear_orders 的去范式化字段，
+        # 导致 after_sales_cases.status 永远停在 refund_processing / C端长期显示「退款处理中」）。
+        c.execute("UPDATE after_sales_cases SET status=?,completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",('refunded' if fully else 'completed',case_id))
         return {'ok':True,'orderId':oid,'afterSalesCaseId':case_id,'status':'refunded' if fully else 'partial_refunded',
                 'cashRefundAmount':refund_cash,'goodsRefundAmount':goods,'orderFullyRefunded':fully,
                 'gearPointsReturned':return_pts,'gearPointsEarnedReversed':earn_rev,'gearPointsDebt':gear_debt,
@@ -179,7 +182,7 @@ class CommerceRefundEngine:
                              VALUES(?,?,?,?,?)''',
                           (order['source_club_id'],ai_debt,'gear_refund',str(order_id),'商城奖励已使用，退款形成AI Credits欠账'))
 
-        c.execute("UPDATE gear_orders SET status='refunded',payment_status='succeeded',refund_status='succeeded',after_sales_status='refunded',refunded_at=CURRENT_TIMESTAMP WHERE id=?",(order_id,))
+        c.execute("UPDATE gear_orders SET status='refunded',payment_status='succeeded',refund_status='succeeded',after_sales_status='refunded',refunded_at=CURRENT_TIMESTAMP,refunded_cash_total=?,refunded_goods_total=? WHERE id=?",(float(order.get('cash_paid') or 0),float(order.get('total') or 0),order_id))
         return {'ok':True,'orderId':order_id,'status':'refunded','reason':reason,
                 'points':point_result,'benefitVouchersRestored':restored_vouchers,
                 'commissionReversed':round(to_reverse,2),'commissionFutureOffset':round(float(commission_result.get('futureOffset') or 0),2),

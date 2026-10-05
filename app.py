@@ -2422,14 +2422,19 @@ def _submit_refund_to_provider(refund_id:str):
         refund_amount=float(rr.get('cash_amount') or 0)
         reason=str(rr.get('reason') or '用户退款')
     if str(account.get('provider'))=='local':
-        # Keep deterministic local/demo lifecycle backward compatible: approval moves to processing,
-        # then tests/demo may send the existing commerce refund-succeeded event.
+        # 生产环境保留确定性的 local/demo 生命周期兼容：approval 进入 processing 后由真实渠道的
+        # refund-succeeded 事件回调完成。非生产（demo/local）环境直接 finalize，让装备积分回退、
+        # 订单进入终态，避免售后退款卡在 local_waiting 永远不完成（与 platform_refund_order 行为一致）。
+        if IS_PROD:
+            with conn() as c:
+                c.execute("UPDATE refund_requests SET provider_status='local_waiting',updated_at=CURRENT_TIMESTAMP WHERE id=?",(refund_id,))
+            return {'ok':True,'refundRequestId':refund_id,'status':'processing','providerStatus':'local_waiting','provider':'local',
+                    'cashAmount':float(rr.get('cash_amount') or 0),'originalCashAmount':float(rr.get('original_cash_amount') or rr.get('cash_amount') or 0),
+                    'refundPercent':float(rr.get('refund_percent') or 0),'retainedCashAmount':float(rr.get('retained_cash_amount') or 0),
+                    'nextAction':'SIMULATE_PROVIDER_REFUND_CALLBACK'}
         with conn() as c:
-            c.execute("UPDATE refund_requests SET provider_status='local_waiting',updated_at=CURRENT_TIMESTAMP WHERE id=?",(refund_id,))
-        return {'ok':True,'refundRequestId':refund_id,'status':'processing','providerStatus':'local_waiting','provider':'local',
-                'cashAmount':float(rr.get('cash_amount') or 0),'originalCashAmount':float(rr.get('original_cash_amount') or rr.get('cash_amount') or 0),
-                'refundPercent':float(rr.get('refund_percent') or 0),'retainedCashAmount':float(rr.get('retained_cash_amount') or 0),
-                'nextAction':'SIMULATE_PROVIDER_REFUND_CALLBACK'}
+            out=refund_lifecycle.finalize(c,refund_id=refund_id,provider_refund_id='local_after_sales',provider='local')
+        return {**out,'providerStatus':'succeeded','provider':'local'}
     provider=provider_for_account(account)
     notify_url=f"{_payment_public_base_url()}/api/payments/{account['provider']}/{account['id']}/notify"
     try:
@@ -2665,6 +2670,25 @@ def user_order_center(user_id:int,club_id:int=1):
 def user_orders(user_id:int):
     # Backward-compatible gear-only endpoint. New C-end should use /order-center.
     with conn() as c:return rows(c.execute('SELECT id,source_club_id,total,cash_paid,status,tracking_no,carrier,after_sales_status,payment_status,refund_status,created_at FROM gear_orders WHERE user_id=? ORDER BY id DESC',(user_id,)))
+
+@app.post('/api/public/orders/{order_id}/confirm-receipt')
+def confirm_receipt(order_id:int,payload:dict=Body(default={})):
+    # C 端「确认收货」：仅会员本人可操作，且仅在已发货(shipped)时允许签收 → delivered，
+    # 同时冻结该订单的佣金（进入售后保障期）。生产环境签收应由平台端 PATCH delivered 完成，
+    # 这里给 C 端用户一个自助签收出口，避免订单永远停在 shipped。
+    user_id=int(payload.get('userId') or 0)
+    if not user_id: raise HTTPException(400,'userId required')
+    with conn() as c:
+        o=row(c.execute('SELECT * FROM gear_orders WHERE id=?',(order_id,)))
+        if not o: raise HTTPException(404,'装备订单不存在')
+        if int(o.get('user_id') or 0)!=user_id: raise HTTPException(403,'该订单不属于当前用户')
+        if o['status']=='delivered':
+            return {'ok':True,'orderId':order_id,'status':'delivered','idempotent':True}
+        if o['status']!='shipped':
+            raise HTTPException(409,f"当前订单状态({o['status']})不能确认收货")
+        c.execute("UPDATE gear_orders SET status='delivered',delivered_at=CURRENT_TIMESTAMP WHERE id=?",(order_id,))
+        commission=commission_engine.freeze_order(c,order_id=order_id)
+    return {'ok':True,'orderId':order_id,'status':'delivered','commission':commission}
 
 @app.post('/api/public/orders/{order_id}/after-sales')
 def after_sales(order_id:int,payload:dict=Body(default={})):

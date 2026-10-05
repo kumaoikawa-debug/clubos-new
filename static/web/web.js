@@ -40,7 +40,7 @@ function wCovCls(x){return 'cov-'+((Number(x&&x.id||0)%6)+1);}
    猜错枚举比露出 `awaiting_return` 更糟 —— 前者会让顾客看到一句断言错的话。 */
 /* pending_payment 是真实的订单态（建单未付款），failed 来自 registrations/gear_orders 的
    payment_status。缺这两个键时 badge 会把英文枚举原样显示给用户。 */
-const ORD_ST={paid:'已支付',pending:'待支付',unpaid:'待支付',pending_payment:'待支付',payment_failed:'支付未完成',refunded:'已退款',cancelled:'已取消',canceled:'已取消',closed:'已关闭',completed:'已完成',refunding:'退款中',partial_refunded:'部分退款',processing:'处理中'};
+const ORD_ST={paid:'已支付',pending:'待支付',unpaid:'待支付',pending_payment:'待支付',payment_failed:'支付未完成',shipped:'已发货',delivered:'已签收',refunded:'已退款',cancelled:'已取消',canceled:'已取消',closed:'已关闭',completed:'已完成',refunding:'退款中',partial_refunded:'部分退款',processing:'处理中'};
 const RF_ST={none:'',rejected:'已驳回',pending:'审核中',approved:'已通过',processing:'处理中',refunded:'已退款'};
 const INS_ST={pending:'待投保',processing:'办理中',enrolling:'投保中',done:'已投保',insured:'已投保',completed:'已投保',cancelling:'退保中',cancelled:'已退保',failed:'投保失败',cancel_failed:'退保失败',not_required:'无需保险'};
 const AS_TYPE={refund_only:'仅退款',return_refund:'退货退款',exchange:'换货'};
@@ -1042,7 +1042,8 @@ async function loadOrders(){
   $('#gearOrders').innerHTML=(d.gearOrders||[]).map(x=>{
     const items=(x.items||[]).map(i=>`<div class="w-item"><span>${esc(i.product_name)}</span><b>×${i.quantity}</b></div>`).join('');
     let action='';
-    if(x.status!=='refunded') action=`<button class="w-act" type="button" onclick='requestGearAfterSales(${JSON.stringify(x).replace(/'/g,"&#39;")})'>申请售后</button>`;
+    if(x.status==='shipped') action+=`<button class="w-act w-act--primary" type="button" onclick="confirmGearReceipt(${x.id})">确认收货</button>`;
+    if(x.status!=='refunded') action+=`<button class="w-act" type="button" onclick='requestGearAfterSales(${JSON.stringify(x).replace(/'/g,"&#39;")})'>申请售后</button>`;
     const cases=(x.afterSalesCases||[]).map(a=>`<div class="w-case">
       <div class="w-case__hd">${badge(asType(a.case_type),'info')}${badge(asSt(a.status),stTone(a.status))}</div>
       ${a.return_tracking_no?`<div class="w-case__meta">退货物流 ${esc(a.return_tracking_no)}</div>`:''}
@@ -1089,6 +1090,10 @@ async function requestActivityRefund(id,amount,pct){
   if(!(await showConfirm({title:'确认申请退款',message:`按当前活动规则，本次预计现金退款 ${money(amount)}（${Number(pct)}%）。退款成功后，本单使用的积分/福利券按规则恢复。`,confirmText:'确认提交',danger:true})))return;
   const v=await showForm({title:'填写退款原因',submitText:'提交',fields:[{name:'reason',label:'退款原因',type:'textarea',value:'临时有事无法参加',required:true}]});if(!v)return;
   try{let r=await api(`/api/public/registrations/${id}/refund-request`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:v.reason})});await showAlert({title:'退款申请已提交',message:`预计现金退款 ${money(r.cashAmount)}\n退款比例 ${Number(r.refundPercent||0)}%${Number(r.retainedCashAmount||0)>0?`\n取消费 ${money(r.retainedCashAmount)}`:''}`});loadOrders()}catch(e){showAlert({title:'提交失败',message:e.message})}
+}
+async function confirmGearReceipt(id){
+  if(!(await showConfirm({title:'确认收货',message:'确认已收到该订单的商品？签收后将进入售后保障期。',confirmText:'确认收货'})))return;
+  try{await api(`/api/public/orders/${id}/confirm-receipt`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:USER})});toast('已确认收货');loadOrders()}catch(e){showAlert({title:'操作失败',message:e.message})}
 }
 async function requestGearAfterSales(order){
   const items=order.items||[];
