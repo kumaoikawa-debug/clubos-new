@@ -8,6 +8,8 @@ from pptx import Presentation
 from docx import Document
 from PIL import Image
 
+from cost_guard import redact_cost_text
+
 ALLOWED = {'.pptx','.docx','.pdf','.txt','.md','.jpg','.jpeg','.png','.webp'}
 IMAGE_EXTS = {'.jpg','.jpeg','.png','.webp'}
 
@@ -189,7 +191,7 @@ def save_uploads(files, upload_dir: Path, *, max_total_bytes: int | None = None)
 
 
 def parse_sources(paths: Iterable[Path], user_text: str='', static_root: Path | None=None):
-    texts=[]; images=[]; files=[]
+    texts=[]; images=[]; files=[]; cost_stats={'costLines':0,'costBlocks':0}; raw_len=0
     if user_text.strip(): texts.append('[用户输入]\n'+user_text.strip())
     for p in paths:
         files.append({'name':p.name,'ext':p.suffix.lower()})
@@ -203,6 +205,14 @@ def parse_sources(paths: Iterable[Path], user_text: str='', static_root: Path | 
             if m: images.append(m)
             continue
         t=extract_text(p)
+        # ★ 成本闸门（2026-10-06）：喂给 AI 的文本里就不许出现成本/报价数据。
+        # 一份始祖鸟高客方案的第 15 页是「14 — COST 活动费用明细」（单价/小计/合计（未含税）/
+        # 人均费用/策划执行 10%），此前会被原样喂给模型、再被抓成 activity_master.fees
+        # 渲染到 C 端「费用说明 PRICE」卡片上 —— 等于把俱乐部的成本底价摊给顾客看。
+        # 这里在源头剔掉成本行，只保留白名单里的服务项名（含门票/含氧气/含摄影）。
+        raw_len+=len(t)
+        t,cost_st=redact_cost_text(t)
+        cost_stats['costLines']+=cost_st['costLines']; cost_stats['costBlocks']+=cost_st['costBlocks']
         if t.strip(): texts.append(f"[文件: {p.name}]\n{t}")
         extracted=[]
         is_page_render=p.suffix.lower()=='.pdf'
@@ -223,5 +233,10 @@ def parse_sources(paths: Iterable[Path], user_text: str='', static_root: Path | 
         'text':normalize_text('\n\n'.join(texts)),
         'images':images,
         'files':files,
+        # 成本清洗台账：上线后用它判断「这份方案里的成本有没有被挡住」。
+        # textLengthRaw 是**清洗前**的字数 —— 上传了文档却一个字都读不出来时仍要当场 422，
+        # 这个判定必须按原文长度来，不能被清洗结果误伤（一份纯成本页的方案不该被当成空文档）。
+        'costRedacted':cost_stats,
+        'textLengthRaw':raw_len,
         'media_manifest':[{'ref':x['ref'],'name':x['name'],'url':x.get('url',''),'width':x['width'],'height':x['height'],'source':x.get('source'),'page':x.get('page'),'kind':x.get('kind','photo')} for x in images]
     }

@@ -131,7 +131,7 @@ function heroSlide(x,i){
       <div class="w-hero__facts">
         <span class="w-hero__fact">${d?wDay(x.event_date):'团期待定'}</span>
         ${x.capacity?`<span class="w-hero__fact">限 ${x.capacity} 人</span>`:''}
-        <span class="w-hero__fact">${money(x.price)} / 人</span>
+        <span class="w-hero__fact">${priceHtml(x.price,{unit:' / 人',pending:x.priceFrom==='pending'})}</span>
       </div>
       <button class="w-hero__cta" type="button" onclick="openAct(${x.id})">即刻探索${WI.arrow}</button>
     </div>
@@ -145,14 +145,14 @@ function miniCard(x){
       ${d?`<span class="w-mini__date">${wDay(x.event_date)}</span>`:''}
     </div>
     <div class="w-mini__title">${esc(x.title)}</div>
-    <div class="w-mini__meta"><span>${esc(x.location||'户外')}</span><span class="w-mini__price">${money(x.price)}</span></div>
+    <div class="w-mini__meta"><span>${esc(x.location||'户外')}</span><span class="w-mini__price">${priceHtml(x.price,{pending:x.priceFrom==='pending'})}</span></div>
   </button>`;
 }
 function miniGear(x){
   return `<button class="w-mini w-mini--gear" type="button" onclick="buy(${x.id})">
     <div class="w-mini__media">${x.image_url?`<img src="${esc(x.image_url)}" alt="" loading="lazy">`:WI.bag}</div>
     <div class="w-mini__title">${esc(x.name)}</div>
-    <div class="w-mini__meta"><span class="w-mini__price">${money(x.price)}</span></div>
+    <div class="w-mini__meta"><span class="w-mini__price">${priceHtml(x.price,{pending:x.priceFrom==='pending'})}</span></div>
   </button>`;
 }
 
@@ -215,7 +215,7 @@ function reelCard(x){
     <div class="w-reel__scrim"></div>
     <div class="w-reel__badges">
       ${d?`<span class="w-reel__date">${wDay(x.event_date)}</span>`:'<span class="w-reel__date">即将出发</span>'}
-      <span class="w-reel__price">${money(x.price)} <em>/ 人起</em></span>
+      <span class="w-reel__price">${priceHtml(x.price,{unit:' / 人起',pending:x.priceFrom==='pending'})}</span>
     </div>
     <div class="w-reel__copy">
       <h3>${esc(x.title)}</h3>
@@ -662,7 +662,7 @@ let a=await api(`/api/public/activities/${id}`);currentAct=a;
 /* 默认选中也要跳过已出发的团期：否则一进详情页按钮就是「立即报名 ¥xxx」，
    顾客点下去才被告知不能报。 */
 currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0&&!occExpired(o))||null;
-bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${money(a.price)} / 人</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
+bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
 /* 回到活动列表。两个入口共用：详情页的「返回活动」、底部「活动」tab。 */
 function showActivityList(){
   const l=$('#activityList');if(l)l.style.display='block';
@@ -770,7 +770,7 @@ function occCard(o,i){
   return `<div class="occ${on?' active':''}${blocked?' is-full':''}" data-occ="${o.id}"${blocked?'':' onclick="selectOcc('+o.id+',this)"'} tabindex="${blocked?'-1':'0'}" role="radio" aria-checked="${on?'true':'false'}" aria-disabled="${blocked?'true':'false'}" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();if(!${blocked})this.click()}">
     <div class="occ__top"><strong>${esc(day)}</strong>${kind?`<span class="occ__kind">${esc(kind)}</span>`:''}</div>
     <div class="occ__sub">${gone?'<em>已出发</em>':full?'<em>已满</em>':`剩余 ${o.remaining} / ${o.capacity} 个名额`}</div>
-    <div class="occ__price">${money(o.price)}<span> / 人</span></div>
+    <div class="occ__price">${priceHtml(o.price,{unit:' / 人'})}</div>
     <span class="occ__check" aria-hidden="true">✓</span>
   </div>`;
 }
@@ -889,7 +889,16 @@ function syncPointConfirm(mx){
   if(String(g.value||'0')!==wg){g.value=wg;drifted=true}
   return drifted;
 }
-async function refreshQuote(depth=0){if(!currentAct||!currentOcc||!$('#quoteBox'))return;let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';try{let q=await api(`/api/public/activities/${currentAct.id}/price-quote?occurrence_id=${currentOcc.id}&user_id=${USER}&club_points=${cp}&gear_points=${gp}&voucher_codes=${encodeURIComponent(voucher)}&participant_count=${bookingParticipants.length}`);/* 换团期/改人数/刚勾上都会让上限变化，这里把提交值收敛回系统算出的上限，
+async function refreshQuote(depth=0){if(!currentAct||!currentOcc||!$('#quoteBox'))return;let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';
+/* 成本闸门（2026-10-06）：没有对外售价的活动（priceFrom='pending'，老活动的团期价往往是
+   成本表推出来的内部单价）根本不该报价。这里直接短路：不去打必然 409 的请求，也绝不
+   让「1 人 × ¥3,806.55」这种成本价出现在订单摘要里。报名按钮同时置灰。 */
+if(currentAct.priceFrom==='pending'||Number(currentAct.price||0)<=0){
+  const qb=$('#quoteBox');if(qb)qb.innerHTML='<div class="quote-box__hd">订单摘要</div><div class="quote-line"><span>价格待定，请联系俱乐部咨询</span></div>';
+  const hint=$('#payHint');if(hint)hint.textContent='价格待定';
+  const btn=document.querySelector('#bookBtn,.book-btn,[data-book]');if(btn){btn.disabled=true;btn.setAttribute('aria-disabled','true')}
+  return}
+try{let q=await api(`/api/public/activities/${currentAct.id}/price-quote?occurrence_id=${currentOcc.id}&user_id=${USER}&club_points=${cp}&gear_points=${gp}&voucher_codes=${encodeURIComponent(voucher)}&participant_count=${bookingParticipants.length}`);/* 换团期/改人数/刚勾上都会让上限变化，这里把提交值收敛回系统算出的上限，
    否则会出现「界面写着最多抵 ¥30、实际却按 0 抵扣下单」。depth 只是防呆上限，正常一到两次就稳定。 */let drifted=false;if(q.maxRedeemable)drifted=syncPointConfirm(q.maxRedeemable)/* 抵扣行只在真的减了钱时才出现：没勾积分也画一行「积分抵扣 - ¥0」，
    顾客会以为系统扣了什么、或者以为抵扣坏了 —— 零减项不是「零」这件事值得看的信息。
    两类积分在这里合成一行「积分抵扣」：付账时顾客只需要看到一个减项，
@@ -900,6 +909,9 @@ const qb=$('#quoteBox');if(!qb)return;qb.innerHTML=lines;
    把它放在按钮上，省掉一次「点了才知道多少钱」的往返。 */
 const hint=$('#payHint');if(hint)hint.textContent=money(q.payable);
 if(drifted&&depth<4)return refreshQuote(depth+1)}catch(e){const qb2=$('#quoteBox');if(qb2)qb2.textContent=e.message}}
+/* 价格待定的活动连下单接口也不放行（后端与price-quote 同口径），前端先给一句能行动的话，
+   而不是把409 的技术文案甩给顾客。 */
+async function signupNow(){if(!currentAct||!currentOcc){showAlert({title:'请选择团期',message:'当前没有可报名的团期，请稍后再试或联系俱乐部。'});return}if(currentAct.priceFrom==='pending'||Number(currentAct.price||0)<=0){showAlert({title:'价格待定',message:'这场活动还没有对外价格，请联系俱乐部咨询报名与报价。'});return}let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';try{let d=await api(`/api/public/activities/${currentAct.id}/checkout`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:PAYER_NAME,phone:PAYER_PHONE,occurrenceId:currentOcc.id,clubPoints:cp,gearPoints:gp,voucherCodes:voucher?[voucher]:[],participants:bookingParticipants})});let paid=await payCheckout(d);if(!paid)return;await showAlert({title:'报名成功',message:`${paid.participantCount||bookingParticipants.length} 人\n实际支付 ${money(paid.cashPaid)}\n本次获得 ${paid.clubPointsEarned} 活动积分${paid.clubBenefitDiscount?`\n俱乐部福利抵扣 ${money(paid.clubBenefitDiscount)}`:''}${paid.platformBenefitSubsidy?`\n平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}`});await loadWallet();openAct(currentAct.id)}catch(e){showAlert({title:'操作失败',message:e.message})}}
 async function waitForCheckoutPaid(checkoutId,attempts=45){for(let i=0;i<attempts;i++){await new Promise(r=>setTimeout(r,2000));let x=await api(`/api/public/checkouts/${checkoutId}`);if(x.status==='paid'||x.payment_status==='succeeded')return x.result||x;if(x.payment_status==='failed')throw new Error('支付失败，可重新发起支付')}throw new Error('支付状态仍在处理中，请稍后到“我的订单”查看')}
 async function payCheckout(checkout){let p=await api(`/api/public/checkouts/${checkout.checkoutId}/pay`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({simulateSuccess:!Boolean(clubosCookie('clubos_csrf')),returnUrl:location.href})});if(p.paymentStatus==='succeeded')return p.result;let a=p.paymentAction||{};if(a.type==='redirect'&&a.url){location.href=a.url;return null}if(a.type==='jsapi'&&a.params){if(window.WeixinJSBridge){await new Promise((resolve,reject)=>WeixinJSBridge.invoke('getBrandWCPayRequest',a.params,r=>String(r.err_msg||'').includes(':ok')?resolve(r):reject(new Error(r.err_msg||'微信支付未完成'))));return await waitForCheckoutPaid(checkout.checkoutId)}showAlert({title:'无法唤起微信支付',message:'当前页面不在微信 JSAPI 环境，请在微信内打开'});return null}if(a.type==='qrcode'&&a.url){await showAlert({title:'请扫码完成支付',message:'微信 Native 支付 code_url：'+a.url,wide:true});return await waitForCheckoutPaid(checkout.checkoutId,15)}return null}
 async function signupNow(){if(!currentAct||!currentOcc){showAlert({title:'请选择团期',message:'当前没有可报名的团期，请稍后再试或联系俱乐部。'});return}let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';try{let d=await api(`/api/public/activities/${currentAct.id}/checkout`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:PAYER_NAME,phone:PAYER_PHONE,occurrenceId:currentOcc.id,clubPoints:cp,gearPoints:gp,voucherCodes:voucher?[voucher]:[],participants:bookingParticipants})});let paid=await payCheckout(d);if(!paid)return;await showAlert({title:'报名成功',message:`${paid.participantCount||bookingParticipants.length} 人\n实际支付 ${money(paid.cashPaid)}\n本次获得 ${paid.clubPointsEarned} 活动积分${paid.clubBenefitDiscount?`\n俱乐部福利抵扣 ${money(paid.clubBenefitDiscount)}`:''}${paid.platformBenefitSubsidy?`\n平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}`});await loadWallet();openAct(currentAct.id)}catch(e){showAlert({title:'操作失败',message:e.message})}}

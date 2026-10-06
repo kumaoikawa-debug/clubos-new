@@ -43,3 +43,6 @@
 .gear-extras-title{font-size:12px;font-weight:800;margin-bottom:9px}
 .gear-extras .pack-gear{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 @media(max-width:680px){.pack-plan,.gear-extras .pack-gear{grid-template-columns:1fr}}
+/* 成本闸门（2026-10-06）：活动来自成本表、俱乐部尚未定价时，价格位显示「价格待定」，
+   而不是把成本价当售价露出。视觉上弱化为静默灰，不与真实售价抢眼。 */
+.price-pending{font-weight:700;color:var(--muted);font-size:.92em;letter-spacing:.5px}

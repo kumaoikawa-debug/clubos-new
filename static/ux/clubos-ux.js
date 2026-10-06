@@ -73,5 +73,7 @@ const glyphs={pdash:'◫',clubs:'♧',pcredits:'◎',ppoints:'◈',pbenefits:'�
   el.querySelector('.x').onclick=()=>finish(null);el.querySelector('.ux-cancel').onclick=()=>finish(null);el.onclick=e=>{if(e.target===el)finish(null)};const key=e=>{if(e.key==='Escape'){e.stopPropagation();finish(null)}if(e.key==='Tab'){const focusables=[...el.querySelectorAll('button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled])')];if(!focusables.length)return;const first=focusables[0],last=focusables.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}}};document.addEventListener('keydown',key);document.body.appendChild(el);el.querySelector('input,select,textarea,.x')?.focus();
  })};
  window.uxConfirm=async function({title='确认操作',message,confirmText='确认',danger=false}){const result=await uxForm({title,hint:message,fields:[],submitText:confirmText,danger});return result!==null};
- window.uxTask=async function(fn){try{return await fn()}catch(e){toast(e.message||'操作未完成');return null}};
+ /* e.message 可能是对象（后端 detail 是数组/对象时），原样塞给 toast 会印出
+    [object Object]（用户 2026-10-06 截图实证）。统一交给 toast 归一。 */
+ window.uxTask=async function(fn){try{return await fn()}catch(e){toast((e&&e.message)||e||'操作未完成');return null}};
 })();

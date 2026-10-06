@@ -24,7 +24,7 @@ function feedCard(x){
     ${d?`<span class="w-fd__date">${esc(d)}</span>`:''}
     <div class="w-fd__copy">
       <h3>${esc(x.title)}</h3>
-      <div class="w-fd__meta"><span>${esc(x.location||'户外')}</span><b>${money(x.price)}<em>/人</em></b></div>
+      <div class="w-fd__meta"><span>${esc(x.location||'户外')}</span><b>${priceHtml(x.price,{unit:'/人',pending:x.priceFrom==='pending'})}</b></div>
     </div>
   </button>`;
 }
@@ -64,7 +64,7 @@ function themeCard(x,i){
       <div class="w-theme__eyebrow">${i===0?'本期主推':'精选线路'}</div>
       <h2>${esc(x.title)}</h2>
       ${meta?`<div class="w-theme__meta">${esc(meta)}</div>`:''}
-      <div class="w-theme__price">${money(x.price)}<em> / 人</em></div>
+      <div class="w-theme__price">${priceHtml(x.price,{unit:' / 人',pending:x.priceFrom==='pending'})}</div>
     </div>
     <span class="w-theme__cue" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="m6 9.8 6 5.4 6-5.4"/></svg></span>
   </button>`;

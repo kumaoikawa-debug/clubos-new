@@ -193,8 +193,18 @@ def public_rate_limit(request: Request, action: str, max_attempts: int, seconds:
 
 
 def sanitize_public_document(document):
-    """Remove internal fields recursively; public content requires editorial approval before publication."""
-    private = re.compile(r'(internal|private|secret|credential|supplier|cost|margin|profit|api.?key|prompt|rawsource|raw_source|budget|settlement|inventory|wholesale)', re.I)
+    """Remove internal fields recursively; public content requires editorial approval before publication.
+
+    2026-10-06 增补中文成本键：此前只认英文（cost/margin/profit…），于是 master.fees 里的
+    `人均费用`/`合计（未含税）`/`单价`/`小计`/`未含税`/`策划执行`/`毛利` 这些中文成本键能直接穿过这道闸。
+    只加「成本专属」的中文词，绝不加泛词 `费用`/`价格` —— 否则会把公开的 `费用包含`、对外 `价格` 一并删掉。
+    （真正的兜底在 app.py 的 sanitize_for_frontend，这里只是 IS_PROD 路径的纵深防御。）
+    """
+    private = re.compile(
+        r'(internal|private|secret|credential|supplier|cost|margin|profit|api.?key|prompt|'
+        r'rawsource|raw_source|budget|settlement|inventory|wholesale|'
+        r'人均费用|合计|单价|小计|未含税|不含税|毛利|净利|利润|策划执行|成本|预算|结算|税费|税金|返点|提成|报价单)',
+        re.I)
     if isinstance(document,dict):
         return {k:sanitize_public_document(v) for k,v in document.items() if not private.search(str(k))}
     if isinstance(document,list): return [sanitize_public_document(x) for x in document]

@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from db import init_db, conn, row, rows, jdump, jload, setting
 from document_parser import save_uploads, parse_sources, _image_kind
+from cost_guard import sanitize_for_frontend, master_has_cost_evidence
 from ai_engine import generate_activity, generate_channel, regenerate_detail, detail_outline
 from ai_billing import ensure_credits, charge_credits, credit_cost
 from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config,
@@ -661,6 +662,26 @@ def get_activity(club_id:int,activity_id:int):
     a.pop('source_json',None)
     a.pop('activity_master_json',None)
     a['activityMaster']=_master;a['detail']=_detail;a['occurrences']=occ
+    # ★ 成本闸门（2026-10-06）：俱乐部端也是前端。结构化 master 一律不含成本（原始成本底价
+    # 留在 source_json，该字段任何前端都不下发），避免俱乐部端预览/再保存把成本带出去。
+    # 没有成本键的活动（如手动建、仅填了公开售价）不受影响 —— price/费用包含 等公开字段原样保留。
+    a['activityMaster'], a['detail'], _cost_changed, cost_derived = sanitize_for_frontend(
+        a.get('activityMaster') or {}, a.get('detail') or {})
+    # 价格「待定」判定同 public_activity（非粘性：俱乐部定价后 priceFrom='priced' 即不再归零）。
+    _pending=(a.get('activityMaster') or {}).get('priceFrom')=='pending' or (cost_derived and (a.get('activityMaster') or {}).get('priceFrom')!='priced')
+    if _pending:
+        try:
+            if float(a.get('price') or 0) > 0:
+                a['price'] = 0
+        except (TypeError, ValueError):
+            pass
+        a['priceFrom'] = 'pending'
+        for _oc in (a.get('occurrences') or []):
+            try:
+                if isinstance(_oc, dict) and float(_oc.get('price') or 0) > 0:
+                    _oc['price'] = 0
+            except (TypeError, ValueError):
+                pass
     a['gearRecommendations']=_gear
     a['leaderPlan']=_leaders
     current=a.get('detail_version_id')
@@ -930,7 +951,11 @@ def update_activity(club_id:int,activity_id:int,payload:dict=Body(...)):
         if 'title' in fields: master['title']=fields['title']
         if 'event_date' in fields: master['date']=fields['event_date'] or ''
         if 'location' in fields: master['location']=fields['location'] or ''
-        if 'price' in fields: master['price']=fields['price']
+        if 'price' in fields:
+            master['price']=fields['price']
+            # 俱乐部主动设定了对外售价 → 标记 'priced'，解除「成本表来源→待定」的粘性判定，
+            # 否则 C 端每次读取都会把俱乐部刚填的价格打回 0（详见 public_activity/get_activity）。
+            master['priceFrom']='priced'
         if 'capacity' in fields: master['capacity']=fields['capacity']
         if checklist is not None: master['checklist']=checklist
         # 只更新「当前工作副本」；历史版本快照保持不可变（恢复某一版时会随之恢复其文案）。
@@ -1638,8 +1663,20 @@ def public_club_biz_media(club_id:int,asset_path:str):
 def public_activities(club_id:int):
     if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
     with conn() as c:
-        acts=rows(c.execute('SELECT id,title,event_date,location,price,capacity,cover FROM activities WHERE club_id=? AND status="published" ORDER BY id DESC',(club_id,)))
+        acts=rows(c.execute('SELECT id,title,event_date,location,price,capacity,cover,activity_master_json FROM activities WHERE club_id=? AND status="published" ORDER BY id DESC',(club_id,)))
     for a in acts:
+        # ★ 成本闸门（2026-10-06）：成本表来源且俱乐部未定价（priceFrom 非 'priced'）的活动，
+        # 顶层 price 是「合计÷人数」推出来的内部单价，绝不能当对外售价摆上列表卡。铁证判定后归零
+        # 并打 priceFrom='pending'（前端显示「价格待定」）。俱乐部定价后 priceFrom='priced'，不再归零。
+        try:
+            _m=jload(a.pop('activity_master_json',None),{}) or {}
+            _pending=(_m.get('priceFrom')=='pending') or (master_has_cost_evidence(_m) and _m.get('priceFrom')!='priced')
+            if _pending:
+                if float(a.get('price') or 0) > 0:
+                    a['price']=0
+                a['priceFrom']='pending'
+        except (TypeError, ValueError):
+            pass
         cov=a.get('cover')
         if cov and str(cov).startswith('/static/'):
             a['cover']='/api/public/activities/%d/media/%s'%(a['id'],quote(str(cov)[len('/static/'):],safe='/'))
@@ -1718,6 +1755,30 @@ def public_activity(activity_id:int):
     _pub_src,_pub_origin=_activity_source(a)
     a.pop('source_json',None)   # 原始资料属俱乐部内部资料，C 端一律不下发
     a['activityMaster']=_repair_master_media(jload(a.pop('activity_master_json'),{}),_pub_src);a['detail']=jload(a.pop('detail_json'),{});a['occurrences']=occ
+    # ★ 成本闸门（2026-10-06）：C 端是顾客视角，成本底价/内部报价一律不可见。
+    # 解析期已不再把成本喂给模型、出口也已清洗，这里再兜底一遍 —— 确保**库里已存在的老活动**
+    # （改代码前生成、master 里还留着 人均费用/合计（未含税）/price=3806.55 的那批）也不泄露。
+    # 成本来源的 master 其 price 归零并打 priceFrom='pending'（前端显示「价格待定」），
+    # 绝不拿成本价当售价卖。原始成本底价留在 source_json（任何前端都不下发），俱乐部仍可追溯。
+    a['activityMaster'], a['detail'], _cost_changed, cost_derived = sanitize_for_frontend(
+        a.get('activityMaster') or {}, a.get('detail') or {})
+    # ★ 价格是否「待定」：成本表来源且俱乐部尚未定价（priceFrom 非 'priced'）时，顶层 price 与
+    # 每个团期 price 一并归零，避免把成本价当售价（老活动库里就存着 3806.55）。俱乐部一旦在编辑端
+    # 设定真实售价，更新接口会把 master.priceFrom 置为 'priced'，这里便不再归零（非粘性）。
+    _pending=(a.get('activityMaster') or {}).get('priceFrom')=='pending' or (cost_derived and (a.get('activityMaster') or {}).get('priceFrom')!='priced')
+    if _pending:
+        try:
+            if float(a.get('price') or 0) > 0:
+                a['price'] = 0
+        except (TypeError, ValueError):
+            pass
+        a['priceFrom'] = 'pending'
+        for _oc in (a.get('occurrences') or []):
+            try:
+                if isinstance(_oc, dict) and float(_oc.get('price') or 0) > 0:
+                    _oc['price'] = 0
+            except (TypeError, ValueError):
+                pass
     # 出行清单 × 商城在售装备：让 C 端报名页能直接把清单变成可下单的装备推荐
     with conn() as _gc:a['gearRecommendations']=_gear_plan_for(_gc,a['activityMaster'],int(a['club_id']))
     # 带队领队：顾客挑团期时最想知道「谁带」，俱乐部端排好班之后这里必须看得见
@@ -1816,10 +1877,30 @@ def public_activity_media(activity_id:int,asset_path:str):
     response.headers['Cache-Control']='public, max-age=300'
     return response
 
+def _public_price_pending(c, activity_id:int, master:dict|None=None) -> bool:
+    """这个活动当前有没有「可对外报的价格」。判定口径与 public_activity/get_activity 完全一致。
+
+    ★为什么报价/下单也必须查这条：这两条链路直接读 activity_occurrences.price，
+    绕过了展示层清洗。老活动的团期价就是从成本表推出来的内部单价（=合计÷人数），
+    一旦放行，顾客会在「订单摘要」里看到 ¥3,806.55 并真的按这个价下单 ——
+    这是把俱乐部底价当对外售价卖出去，比多显示一行文案严重得多。
+    没有对外售价时正确做法是**不报价、不可下单**，而不是拿成本价兜底。
+    """
+    if master is None:
+        master = jload(row(c.execute('SELECT activity_master_json FROM activities WHERE id=?',(activity_id,)))['activity_master_json'],{}) or {}
+    if (master.get('priceFrom') or '') == 'priced':
+        return False                      # 俱乐部已明确定价 → 正常卖
+    return master_has_cost_evidence(master) or (master.get('priceFrom') == 'pending')
+
+
 @app.get('/api/public/activities/{activity_id}/price-quote')
 def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_points:int=0,gear_points:int=0,voucher_codes:str='',participant_count:int=1):
     codes=[x.strip() for x in str(voucher_codes or '').split(',') if x.strip()]
     with conn() as c:
+        # 成本闸门：没有对外售价就不报价。宁可让顾客看到「价格待定，请联系俱乐部」，
+        # 也绝不能把成本底价当成售价报出去（这条链路不经过展示层清洗）。
+        if _public_price_pending(c, activity_id):
+            raise HTTPException(409,'该活动价格待定，请联系俱乐部咨询')
         try:
             q=booking_engine.quote(c,activity_id=activity_id,occurrence_id=occurrence_id,user_id=user_id,requested_club_points=club_points,requested_gear_points=gear_points,participant_count=max(1,participant_count))
             benefits=benefit_engine.quote_vouchers(c,voucher_codes=codes,user_id=user_id,club_id=int(q.occurrence['club_id']),kind='activity',amount_available=float(q.points['payable']))
@@ -1845,6 +1926,10 @@ def create_activity_checkout(activity_id:int,payload:dict=Body(...)):
     with conn() as c:
         a=row(c.execute('SELECT * FROM activities WHERE id=? AND status="published"',(activity_id,)))
         if not a: raise HTTPException(404,'活动不可报名')
+        # 成本闸门（与 price-quote 同口径）：老活动的团期价可能是成本表推出来的内部单价，
+        # 这里不放行就等于按俱乐部底价成交。
+        if _public_price_pending(c, activity_id, jload(a.get('activity_master_json'),{}) or {}):
+            raise HTTPException(409,'该活动价格待定，请联系俱乐部咨询')
         occ=row(c.execute('SELECT * FROM activity_occurrences WHERE id=? AND activity_id=? AND status="open"',(occurrence_id,activity_id))) if occurrence_id else None
         if not occ: raise HTTPException(400,'请选择有效团期')
         uid=user_or_create(c,name,phone)
@@ -2209,6 +2294,9 @@ def signup(activity_id:int,payload:dict=Body(...)):
     with conn() as c:
         a=row(c.execute('SELECT * FROM activities WHERE id=? AND status="published"',(activity_id,)))
         if not a: raise HTTPException(404,'活动不可报名')
+        # 成本闸门：demo 直报端点同样不能按成本价成交
+        if _public_price_pending(c, activity_id, jload(a.get('activity_master_json'),{}) or {}):
+            raise HTTPException(409,'该活动价格待定，请联系俱乐部咨询')
         occ=row(c.execute('SELECT * FROM activity_occurrences WHERE id=? AND activity_id=? AND status="open"',(occurrence_id,activity_id))) if occurrence_id else None
         if not occ: raise HTTPException(400,'请选择有效团期')
         uid=user_or_create(c,name,phone)

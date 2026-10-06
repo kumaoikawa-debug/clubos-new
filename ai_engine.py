@@ -2,6 +2,8 @@ from __future__ import annotations
 import json,re
 from typing import Any
 from ai_gateway import generate_json, record_mock_usage, GatewayResponse
+from cost_guard import (scrub_cost_text, scrub_cost_data, sanitize_for_frontend, is_cost_row,
+                        is_cost_key, has_cost_context, master_has_cost_evidence)
 
 SYSTEM = """你是 ClubOS 的 AI 活动内容主编（Editorial Director），不是模板填充器。
 老板/领队只负责提供真实资料和照片，你负责像资深户外活动策划、编辑、文案与视觉主编一起工作一样，直接产出可发布成品。
@@ -145,12 +147,32 @@ def _map_strings(node:Any,fn)->Any:
     return node
 
 
+def apply_cost_guard(data:dict[str,Any])->bool:
+    """出口成本闸门：把成本/报价数据从成品里彻底摘掉（含价格归零），返回是否清洗过。
+
+    为什么需要这一层：解析期已经不再把成本行喂给模型（document_parser.redact_cost_text），
+    但 live 模式下模型仍可能自己写出价格、或把「人均 3806 元」算进叙事文案；而库里
+    **已经存在**的老活动更是带着完整成本表（用户截图里那张「费用说明 PRICE」卡片就是）。
+    所以成品在离开引擎前必须再过一遍 —— 见 cost_guard.sanitize_for_frontend。
+    """
+    if not isinstance(data,dict): return False
+    mast=data.get('activity_master'); det=data.get('detail')
+    if not isinstance(mast,dict): return False
+    m,d,changed,_cd=sanitize_for_frontend(mast,det)
+    data['activity_master']=m
+    if isinstance(det,dict) and isinstance(d,dict): data['detail']=d
+    return changed
+
+
 def apply_fact_guard(data:dict[str,Any],source_text:str)->list[str]:
     """出口事实回检：① 品牌名音译还原成资料原始写法；② 资料里查无此名的地名收集成告警。
 
     返回可疑地名列表，并同步写进 master['uncertainties']（俱乐部端可见，便于运营核对）。
     internalData 是内部经营资料，**不做任何改写**，避免把运营口径改坏。
     """
+    # ★ 成本闸门先跑，且不受 source_text 是否为空影响：成本数据不许进入成品的判定
+    #   与被上传资料的完整性无关（见 cost_guard 模块文首）。
+    apply_cost_guard(data)
     src=str(source_text or '')
     if not src or not isinstance(data,dict): return []
     def fix(t:str)->str: return restore_brand_names(t,src)
@@ -390,6 +412,33 @@ def _extract_location(raw:str)->str:
     return ''
 
 
+def _public_price(raw:str)->str:
+    """只在「对外报价」语境里取价格 —— 成本表里的数字不当售价。
+
+    2026-10-06 用户要求：方案里的成本数据前端一律不显示。此前这里把 `人均费用` 也当售价抓
+    （一份始祖鸟高客方案的成本是 ¥3,806.55/人 = 76,131 ÷ 20，抓成 price 后 C 端卡片直接
+    按成本价开卖）。现在逐行判定：命中成本行（人均费用/合计/未含税/单价…）就跳过，
+    继续往下找真正的公开价格（售价 / 会员价 / 每人 288 元 / 498 元每次）。
+    整份资料没有任何公开价格时返回空串，价格留空由俱乐部自己定。
+    """
+    for ln in str(raw or '').split('\n'):
+        if is_cost_row(ln, has_cost_context(raw)):
+            continue
+        for pat in _PRICE_PATTERNS:
+            m=pat.search(ln)
+            if m:
+                return m.group(1)
+    return ''
+
+
+_PRICE_PATTERNS=(
+    # 「售价 ¥498」「会员价 498」「每人 288 元」「人均 498」
+    re.compile(r'(?:售价|价格|会员价|新客价|优惠价|每人|人均)[^\n\d]{0,8}?([0-9][0-9,]*(?:\.[0-9]+)?)'),
+    # 套餐式报价：「498 元/次」「298/人」
+    re.compile(r'([0-9][0-9,]{1,5})\s*元?\s*/\s*(?:次|人|位|场|份)'),
+)
+
+
 def _extract_structured(source:dict[str,Any])->dict[str,Any]:
     """从原始资料文本里「抽取」结构化事实：行程、费用、服务、清单、人数、价格、地点、亮点。
 
@@ -421,15 +470,10 @@ def _extract_structured(source:dict[str,Any])->dict[str,Any]:
             n=int(m.group(1))
             if 2<=n<=500: cap=m; break
     if cap: out['capacity']=int(cap.group(1))
-    per=(re.search(r'人均费用\s*[¥￥]?\s*([0-9][0-9,]*(?:\.\d+)?)',raw)
-         or re.search(r'人均[^\n]{0,6}?[¥￥]\s*([0-9][0-9,]*(?:\.\d+)?)',raw)
-         # 无货币符号的口语写法：「人均288元」「每人 288」「人均价格 288」
-         or re.search(r'(?:人均(?:费用|价格)?|每人)\s*[¥￥]?\s*([0-9][0-9,]*(?:\.\d+)?)\s*元?',raw)
-         # 套餐式报价：「498/次」「498 元/次」
-         or re.search(r'([0-9][0-9,]{1,5})\s*元?\s*/\s*(?:次|人|位|场)',raw))
-    total=re.search(r'未含税\s*[¥￥]\s*([0-9][0-9,]*(?:\.\d+)?)',raw) or re.search(r'合计[^\n]{0,20}?[¥￥]\s*([0-9][0-9,]*(?:\.\d+)?)',raw)
+    # ---- 价格：只在「对外报价」语境里取，成本表里的数字一律不当售价 ----
+    per=_public_price(raw)
     if per:
-        try: out['price']=float(per.group(1).replace(',',''))
+        try: out['price']=float(per.replace(',',''))
         except ValueError: pass
     out['location']=_extract_location(raw)
     dts=re.findall(r'(20\d{2})\s*[年./\-]\s*(\d{1,2})\s*[月./\-]\s*(\d{1,2})\s*日?',raw)
@@ -440,16 +484,16 @@ def _extract_structured(source:dict[str,Any])->dict[str,Any]:
     if not tit: tit=re.search(r'(?:活动名称|活动主题|主题)[：:]?\s*([^\n]{2,24})',raw)
     if tit: out['title']=_clean(tit.group(1)).strip('·')
 
-    # ---- 费用说明：只写资料里出现过的条目 ----
+    # ---- 费用说明：只写顾客该知道的项，**只写项名、不写金额** ----
+    # 2026-10-06 用户要求：方案里的成本数据前端一律不显示。此前这里把成本表抓成了 fees：
+    # 人均费用（= 合计 ÷ 人数）、合计（未含税）、按人数报价、以及「本表为方案成本预估」的备注，
+    # 前端再渲染成「费用说明 PRICE」卡片 —— 等于把俱乐部的成本底价和利润结构摊给顾客看。
+    # 现在只留「费用包含」这一项服务范围（车费/门票/氧气/摄影…），价格与成本一概不写。
     items=[]
     for kw in ['车费','保姆大巴','越野中转车','中转车','午餐','晚餐','特色餐','住宿','门票','唐卡体验','唐卡',
-               '饮用水','氧气','摄影','领队','保险','工作餐','策划执行']:
+               '饮用水','氧气','摄影','领队','保险','工作餐']:
         if kw in raw and kw not in items: items.append(kw)
-    if per: out['fees']['人均费用']='¥'+per.group(1)
-    if total: out['fees']['合计（未含税）']='¥'+total.group(1)
-    if cap: out['fees']['按人数报价']=cap.group(1)+' 人'
     if items: out['fees']['费用包含']='、'.join(items[:14])
-    if ('未含税' in raw) or ('成本预估' in raw): out['fees']['备注']='本表为方案成本预估，未含税金；价格随季节浮动。'
 
     # ---- 服务：只写资料里明确提到的，不凭空补充；命中内部标记的一律丢弃 ----
     services=[]
@@ -702,7 +746,8 @@ def _mock_activity(source:dict[str,Any]):
 
     services=_merge_services(list(prof.get('services') or [])+list(st.get('services') or []))
     info=[]
-    if st.get('fees',{}).get('人均费用'): info.append('人均费用 '+st['fees']['人均费用'])
+    # 成行人数是活动事实、可以对外；「人均费用」是成本推导出来的内部单价，一律不写
+    # （2026-10-06 用户要求：成本数据前端不显示。此前这里把 ¥3,806.55 印进了「服务与保障」）。
     if cap_extracted: info.append('成行人数 '+str(cap_val)+' 人')
     info+=services
     if info: blocks.append({'type':'info','title':'服务与保障','items':info[:10]})
@@ -733,7 +778,9 @@ def _mock_activity(source:dict[str,Any]):
         'editorialIntent':{'opening':'由当前活动最强的出发动机决定','visualWeight':'由素材质量决定','template':'NONE'},
         'blocks':_sanitize_blocks(blocks)
     }
-    return {'activity_master':master,'detail':detail}
+    data={'activity_master':master,'detail':detail}
+    apply_cost_guard(data)   # 成本闸门：mock 也不豁免（成品的最后一道门）
+    return data
 
 
 def media_catalog(source:dict[str,Any],master:dict[str,Any]|None=None)->list[dict[str,Any]]:
@@ -875,8 +922,19 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
   根据本次活动的地点海拔、季节、天数与难度推导；不要输出「高原适应准备」「防晒防寒装备」这类抽象分类——
   它们无法对应到商城在售装备。证件、个人药品这类非装备个人物品放在最后，最多两三项。
 - 若资料含逐日行程，detail.blocks 必须包含一个 timeline block（items=[{{"time":"...","text":"..."}}]，与 itinerary 同形状）。
-- 方案里的 [Slide N] / [Page N] 只是解析用的页码骨架，绝不能出现在任何 C 端字段里；
-  成本、供应商报价、门店 SOP、话术禁区、内部沟通等内容属于内部资料，一律不得进入 C 端成品。
+- 方案里的 [Slide N] / [Page N] 只是解析用的页码骨架，绝不能出现在任何 C 端字段里。
+
+★★ 成本数据铁律（2026-10-06 用户反馈，最高优先级）：
+- 方案里的「活动费用明细 / COST」页是俱乐部的**成本底价**（单价、小计、合计（未含税）、人均费用、
+  策划执行 10%、税费、毛利…）。这类数字**一个都不许出现在成品里** —— 不在 fees、不在正文、
+  不在 narrative/statement/info/facts 的任何一句话里，也不要改写成「人均约 3800 元」「成本约 7.6 万」
+  这种模糊说法。顾客看到成本价等于把利润结构摊在桌上。
+- fees 只允许写「费用包含」这一项（顾客该知道含什么：车费、门票、氧气、摄影…），
+  **只写项名、不写金额**；禁止输出 人均费用 / 合计 / 合计（未含税）/ 单价 / 小计 / 按人数报价 /
+  策划执行 / 备注 这类键。
+- price 只在方案里出现**明确的对外报价**（售价 / 报名费 / 会员价 / 每人 288 元）时才填；
+  资料里只有成本明细页时，price 留 0，由俱乐部自己定价 —— 绝不要把成本均价当对外售价填进去。
+- 成本、供应商报价、门店 SOP、话术禁区、内部沟通等内容属于内部资料，一律不得进入 C 端成品。
 
 文案与排版契约（详情页的吸引力来自文字，不只是图片；2026-09-28 用户反馈「图片好看但文字没气势」）：
 - 每段 narrative：eyebrow 用 2~6 字场景词（如「日出之前」「海拔4200米」「篝火燃起来时」）；
@@ -1022,6 +1080,8 @@ recap: 只有提供真实 actualActivityData / 现场素材时才能叙述实际
         data=gw.data or {}
         if cover_url: data['coverUrl']=cover_url
         if isinstance(data.get('blocks'),list): data['blocks']=_sanitize_blocks(data['blocks'],allowed_refs=photos)
+        # 公众号推文 / 海报同样不许出现成本数据：主视觉文案里印一行「人均 ¥3,806」同样是事故
+        data,_changed=scrub_cost_data(data)
         return data,gw
     title=activity_master.get('title','活动');idea=detail.get('coreSellingIdea','')
     gallery=[m.get('ref') for m in activity_master.get('media',[]) if isinstance(m,dict)

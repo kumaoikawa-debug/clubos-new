@@ -114,6 +114,64 @@ function uxFlow(name,fn){
   const busy=uxBusyOn(_claimWriteTrigger());
   return (async()=>{try{return await fn()}finally{_flowLocks.delete(name);uxBusyOff(busy)}})();
 }
+/* 把后端错误体归一成一句人能读的话。
+   ★ 为什么必须在这里归一，而不是让每个catch 自己处理：
+   FastAPI 的 `detail` **不一定是字符串** ——
+     · `HTTPException(409,'xx')` → `'xx'`（正常）；
+     · **请求体校验失败 422 → `detail` 是数组** `[{loc,msg,type},…]`；
+     · 少数校验器/中间件会回 `detail:{msg:…}` 或 `detail:{error:…}`。
+   旧代码直接 `new Error(d.detail)`，遇到数组/对象会被强制 String() →
+   顾客看到 `[object Object][object Object]`（用户 2026-10-06 截图实证：
+   C 端点「补资料」即撞此坑）。edPlain 虽能兜住不吐 [object Object]，
+   但会把 loc/msg/type 三个键的值全拼出来，仍然不是能读的话，
+   所以这里显式按形状取msg、并把字段名中文化。 */
+function apiErrorText(detail,status){
+  const fallback='请求失败'+(status?`（${status}）`:'');
+  if(detail==null)return fallback;
+  if(typeof detail==='string')return detail.trim()||fallback;
+  // 422 校验错误数组：取每条的 msg，并带上中文字段名
+  if(Array.isArray(detail)){
+    const names={idType:'证件类型',idNumber:'证件号码',emergencyContactName:'紧急联系人',
+      emergencyContactPhone:'紧急联系人电话',name:'姓名',phone:'手机号',password:'密码',
+      email:'邮箱',amount:'金额',price:'价格',quantity:'数量',voucherCodes:'福利券码',reason:'原因'};
+    const parts=detail.map(x=>{
+      if(x==null)return'';
+      if(typeof x==='string')return x;
+      const loc=Array.isArray(x.loc)?x.loc.filter(k=>k!=='body'&&k!=='query'&&k!=='path'):[];
+      const field=loc.length?names[String(loc[loc.length-1])]||String(loc[loc.length-1]):'';
+      const msg=x.msg||x.message||x.detail||'';
+      let text=typeof msg==='string'?msg:'';
+      /* FastAPI/pydantic 的 msg 是英文（Field required / Input should be a valid integer…）。
+         顾客看英文校验提示等于没提示，按 type + 常见 msg 前缀翻成中文；
+         翻不出来就保留原文（总比 [object Object] 强）。 */
+      if(text)text=apiMsgCn(text,x.type);
+      if(!text)return '';
+      return field?`${field}：${text}`:text;
+    }).filter(Boolean);
+    return parts.length?parts.join('；'):fallback;
+  }
+  if(typeof detail==='object'){
+    const msg=detail.msg||detail.message||detail.error||detail.reason;
+    if(typeof msg==='string'&&msg.trim())return apiMsgCn(msg.trim(),'');
+  }
+  return fallback;
+}
+/* 校验错误英文 → 中文。命中不了就原样返回，不做猜测式翻译。 */
+function apiMsgCn(text,type){
+  const t=String(text||'');
+  const exact={'Field required':'不能为空','missing':'不能为空',
+    'Input should be a valid integer':'请填整数','Input should be a valid number':'请填数字',
+    'Input should be a valid string':'请填文本','Input should be a valid list':'格式不正确',
+    'Input should be a valid dictionary':'格式不正确','value is not a valid email':'邮箱格式不正确',
+    'Input should be a valid boolean':'请填是/否','string too short':'内容太短','string too long':'内容太长'};
+  if(exact[t])return exact[t];
+  let m=t;
+  m=m.replace(/^Field required$/,'不能为空');
+  m=m.replace(/^Input should be a valid (\w+).*$/,(s,g)=>exact['Input should be a valid '+g]||'格式不正确');
+  m=m.replace(/^Value error,\s*/,'参数错误：');
+  // 已被上面规则处理过的（仍是英文原文）保持不变
+  return m;
+}
 async function api(url,opt={}){
   const key=_writeKey(url,opt);
   if(key){
@@ -134,7 +192,7 @@ async function api(url,opt={}){
       const r=await fetch(url,{credentials:'same-origin',...opt});
       let d;try{d=await r.json()}catch{d={}}
       if(r.status===401 && location.pathname!='/login'){location.href='/login';throw new Error('请先登录')}
-      if(!r.ok)throw new Error(d.detail||'请求失败');return d
+      if(!r.ok)throw new Error(apiErrorText(d&&d.detail,r.status));return d
     }finally{if(isWrite)_writeEnd()}
   })();
   if(busy)run.then(()=>uxBusyOff(busy),()=>uxBusyOff(busy));
@@ -146,6 +204,14 @@ async function api(url,opt={}){
   return run;
 }
 function money(n){return '¥'+Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2})}
+/* 活动价显示：成本为 0 / 缺失 / 被标记为待定时，一律显示「价格待定」，绝不把成本底价当售价露出。
+   `pending` 由后端在「活动来自成本表」时打上（priceFrom='pending'）；即便没有该标记，
+   只要价格不是正数也按待定处理 —— 兜底防住库里残留的成本价。
+   unit 是价格单位（如 "/人"），普通商品/订单价请不要走这里（它们永远是真售价）。 */
+function pricePending(p,opts){opts=opts||{};return opts.pending||!(Number(p)>0)}
+function priceHtml(p,opts){opts=opts||{};
+  if(pricePending(p,opts))return '<span class="price-pending">价格待定</span>';
+  const unit=opts.unit||'';return money(p)+(unit?`<em>${unit}</em>`:'');}
 function dateText(s){return s||'待定'}
 function navInit(){$$('.nav button[data-view]').forEach(b=>b.onclick=()=>{$$('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');$$('.view').forEach(v=>v.classList.remove('active'));$('#'+b.dataset.view)?.classList.add('active');if(window.onView)window.onView(b.dataset.view)});}
 /* 页面内 .modal（如 club 端 AI 发活动）也接同一套会话：Esc 关闭、焦点进入并圈闭、
@@ -164,7 +230,16 @@ function modal(id,on=true){
   if(!el.hasAttribute('tabindex'))el.tabIndex=-1;
   _uxModalSessions.set(id,uxDialogSession(el,{onEscape:()=>modal(id,false),initialFocus:'textarea,input:not([type=file]),select'}));
 }
-function toast(msg){let el=document.createElement('div');el.textContent=msg;el.className='toast';document.body.appendChild(el);setTimeout(()=>el.remove(),2400)}
+/* toast 是全站最后一道文案出口（uxTask / 各 catch 都往这里塞 e.message）。
+   任何非字符串进来都先归一 —— 用户截图实锤过 `[object Object][object Object]`：
+   根因是 api() 把 FastAPI 的数组 detail 直接交给 new Error()。这里再兜一次，
+   保证「点任何按钮都不会弹出看不懂的东西」。 */
+function toast(msg){
+  let s=(typeof msg==='string')?msg:(msg==null?'':apiErrorText(msg));
+  if(!s.trim())s='操作未完成';
+  /* 归一后仍可能过长（数组拼接时），截断避免撑破移动端toast */
+  if(s.length>160)s=s.slice(0,160)+'…';
+  let el=document.createElement('div');el.textContent=s;el.className='toast';document.body.appendChild(el);setTimeout(()=>el.remove(),2400)}
 /* 数据加载失败的统一错误态：把残留骨架换成明确提示 + 重试入口。
    各端很多加载函数此前没有 try/catch，接口一旦报错就永远停在骨架，用户无从判断是网络还是系统问题。 */
 function loaderError(sel,e,tip){
@@ -442,18 +517,35 @@ function feeValueHtml(v,depth){
   }
   return esc(String(v));
 }
+/* 成本闸门（2026-10-06）：费项标签若命中成本专属词，绝不许渲染到顾客眼前（后端已剔除，
+   这里再兜底一道，防住浏览器缓存/其它路径漏进来的老数据）。只拦成本专属词，绝不含泛词
+   「费用」「价格」—— 否则会把公开的 `费用包含`、对外 `价格` 一并删掉。
+   注：`对外报价` 含「报价」但不在下表，故不会被误删（对外报价是俱乐部想公开的价）。 */
+const _COST_FEE_LABELS=['人均费用','人均单价','人均价','合计','总计','小计','单价','总价','总费用',
+  '人均成本','成本','毛利','利润','净利','税金','税费','未含税','不含税','含税','税后','税前',
+  '策划执行','策划费','管理费率','报价单','预算','结算','返点','提成','成本预估','费用结构',
+  '费用条目','前期合计','前期计调','利润率'];
+function isCostFeeLabel(label){const s=String(label||'');
+  return _COST_FEE_LABELS.some(t=>s.indexOf(t)>=0);}
 function feeListHtml(fees){
   fees=fees||{};
   // fees 本身可能是数组或单个对象（模型输出形状不固定），统一成键值对再渲染
   let pairs=[];
   if(Array.isArray(fees)){
-    fees.forEach((x,i)=>{if(x!=null&&x!=='')pairs.push([String(i),x])});
+    fees.forEach((x,i)=>{if(x!=null&&x!==''&&!isCostFeeLabel(x))pairs.push([String(i),x])});
   }else if(typeof fees==='object'){
-    pairs=Object.keys(fees).filter(k=>fees[k]!=null&&fees[k]!=='').map(k=>[k,fees[k]]);
+    pairs=Object.keys(fees)
+      .filter(k=>fees[k]!=null&&fees[k]!==''&&!isCostFeeLabel(k))
+      // 值是成本措辞（如纯「¥3,806.55」）也一并丢弃
+      .filter(k=>!isCostFeeLabel(fees[k]))
+      .map(k=>[k,fees[k]]);
   }else if(fees!==''&&fees!=null){
-    pairs=[['',fees]];
+    pairs=isCostFeeLabel(fees)?[]:[['',fees]];
   }
-  if(!pairs.length)return '<p class="sub">费用以活动通知与最终确认为准</p>';
+  /* 成本行被过滤光时返回空串（而不是「费用以活动通知为准」这句占位）——
+     占位文案会让调用方以为还有内容，渲染出一个只有「费用说明 PRICE」标题的空壳栏目。
+     真要提示顾客，交给调用方按「价格待定」统一处理。 */
+  if(!pairs.length)return '';
   return '<div class="fee-list">'+pairs.map(([k,v])=>{
     const label=k?(FEE_CN[String(k)]||FEE_CN[String(k).replace(/[_\-\s]/g,'').toLowerCase()]||k):'';
     // 顶层值传 depth=1：这样 feeValueHtml 展开出的子行才会带 `.sub`（缩进 + 76px 标签列）
@@ -533,7 +625,13 @@ function renderInfoStack(master,opts={}){
   const skip=opts.skip||[],has=k=>skip.indexOf(k)<0;
   let h='<div class="info-stack polished">';
   if(has('itinerary'))h+=`<details open><summary>详细行程 <span>ITINERARY</span></summary><div class="detail-list">${itineraryRows(master.itinerary).map(x=>`<div>${x.time?`<b>${esc(x.time)}</b>`:''}<p>${esc(x.text)}</p></div>`).join('')||'<p class="sub">以最终活动通知为准</p>'}</div></details>`;
-  if(has('fees'))h+=`<details${has('itinerary')?'':' open'}><summary>费用说明 <span>PRICE</span></summary>${feeListHtml(master.fees)}</details>`;
+  /* 成本闸门（2026-10-06）：费用说明整块按内容决定是否渲染。
+     成本行被后端/本地过滤后如果一条都不剩，就不要留一个只有「费用说明 PRICE」标题的空壳 ——
+     那既是个空栏目，又在提示顾客「这里原本有价格」。价格待定时由priceHtml 显示「价格待定」。 */
+  if(has('fees')){
+    const feeBody=feeListHtml(master.fees);
+    if(feeBody&&feeBody.replace(/<[^>]*>/g,'').trim())h+=`<details${has('itinerary')?'':' open'}><summary>费用说明 <span>PRICE</span></summary>${feeBody}</details>`;
+  }
   if(has('packing'))h+=`<details open><summary>出行清单 <span>PACKING</span></summary>${renderPacking(master,opts)}</details>`;
   return h+'</div>';
 }
