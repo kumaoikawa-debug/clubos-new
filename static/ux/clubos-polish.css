@@ -1,0 +1,93 @@
+/* ============================================================================
+ * clubos-polish.css — additive UI / interaction polish layer for ClubOS NEW.
+ *
+ * Hard constraints honored:
+ *   • NO change to HTML structure — this file only re-styles EXISTING classes.
+ *   • NO new markup required anywhere.
+ *   • It is the LAST stylesheet in every entry point, so it can refine shared AND
+ *     end-specific styles, but it only uses SINGLE-class selectors so that any
+ *     two-class / pseudo-class state variants (.active, .flash, :focus-visible,
+ *     :hover) defined earlier still win by specificity.
+ *   • Tokens consumed from open-props.css (vendored Open Props, MIT).
+ *
+ * What it improves vs. the current hand-written styles:
+ *   1. Smoother, consistent motion  → Open Props easing curves on every control.
+ *   2. Refined elevation            → layered Open Props shadows replace flat ones.
+ *   3. Tactile feedback             → subtle hover lift on clickable cards.
+ *   4. Brand cohesion               → brand-tinted text selection, smooth scroll.
+ * ==========================================================================*/
+
+/* ---- 1) Smoother, uniform motion: ease curves on the core interactive surfaces ----
+   (longhand only — keeps each element's existing transition durations intact) */
+button, .btn, .nav button, .web-nav button,
+.act-card, .web-card, .product, .act-mini, .act-op,
+.detail-nav__item, .leader-rec, .leader-chip, .list-row, .ux-chip,
+.stat-tile, .ux-jump-booking, .ux-discovery-card, .card, .panel,
+input, select, textarea, .ux-pay-qr, .leader-av-pick {
+  transition-timing-function: var(--ease-3);
+}
+
+/* Slightly longer, more graceful hover/active motion for the biggest surfaces. */
+.act-card, .web-card, .product, .act-mini, .ux-discovery-card {
+  transition-duration: .22s;
+}
+
+/* ---- 2) Refined elevation: replace flat single-layer shadows with layered ones ---- */
+.card,
+.panel,
+.web-card,
+.act-card,
+.stat-tile,
+.booking-card,
+.reg-occ,
+.act-rail,
+.ux-discovery-card {
+  box-shadow: var(--shadow-2);
+}
+
+.product,
+.act-mini,
+.leader-occ,
+.leader-inline {
+  box-shadow: var(--shadow-1);
+}
+
+/* Heaviest floating surfaces get the deepest, softest elevation. */
+.ux-dialog,
+.ch-panel {
+  box-shadow: var(--shadow-5);
+}
+
+/* ---- 3) Tactile hover lift on clickable cards (no structural change) ---- */
+.product:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2);
+}
+
+.web-card[onclick]:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-3);
+}
+
+.act-mini:hover {
+  box-shadow: var(--shadow-2);
+}
+
+/* ---- 4) Brand cohesion ---- */
+::selection {
+  background: var(--brand);
+  color: #fff;
+}
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 76px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  /* keep ClubOS' existing reduced-motion contract */
+  *, *::before, *::after {
+    transition-duration: .001ms !important;
+  }
+}

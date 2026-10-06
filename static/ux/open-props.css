@@ -1,0 +1,120 @@
+/* ============================================================================
+ * open-props.css — vendored design tokens from Open Props (argyleink/open-props)
+ * License: MIT (https://github.com/argyleink/open-props)
+ * Vendored locally so there is ZERO runtime network dependency and ZERO build step.
+ *
+ * What was kept: the shadow / easing / size token sets (pure CSS custom properties).
+ * What was stripped: `@custom-media` and `@media (--OSdark)` — these are CSS Media
+ * Queries Level 5 syntax that browsers do NOT support natively without a build step,
+ * so they were removed. The dark-mode shadow strength boost is omitted because ClubOS
+ * uses its own (light) panel theme regardless of the OS color scheme.
+ *
+ * These tokens are additive: they only DEFINE variables (via :where(html), 0 specificity)
+ * and never override any existing ClubOS rule. clubos-polish.css consumes them.
+ * ==========================================================================*/
+
+/* ---- Shadows: refined, layered elevation (replaces flat single-layer shadows) ---- */
+:where(html) {
+  --shadow-color: 220 3% 15%;
+  --shadow-strength: 1%;
+  --shadow-strength-3: calc(var(--shadow-strength) + 2%);
+  --shadow-strength-4: calc(var(--shadow-strength) + 3%);
+  --shadow-strength-5: calc(var(--shadow-strength) + 4%);
+  --shadow-strength-6: calc(var(--shadow-strength) + 5%);
+  --shadow-strength-7: calc(var(--shadow-strength) + 6%);
+  --shadow-strength-8: calc(var(--shadow-strength) + 7%);
+  --shadow-strength-10: calc(var(--shadow-strength) + 9%);
+  --text-shadow-strength: 25%;
+  --text-shadow-strength-1: calc(var(--text-shadow-strength) + 5%);
+  --text-shadow-strength-2: calc(var(--text-shadow-strength) + 10%);
+  --text-shadow-strength-3: calc(var(--text-shadow-strength) + 15%);
+  --text-shadow-strength-4: calc(var(--text-shadow-strength) + 20%);
+  --text-shadow-strength-5: calc(var(--text-shadow-strength) + 25%);
+  --text-shadow-strength-6: calc(var(--text-shadow-strength) + 30%);
+  --inner-shadow-highlight: inset 0 -.5px 0 0 #fff, inset 0 .5px 0 0 #0001;
+  --shadow-1: 0 1px 2px -1px hsl(var(--shadow-color) / var(--shadow-strength-10));
+  --shadow-2:
+    0 3px 5px -2px hsl(var(--shadow-color) / var(--shadow-strength-4)),
+    0 7px 14px -5px hsl(var(--shadow-color) / var(--shadow-strength-6));
+  --shadow-3:
+    0 -1px 3px 0 hsl(var(--shadow-color) / var(--shadow-strength-3)),
+    0 1px 2px -5px hsl(var(--shadow-color) / var(--shadow-strength-3)),
+    0 2px 5px -5px hsl(var(--shadow-color) / var(--shadow-strength-5)),
+    0 4px 12px -5px hsl(var(--shadow-color) / var(--shadow-strength-6)),
+    0 12px 15px -5px hsl(var(--shadow-color) / var(--shadow-strength-8));
+  --shadow-4:
+    0 -2px 5px 0 hsl(var(--shadow-color) / var(--shadow-strength-3)),
+    0 1px 1px -2px hsl(var(--shadow-color) / var(--shadow-strength-4)),
+    0 2px 2px -2px hsl(var(--shadow-color) / var(--shadow-strength-4)),
+    0 5px 5px -2px hsl(var(--shadow-color) / var(--shadow-strength-5)),
+    0 9px 9px -2px hsl(var(--shadow-color) / var(--shadow-strength-6)),
+    0 16px 16px -2px hsl(var(--shadow-color) / var(--shadow-strength-7));
+  --shadow-5:
+    0 -1px 2px 0 hsl(var(--shadow-color) / var(--shadow-strength-3)),
+    0 2px 1px -2px hsl(var(--shadow-color) / var(--shadow-strength-4)),
+    0 5px 5px -2px hsl(var(--shadow-color) / var(--shadow-strength-4)),
+    0 10px 10px -2px hsl(var(--shadow-color) / var(--shadow-strength-5)),
+    0 20px 20px -2px hsl(var(--shadow-color) / var(--shadow-strength-6)),
+    0 40px 40px -2px hsl(var(--shadow-color) / var(--shadow-strength-8));
+  --shadow-6:
+    0 -1px 2px 0 hsl(var(--shadow-color) / var(--shadow-strength-3)),
+    0 3px 2px -2px hsl(var(--shadow-color) / var(--shadow-strength-4)),
+    0 7px 5px -2px hsl(var(--shadow-color) / var(--shadow-strength-4)),
+    0 12px 10px -2px hsl(var(--shadow-color) / var(--shadow-strength-5)),
+    0 22px 18px -2px hsl(var(--shadow-color) / var(--shadow-strength-6)),
+    0 41px 33px -2px hsl(var(--shadow-color) / var(--shadow-strength-7)),
+    0 100px 80px -2px hsl(var(--shadow-color) / var(--shadow-strength-8));
+  --text-shadow-1: 0 0 1px hsl(var(--shadow-color) / var(--text-shadow-strength-1));
+  --text-shadow-2: 0 0 2px hsl(var(--shadow-color) / var(--text-shadow-strength-2));
+  --text-shadow-3: 0 0 3px hsl(var(--shadow-color) / var(--text-shadow-strength-3));
+  --text-shadow-4: 0 0 5px hsl(var(--shadow-color) / var(--text-shadow-strength-4));
+  --text-shadow-5: 0 0 7px hsl(var(--shadow-color) / var(--text-shadow-strength-5));
+  --text-shadow-6: 0 0 10px hsl(var(--shadow-color) / var(--text-shadow-strength-6));
+  --inner-shadow-0: inset 0 0 0 1px hsl(var(--shadow-color) / var(--shadow-strength-10));
+  --inner-shadow-1: inset 0 1px 2px 0 hsl(var(--shadow-color) / var(--shadow-strength-10)), var(--inner-shadow-highlight);
+  --inner-shadow-2: inset 0 1px 4px 0 hsl(var(--shadow-color) / var(--shadow-strength-10)), var(--inner-shadow-highlight);
+  --inner-shadow-3: inset 0 2px 8px 0 hsl(var(--shadow-color) / var(--shadow-strength-10)), var(--inner-shadow-highlight);
+  --inner-shadow-4: inset 0 2px 14px 0 hsl(var(--shadow-color) / var(--shadow-strength-10)), var(--inner-shadow-highlight);
+}
+
+/* ---- Easings: smooth, expressive motion curves ---- */
+:where(html) {
+  --ease-1: cubic-bezier(.25, 0, .5, 1);
+  --ease-2: cubic-bezier(.25, 0, .4, 1);
+  --ease-3: cubic-bezier(.25, 0, .3, 1);
+  --ease-4: cubic-bezier(.25, 0, .2, 1);
+  --ease-5: cubic-bezier(.25, 0, .1, 1);
+  --ease-in-out-1: cubic-bezier(.1, 0, .9, 1);
+  --ease-in-out-2: cubic-bezier(.3, 0, .7, 1);
+  --ease-in-out-3: cubic-bezier(.5, 0, .5, 1);
+  --ease-in-out-4: cubic-bezier(.7, 0, .3, 1);
+  --ease-in-out-5: cubic-bezier(.9, 0, .1, 1);
+  --ease-out-1: cubic-bezier(0, 0, .75, 1);
+  --ease-out-2: cubic-bezier(0, 0, .50, 1);
+  --ease-out-3: cubic-bezier(0, 0, .3, 1);
+  --ease-out-4: cubic-bezier(0, 0, .1, 1);
+  --ease-out-5: cubic-bezier(0, 0, 0, 1);
+  --ease-cubic-out: cubic-bezier(.215, .61, .355, 1);
+  --ease-expo-out: cubic-bezier(.19, 1, .22, 1);
+  --ease-quint-out: cubic-bezier(.23, 1, .32, 1);
+  --ease-circ-out: cubic-bezier(.075, .82, .165, 1);
+  --ease-sine-out: cubic-bezier(.39, .575, .565, 1);
+}
+
+/* ---- Sizes: consistent spacing scale + fluid sizes ---- */
+:where(html) {
+  --size-1: .25rem;
+  --size-2: .5rem;
+  --size-3: 1rem;
+  --size-4: 1.25rem;
+  --size-5: 1.5rem;
+  --size-6: 1.75rem;
+  --size-7: 2rem;
+  --size-8: 3rem;
+  --size-fluid-1: clamp(.5rem, 1vw, 1rem);
+  --size-fluid-2: clamp(1rem, 2vw, 1.5rem);
+  --size-fluid-3: clamp(1.5rem, 3vw, 2rem);
+  --size-fluid-4: clamp(2rem, 4vw, 3rem);
+  --size-content-2: 45ch;
+  --size-content-3: 60ch;
+}
