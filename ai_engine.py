@@ -19,7 +19,91 @@ SYSTEM = """你是 ClubOS 的 AI 活动内容主编（Editorial Director），�
 8. 输出严格 JSON，不要 Markdown，不要解释。
 """
 
-BLOCK_TYPES = "hero|lead|narrative|statement|media|gallery|facts|timeline|info|quote|divider"
+BLOCK_TYPES = "hero|lead|narrative|statement|media|gallery|facts|timeline|info|quote|divider|cta"
+
+# 文案契约（2026-10-07 重写）。
+# 旧契约要求「eyebrow 用 2~6 字场景词 / body 拆成一行一个 ≤30 字短句 / 每段都配一句对仗 pull」，
+# 结果是每一节长得一模一样：场景小标题 + 四行诗 + 「A，B」式金句，一眼就是 AI 写的。
+# 新契约反过来把这三条列为禁令，改为要求连贯段落、信息型小标题、以及「只有这场活动才有」的具体细节。
+_WRITING_CONTRACT = """文案与排版契约（2026-10-07 用户反馈「生成的内容都很差、一眼就是 AI 写的」后重写）：
+
+★★ 总纲：你不是在填模板，你是在写一篇让人读完就想报名的长文。读起来必须像一位熟悉这条线的
+户外编辑亲手写的——有具体细节、有判断、有节奏变化。以下「AI 腔」特征必须彻底消灭：
+
+- 禁令 A｜场景词小标题：不要用「日落之前」「夜幕降临」「清晨醒来」「藏式手作」「换装时刻」
+  「落脚之处」「出发时刻」这类 2~6 字泛化场景词当小节标题。标题必须给出**信息或判断**。
+  反例：`日落之前`、`攀上鱼子西，迎接金色的神山`（空洞无信息）。
+  正例：`三座神山同框的 30 分钟，值得专程奔赴`、`3.5 小时，画一幅真正属于你的唐卡`、
+  `赞巴明镜酒店：夯土墙里的现代侘寂`、`打酥油茶、捏糌粑——高原生存智慧，亲手还原`。
+
+- 禁令 B｜一行一句的排版诗：body 绝对不要写成
+  「海拔4200米的观景平台\\n三座神山同框出现\\n阳光穿透云层，将雪山染成熔金」这种一行一个短句。
+  要写成**连贯段落**：每段 2~4 句、60~180 字，句子里正常使用逗号、顿号、破折号与分号。
+  段与段之间才换行，一节最多 2 段。短句可以有，但必须嵌在长句的节奏里，而不是一句一行。
+
+- 禁令 C｜对仗金句：pull 金句是**可选**的，全篇最多 2 处，且不许都用「A，B」对仗格式。
+  反例（六句一个模子，绝对不能这样）：「日照金山，照进心里」「味觉与声音的高原」
+  「画一幅，带走一段时光」「舌尖上的康巴文化」「拍一张，留在记忆里」「雪山在窗，心在屋」。
+  宁可一句金句都不写，也不要凑。
+
+- 禁令 D｜空话套话：禁止「美丽的风景」「难忘的旅程」「放松身心」「心旷神怡」「不虚此行」
+  「远离喧嚣」「值得拥有」「人生必去」「让身心都得到治愈」「本次活动的亮点在于」。
+  把每一个空话换成只有这场活动才成立的事实。
+
+- 禁令 E｜每节同构：不要让每一节都是「小标题 + 一段描述 + 一张图」。段落长短、有没有配图、
+  配几张图，都应该跟着内容走：有的章节两句话就够，有的可以写满一段；有的配图，有的不配。
+
+- 禁令 F｜句式雷同（最容易露馅的一条）：**「不是 X，是 Y」这一类否定对仗句，全文最多用 1 次。**
+  实测这是最强惯性：资料给得越足，模型越会在每一节都写一次，连读六节一眼就是 AI。
+  反例：「这不是打卡式旅行，是身体攀向光」「不是滤镜，不靠修图」「这不是表演，是松弛的共在」
+  「不是临摹，是遵循度量经；不是速成，是…」「唐卡不只是绘画，更是修行」「它不是一个景点，而是一个平台」。
+  **发现自己正在写这种句子，直接改成陈述句**：
+     ✗「唐卡不只是绘画，更是修行」→ ✓「唐卡绘制是一次修行：必须遵从《佛说造像度量经》，比例不能随意改动。」
+     ✗「它不是一个景点，而是一个 360° 平台」→ ✓「鱼子西是一块海拔 4200 米的观景平台，能同时看到三座神山。」
+  同理，不要让每节都以「在海拔 4200 米，…」或「当…的时候，…」起头；相邻小节的开场方式必须不同。
+
+- 禁令 G｜给资料里没有的东西添细节：资料写「康巴藏装，款式任选，自由拍摄」，你就只能写到这个程度，
+  **不要自己补「珊瑚项链、松石耳坠、镶边氆氇裙、盘羊角纹马甲」**；资料没写的配饰、菜品、材料、
+  器材、品牌、产地，一律不许出现。写不出出处的具体物件，就不写——宁可只写资料里有的那几件。
+
+★★ 合格的段落长这样（模仿这种信息密度与句子节奏。**〔〕里的只是占位符**，你必须换成
+  本次原始资料里**真实存在的**数字，一个都不许照抄，更不许把占位符当成事实来源）：
+  「木桶上下抽打〔资料里写明的次数〕下，让酥油与浓茶彻底乳化；青稞炒香后石磨成粉，加入奶渣、
+   温茶、一小块酥油。揉成团，咬一口，微咸、微酸、微甜、微韧——这是牧民走一天山路的能量。」
+  「〔资料里写明的开业年份〕年开业的藏式隐奢空间，没有浮夸雕饰，只有厚实夯土墙、低垂暖光、
+   窗外整面雪山。两晚连住，行李不动，你只需推开窗，就能把神山框进日常。」
+  → 共同点：有数字、有专名、有动作、有感官、有判断；长短句交错；没有一句能搬到别的活动上去。
+
+★★ 细节的边界（与上一条同等重要，「挖细节」绝不等于「编细节」）：
+  上面要求的具体，**只能来自原始资料里已经写过的内容**。以下全部属于编造，出现即不合格：
+  - 资料没写的机构名 / 资质名 / 证书名（例：「甘孜州非遗传承中心」「中国登山协会高山向导证」
+    「文旅局签发的旅游营运资质」——只有资料写了才允许写）；
+  - 资料没写的材料 / 品类 / 工艺参数（例：「青金石蓝」「24K 金粉」「火漆印」「有编号」）；
+  - 资料没写的经验 / 荣誉 / 数值（例：「驾龄 12 年」「连续 6 年零事故」「气压约 60kPa」
+    「核载 26 人」「二楼静修室」「塔公乡妇女合作社」）；
+  - 资料没写的药品 / 装备配给（例：「乙酰唑胺」「血氧仪」「每人 1 瓶氧气」）；
+  - 资料没写的人数、名额、剩余席位（例「仅剩 12 席」——除非资料明确写了）。
+  你可以做的是**把资料里已经写了的细节写得更好**：换更有画面感的动词、调整句子节奏、
+  点明它为什么重要。资料写「木杆反复上下抽打」→ 你写「用长木杆反复上下抽打，直到乳化成
+  温润的奶霜状」是对的（「奶霜状」是表达，属于你可发挥的空间）；但「300 下」如果资料没写，
+  就不许出现。**任何你在资料里找不到出处的事实，都写成你在资料里能看到的那个版本。**
+
+★ 资料是原料，不是成品：**不要照抄原始资料里的句子**。方案 PPT 里的句子是「资料语言」
+  （名词堆叠、短句罗列、无主语），不是你该交付的文章。事实（数字 / 专名 / 工艺 / 时间）
+  必须与资料完全一致，但**表达必须是你自己的**：重组语序、换更准确的动词、把 PPT 的碎片
+  连成有呼吸的长句、点明它为什么值得专程去一趟。
+  自查标准：把你写的段落和资料原句并排看——如果几乎一样，说明你只是在复制，没在写。
+  同样，也不要复制你自己上一段的话：相邻小节不要用相同的开场方式，也不要重复同一个形容词。
+
+★ 每一节至少要含 1 个「只有这场活动才有」的具体事实：数字（海拔 / 时长 / 公里数 / 人数 / 年份）、
+  专有名词（地名 / 酒店名 / 机构名 / 经文名 / 菜品名）、具体动作或机制（怎么抽打、怎么上色、几点抵达）。
+  一个章节里挖不到具体事实，就说明这节不该写。
+
+★ 小节标题（headline）：8~22 字，写**判断句或信息句**，不是词组堆叠。数字和专名是好朋友。
+★ eyebrow 字段可选，只在确实需要场景锚点时才用，且不要连续两节都用。
+★ 全页穿插 1~2 个 statement（整页大字观点句，≤18 字）与至多 1 个 quote；金句必须从本次活动的
+  真实体验里长出来（地名 / 海拔 / 动作 / 时刻），不许放之四海皆准。
+★ lead 是开场引言：2~3 句，第一句给画面、最后一句给出发的理由。不要写成「本次活动旨在…」。"""
 
 
 def _guess(text:str,patterns:list[str],default=''):
@@ -110,6 +194,11 @@ def restore_brand_names(text:str,source_text:str)->str:
     """把模型音译/意译的品牌名还原成资料里的原始写法。"""
     if not text or not source_text: return text
     out=str(text)
+    # ★ 路径 / URL 不是文案，必须原样返回。上传的图片文件名里就带品牌中文名
+    #   （…/extracted/2026始祖鸟高客_四川新都桥鱼子西方案_最新__image2.jpg），
+    #   一旦被下面的映射改成「2026ARC'TERYX高客_…」，磁盘上根本没有这个文件，
+    #   整个活动详情页的图片会全部 404（2026-10-07 实测事故，且每次重新生成都会复发）。
+    if out.startswith(('/','http://','https://','data:','blob:')): return out
     for alias,canonical in _BRAND_ALIASES.items():
         if alias in out and canonical.lower() in source_text.lower():
             out=out.replace(alias,canonical)
@@ -180,7 +269,9 @@ def apply_fact_guard(data:dict[str,Any],source_text:str)->list[str]:
     if isinstance(det,dict): data['detail']=_map_strings(det,fix)
     if isinstance(mast,dict):
         for k in list(mast.keys()):
-            if k=='internalData': continue
+            # internalData 是运营口径；media 是磁盘文件的映射（ref→url），两者都不是文案，
+            # 做品牌名替换只会把 url 改坏（见 restore_brand_names 的说明）。
+            if k in ('internalData','media'): continue
             mast[k]=_map_strings(mast[k],fix)
     # 收集可疑地名（只看 C 端可见部分）
     parts=[]
@@ -936,15 +1027,7 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
   资料里只有成本明细页时，price 留 0，由俱乐部自己定价 —— 绝不要把成本均价当对外售价填进去。
 - 成本、供应商报价、门店 SOP、话术禁区、内部沟通等内容属于内部资料，一律不得进入 C 端成品。
 
-文案与排版契约（详情页的吸引力来自文字，不只是图片；2026-09-28 用户反馈「图片好看但文字没气势」）：
-- 每段 narrative：eyebrow 用 2~6 字场景词（如「日出之前」「海拔4200米」「篝火燃起来时」）；
-  headline 是一句有画面感的话（8~16 字），不要「关于X」「介绍X」式标题；
-  body 拆成 1~3 个独立短句（用 \\n 分隔），每句 ≤30 字，写动作、感官、光线与具体数字——
-  禁止「美丽的风景」「难忘的旅程」「放松身心」这类放到任何活动上都成立的空话。
-- 每段 narrative 可带 pull 字段：一句独立金句（≤14 字，这一节最想让人记住的话），页面会渲染成品牌色强调行。
-- 全页穿插 1~2 个 statement block（整页大字观点句，≤18 字）与至多 1 个 quote block：
-  金句必须从本次活动的真实体验里长出来（地名/海拔/动作/时刻），不许放之四海皆准。
-- lead 是开场引言：两句以内。第一句给画面，第二句给出发的理由。
+{_WRITING_CONTRACT}
 
 返回 JSON：
 {{
@@ -1020,10 +1103,7 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
 - 严禁输出 title 为「装备建议 / 出行清单 / 装备清单 / 携带清单 / 着装建议」之类的 info block：
   平台会在详情页下方单独渲染「出行清单」，重复出块会让同一份清单出现两遍。
 
-文案与排版契约（与首次生成同一标准；吸引力来自文字，不只是图片）：
-- narrative：eyebrow 用 2~6 字场景词；headline 有画面感（8~16 字）；body 拆成 1~3 个独立短句（\\n 分隔），
-  每句 ≤30 字，写动作、感官、光线与具体数字，禁止空话套话；每段可带 pull 金句（≤14 字）。
-- 全页穿插 1~2 个 statement 大字观点句（≤18 字）与至多 1 个 quote，金句必须从真实体验里长出来。
+{_WRITING_CONTRACT}
 - 方案里的 [Slide N] / [Page N] 只是解析用的页码骨架，绝不能出现在任何 C 端字段里。
 
 返回 JSON：
@@ -1059,29 +1139,129 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
     return {'activity_master':master,'detail':detail},record_mock_usage(club_id,'detail',prompt,data)
 
 
-async def generate_channel(club_id:int,activity_master:dict[str,Any],detail:dict[str,Any],channel:str,cover_url:str|None=None)->tuple[dict[str,Any],GatewayResponse]:
+def normalize_channel_blocks(data:dict[str,Any])->dict[str,Any]:
+    """把模型返回的各种「形状」归一到 blocks 数组。
+
+    为什么需要：前端只认 data.blocks。实测 qwen-max 会自作主张返回
+    {"title","lead":{...},"narrative":[{headline,body,mediaRefs}...],"facts":{...},"closing":{quote,cta}}，
+    形状一变，blocks 为空 → 内容中心显示「已生成」但预览整篇空白，用户只会说「又坏了」。
+    与其指望提示词约束住模型，不如在出口做一次结构归一化，把内容救回来。
+    """
+    if not isinstance(data,dict): return data
+    blk=data.get('blocks')
+    if isinstance(blk,list) and blk: return data
+    out=[]
+    def add(btype,src):
+        if src is None: return
+        if isinstance(src,list):
+            for it in src: add(btype,it)
+            return
+        b={'type':btype}
+        if isinstance(src,str):
+            t=src.strip()
+            if not t: return
+            b['text']=t
+        elif isinstance(src,dict):
+            for k in ('eyebrow','headline','title','subtitle','body','text','pull','summary'):
+                v=src.get(k)
+                if isinstance(v,str) and v.strip(): b[k]=v.strip()
+            for k in ('mediaRefs','items'):
+                v=src.get(k)
+                if isinstance(v,list) and v: b[k]=v
+            if not any(k in b for k in ('headline','title','body','text','items')): return
+        else:
+            return
+        out.append(b)
+    add('lead',data.get('lead') or data.get('intro') or data.get('opening'))
+    add('narrative',data.get('narrative') or data.get('narratives')
+        or data.get('sections') or data.get('story') or data.get('paragraphs'))
+    add('statement',data.get('statement') or data.get('statements'))
+    add('gallery',data.get('gallery') or data.get('images'))
+    add('facts',data.get('facts') or data.get('info'))
+    add('quote',data.get('quote'))
+    for key in ('timeline',):
+        add('timeline',data.get(key))
+    closing=data.get('closing')
+    if isinstance(closing,dict):
+        add('quote',closing.get('quote'))
+        add('cta',closing.get('cta') or closing.get('action'))
+    else:
+        add('cta',closing or data.get('cta'))
+    if out:
+        data['blocks']=out
+        # 顶层摘要：前端标题下方的导语，缺了就从前几段里挑一句
+        if not data.get('summary'):
+            for b in out:
+                if b['type'] in ('lead','narrative') and b.get('text'):
+                    data['summary']=b['text'][:60]; break
+    return data
+
+
+async def generate_channel(club_id:int,activity_master:dict[str,Any],detail:dict[str,Any],channel:str,
+                           cover_url:str|None=None,source_text:str='')->tuple[dict[str,Any],GatewayResponse]:
     labels={'wechat':'微信公众号','xhs':'小红书','poster':'活动招募海报','recap':'活动回顾'}
     cover_note=f"活动官方封面（已上传的主视觉，优先用作首图 / 海报主图）：{cover_url}\n" if cover_url else ''
+    # 2026-10-07 修复：此前渠道生成只拿到「抽取后的 master / detail JSON」，原始方案全文根本没有进来
+    # （木杆上下抽打、3.5 小时、《佛说造像度量经》、2023 年开业、1+1 航空座椅…这些最值钱的细节
+    # 在 master 里只剩关键词），于是公众号推文只能把已经压缩过的事实再压缩一遍，又短又空。
+    # 现在把第一手资料原文一并给模型，明确要求从中挖细节。
+    raw_note=(f"\n原始方案全文（第一手资料，细节最全；下面这些具体数字 / 专名 / 动作就是最好的素材，"
+              f"务必直接从里面挖，不要只靠上面的 JSON）：\n{source_text}\n" if source_text else '')
+    briefs={
+      'wechat':"""wechat（公众号图文）：这是**独立成篇的长文**，不是活动详情的删减版。写短了就是失败。
+- 篇幅：正文 900~1400 字，7~9 个小节，每节 100~200 字。宁可 7 节写扎实，
+  也不要 11 节每节只有两句——一堆短节凑在一起，读者只会觉得"什么都没说"。
+- 结构：title（≤26 字，要有画面或判断，不要「XX 活动招募」）→ 开头 2~3 句钩子（lead）→
+  若干 narrative 小节（headline 是有信息量的小标题、body 是 1~2 段连贯叙述，可按需带 mediaRefs）→
+  一节「活动信息」（facts，写时间 / 交通 / 导游 / 费用包含）→ 收束（quote 或 cta）。
+- 图片：mediaRefs 只引真实照片（kind='photo' 的 ref），贴在**对应叙述之后**，一节 0~2 张，不要全堆到文末。
+- 禁止：把 detail 的 blocks 原样搬过来；「本次活动的亮点在于」式公文句；空话套话；
+  编造资料里没有的日期 / 价格 / 名额 / 资质 / 用户评价。""",
+      'xhs':"""xhs（小红书图文）：titleOptions[]（3 个，≤20 字，带钩子）、hook（首句抓人）、
+body（真实口语，可换行，带 emoji 但要克制）、tags[]（6~10 个）、imageSequence[]（真实照片 ref 或 url）。
+不要写成公文或硬广。""",
+      'poster':"""poster（活动招募海报）：headline（≤14 字，一句就能立住）、subheadline、
+facts[]（时间 / 地点 / 价格 / 人数，只写真实值）、sellingPoints[]（3~5 条，每条带具体细节）、
+cta、preferredMediaRefs[]（真实照片 ref）。""",
+      'recap':"""recap（活动回顾）：只有提供真实 actualActivityData / 现场素材时才能叙述实际发生事件；
+资料不足时明确返回 needsActualData=true，绝不编造。""",
+    }
+    # 只把「编辑判断」交给渠道生成，**不传 detail 的 blocks**。
+    # 实测：把整个 detail 成品塞进 prompt，模型会直接照抄它的标题与段落（qwen-max 尤其明显），
+    # 结果公众号图文变成详情页的换皮版。渠道内容必须自己从原始资料重新写。
+    detail_view={k:v for k,v in (detail or {}).items()
+                 if k in ('activityUnderstanding','coreSellingIdea','editorialIntent') and v} \
+                if isinstance(detail,dict) else {}
     prompt=f"""基于同一场活动，重新创作 {labels.get(channel,channel)} 原生内容。不是活动详情删减版。
 {cover_note}
-Activity Master（事实）：{json.dumps(activity_master,ensure_ascii=False)}
-招募详情的活动理解（可参考但不要照抄结构）：{json.dumps(detail,ensure_ascii=False)}
+Activity Master（事实锚点）：{json.dumps(activity_master,ensure_ascii=False)}
+详情页的编辑判断（只用来理解这场活动的定位，**禁止复用它的句子、小标题与结构**——本渠道是重新写一遍）：{json.dumps(detail_view,ensure_ascii=False)}
+{raw_note}
+{_WRITING_CONTRACT}
 
-wechat: 根据公众号阅读场景重新决定标题、开篇、图文节奏与报名收束；返回 title, summary, blocks[]。
-xhs: 返回 titleOptions[], hook, body, tags[], imageSequence[]；语言更像真实平台内容，不写公文。
-poster: 返回 headline, subheadline, facts[], sellingPoints[], cta, preferredMediaRefs[]。
-recap: 只有提供真实 actualActivityData / 现场素材时才能叙述实际发生事件；资料不足时明确返回 needsActualData=true，不编造。
-严格 JSON。"""
+本渠道要求：
+{briefs.get(channel,'')}
+输出结构（强制；字段名不得改动）：
+{{"title":"","summary":"","blocks":[{{"type":"lead|narrative|statement|media|gallery|facts|timeline|quote|cta","headline":"","body":"","mediaRefs":[],"items":[{{"label":"","value":""}}]}}]}}
+正文**必须全部放进 blocks 数组**。不要自作主张换成 lead / narrative / facts / closing 这类顶层键——
+前端只读 blocks，形状一变，整篇内容就会渲染成空白页。
+严格 JSON，不要 Markdown，不要解释。"""
     gw=await generate_json(club_id=club_id,task_type=channel,system_prompt=SYSTEM,user_prompt=prompt)
     # 渠道成品（海报 / 小红书九宫格）同样只能用真实照片：品牌 logo 与空白底图不能上去
     photos={m.get('ref') for m in activity_master.get('media',[]) if isinstance(m,dict)
             and m.get('ref') and (m.get('kind') or 'photo')=='photo'}
     if gw:
         data=gw.data or {}
+        # 模型自创结构（lead/narrative/facts/closing）时把内容救回 blocks，别让前端渲染空白
+        if channel in ('wechat','recap'): data=normalize_channel_blocks(data)
         if cover_url: data['coverUrl']=cover_url
         if isinstance(data.get('blocks'),list): data['blocks']=_sanitize_blocks(data['blocks'],allowed_refs=photos)
         # 公众号推文 / 海报同样不许出现成本数据：主视觉文案里印一行「人均 ¥3,806」同样是事故
         data,_changed=scrub_cost_data(data)
+        # 与详情共用同一道事实防线：渠道文案一样会把品牌名音译掉（icebreaker → 冰破），
+        # 以前这道检查只在详情上跑，推文里的错品牌名会直接发出去。
+        if source_text:
+            data=_map_strings(data,lambda t:restore_brand_names(t,source_text))
         return data,gw
     title=activity_master.get('title','活动');idea=detail.get('coreSellingIdea','')
     gallery=[m.get('ref') for m in activity_master.get('media',[]) if isinstance(m,dict)
