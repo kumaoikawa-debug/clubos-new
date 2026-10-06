@@ -58,6 +58,19 @@ input, select, textarea, .ux-pay-qr, .leader-av-pick {
   box-shadow: var(--shadow-5);
 }
 
+/* C 端通用白卡（订单 / 福利 / 详情）：web.css 用 .web-shell .web-card(0,2,0) 定义了
+   扁平单层阴影，上面单类 .web-card 压不过它。这里用同前缀 .web-shell .web-card 提权、
+   靠加载顺序（本层在 web.css 之后）胜出，只改 box-shadow，不动 border/radius/padding。
+   注意：.web-card.w-product(0,3,0, box-shadow:none) 与 #publicDetail .web-card(1,1,0) 仍各
+   自优先，不会被误伤 —— C 端商品卡/详情卡保持原观感。 */
+.web-shell .web-card {
+  box-shadow: var(--shadow-2);
+}
+.web-shell .web-card[onclick]:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-3);
+}
+
 /* ---- 3) Tactile hover lift on clickable cards (no structural change) ---- */
 .product:hover {
   transform: translateY(-2px);
