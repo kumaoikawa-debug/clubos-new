@@ -46,9 +46,20 @@
     return '';
   }
 
+  /* 封面兜底。媒体清单里混着品牌 logo / 空白幻灯片底图 / 地图截图，
+     直接取「第一项」会得到一张几乎全白的首图 —— 2026-10-07 用户截图实证：
+     推文顶部是一整块空白，看起来像生成坏了。所以先扫一遍 kind='photo' 的真实照片，
+     确实一张都没有时，才退回清单里的任意一张。 */
   function firstMediaUrl(mm) {
     var k = Object.keys(mm || {});
-    for (var i = 0; i < k.length; i++) { if (mm[k[i]] && mm[k[i]].url) return abs(mm[k[i]].url); }
+    for (var pass = 0; pass < 2; pass++) {
+      for (var i = 0; i < k.length; i++) {
+        var m = mm[k[i]];
+        if (!m || !m.url) continue;
+        if (pass === 0 && (m.kind || 'photo') !== 'photo') continue;
+        return abs(m.url);
+      }
+    }
     return '';
   }
 
