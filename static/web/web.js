@@ -332,6 +332,17 @@ function showMallList(){
   const shop=document.querySelector('#wmall .w-shop');if(shop)shop.style.display='';
   if(MALL_ALL.length)renderMall();else loadMall();
 }
+/* 从活动详情页的出行清单点装备进来时的中转（用户 2026-10-06 要求：先看商品详情再决定买不买）。
+   ★ 必须先切到 wmall 视图：#productDetail 是 wmall 的子节点，wmall 整体 display:none 时，
+     openProduct 照样会把内容渲染进去，但页面停在活动详情上 —— 看起来就是「点了没反应」
+     （与 openAct 当年同一个坑）。切完再等商城列表就位，让详情页的「返回装备列表」有东西可回。 */
+async function openProductFromPacking(id){
+  const btn=document.querySelector('.w-nav button[data-wv="wmall"]');
+  if(btn)btn.click();else wviewShow('wmall');
+  if(!MALL_ALL.length){try{await loadMall()}catch(e){/* 列表拉不到也照样尝试进详情，openProduct 会自己回源 */}}
+  await openProduct(id);
+}
+window.openProductFromPacking=openProductFromPacking;
 async function openProduct(id){
   const box=$('#productDetail');if(!box)return;
   showProductPane();

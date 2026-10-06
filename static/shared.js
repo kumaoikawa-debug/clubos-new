@@ -360,11 +360,22 @@ function gearRow(p,opts,sub){
     +'<span class="gear-main"><b>'+esc(p.name)+'</b>'
     +'<small>'+priceHtml+esc(p.reason||'')+(p.inStock?'':' · 暂时缺货')+memberNote+'</small></span>'
     +'<span class="gear-go">›</span>';
-  // C 端 = 下单入口；俱乐部后台点进去是「本俱乐部商城里的这件商品」——
-  // 推荐只能看不能买等于没落地，配上会员价才有意义。
-  return opts.canBuy
-    ? '<button type="button" class="gear-row buyable'+(sub?' gear-row--sub':'')+'" onclick="buy('+Number(p.id||0)+')" title="下单购买">'+inner+'</button>'
-    : '<button type="button" class="gear-row buyable'+(sub?' gear-row--sub':'')+'" onclick="openGearProduct('+Number(p.id||0)+')" title="在装备商城里查看这件商品">'+inner+'</button>';
+  /* 点清单里的装备 = **先看这件商品**，不是直接下单（用户 2026-10-06 明确要求）。
+     之前 C 端（canBuy 分支）绑的是 buy(id) —— 一碰就弹「确认装备订单」，
+     顾客连图片、规格、库存都还没看就被要求付钱；这跟商城列表里那张卡
+     写着「查看详情」、点了会进#productDetail 的行为也自相矛盾。
+     现在两端统一进商品详情，下单动作交给详情页底部那颗「立即购买」。
+     详情页入口按端挑，且优先「会先切视图」的那个：C 端的 #productDetail 挂在 wmall
+     视图下，wmall 隐藏时 openProduct 会把内容写进一个看不见的容器 → 点了像没反应
+     （与 openAct 当年同一个坑）。所以从活动页进来走 openProductFromPacking。*/
+  const detailFn=(typeof window.openProductFromPacking==='function'&&!opts.manage)?'openProductFromPacking'
+    :((typeof window.openProduct==='function'&&!opts.manage)?'openProduct'
+    :((typeof window.openGearProduct==='function')?'openGearProduct':''));
+  if(detailFn){
+    return '<button type="button" class="gear-row buyable'+(sub?' gear-row--sub':'')+'" onclick="'+detailFn+'('+Number(p.id||0)+')" title="查看这件装备的详情">'+inner+'</button>';
+  }
+  /* 连详情页都没有的端（理论上不会发生）：退回只读行，绝不退化成「一点就下单」。 */
+  return '<div class="gear-row'+(sub?' gear-row--sub':'')+'" title="查看装备详情">'+inner+'</div>';
 }
 /* 同一件装备会同时满足多项清单要求（「速干衣裤」与「防晒外套」都命中服装面料），
    整行重复出现会把清单拉长一倍，看起来像推荐错了。第二次出现收成一行只读引用，
