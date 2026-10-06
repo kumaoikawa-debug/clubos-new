@@ -291,25 +291,187 @@ async function shareActivity(id){
 /* ===== AI 内容中心：生成 → 直接出成品（公众号图文 / 小红书卡片 / 海报）=====
    过去 genChannel 把接口返回的 JSON 塞进 <pre>，老板拿到的是一堆代码。
    现在交给 static/channel-render.js 渲染成能直接用的成品，并可复制 / 下载。 */
+/* ===== 活动选择器（AI 内容中心）=====
+   老板原话：「如果以后活动多了，也一个一个选太难选了。」
+   原生 <select> 在几十场活动时只能一行行翻、还搜不了。这里换成 combobox：
+   按钮显示当前活动 → 弹出「搜索 + 状态筛选 + 可滚动列表」，
+   ↑↓ 移动 / Enter 确认 / Esc 关闭，鼠标点击同样生效，并标出哪些活动已生成过内容。 */
+const ActPick={acts:[],counts:{},host:null,q:'',filter:'all',idx:0,open:false};
+const ACT_PICK_ORDER=['published','draft','archived','cancelled'];
+/* 浏览器可能还缓存着旧版 HTML（那里是 <select id="contentActivity">）。
+   取不到新容器时就地换成 div，避免出现「后台改好了、用户看到的还是旧的」。 */
+function actPickHost(){
+  const host=$('#contentActivityPick');
+  if(host)return host;
+  const legacy=$('#contentActivity');
+  if(!legacy)return null;
+  if(legacy.tagName==='SELECT'){
+    const d=document.createElement('div');d.className='act-pick';d.id='contentActivityPick';
+    legacy.replaceWith(d);return d;
+  }
+  return legacy;
+}
+function actPickStatuses(acts){
+  const seen=[];
+  acts.forEach(a=>{const s=String(a.status||'');if(s&&!seen.includes(s))seen.push(s)});
+  return seen.sort((x,y)=>{const ix=ACT_PICK_ORDER.indexOf(x),iy=ACT_PICK_ORDER.indexOf(y);return (ix<0?99:ix)-(iy<0?99:iy)});
+}
+function actPickFiltered(){
+  const q=ActPick.q.trim().toLowerCase();
+  return ActPick.acts.filter(a=>{
+    if(ActPick.filter!=='all'&&String(a.status||'')!==ActPick.filter)return false;
+    if(!q)return true;
+    return [a.title,a.location,a.event_date,a.status,enumCn(a.status),'#'+a.id]
+      .filter(Boolean).join(' ').toLowerCase().includes(q);
+  });
+}
+/* 高亮关键词：先转义再拼 <mark>，用户输入不会被当成标签执行。 */
+function actPickHi(text,q){
+  const t=String(text==null?'':text);
+  if(!q)return esc(t);
+  const i=t.toLowerCase().indexOf(q);
+  if(i<0)return esc(t);
+  return esc(t.slice(0,i))+'<mark class="act-pick__hit">'+esc(t.slice(i,i+q.length))+'</mark>'+esc(t.slice(i+q.length));
+}
+function actPickMeta(a){
+  return [a.event_date,a.location,a.price?money(a.price):''].filter(Boolean).join(' · ');
+}
+function actPickItemHtml(a,selected){
+  const q=ActPick.q.trim().toLowerCase();
+  const n=Number(ActPick.counts[a.id]||0);
+  return `<div class="act-pick__item${a.id===ActPick.idx?' active':''}" id="actPickItem${a.id}" role="option" aria-selected="${a.id===selected?'true':'false'}" data-id="${a.id}">`
+    +`<span class="act-pick__item__main"><span class="act-pick__itemTitle">${actPickHi(a.title,q)}</span>`
+    +`<span class="act-pick__itemSub">${actPickHi(actPickMeta(a)||'未填日期 / 地点',q)}</span></span>`
+    +`<span class="act-pick__itemTags"><span class="tag${a.status==='draft'?' orange':''}">${esc(enumCn(a.status,'')||'未设置')}</span>${n?`<span class="tag">已有 ${n} 条内容</span>`:''}</span></div>`;
+}
+function actPickRenderList(){
+  const host=ActPick.host; if(!host)return;
+  const list=actPickFiltered(), selected=Number(window.__contentActId||0);
+  const box=host.querySelector('#actPickList');
+  if(!box)return;
+  const q=ActPick.q.trim();
+  if(!list.length){
+    box.innerHTML=`<div class="act-pick__empty">没有匹配的活动${q?`（关键词「${esc(q)}」）`:''}<br><span class="sub">换个关键词，或点上面的「全部」。</span></div>`;
+  }else{
+    if(!list.some(a=>a.id===ActPick.idx))ActPick.idx=list[0].id;
+    box.innerHTML=list.map(a=>actPickItemHtml(a,selected)).join('');
+  }
+  host.querySelectorAll('.act-pick__filters button').forEach(b=>b.classList.toggle('on',b.dataset.f===ActPick.filter));
+  const count=host.querySelector('#actPickCount');
+  if(count)count.textContent=`共 ${ActPick.acts.length} 场 · 显示 ${list.length}`;
+  const input=host.querySelector('#actPickSearch');
+  if(input)input.setAttribute('aria-activedescendant',list.length?('actPickItem'+ActPick.idx):'');
+  const active=box.querySelector('.act-pick__item.active');
+  if(active&&active.scrollIntoView)active.scrollIntoView({block:'nearest'});
+}
+function actPickMount(host,acts,counts){
+  actPickClose();
+  ActPick.host=host; ActPick.acts=acts||[]; ActPick.counts=counts||{};
+  if(!ActPick.acts.length){host.innerHTML='<div class="act-pick__btn" style="cursor:default;color:var(--muted)">还没有活动</div>';return}
+  const cur=ActPick.acts.find(a=>a.id===Number(window.__contentActId||0))||ActPick.acts[0];
+  const sts=actPickStatuses(ActPick.acts), cnt={};
+  ActPick.acts.forEach(a=>{const s=String(a.status||'');cnt[s]=(cnt[s]||0)+1});
+  host.innerHTML=`<button type="button" class="act-pick__btn" id="actPickBtn" aria-haspopup="listbox" aria-expanded="false">`
+    +`<span class="act-pick__value" id="actPickBtnLabel">${esc(cur.title)}</span>`
+    +`<span class="act-pick__meta">${esc(actPickMeta(cur))}</span>`
+    +`<span class="tag${cur.status==='draft'?' orange':''}">${esc(enumCn(cur.status,'')||'未设置')}</span>`
+    +`<span class="act-pick__caret" aria-hidden="true">▼</span></button>`
+    +`<div class="act-pick__pop" id="actPickPop" hidden>`
+      +`<div class="act-pick__search"><span aria-hidden="true">🔍</span>`
+      +`<input id="actPickSearch" type="search" role="combobox" aria-expanded="false" aria-controls="actPickList" aria-autocomplete="list" placeholder="搜索活动名称 / 地点 / 日期" autocomplete="off" aria-label="搜索活动">`
+      +`<span class="act-pick__count" id="actPickCount"></span></div>`
+      +`<div class="act-pick__filters" id="actPickFilters" role="group" aria-label="按状态筛选">`
+      +`<button type="button" data-f="all" class="on">全部 ${ActPick.acts.length}</button>`
+      +sts.map(s=>`<button type="button" data-f="${esc(s)}">${esc(enumCn(s))} ${cnt[s]}</button>`).join('')
+      +`</div>`
+      +`<div class="act-pick__list" id="actPickList" role="listbox" aria-label="活动列表"></div>`
+      +`<div class="act-pick__hint"><kbd>↑</kbd><kbd>↓</kbd> 移动 · <kbd>Enter</kbd> 确认 · <kbd>Esc</kbd> 关闭 · 直接打字即搜索</div>`
+    +`</div>`;
+  const btn=host.querySelector('#actPickBtn');
+  const input=host.querySelector('#actPickSearch');
+  btn.onclick=()=>{ActPick.open?actPickClose():actPickOpen()};
+  input.oninput=()=>{ActPick.q=input.value;ActPick.idx=0;actPickRenderList()};
+  host.querySelector('#actPickFilters').onclick=e=>{
+    const b=e.target.closest('button[data-f]'); if(!b)return;
+    ActPick.filter=b.dataset.f;ActPick.idx=0;actPickRenderList();
+  };
+  host.querySelector('#actPickList').onclick=e=>{
+    const it=e.target.closest('.act-pick__item'); if(!it)return;
+    actPickChoose(Number(it.dataset.id));
+  };
+  host.onkeydown=e=>{
+    if(!ActPick.open){
+      if(e.key==='ArrowDown'||e.key==='ArrowUp'){e.preventDefault();actPickOpen()}
+      return;
+    }
+    if(e.key==='Escape'){e.preventDefault();e.stopPropagation();actPickClose();btn.focus();return}
+    if(e.key==='ArrowDown'){e.preventDefault();actPickMove(1);return}
+    if(e.key==='ArrowUp'){e.preventDefault();actPickMove(-1);return}
+    if(e.key==='Enter'){e.preventDefault();if(ActPick.idx)actPickChoose(ActPick.idx)}
+  };
+  actPickRenderList();
+}
+function actPickOpen(){
+  const host=ActPick.host; if(!host||ActPick.open)return;
+  const pop=host.querySelector('#actPickPop'), btn=host.querySelector('#actPickBtn'), input=host.querySelector('#actPickSearch');
+  if(!pop||!input)return;
+  ActPick.open=true; ActPick.q=''; input.value='';
+  const list=actPickFiltered();
+  const sel=list.find(a=>a.id===Number(window.__contentActId||0));
+  ActPick.idx=sel?sel.id:(list.length?list[0].id:0);
+  pop.hidden=false; btn.setAttribute('aria-expanded','true'); input.setAttribute('aria-expanded','true');
+  actPickRenderList();
+  input.focus();
+  document.addEventListener('click',actPickDocClick,true);
+}
+function actPickClose(){
+  const host=ActPick.host; if(!host||!ActPick.open)return;
+  ActPick.open=false;
+  const pop=host.querySelector('#actPickPop'), btn=host.querySelector('#actPickBtn'), input=host.querySelector('#actPickSearch');
+  if(pop)pop.hidden=true;
+  if(btn)btn.setAttribute('aria-expanded','false');
+  if(input)input.setAttribute('aria-expanded','false');
+  document.removeEventListener('click',actPickDocClick,true);
+}
+function actPickDocClick(e){
+  if(!ActPick.host||!ActPick.open)return;
+  if(!ActPick.host.contains(e.target))actPickClose();
+}
+function actPickMove(step){
+  const list=actPickFiltered(); if(!list.length)return;
+  let i=list.findIndex(a=>a.id===ActPick.idx);
+  if(i<0)i=step>0?-1:0;
+  ActPick.idx=list[(i+step+list.length)%list.length].id;
+  actPickRenderList();
+}
+function actPickChoose(id){
+  id=Number(id)||0; if(!id)return;
+  actPickClose();
+  window.__contentActId=id;
+  loadContent();
+}
 async function loadContent(){
   skel('#channelArea',2);
   try{
-  const acts=await api(`/api/club/${CLUB}/activities`);
-  const sel=$('#contentActivity');
+  const [acts,content]=await Promise.all([
+    api(`/api/club/${CLUB}/activities`),
+    api(`/api/club/${CLUB}/content`).catch(()=>[])
+  ]);
+  const pickHost=actPickHost();
   if(!acts.length){
-    if(sel)sel.innerHTML='<option value="">还没有活动</option>';
+    if(pickHost)pickHost.innerHTML='<div class="act-pick__btn" style="cursor:default;color:var(--muted)">还没有活动</div>';
     $('#channelArea').innerHTML='<div class="empty">先创建一场活动，再让 AI 做内容。</div>';
     $('#contentList').innerHTML='<div class="empty">还没有渠道内容</div>';
     return;
   }
-  if(sel){
-    const want=Number(window.__contentActId||0);
-    const keep=acts.some(a=>a.id===want)?want:acts[0].id;
-    sel.innerHTML=acts.map(a=>`<option value="${a.id}"${a.id===keep?' selected':''}>${esc(a.title)}${a.status==='draft'?'（草稿）':''}</option>`).join('');
-    sel.onchange=()=>{window.__contentActId=Number(sel.value)||null;loadContent()};
-    window.__contentActId=keep;
-  }
-  const a=acts.find(x=>x.id===Number(window.__contentActId))||acts[0];
+  // 每场活动已生成过多少条内容：选择器里标出来，老板一眼能找到上次做到哪。
+  const counts={};
+  (content||[]).forEach(x=>{counts[x.activity_id]=(counts[x.activity_id]||0)+1});
+  const want=Number(window.__contentActId||0);
+  const keep=acts.some(a=>a.id===want)?want:acts[0].id;
+  window.__contentActId=keep;
+  if(pickHost)actPickMount(pickHost,acts,counts);
+  const a=acts.find(x=>x.id===keep)||acts[0];
   currentActivity=a;
   const cards=[
     ['wechat','微信公众号图文','AI 重排公众号阅读节奏；生成后可直接预览，并一键复制带格式图文到公众号编辑器'],
@@ -318,8 +480,9 @@ async function loadContent(){
     ['recap','活动回顾','只在有真实现场素材时才写；素材不足会明确告诉你缺什么，不编造']
   ];
   $('#channelArea').innerHTML=cards.map(x=>`<div class="card channel-card"><div><strong>${x[1]}</strong><p>${x[2]}</p><div class="sub">当前活动：${esc(a.title)}</div></div><button class="btn secondary" onclick="genChannel('${x[0]}',${a.id})">AI 生成${x[1]}</button></div>`).join('');
-  const list=await api(`/api/club/${CLUB}/content`);
-  $('#contentList').innerHTML=list.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title||channelLabel(x.channel))}</div><div class="list-row__sub">活动 #${x.activity_id} · ${esc(x.created_at||'')}</div></div><div class="list-row__end"><span class="tag">${esc(channelLabel(x.channel))}</span><button class="btn secondary" onclick="openContentAsset(${x.id})">查看成品</button></div></div>`).join('')
+  // 已生成内容里补上「这是哪场活动的」——以前只显示 活动 #12，活动一多就认不出来。
+  const byId={}; acts.forEach(x=>{byId[x.id]=x});
+  $('#contentList').innerHTML=(content||[]).map(x=>{const t=byId[x.activity_id];const cur=Number(x.activity_id)===Number(window.__contentActId);return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title||channelLabel(x.channel))}</div><div class="list-row__sub">${t?`活动：${esc(t.title)}`:`活动 #${x.activity_id}`} · ${esc(x.created_at||'')}</div></div><div class="list-row__end"><span class="tag">${esc(channelLabel(x.channel))}</span>${t&&!cur?`<button class="btn ghost" onclick="actPickChoose(${x.activity_id})">切到这场</button>`:''}<button class="btn secondary" onclick="openContentAsset(${x.id})">查看成品</button></div></div>`}).join('')
     ||'<div class="empty">还没有渠道内容</div>';
   }catch(e){loaderError('#channelArea',e,'内容中心加载失败')}
 }

@@ -2,7 +2,7 @@
 from pathlib import Path
 import re,subprocess
 ROOT=Path(__file__).resolve().parents[1]
-for role,n in [('platform',13),('club',9),('web',4)]:
+for role,n in [('platform',13),('club',12),('web',4)]:
  s=(ROOT/'static'/role/'index.html').read_text()
  assert '/static/ux/clubos-ux.css' in s
  assert '/static/ux/clubos-ux.js' in s

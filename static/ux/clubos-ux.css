@@ -229,6 +229,46 @@ button.is-busy::after,.btn.is-busy::after{content:'';position:absolute;top:0;bot
 .chan-picker{display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-radius:15px;padding:12px 15px;margin-bottom:15px}
 .chan-picker select{max-width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:13px;min-width:0}
 .chan-picker .sub{margin:0}
+/* --- 活动选择器（AI 内容中心）：活动多了不能再靠原生 <select> 一行行翻。
+       做成 combobox：按钮显示当前活动 → 弹出「搜索 + 状态筛选 + 可滚动列表」，
+       ↑↓ 移动 / Enter 确认 / Esc 关闭，鼠标点击同样生效。 --- */
+.act-pick{position:relative;flex:1 1 320px;min-width:0;max-width:560px}
+.act-pick__btn{display:flex;align-items:center;gap:9px;width:100%;min-height:44px;padding:8px 12px;background:#fff;border:1px solid #d7e0d9;border-radius:12px;cursor:pointer;text-align:left;font-size:13px;color:var(--text);font-family:inherit}
+.act-pick__btn:hover{border-color:#a7c9a9;background:#fbfdfa}
+.act-pick__btn[aria-expanded="true"]{border-color:#7fae8c;box-shadow:0 0 0 3px #e3f0e3}
+.act-pick__value{flex:1 1 auto;min-width:0;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.act-pick__meta{flex:0 1 auto;min-width:0;color:var(--muted);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.act-pick__caret{flex:0 0 auto;color:#6b7c72;font-size:10px;transition:transform .16s}
+.act-pick__btn[aria-expanded="true"] .act-pick__caret{transform:rotate(180deg)}
+.act-pick__pop{position:absolute;z-index:70;top:calc(100% + 8px);left:0;width:min(540px,92vw);max-height:min(440px,68vh);background:#fff;border:1px solid #dfe7df;border-radius:16px;box-shadow:0 24px 60px #10251726;overflow:hidden;display:flex;flex-direction:column}
+.act-pick__pop[hidden]{display:none}
+.act-pick__search{display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--line);background:#fafcf9;flex:0 0 auto;transition:background .15s,box-shadow .15s}
+/* 打开弹层时我们会自动把焦点放进搜索框，全站那条 3px 金色 focus 环在这里会显得很吵。
+   改成「底线高亮 + 底色微变」——仍然是明确的焦点指示，只是不再抢视线。 */
+.act-pick__search:focus-within{background:#f2f8f0;box-shadow:inset 0 -2px 0 var(--focus)}
+.act-pick__search input:focus-visible{outline:0!important;outline-offset:0!important}
+.act-pick__search input{flex:1;min-width:0;border:0;outline:0;background:transparent;font-size:13px;color:var(--text);padding:0}
+.act-pick__search input::-webkit-search-cancel-button{cursor:pointer}
+.act-pick__count{font-size:11px;color:#708074;white-space:nowrap}
+.act-pick__filters{display:flex;gap:6px;flex-wrap:wrap;padding:10px 13px;border-bottom:1px solid var(--line);flex:0 0 auto}
+.act-pick__filters button{font-size:11.5px;font-weight:750;padding:5px 11px;min-height:28px;border-radius:999px;border:1px solid #dcebdc;background:#f2f7f0;color:#3a6a4d;cursor:pointer;font-family:inherit}
+.act-pick__filters button:hover{border-color:#a7c9a9}
+.act-pick__filters button.on{background:#25523c;border-color:#25523c;color:#fff}
+.act-pick__list{overflow:auto;padding:5px;flex:1 1 auto;scrollbar-width:thin}
+.act-pick__item{display:flex;align-items:center;gap:10px;width:100%;padding:9px 11px;border:0;background:transparent;border-radius:11px;cursor:pointer;text-align:left;color:var(--text);font-family:inherit}
+.act-pick__item:hover{background:#f3f8f1}
+.act-pick__item.active{background:#eaf3e7;box-shadow:inset 0 0 0 1px #b9d8b9}
+.act-pick__item[aria-selected="true"] .act-pick__itemTitle{color:#1d4c33}
+.act-pick__item__main{flex:1 1 auto;min-width:0;display:grid;gap:3px}
+.act-pick__itemTitle{font-size:13px;font-weight:720;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.act-pick__itemSub{font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.act-pick__itemTags{display:flex;align-items:center;gap:5px;flex:0 0 auto}
+.act-pick__itemTags .tag{font-size:10.5px;padding:2px 7px}
+.act-pick__hit{background:#ffe9a8;border-radius:3px;color:inherit;padding:0 1px}
+.act-pick__empty{padding:22px 12px;text-align:center;color:var(--muted);font-size:12.5px}
+.act-pick__hint{padding:8px 13px;border-top:1px solid var(--line);background:#fafcf9;font-size:11px;color:#7d8c82;flex:0 0 auto}
+.act-pick__hint kbd{background:#eef2ee;border:1px solid #dbe3db;border-radius:4px;padding:0 4px;font-size:10.5px;font-family:inherit;color:#4d6357}
+@media(max-width:650px){.act-pick{max-width:none;flex:1 1 100%}.act-pick__pop{width:100%;max-height:58vh}.act-pick__meta{display:none}}
 .ch-overlay{position:fixed;inset:0;background:#0d1a14d9;backdrop-filter:blur(6px);z-index:1200;display:flex;align-items:center;justify-content:center;padding:18px}
 .ch-panel{width:min(1080px,100%);max-height:94vh;overflow:auto;background:#fff;border-radius:22px;box-shadow:0 30px 100px #06160f66;display:flex;flex-direction:column}
 .ch-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:20px 24px 15px;border-bottom:1px solid var(--line);background:#fff;border-radius:22px 22px 0 0}
