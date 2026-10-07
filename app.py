@@ -857,7 +857,112 @@ def add_occurrence(club_id:int,activity_id:int,payload:dict=Body(...)):
         c.execute('INSERT INTO activity_occurrences(activity_id,club_id,start_at,end_at,price,capacity,status,label) VALUES(?,?,?,?,?,?,?,?)',(
             activity_id,club_id,payload['startAt'],payload.get('endAt'),float(payload.get('price',0)),int(payload.get('capacity',0)),payload.get('status','open'),payload.get('label','团期')))
         oid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        _sync_activity_price_from_occurrences(c,club_id=club_id,activity_id=activity_id)
     return {'id':oid}
+
+# ---------------------------------------------------------------------------
+# 团期的修改 / 删除
+#
+# 2026-10-07 用户截图实证的缺口：团期只有 POST（新增）没有 PATCH/DELETE。
+# 「首发团期」这类由活动创建时自动生成的团期，在俱乐部端只显示
+# 「首发团期 ¥0 · 已售 0/20」一行纯文本，**没有任何入口能改出发时间与价格**
+# —— 老板想调档期、调价、调名额，只能删掉整个活动重做。
+#
+# 这里补齐两条路由，并守住三条纪律：
+#   ① 名额不得低于已售人数（否则「已售 N / 名额 M」自相矛盾，也会让超卖判定失真）；
+#   ② 已有未取消报名的团期不许删除（留孤儿报名会让报名管理、保险、分车全部对不上）；
+#      删除时把历史报名（已取消/已退款）的 occurrence_id 置空，保留财务留痕而不是连报名一起删。
+#   ③ 「定过价」要解除价格待定粘性：成本表来源的活动（priceFrom != 'priced'）在读取时
+#      会把团期价归零、C 端显示「价格待定」，报价/结算接口还会 409 拦截（见
+#      _public_price_pending / public_activity）。只在团期被定了正价时不置 'priced'，
+#      老板就会遇到「改了价格但还是 ¥0、还是报不了名」——等于白改。
+# ---------------------------------------------------------------------------
+def _sync_activity_price_from_occurrences(c, *, club_id:int, activity_id:int) -> bool:
+    """把活动级公开价对齐到团期价，并解除「价格待定」粘性。
+
+    顶层 activities.price 是 C 端列表卡片与详情页头部的展示价，团期 price 才是
+    真正用于报价/下单的价格（两者是独立字段）。老板只改团期价时，若顶层价停在
+    0 且 master.priceFrom 不是 'priced'，C 端会一直显示「价格待定」并拒绝报名。
+    规则：对外展示价 = 本活动**未取消**团期里的最低正价（即「¥xxx 起」）。
+    这里刻意**不**保留「老板在活动基本信息里填过的价」——实测那会让页头出现
+    「头部 ¥3,280 / 团期 ¥2,980」这种自相矛盾的展示（改团期价理应是改对外价；
+    团期价才是真实成交价）。没有正价团期时保持不动，让「价格待定」继续生效。
+    """
+    a=row(c.execute('SELECT price,activity_master_json FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+    if not a: return False
+    prices=[float(r['price']) for r in c.execute(
+        "SELECT price FROM activity_occurrences WHERE activity_id=? AND club_id=? AND COALESCE(status,'open')!='cancelled'",
+        (activity_id,club_id)).fetchall() if float(r['price'] or 0)>0]
+    if not prices: return False                        # 全是 0，维持「价格待定」
+    best=min(prices)
+    master=jload(a.get('activity_master_json'),{}) or {}
+    if (master.get('priceFrom')=='priced') and float(a.get('price') or 0)==best and float(master.get('price') or 0)==best:
+        return False                                   # 已一致，不写库也不动 updated_at
+    master['price']=best; master['priceFrom']='priced'
+    c.execute('UPDATE activities SET price=?,activity_master_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
+              (best,jdump(master),activity_id,club_id))
+    return True
+
+
+@app.patch('/api/club/{club_id}/occurrences/{occurrence_id}')
+def update_occurrence(club_id:int,occurrence_id:int,payload:dict=Body(...)):
+    with conn() as c:
+        o=row(c.execute('SELECT * FROM activity_occurrences WHERE id=? AND club_id=?',(occurrence_id,club_id)))
+        if not o: raise HTTPException(404,'团期不存在')
+        fields={}
+        if 'startAt' in payload:
+            v=str(payload.get('startAt') or '').strip()
+            if not v: raise HTTPException(400,'出发时间不能为空')
+            fields['start_at']=v
+        if 'endAt' in payload:
+            v=str(payload.get('endAt') or '').strip()
+            fields['end_at']=v or None
+        if 'price' in payload:
+            try: p=float(payload.get('price'))
+            except (TypeError,ValueError): raise HTTPException(400,'价格必须是数字')
+            if p<0: raise HTTPException(400,'价格不能为负数')
+            fields['price']=p
+        if 'capacity' in payload:
+            try: cap=int(payload.get('capacity'))
+            except (TypeError,ValueError): raise HTTPException(400,'名额必须是整数')
+            if cap<0: raise HTTPException(400,'名额不能为负数')
+            sold=int(o.get('sold') or 0)
+            if cap<sold: raise HTTPException(400,f'该团期已有 {sold} 人报名，名额不能少于 {sold}')
+            fields['capacity']=cap
+        if 'label' in payload:
+            fields['label']=str(payload.get('label') or '').strip() or None
+        if 'status' in payload:
+            st=str(payload.get('status') or '').strip()
+            if st not in ('open','closed','cancelled'): raise HTTPException(400,'团期状态只支持 open / closed / cancelled')
+            fields['status']=st
+        if not fields: raise HTTPException(400,'没有需要更新的字段')
+        start=fields.get('start_at') or o.get('start_at')
+        end=fields.get('end_at',o.get('end_at'))
+        if end and start and str(end)<=str(start): raise HTTPException(400,'结束时间必须晚于出发时间')
+        sets=','.join([f'{k}=?' for k in fields])
+        c.execute(f'UPDATE activity_occurrences SET {sets} WHERE id=? AND club_id=?',
+                  (*fields.values(),occurrence_id,club_id))
+        priced=_sync_activity_price_from_occurrences(c,club_id=club_id,activity_id=int(o['activity_id']))
+    return {'ok':True,'updated':sorted(fields.keys()),'priced':priced}
+
+
+@app.delete('/api/club/{club_id}/occurrences/{occurrence_id}')
+def delete_occurrence(club_id:int,occurrence_id:int):
+    with conn() as c:
+        o=row(c.execute('SELECT * FROM activity_occurrences WHERE id=? AND club_id=?',(occurrence_id,club_id)))
+        if not o: raise HTTPException(404,'团期不存在')
+        live=int(c.execute("SELECT COUNT(*) FROM registrations WHERE occurrence_id=? AND club_id=? AND status NOT IN ('cancelled','refunded')",
+                           (occurrence_id,club_id)).fetchone()[0])
+        if live: raise HTTPException(409,f'该团期还有 {live} 笔未取消的报名，不能删除。请先处理报名，或把团期改为「停止报名」。')
+        # 执行域数据随团期整条清理（与「删除活动」同一份表清单）
+        for t in ('participant_checkins','participant_group_assignments','execution_event_logs',
+                  'activity_notices','execution_groups','occurrence_leaders','occurrence_execution_settings'):
+            c.execute(f'DELETE FROM {t} WHERE occurrence_id=?',(occurrence_id,))
+        # 已取消/已退款的报名是历史留痕，保留记录但解除团期关联（不连报名一起删）
+        c.execute('UPDATE registrations SET occurrence_id=NULL WHERE occurrence_id=? AND club_id=?',(occurrence_id,club_id))
+        c.execute('DELETE FROM activity_occurrences WHERE id=? AND club_id=?',(occurrence_id,club_id))
+        _sync_activity_price_from_occurrences(c,club_id=club_id,activity_id=int(o['activity_id']))
+    return {'ok':True,'deleted':occurrence_id}
 
 @app.post('/api/club/{club_id}/activities/{activity_id}/publish')
 def publish_activity(club_id:int,activity_id:int):
