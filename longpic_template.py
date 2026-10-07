@@ -152,7 +152,7 @@ html,body{background:%(bg)s}
 .params{margin-top:34px}
 .params .r{display:flex;gap:22px;align-items:flex-start;padding:25px 0}
 .params .r+.r{border-top:1px solid %(line2)s}
-.params .d{flex:none;width:90px;font-size:22px;font-weight:700;color:%(accent)s;letter-spacing:1.8px;padding-top:3px}
+.params .d{flex:none;width:120px;font-size:22px;font-weight:700;color:%(accent)s;letter-spacing:1.8px;padding-top:3px}
 .params .p{flex:1;font-size:24px;line-height:1.7;color:%(ink)s}
 .params .p i{font-style:normal;color:%(faint)s;font-size:20px}
 .chips{display:flex;flex-wrap:wrap;gap:14px;margin-top:28px}
@@ -225,6 +225,12 @@ html,body{background:%(bg)s}
 """
 
 
+# 标题折行阈值（详见 wrap_title 的说明）：按字号/字距反算 750px 画布一行最多几个字
+_HERO_TITLE_MAX = 9      # 66px + 1.8px 字距，画布内容宽 650px
+_SEC_TITLE_MAX = 14      # 45px + 1.4px
+_SIGNUP_TITLE_MAX = 13   # 47px + 2.7px
+
+
 def build_css(theme: str) -> str:
     v = THEMES.get(theme) or THEMES[DEFAULT_THEME]
     return _CSS % v
@@ -235,7 +241,7 @@ def build_css(theme: str) -> str:
 # ══════════════════════════════════════════════════════════════════════
 def _e(x: Any) -> str:
     """转义为纯文本（模型只填文本，绝不产出标签）。"""
-    return _html.escape(str(x if x is not None else ''), quote=True)
+    return _html.escape(clean_placeholder(x), quote=True)
 
 
 # ★ 唯一的富文本例外：`<b>…</b>`（2026-10-08）。
@@ -259,12 +265,87 @@ def _txt(x: Any) -> str:
     return ' '.join(str(x if x is not None else '').split())
 
 
+def _real_price(x: Any) -> bool:
+    """只有**真实正数**售价才渲染价格行。
+
+    ★ 2026-10-08 实测踩到的坑：素材里没有对外售价时，模型会填 `"price": 0`，
+      于是成品上出现一行「**¥0 / 人**」——比不写价格糟得多（客人以为是免费）。
+    """
+    t = str(x if x is not None else '').strip()
+    if not t:
+        return False
+    m = re.search(r'\d+(?:\.\d+)?', t)
+    if not m:
+        return False
+    try:
+        return float(m.group(0)) > 0
+    except ValueError:
+        return False
+
+
+# 内部成本口径的词，绝不进「费用包含」清单。
+# 依据（用户铁律）：成本数据不得出现在任何前端 —— 这是最后一道兜底，
+# 提示词已先要求"只抄资料里写给客人的费用包含，不要搬内部成本明细"。
+_INTERNAL_COST = re.compile(r'工作餐|员工餐|内部|成本|毛利|摊销|策划执行|物料费|服务费|佣金|分成')
+
+
 def _lst(x: Any) -> list:
     if x is None:
         return []
     if isinstance(x, list):
         return [i for i in x if i not in (None, '', {})]
     return [x]
+
+
+# ──────────────────────────────────────────────────────────────────────
+# 两处**确定性兜底**（2026-10-08 实测后加的）：提示词写了、模型仍会漏的两件事，
+# 改成代码保证 —— 因为它们直接决定"这张图能不能发出去"。
+# ──────────────────────────────────────────────────────────────────────
+# ① 占位符日期：资料只写「10 月（日期待定）」时，模型会把 `10 月 xx 日` 原样搬进报名区，
+#    而这是**要印在宣传图上的**。凡短字段里出现占位符，改写成诚实的「月份 · 日期待定」。
+#    ★ 只碰**短字段**（≤28 字）：正文长句里出现"待定"是正常表达
+#      （"具体日期待定，出行前 1-2 天建群通知"），整句截断是第一版的 bug，已修。
+_PH_TOKEN = re.compile(r'(?:[xX]{2,}|待定|TBD|\?\?|__+)')
+_PH_TAIL = re.compile(r'[\s—\-–~～·、,，/]+$')
+
+
+def clean_placeholder(x: Any) -> str:
+    t = '' if x is None else str(x)
+    if len(t) > 28 or not _PH_TOKEN.search(t):
+        return t                                   # 原样返回（保住换行，交给 nl2br）
+    head = _PH_TAIL.sub('', _PH_TOKEN.split(t)[0]).strip()
+    if not head:
+        return '待定'
+    if ('年' in head or '月' in head) and not re.search(r'\d\s*$', head):
+        return head + ' · 日期待定'
+    return head
+
+
+# ② 超长标题折行：750px 画布上主标题**一行只放得下 9 个字**（66px + 字距），
+#    模型常无视「每行 6~8 字」、写成一行 13 个字 → 挤出一个孤字、版式就垮。
+#    这里做确定性断行：优先断在中点的标点处，其次中点硬断。
+_TITLE_BREAKERS = '，,、：:；;· 　'
+
+
+def wrap_title(t: Any, maxlen: int) -> str:
+    t = str(t if t is not None else '').strip()
+    if '\n' in t or len(t) <= maxlen:
+        return t
+    mid = len(t) // 2
+    best = None
+    for i, ch in enumerate(t):
+        if ch in _TITLE_BREAKERS and abs(i - mid) <= maxlen // 2 + 1:
+            if best is None or abs(i - mid) < abs(best - mid):
+                best = i
+    if best is not None and 0 < best < len(t) - 1:
+        return t[:best + 1].rstrip() + '\n' + t[best + 1:].lstrip()
+    return t[:mid] + '\n' + t[mid:]
+
+
+def wrap_lines(x: Any, maxlen: int) -> str:
+    """整段多行标题：逐行按 maxlen 折行，结果仍用 \\n 分（内部可能有多个断点）。"""
+    raw = '' if x is None else str(x)
+    return '\n'.join(wrap_title(l, maxlen) for l in raw.split('\n'))
 
 
 def _s(x: Any, key: str = '', default: str = '') -> str:
@@ -458,7 +539,8 @@ def _render_hero(h: dict, allowed: set[str], cover_url: str | None) -> str:
 
     # 主标题：支持显式换行（`\n`）+ accent 高亮（accent 必须是标题里原样出现的一段）
     raw_title = str(h.get('title') or '')
-    lines = [l for l in raw_title.split('\n')]
+    wrapped = wrap_lines(raw_title, _HERO_TITLE_MAX)      # ★ 确定性折行（一行 9 字）
+    lines = [l for l in wrapped.split('\n')]
     lines = lines if any(l.strip() for l in lines) else [raw_title]
     esc_lines = [_rich(l.strip()) for l in lines if l.strip()]
     accent = _txt(h.get('accent'))
@@ -495,7 +577,8 @@ def _render_section(s: dict, allowed: set[str]) -> str:
     eye_html = ('<div class="s-eyebrow"><span class="no en">%s</span><i class="line"></i></div>' % _e(eyebrow)
                 if eyebrow else '')
     title = _s(s, 'title')
-    title_html = '<div class="s-title">%s</div>' % _nl2br(title) if title else ''
+    title_html = ('<div class="s-title">%s</div>' % _nl2br(wrap_lines(title, _SEC_TITLE_MAX))
+                  if title else '')
     lead = _s(s, 'lead') or _s(s, 'text')
     lead_html = '<p class="s-lead">%s</p>' % _nl2br(lead) if lead else ''
     body = _render_blocks(s.get('blocks'), allowed)
@@ -513,7 +596,7 @@ def _render_signup(s: dict, allowed: set[str]) -> str:
     parts.append('<div class="en-roll en">%s</div>' % _e(en_roll))
     title = _s(s, 'title')
     if title:
-        parts.append('<h2>%s</h2>' % _nl2br(title))
+        parts.append('<h2>%s</h2>' % _nl2br(wrap_lines(title, _SIGNUP_TITLE_MAX)))
     sub = _s(s, 'sub')
     if sub:
         parts.append('<div class="en2 en">%s</div>' % _e(sub))
@@ -536,11 +619,11 @@ def _render_signup(s: dict, allowed: set[str]) -> str:
         pics = pics if pics.count('<img') >= 2 else ''
         price, unit = _s(prod, 'price'), _s(prod, 'unit') or '/ 人'
         inc = [_s(i) for i in _lst(prod.get('inc'))]
-        inc = [i for i in inc if i.strip()]
+        inc = [i for i in inc if i.strip() and not _INTERNAL_COST.search(i)]
         if pics or price or inc:
             inc_html = '<div class="inc">%s</div>' % '<br>'.join('· ' + _e(i) for i in inc) if inc else ''
             txt = ''
-            if price:
+            if _real_price(price):
                 txt = '<div class="price"><small>¥</small>%s <small>%s</small></div>' % (_e(price), _e(unit))
             prod_html = '<div class="product">%s<div class="txt">%s%s</div></div>' % (pics, txt, inc_html)
             if pics or txt:
