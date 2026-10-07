@@ -1163,11 +1163,12 @@ async def channel_generate(club_id:int,activity_id:int,channel:str):
     # forbidden in prod) so it resolves inside the club session.
     cover_url=f'/api/club/{club_id}/activities/{activity_id}/cover' if a.get('cover') else None
 
-    # ══「AI 宣传长图」走独立管线（2026-07 新增）══
-    # 与其它渠道最大的不同：**排版权交给模型**（返回整段 HTML），而不是让模型选 block、
-    # 由 channel-render.js 用固定模板渲染。原型实测：同一份资料、同一模型，
-    # 固定模板版把「费用包含/装备建议」塞进 5 列表格 → 页尾变成一张难看的米色电子表格；
-    # 模型直出版自己把同一批信息做成竖排卡片 + 报名区，视觉差距明显。
+    # ══「AI 宣传长图」走独立管线 ══
+    # ★ 排版权在代码侧，不在模型侧（2026-10-08 定案，反转过一次，别再改回去）：
+    #   模型只输出「内容 JSON」（theme/hero/sections[blocks]/signup），
+    #   由 longpic_template.py 用固定 CSS + 组件渲染 HTML。理由：标杆成品本身就是
+    #   一套手写模板 + 两套配色主题，模型自由排版只会「同一份资料两次生成两个样」。
+    #   （早期"模型直出整段 HTML"的实现作为**回退路径**保留在 longpic.py，模型结构化失败时用。）
     if channel=='longpic':
         master=_repair_master_media(master or {},_activity_source(a)[0])
         # ① 先让视觉模型给每张照片写描述并判断能不能用 —— 否则模型是「盲选图」，
