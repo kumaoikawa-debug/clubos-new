@@ -503,13 +503,16 @@
 
   async function inlineImages(doc) {
     var imgs = Array.prototype.slice.call(doc.images || []);
+    var failed = 0;
     await Promise.all(imgs.map(function (im) {
       if (!im.getAttribute('src')) return null;
       if (/^data:/i.test(im.getAttribute('src'))) return null;   // 已经是内联的跳过
       return new Promise(function (res) {
         var finish = function () {
           if (im.complete && im.naturalWidth > 0) {
-            try { _inlineOne(im); } catch (e) { /* canvas 被污染：留原 src */ }
+            try { _inlineOne(im); } catch (e) { failed++; /* canvas 被污染：留原 src */ }
+          } else {
+            failed++;                    // 压根没加载出来的图，也要如实计数，不许静默留白
           }
           res(1);
         };
@@ -517,11 +520,13 @@
         im.addEventListener('error', function () {
           // 裂图换成 1×1 透明像素，别让 foreignObject 为一张挂掉的图整块失败
           im.setAttribute('src', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
+          failed++;
           res(1);
         }, { once: true });
         if (im.complete) finish();          // 已加载完的不会触发 load，得主动处理
       });
     }));
+    return { total: imgs.length, failed: failed };
   }
 
   async function exportLongpicPng(paint, ctx, fileBase) {
@@ -533,7 +538,7 @@
     // 高度只能在**活的预览文档**里量：离屏副本 scrollHeight 恒为 0
     var H = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight, 1);
 
-    await inlineImages(doc);
+    var inlineStat = await inlineImages(doc);
 
     /* 复制到一张全新的离屏文档再序列化。
        ★ 2026-10-07 实测的坑：原先是把节点搬进一个 holder 再导出，
@@ -543,9 +548,17 @@
     var clean = document.implementation.createHTMLDocument('longpic-export');
     var style = doc.querySelector('style');          // 地板样式带上，字距才不会变
     if (style) clean.head.appendChild(style.cloneNode(true));
-    clean.body.setAttribute('style', 'margin:0;padding:0;background:#fff');
-    var src = doc.body.firstElementChild;
-    if (src) clean.body.appendChild(src.cloneNode(true));   // 克隆，不动活的预览
+    clean.body.setAttribute('style', 'margin:0;padding:0;background:#fff;width:' + W + 'px');
+    /* ★★ 2026-10-07 实测修掉的**第二个**真 bug（用户截图实证：「下载下来下面全是空白」）。
+       原实现只克隆 `body.firstElementChild` —— 只取第一个顶层节点。
+       而模型直出的 HTML 是**多个并列的顶层 section**（首屏 / 中段各节 / 收尾卡片），
+       于是导出图里只剩首屏那一块，下面 5000+px 全是纯白；
+       偏偏 canvas 高度取的是**完整** scrollHeight，文件名还写着 750x6709，
+       尺寸看着完全正常、预览也完全正常 —— 只有下载出来的图是残的（内容只剩 1/9）。
+       必须克隆 body 的**全部**子节点，一个不落。 */
+    Array.prototype.slice.call(doc.body.childNodes).forEach(function (n) {
+      clean.body.appendChild(n.cloneNode(true));
+    });
 
     /*★ 必须用 XMLSerializer，不能用 innerHTML（2026-10-07 实测踩死在这）。
        foreignObject 里由 **XML 解析器**处理，而 innerHTML 是 **HTML 序列化**：
@@ -583,6 +596,7 @@
     var blob = await new Promise(function (res) { cv.toBlob(res, 'image/jpeg', 0.92); });
     if (!blob) throw new Error('浏览器拒绝生成图片');
     downloadBlob(blob, fileBase + '_长图_' + W + 'x' + H + '_2x.jpg');
+    return inlineStat;      // 交给调用方如实告知「有几张图没能载入」
   }
 
   function downloadBlob(blob, name) {
@@ -947,8 +961,16 @@
       btn('下载长图（750px 宽 · 2倍图）', '', async function () {
         try {
           btn.disabled = true;
-          await exportLongpicPng(paint, ctx, safeName(ctx.title));
-          toast('长图已下载，可直接发公众号');
+          var st = await exportLongpicPng(paint, ctx, safeName(ctx.title));
+          /* 图片没载进来时**必须说**。原先裂图会被静默替换成透明像素，
+             老板拿到一张"有些地方是白的"的成品，还以为是设计留白。 */
+          if (st && st.failed > 0) {
+            showAlert({ title: '长图已下载，但有照片没载进来',
+              message: '共 ' + st.total + ' 张照片，其中 ' + st.failed + ' 张没能载入，这些位置在长图里是空白。' +
+                '请确认活动素材还在，然后再下载一次。' });
+          } else {
+            toast('长图已下载，可直接发公众号');
+          }
         } catch (e2) {
           showAlert({ title: '下载失败', message: '这个浏览器不允许把预览转成图片。' +
             '可以在预览区直接按 Command+P 存成 PDF，或用系统截图。' + (e2 && e2.message ? '（' + e2.message + '）' : '') });
