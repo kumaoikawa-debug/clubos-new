@@ -297,10 +297,15 @@ button.is-busy::after,.btn.is-busy::after{content:'';position:absolute;top:0;bot
 .ch-wx-caption{font-size:12.5px;color:#9a9a9a;text-align:center;margin:4px 0 14px}
 .ch-wx-statement{font-size:16.5px;line-height:1.85;margin:24px 0;padding:17px 19px;background:#f4f0e8;border-radius:8px}
 .ch-wx-quote{margin:0 0 20px;padding:12px 0 12px 15px;border-left:3px solid #d8d1c5;color:#4a4a4a;font-style:italic}
-.ch-wx-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(118px,1fr));gap:1px;background:#eae5da;border-radius:8px;overflow:hidden;margin:0 0 20px}
-.ch-wx-facts>div{background:#faf8f3;padding:13px 14px}
-.ch-wx-facts small{display:block;font-size:10.5px;color:#9a9488;letter-spacing:.8px}
-.ch-wx-facts strong{display:block;font-size:15.5px;margin-top:5px}
+/* facts 的旧排版是 repeat(auto-fit,minmax(118px,1fr)) 的横向网格 —— 2026-10-07 用户截图实证事故：
+   facts 里的「费用包含 / 装备建议」的值是长串清单（"…T恤一件、景区门票、午餐桌餐、瑜伽垫、
+   户外烤肉补给、PICC最高级别户外保险"），5 项挤进 5 个 118px 窄列 → 页尾变成一张巨大的
+   米色电子表格。改成**竖排 label/value 行**，与 inlineHtml 里早已在用的样式一致；
+   短值（日期 / 地点 / 费用）仍然读得清楚，长值也不会再撑爆版式。 */
+.ch-wx-facts{border-top:1px solid #eae5da;margin:0 0 20px}
+.ch-wx-facts>div{display:flex;gap:14px;align-items:flex-start;padding:11px 0;border-bottom:1px solid #eae5da}
+.ch-wx-facts small{flex:0 0 72px;font-size:12.5px;color:#9a9488;letter-spacing:.4px;line-height:1.7}
+.ch-wx-facts strong{flex:1 1 auto;min-width:0;font-size:15px;font-weight:600;color:#3f3f3f;line-height:1.75;word-break:break-word}
 .ch-wx-timeline>div{display:grid;grid-template-columns:92px minmax(0,1fr);gap:14px;padding:11px 0;border-bottom:1px solid var(--line)}
 .ch-wx-timeline time{font-weight:800;font-size:13px;color:var(--brand)}
 .ch-wx-timeline p{margin:0}
@@ -480,3 +485,18 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .ux-share-qr{width:min(240px,86%);max-height:250px;image-rendering:pixelated;border:1px solid #e0eae0;border-radius:13px;aspect-ratio:1;background:#fff}
 .ux-share-link{display:block;background:#f4f7f3;border-radius:9px;padding:10px;max-width:100%;word-break:break-all;overflow-wrap:anywhere;font-size:11px;color:#58715e}
 .ux-share-cap{white-space:pre-wrap;background:#f4f7f3;border-radius:9px;padding:10px;max-width:100%;font-size:12px;color:#3c5a48;text-align:left;line-height:1.6}
+
+/* ===== AI 宣传长图（longpic）=====
+   模型的版式由模型自己负责，这里只给一个「舞台」：灰底 + 白卡 + 手机宽度缩放，
+   让 750px 的长图在 1080px 宽的弹层里居中显示，不去干预模型写的行内样式。 */
+.ch-long-wrap{display:flex;flex-direction:column;align-items:center;gap:12px}
+.ch-long-frame{width:750px;max-width:100%;background:#fff;border-radius:12px;overflow:hidden;
+  box-shadow:0 10px 34px #1025171f;line-height:0}
+.ch-long-frame iframe{display:block;width:750px;max-width:100%;height:1200px;border:0}
+.ch-long-meta{font-size:11.5px;color:#6d7f74;line-height:1.5;text-align:center}
+@media(max-width:800px){
+  /* 窄屏：把 750px 的长图整体缩到屏幕宽，避免横向溢出。
+     缩放后容器高度由 JS 按 iframe 内容高度 × .52 写回 inline style（这里不能算，
+     因为内容高度只有渲染后才知道）。 */
+  .ch-long-frame iframe{transform:scale(.52);transform-origin:top left;width:750px}
+}

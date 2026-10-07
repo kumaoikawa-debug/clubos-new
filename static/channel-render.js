@@ -12,8 +12,8 @@
 (function () {
   'use strict';
 
-  var LABEL = { wechat: '微信公众号图文', xhs: '小红书图文', poster: '活动招募海报', recap: '活动回顾' };
-  var ICON = { wechat: '📰', xhs: '📕', poster: '🖼', recap: '📷' };
+  var LABEL = { wechat: '微信公众号图文', longpic: 'AI 宣传长图', xhs: '小红书图文', poster: '活动招募海报', recap: '活动回顾' };
+  var ICON = { wechat: '📰', longpic: '🖼', xhs: '📕', poster: '🎽', recap: '📷' };
   var _chSeq = 0;   /* 成品预览层标题 id 计数：叠开两层时 aria-labelledby 不能撞名 */
   var FONT = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif';
   var SERIF = 'Georgia,"Songti SC","Noto Serif SC",serif';
@@ -38,11 +38,27 @@
   function textOf(b) { return b.text || b.body || b.subtitle || b.summary || ''; }
 
   // 模型给 mediaRefs 的可能是 ref（img_01），也可能直接是 url
+  /*上传素材一律走公开代理，不能直接吃 /static/uploads/* ——
+     生产环境 security_v025 把那条路径整个封 404（俱乐部端也封），
+     长图里塞裸链 = 5 张图全裂，且**预览不报错**，只是白框（2026-10-07 实测）。
+     库里的 url 保持裸路径不动（代理路由的白名单就是拿它比对 的），
+     改写只发生在这里。*/
+  var _mediaActivityId = 0;
+  function setMediaActivityId(id) { _mediaActivityId = Number(id) || 0; }
+  function mediaUrl(u) {
+    var s = String(u || '');
+    if (!/^\/static\/uploads\//.test(s)) return s;
+    if (!_mediaActivityId) return s;          // 拿不到活动 id 就原样返回，别拼出坏链
+    var rel = s.replace(/^\/static\//, '');
+    return '/api/public/activities/' + _mediaActivityId + '/media/' +
+      rel.split('/').map(encodeURIComponent).join('/');
+  }
+
   function toUrl(x, mm) {
     var s = String(x || '');
     if (!s) return '';
-    if (mm && mm[s] && mm[s].url) return abs(mm[s].url);
-    if (/^(https?:|\/|data:|blob:)/.test(s)) return abs(s);
+    if (mm && mm[s] && mm[s].url) return abs(mediaUrl(mm[s].url));
+    if (/^(https?:|\/|data:|blob:)/.test(s)) return abs(mediaUrl(s));
     return '';
   }
 
@@ -57,7 +73,7 @@
         var m = mm[k[i]];
         if (!m || !m.url) continue;
         if (pass === 0 && (m.kind || 'photo') !== 'photo') continue;
-        return abs(m.url);
+        return abs(mediaUrl(m.url));
       }
     }
     return '';
@@ -68,6 +84,8 @@
   var _ctxCache = {};
   function loadCtx(activityId) {
     if (_ctxCache[activityId]) return _ctxCache[activityId];
+    // 媒体 url 要改写成公开代理地址（生产 /static/uploads/* 全 404），在这里记住活动 id
+    setMediaActivityId(activityId);
     var p = api('/api/club/' + CLUB + '/activities/' + activityId).then(function (a) {
       var master = a.activityMaster || {};
       var mm = mediaMap(master);
@@ -355,6 +373,224 @@
 
   function safeName(s) {
     return String(s || 'clubos').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40);
+  }
+
+  /* ---------- AI 宣传长图（longpic）：模型直出 HTML，沙箱里预览 + 导出 PNG ----------
+     为什么单独一节（2026-10-07 用户反馈）：固定模板把 facts 排成 5 列网格，
+     「费用包含 / 装备建议」是长串清单 → 窄列套长文本，页尾变成一张难看的电子表格。
+     这个渠道让模型自己排版，所以这里**不再翻译成 block**，只做三件事：
+       ① 把 {{media:ref}} 换成真实图片地址（ref 不在媒体清单里就整段丢掉，不留破图）
+       ② 用 sandbox iframe 原样渲染模型的设计（不注入任何我们的样式，免得改坏它的版式）
+       ③ 导出 750px 宽的整页 PNG（公众号长图的标准宽度），以及复制可粘贴的图文
+     安全：html 在服务端已 sanitize_html 过（script、事件属性、javascript: 伪协议全剥掉），
+     这里再做一层同源白名单过滤 —— 模型产物永远不该有能力跳出 iframe。 */
+
+  var LONG_WIDTH = 750;
+
+  // 模型可能把占位符写成裸文本而不是 <img src="...">，两种都要能救回来
+  function resolveLongpic(html, mm) {
+    var t = String(html || '');
+    // ① img 标签里的占位符
+    t = t.replace(/(<img\b[^>]*?src=["'])\s*\{\{\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}\}\s*(["'])/gi,
+      function (_, pre, ref, post) {
+        var u = toUrl(ref, mm);
+        return u ? pre + esc(u) + post : '';
+      });
+    // ② 没有任何 src 的 img（模型只写了 {{media:xx}}）→ 丢掉，防止留下 <img src="">
+    t = t.replace(/<img\b[^>]*src=["']\s*["'][^>]*>/gi, '');
+    // ③ 裸占位符：不在 img 里的（实测 qwen3-max 会这么写）→ 保留原样，不当成 URL
+    t = t.replace(/\s*\{\{\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}\}/g,
+      function (whole, ref) { return toUrl(ref, mm) ? '' : whole; });
+    return t;
+  }
+
+  /* 模型产物永远不该有能力跳出 iframe：只允许同源 / 数据 URL，其余 src 一律剥掉。
+     服务端已 sanitize_html 过（script、on*、javascript: 全删），这里是第二道。 */
+  function hardenLongpic(html) {
+    return String(html || '').replace(/(src|href)\s*=\s*(["'])([^"']*)\2/gi,
+      function (whole, attr, q, val) {
+        var v = String(val || '');
+        if (/^(https?:)?\/\//i.test(v)) {
+          try { if (new URL(v, location.href).origin === location.origin) return whole; } catch (e) { return ''; }
+        }
+        if (/^data:image\//i.test(v)) return whole;
+        return '';
+      });
+  }
+
+  function longpicDoc(html, ctx) {
+    return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">' +
+      '<style>' +
+      '*{box-sizing:border-box}' +
+      'html,body{margin:0;padding:0;background:#fff}' +
+      'body{width:' + LONG_WIDTH + 'px;font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;' +
+      '-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}' +
+      /* 这几条只是「地板」：模型自己写的行内样式优先级更高，这里只兜住它没写的情况 */
+      'img{max-width:100%;height:auto;display:block}' +
+      'p{margin:0 0 1em}' +
+      'section{display:block}' +
+      '</style></head><body>' + hardenLongpic(html) + '</body></html>';
+  }
+
+  async function paintLongpic(data, ctx, stage) {
+    // 图片要改写成公开代理地址，先记住是哪场活动（toUrl 靠它拼）
+    setMediaActivityId(ctx.activityId);
+    var mm = ctx.mm;
+    var html = resolveLongpic(data.html || data.body || '', mm);
+    var usedImgs = (html.match(/<img\b/gi) || []).length;
+    var dropped = (data.droppedRefs || []).length || (data.usedRefs || []).length - usedImgs;
+
+    stage.innerHTML = '<div class="ch-long-wrap">' +
+      '<div class="ch-long-frame"><iframe id="chLongFrame" title="宣传长图预览" ' +
+      'sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe></div>' +
+      '<div class="ch-long-meta"><span>正在排版…</span></div></div>';
+
+    var frame = stage.querySelector('#chLongFrame');
+    var doc = longpicDoc(html, ctx);
+    // 用 srcdoc 而不是 blob URL：blob 在部分环境下拿不到 document，会静默渲染成空白
+    frame.srcdoc = doc;
+    // 等图片都解码完再量高度，否则量到的是「图片还没撑开」的半成品高度
+    try {
+      await new Promise(function (res) {
+        var done = false;
+        var finish = function () { if (!done) { done = true; res(1); } };
+        frame.onload = function () {
+          var d = frame.contentDocument;
+          if (!d) return finish();
+          var imgs = Array.prototype.slice.call(d.images || []);
+          if (!imgs.length) return setTimeout(finish, 300);
+          var left = imgs.filter(function (i) { return !i.complete; }).length;
+          if (!left) return setTimeout(finish, 200);
+          var timer = setTimeout(finish, 4000);      // 慢图不许无限拖住预览
+          imgs.forEach(function (i) {
+            i.addEventListener('load', function () { if (--left <= 0) { clearTimeout(timer); finish(); } });
+            i.addEventListener('error', function () { if (--left <= 0) { clearTimeout(timer); finish(); } });
+          });
+        };
+        setTimeout(finish, 6000);
+      });
+    } catch (e) { /* 预览失败不该挡住「复制 / 下载」两条出路 */ }
+
+    var h = 0;
+    try { h = frame.contentDocument ? frame.contentDocument.body.scrollHeight : 0; } catch (e2) { h = 0; }
+    frame.style.height = (h || 1200) + 'px';
+    // 窄屏 CSS 把 iframe 按 .52 缩放，父容器要跟着缩高，否则下方留一大片空白
+    var scaled = window.matchMedia && window.matchMedia('(max-width:800px)').matches ? 0.52 : 1;
+    var holder = stage.querySelector('.ch-long-frame');
+    if (holder && scaled !== 1) holder.style.height = Math.ceil((h || 1200) * scaled) + 'px';
+    var meta = stage.querySelector('.ch-long-meta span');
+    if (meta && h) meta.textContent = '宽度 ' + LONG_WIDTH + 'px（公众号标准宽度）· 实际高度约 ' + h + 'px';
+    return { html: html, usedImgs: usedImgs, dropped: dropped, frame: frame };
+  }
+
+  /* 整页导出 750px 宽 PNG。
+     ★ 2026-10-07 实测修掉的真bug：原实现是 `ctx.drawImage(doc.body, ...)`，
+       浏览器直接抛 TypeError —— drawImage 只接受 canvas/img/video/ImageBitmap，
+       **不接受 DOM 元素**（同源可读也不行）。按钮能点、能看见，但**从来没下载成功过**。
+     正确做法：SVG `foreignObject` 承载序列化后的 DOM，先转成 <img> 再画进 canvas。
+     图片必须先转成 data URI ——foreignObject 里引外链地址会让 SVG 光栅化失败（画出来全白）。 */
+  /* 内联图片：foreignObject 里引外链地址会让 SVG 光栅化失败，必须转成 data URI。
+     用 JPEG(0.92) 而不是 PNG —— 活动照片用 PNG 会让 SVG 膨胀到几MB（2026-10-07 实测 4 张图 6.9MB），
+     白白拖慢导出；JPEG 在这种照片内容上肉眼无损，体积只有零头。 */
+  var _INLINE_MIME = 'image/jpeg';
+  var _INLINE_Q = 0.92;
+  function _inlineOne(im) {
+    var cv2 = document.createElement('canvas');
+    cv2.width = im.naturalWidth; cv2.height = im.naturalHeight;
+    cv2.getContext('2d').drawImage(im, 0, 0);
+    im.setAttribute('src', cv2.toDataURL(_INLINE_MIME, _INLINE_Q));
+  }
+
+  async function inlineImages(doc) {
+    var imgs = Array.prototype.slice.call(doc.images || []);
+    await Promise.all(imgs.map(function (im) {
+      if (!im.getAttribute('src')) return null;
+      if (/^data:/i.test(im.getAttribute('src'))) return null;   // 已经是内联的跳过
+      return new Promise(function (res) {
+        var finish = function () {
+          if (im.complete && im.naturalWidth > 0) {
+            try { _inlineOne(im); } catch (e) { /* canvas 被污染：留原 src */ }
+          }
+          res(1);
+        };
+        im.addEventListener('load', finish, { once: true });
+        im.addEventListener('error', function () {
+          // 裂图换成 1×1 透明像素，别让 foreignObject 为一张挂掉的图整块失败
+          im.setAttribute('src', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
+          res(1);
+        }, { once: true });
+        if (im.complete) finish();          // 已加载完的不会触发 load，得主动处理
+      });
+    }));
+  }
+
+  async function exportLongpicPng(paint, ctx, fileBase) {
+    var frame = paint.frame;
+    var doc = null;
+    try { doc = frame.contentDocument; } catch (e) { doc = null; }
+    if (!doc) throw new Error('预览尚未就绪');
+    var W = LONG_WIDTH;
+    // 高度只能在**活的预览文档**里量：离屏副本 scrollHeight 恒为 0
+    var H = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight, 1);
+
+    await inlineImages(doc);
+
+    /* 复制到一张全新的离屏文档再序列化。
+       ★ 2026-10-07 实测的坑：原先是把节点搬进一个 holder 再导出，
+         foreignObject 光栅化会把页面上同层的浮层（圆角气泡里的「3万」、
+         左右两侧的轮播箭头）一起烤进成品 —— 长图右上角凭空多一个东西。
+         离屏文档里只有长图自己的节点，SVG 不可能画到别的东西。 */
+    var clean = document.implementation.createHTMLDocument('longpic-export');
+    var style = doc.querySelector('style');          // 地板样式带上，字距才不会变
+    if (style) clean.head.appendChild(style.cloneNode(true));
+    clean.body.setAttribute('style', 'margin:0;padding:0;background:#fff');
+    var src = doc.body.firstElementChild;
+    if (src) clean.body.appendChild(src.cloneNode(true));   // 克隆，不动活的预览
+
+    /*★ 必须用 XMLSerializer，不能用 innerHTML（2026-10-07 实测踩死在这）。
+       foreignObject 里由 **XML 解析器**处理，而 innerHTML 是 **HTML 序列化**：
+       <img src=x>、<br> 这类不闭合标签、以及 &nbsp; 在 XML 里都是**语法错误**，
+       整个 SVG 解析失败 → img.onload 永远不来，只剩 onerror。 */
+    var inner = new XMLSerializer().serializeToString(clean.body);
+    // HTML 里定义过的实体在 XML 里未定义，序列化后仍会以实体名出现
+    inner = inner.replace(/&nbsp;/gi, ' ');
+
+    var svg = '<?xml version="1.0" encoding="UTF-8"?>' +
+      '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '">' +
+      '<foreignObject x="0" y="0" width="' + W + '" height="' + H + '">' + inner +
+      '</foreignObject></svg>';
+
+    /* ★ 必须用 data URI，**不能**用 Blob URL（2026-10-07 实测对照两条路径）：
+         data URI → 图片加载正常，canvas.toBlob 出图成功；
+         Blob URL → canvas 直接被判 Tainted，`toBlob` 抛 "Tainted canvases may not be exported"。
+       原因是浏览器给 blob: 的 SVG 标了不透明来源，画进 canvas 就污染了。
+       （先前误以为 data URI 会因长度失败而改用 Blob URL，正好踩中这个坑；
+         内联图换成 JPEG 后 SVG 只有 ~1.5MB，data URI 完全够用。） */
+    var img = await new Promise(function (res, rej) {
+      var im = new Image();
+      im.onload = function () { res(im); };
+      im.onerror = function () { rej(new Error('浏览器无法把排版结果转成图片')); };
+      im.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    });
+
+    var cv = document.createElement('canvas');
+    cv.width = W * 2; cv.height = H * 2;             // 2 倍图：公众号里缩排也不发虚
+    var c = cv.getContext('2d');
+    c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height);
+    c.drawImage(img, 0, 0, W * 2, H * 2);
+    /* 导出 JPEG 而非 PNG：长图是照片为主，PNG 无损会把 750×5000 的图撑到 17MB，
+       微信/邮件都发不动；JPEG(0.92) 肉眼几乎无损，体积降到 1MB 上下。 */
+    var blob = await new Promise(function (res) { cv.toBlob(res, 'image/jpeg', 0.92); });
+    if (!blob) throw new Error('浏览器拒绝生成图片');
+    downloadBlob(blob, fileBase + '_长图_' + W + 'x' + H + '_2x.jpg');
+  }
+
+  function downloadBlob(blob, name) {
+    var u = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = u; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(u); }, 5000);
   }
 
   /* ---------- 小红书：以「文案」为主，配一张首页海报 + 其它图片自动裁剪 3:4 ---------- */
@@ -697,6 +933,42 @@
     }
 
     var canvases = [];
+
+    // ══ AI 宣传长图：模型直出版式，沙箱预览 + 导出 PNG + 复制图文 ══
+    if (channel === 'longpic') {
+      if (!data.html) {
+        stage.innerHTML = '<div class="ch-missing"><div class="ch-missing-mark">🖼</div>' +
+          '<h3>这次没有拿到可用的排版内容</h3>' +
+          '<p>模型没有返回长图 HTML，通常是模型服务临时异常。请再点一次「AI 生成」。</p></div>';
+        note.textContent = '没有生成成功的内容不会计费以外的动作，也不会覆盖你已有的版本。';
+        return;
+      }
+      var paint = await paintLongpic(data, ctx, stage);
+      btn('下载长图（750px 宽 · 2倍图）', '', async function () {
+        try {
+          btn.disabled = true;
+          await exportLongpicPng(paint, ctx, safeName(ctx.title));
+          toast('长图已下载，可直接发公众号');
+        } catch (e2) {
+          showAlert({ title: '下载失败', message: '这个浏览器不允许把预览转成图片。' +
+            '可以在预览区直接按 Command+P 存成 PDF，或用系统截图。' + (e2 && e2.message ? '（' + e2.message + '）' : '') });
+        } finally { btn.disabled = false; }
+      });
+      btn('复制图文（粘贴进公众号编辑器）', 'secondary', async function () {
+        var docHtml = '<div style="width:' + LONG_WIDTH + 'px;font-family:-apple-system,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;">' + paint.html + '</div>';
+        var txt = doc.body ? doc.body.innerText : '';
+        (await copyRich(docHtml, txt)) ? toast('已复制带格式图文，去公众号编辑器粘贴即可')
+          : showAlert({ title: '复制失败', message: '浏览器拒绝了剪贴板权限，可改用「复制纯文本」。' });
+      });
+      btn('复制纯文本', 'secondary', async function () {
+        var txt = paint.frame.contentDocument ? paint.frame.contentDocument.body.innerText : (data.title || '');
+        (await copyText(txt)) ? toast('纯文本已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
+      });
+      var bits = '模型自己排的版式，直接按它的成品导出，不走固定模板。';
+      if (paint.dropped > 0) bits += ' 有 ' + paint.dropped + ' 张配图被剔除（不是本活动的真实照片）。';
+      note.textContent = bits;
+      return;
+    }
 
     if (channel === 'poster') {
       canvases = await paintPoster(data, ctx, stage);

@@ -12,7 +12,10 @@ from fastapi.staticfiles import StaticFiles
 from db import init_db, conn, row, rows, jdump, jload, setting
 from document_parser import save_uploads, parse_sources, _image_kind
 from cost_guard import sanitize_for_frontend, master_has_cost_evidence
-from ai_engine import generate_activity, generate_channel, regenerate_detail, detail_outline
+from ai_engine import (generate_activity, generate_channel, regenerate_detail, detail_outline,
+                       _fact_digest)
+from longpic import generate_longpic
+from image_caption import caption_media, caption_lines, persist_captions
 from ai_billing import ensure_credits, charge_credits, credit_cost
 from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config,
                         update_platform_provider_config, test_provider_connection, effective_gateway_mode)
@@ -1147,7 +1150,7 @@ def club_activity_cover(club_id:int, activity_id:int):
 
 @app.post('/api/club/{club_id}/activities/{activity_id}/channel/{channel}')
 async def channel_generate(club_id:int,activity_id:int,channel:str):
-    if channel not in {'wechat','xhs','poster','recap'}: raise HTTPException(400,'unsupported channel')
+    if channel not in {'wechat','xhs','poster','recap','longpic'}: raise HTTPException(400,'unsupported channel')
     ensure_credits(club_id,channel)
     with conn() as c:a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
     if not a: raise HTTPException(404,'活动不存在')
@@ -1159,6 +1162,38 @@ async def channel_generate(club_id:int,activity_id:int,channel:str):
     # Use the club-scoped proxy URL (not the raw /static/uploads path, which is
     # forbidden in prod) so it resolves inside the club session.
     cover_url=f'/api/club/{club_id}/activities/{activity_id}/cover' if a.get('cover') else None
+
+    # ══「AI 宣传长图」走独立管线（2026-07 新增）══
+    # 与其它渠道最大的不同：**排版权交给模型**（返回整段 HTML），而不是让模型选 block、
+    # 由 channel-render.js 用固定模板渲染。原型实测：同一份资料、同一模型，
+    # 固定模板版把「费用包含/装备建议」塞进 5 列表格 → 页尾变成一张难看的米色电子表格；
+    # 模型直出版自己把同一批信息做成竖排卡片 + 报名区，视觉差距明显。
+    if channel=='longpic':
+        master=_repair_master_media(master or {},_activity_source(a)[0])
+        # ① 先让视觉模型给每张照片写描述并判断能不能用 —— 否则模型是「盲选图」，
+        #    实测它会把路线地图截图选成首屏大图，还会选一张别的活动的雪山攀登照。
+        caps=await caption_media(club_id,master)
+        # ② 要点表只给碎片不给整句：上一轮实测把原文整段喂给写作模型时，
+        #    成品 8 字片段 14.5% 能在原文里逐字命中（最长连续 31 字），读起来像 PPT 译文。
+        digest=await _fact_digest(club_id,source_text) if source_text else ''
+        try:
+            content,usage=await generate_longpic(club_id,master,detail,cover_url=cover_url,
+                                                 source_text=source_text,
+                                                 caption_lines=caption_lines(master,caps),
+                                                 digest=digest)
+        except AIGatewayError as e: raise HTTPException(502,str(e))
+        if not content.get('html'):
+            raise HTTPException(502,'模型没有返回可用的排版内容，请再试一次。')
+        # ③ 描述写回 master：下次生成同一场活动不再重复跑视觉模型
+        persist_captions(master,caps)
+        with conn() as c:
+            c.execute('UPDATE activities SET activity_master_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
+                      (jdump(master),activity_id,club_id))
+            c.execute('INSERT INTO content_assets(club_id,activity_id,channel,title,body_json) VALUES(?,?,?,?,?)',(
+                club_id,activity_id,channel,content.get('title'),jdump(content)))
+        charge_credits(club_id,channel,usage.usage_id)
+        return content
+
     try: content,usage=await generate_channel(club_id,master,detail,channel,cover_url=cover_url,source_text=source_text)
     except AIGatewayError as e: raise HTTPException(502,str(e))
     charge_credits(club_id,channel,usage.usage_id)

@@ -478,6 +478,7 @@ async function loadContent(){
   const a=acts.find(x=>x.id===keep)||acts[0];
   currentActivity=a;
   const cards=[
+    ['longpic','AI 宣传长图','★ 推荐：让大模型自己排版，直接出 750px 公众号长图，可下载 2 倍图。结构、配色、留白都由模型决定，不再走固定模板'],
     ['wechat','微信公众号图文','AI 重排公众号阅读节奏；生成后可直接预览，并一键复制带格式图文到公众号编辑器'],
     ['xhs','小红书图文','文案为主：独立标题、Hook、正文与话题标签可直接复制走；另出一张 1080×1440 首页海报，并把其余现场照片裁成 3:4 九宫格配图'],
     ['poster','活动招募海报','用活动真实封面 + AI 文案在本地合成 1080×1440 海报，可直接下载'],
@@ -494,9 +495,14 @@ function channelLabel(c){return (window.ChannelRender&&ChannelRender.label(c))||
 async function genChannel(ch,id){
   try{
     // 生成会真花 AI Credits，动手前必须讲清楚。本地渲染成品（复制 / 下载）不再另计费。
+    // 长图会多跑一次「图片识别」：每张照片先让视觉模型写一句画面描述、判掉地图截图和
+    // 别的活动的照片，否则写作模型是盲选图（实测会把路线地图选成首屏大图）。费用按
+    // 公众号同一档计，所以这里把这件事对老板讲明白，而不是事后解释。
+    const msg = ch==='longpic'
+      ? '系统会读取这场活动的真实资料并调用 AI：先识别每张照片的内容（剔除地图截图与不属于本活动的照片），再由模型自行排版成一张 750px 长图。过程中产生 AI Credits 计费，生成后可直接预览、下载 2 倍图、复制图文。'
+      : '系统会读取这场活动的真实资料并调用一次 AI，产生一次 AI Credits 计费。生成后直接给成品，可以复制 / 下载。';
     if(window.uxConfirm&&!await uxConfirm({title:'生成'+channelLabel(ch)+'内容',
-      message:'系统会读取这场活动的真实资料并调用一次 AI，产生一次 AI Credits 计费。生成后直接给成品，可以复制 / 下载。',
-      confirmText:'开始生成'}))return;
+      message:msg,confirmText:'开始生成'}))return;
     const d=await api(`/api/club/${CLUB}/activities/${id}/channel/${ch}`,{method:'POST'});
     toast('内容已生成，正在渲染成品…');
     await openChannelOutput(ch,d,{activityId:Number(id)});

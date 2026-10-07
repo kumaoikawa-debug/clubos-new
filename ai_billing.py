@@ -8,6 +8,9 @@ AI_COST_KEYS = {
     'xhs': 'ai_cost_xhs',
     'poster': 'ai_cost_poster',
     'recap': 'ai_cost_recap',
+    # 「AI 宣传长图」（2026-10-07 新增）：模型直出成品 HTML，与公众号图文同量级，
+    # 但要多跑一次图片描述（视觉模型），所以按公众号的价格计，不新增平台配置项。
+    'longpic': 'ai_cost_wechat',
 }
 
 
