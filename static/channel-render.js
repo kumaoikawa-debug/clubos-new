@@ -591,11 +591,44 @@
     var c = cv.getContext('2d');
     c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height);
     c.drawImage(img, 0, 0, W * 2, H * 2);
+
+    /* ★★ 2026-10-08 兜底：**从底部自动裁掉纯白**。
+       用户第二次截图仍显示「下面一大片白」。两种可能：
+         (a) 浏览器还在跑修复前的旧 JS（只渲染首个顶层节点）—— 已在上面从代码层修掉；
+         (b) 图片没载进来时 `width:100%;height:auto` 塌成 0 高，整篇内容比量到的
+             `scrollHeight` 短，底下留白。
+       不去猜是哪一种，直接**在导出后的画布上把底部纯白裁掉**：无论哪种根因都不会再出白边。
+       只砍「末尾」空白（从底往上找最后一行非白像素），不会误伤中间的正常留白 —— 中间留白上方
+       一定有内容，从底往上扫到的第一行非白就是整篇内容的底。 */
+    var finalH = H;
+    try {
+      var rowStep = 4, lastContent = -1;
+      for (var y = cv.height - 1; y >= 0; y -= rowStep) {
+        var row = c.getImageData(0, y, cv.width, 1).data;
+        for (var i = 0; i < row.length; i += 4) {
+          if (row[i] < 250 || row[i + 1] < 250 || row[i + 2] < 250) { lastContent = y; break; }
+        }
+        if (lastContent >= 0) break;
+      }
+      if (lastContent >= 0) {
+        var keepH = Math.min(cv.height, lastContent + 1 + 8);   // 底部留 8px(2x) 收边
+        if (keepH < cv.height - 2) {
+          var cv2 = document.createElement('canvas');
+          cv2.width = cv.width; cv2.height = keepH;
+          var c2 = cv2.getContext('2d');
+          c2.fillStyle = '#fff'; c2.fillRect(0, 0, cv2.width, cv2.height);
+          c2.drawImage(cv, 0, 0);
+          cv = cv2;
+          finalH = Math.round(keepH / 2);
+        }
+      }
+    } catch (eTrim) { /* 读像素失败（极少数被判定污染的画布）就保持原样，不影响导出 */ }
+
     /* 导出 JPEG 而非 PNG：长图是照片为主，PNG 无损会把 750×5000 的图撑到 17MB，
        微信/邮件都发不动；JPEG(0.92) 肉眼几乎无损，体积降到 1MB 上下。 */
     var blob = await new Promise(function (res) { cv.toBlob(res, 'image/jpeg', 0.92); });
     if (!blob) throw new Error('浏览器拒绝生成图片');
-    downloadBlob(blob, fileBase + '_长图_' + W + 'x' + H + '_2x.jpg');
+    downloadBlob(blob, fileBase + '_长图_' + W + 'x' + finalH + '_2x.jpg');
     return inlineStat;      // 交给调用方如实告知「有几张图没能载入」
   }
 
