@@ -89,12 +89,37 @@
     var p = api('/api/club/' + CLUB + '/activities/' + activityId).then(function (a) {
       var master = a.activityMaster || {};
       var mm = mediaMap(master);
+      /* 海报在俱乐部后台本地合成，媒体走 /api/club/ 鉴权路由：
+         公开代理按设计**永不曝光 kind='logo'**、也不服务未发布活动 —— 用它加载 logo 会 404，
+         俱乐部看自己的资料（含品牌 logo / 草稿）天经地义。白名单=该活动 master.media + cover。 */
+      function clubMediaUrl(rawUrl) {
+        var s = String(rawUrl || '');
+        var mUp = s.match(/^\/static\/(uploads\/.+)$/);
+        if (!mUp) return abs(s);   // demo 静态图等非 uploads 路径原样用
+        return abs('/api/club/' + CLUB + '/activities/' + Number(activityId) + '/media/' +
+          mUp[1].split('/').map(encodeURIComponent).join('/'));
+      }
+      function mediaClubUrl(ref) {
+        var m = mm[ref];
+        return m && m.url ? clubMediaUrl(m.url) : '';
+      }
+      function firstPhotoClubUrl() {
+        var k = Object.keys(mm);
+        for (var pass = 0; pass < 2; pass++)
+          for (var i = 0; i < k.length; i++) {
+            var m = mm[k[i]];
+            if (!m || !m.url) continue;
+            if (pass === 0 && (m.kind || 'photo') !== 'photo') continue;
+            return clubMediaUrl(m.url);
+          }
+        return '';
+      }
       /* 海报要盖俱乐部的 logo：资料里被解析期标成 kind='logo' 的图就是品牌标识
          （真实活动照片是 kind='photo'，不会误当 logo 拿来盖印）。取第一张。 */
       var logoUrl = '';
       Object.keys(mm).forEach(function (k) {
         var m = mm[k];
-        if (!logoUrl && m && m.kind === 'logo' && m.url) logoUrl = toUrl(k, mm);
+        if (!logoUrl && m && m.kind === 'logo' && m.url) logoUrl = clubMediaUrl(m.url);
       });
       return {
         club: CLUB,
@@ -103,6 +128,8 @@
         mm: mm,
         logoUrl: logoUrl,
         status: a.status || '',
+        mediaClubUrl: mediaClubUrl,
+        firstPhotoClubUrl: firstPhotoClubUrl,
         coverUrl: a.cover ? ('/api/club/' + CLUB + '/activities/' + activityId + '/cover') : '',
         title: a.title || master.title || '活动',
         date: master.date || a.event_date || '',
@@ -792,7 +819,11 @@
     cv.width = W; cv.height = H;
     var c = cv.getContext('2d');
 
-    var bgUrl = toUrl((data.preferredMediaRefs || [])[0], ctx.mm) || ctx.coverUrl || firstMediaUrl(ctx.mm);
+    /* 海报背景走俱乐部路由（与 logo 同理：草稿活动 / 品牌图公开代理不服务）。
+       优先 AI 指定的图 ref，再退活动封面，最后退清单里第一张真实照片。 */
+    var pref = (data.preferredMediaRefs || [])[0];
+    var bgUrl = (pref && ctx.mm[pref] && ctx.mm[pref].url) ? ctx.mediaClubUrl(pref)
+              : (ctx.coverUrl || ctx.firstPhotoClubUrl());
     var img = bgUrl ? await loadImgSafe(bgUrl) : null;
 
     if (img) { c.save(); drawCover.call(c, img, 0, 0, W, H); c.restore(); }

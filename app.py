@@ -2021,6 +2021,27 @@ def public_activity_media(activity_id:int,asset_path:str):
     response.headers['Cache-Control']='public, max-age=300'
     return response
 
+@app.get('/api/club/{club_id}/activities/{activity_id}/media/{asset_path:path}')
+def club_activity_media(club_id:int,activity_id:int,asset_path:str):
+    """俱乐部后台自己的活动媒体读取（海报合成要把品牌 logo 盖上去，而公开代理按设计
+       永远不曝光 kind='logo'，也不服务未发布活动）。会话安全由 /api/club/ 中间件统一把守
+       （role=club 且 path club_id 必须等于会话 club）；白名单=该活动 master.media + cover，
+       不是对 /static/uploads 通配开放。"""
+    with conn() as c:
+        a=row(c.execute('SELECT activity_master_json,source_json,cover FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+    if not a:raise HTTPException(404,'not found')
+    original='/static/'+unquote(asset_path)
+    file_path=_safe_media_path(original)
+    if not file_path:raise HTTPException(404,'not found')
+    master=_repair_master_media(jload(a['activity_master_json'],{}),_activity_source(a)[0])
+    allowed={str(m.get('url')) for m in master.get('media',[]) if isinstance(m,dict) and m.get('url')}
+    cover=str(a.get('cover') or '')
+    if cover: allowed.add(cover)
+    if original not in allowed or not file_path.is_file():raise HTTPException(404,'not found')
+    response=FileResponse(file_path)
+    response.headers['Cache-Control']='private, max-age=60'
+    return response
+
 def _public_price_pending(c, activity_id:int, master:dict|None=None) -> bool:
     """这个活动当前有没有「可对外报的价格」。判定口径与 public_activity/get_activity 完全一致。
 
