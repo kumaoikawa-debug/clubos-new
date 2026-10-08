@@ -280,7 +280,10 @@ function edPlain(v){
    走 edPlain 归一：对象数组也能拆成正常段落，而不是 [object Object]。 */
 function edParas(v){
   const raw=Array.isArray(v)?v.map(edPlain).join('\n'):edPlain(v);
-  const arr=String(raw||'').split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  // 宣传正文不许以钟点区间开头（「14:20至15:00，…」像排班表）：分钟级安排在「详细行程」折叠区
+  // 已完整呈现（2026-10-08 用户反馈）。只剥段落开头，不动句中时间；旧数据也会在这里被兜住。
+  const clockRe=/^\d{1,2}[:：]\d{2}\s*[至到~～\-—–]\s*\d{1,2}[:：]\d{2}\s*[,，、：:]?\s*/;
+  const arr=String(raw||'').split(/\n+/).map(s=>s.trim().replace(clockRe,'')).filter(Boolean);
   return arr.map(s=>`<p>${esc(s)}</p>`).join('');
 }
 function renderPromo(detail,master={},opts={}){
