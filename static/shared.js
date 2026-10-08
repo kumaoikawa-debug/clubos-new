@@ -302,14 +302,22 @@ function renderPromo(detail,master={},opts={}){
     /* facts 的 value 必须是标量。真模型可能给对象/数组（2026-10-03：esc(x.value||x)
        遇到对象会把它 String() 成 JSON 印在页面上）。这里只渲染标量，
        对象/数组用 feeValueHtml 展开，绝不把 JSON 文本漏给顾客。 */
-    else if(b.type==='facts')h+=`<section class="ed-facts">${(b.items||[]).map(x=>{
-      let v=(x&&typeof x==='object'&&!Array.isArray(x))?x.value:x;
-      let shown;
-      if(v==null)v=(x&&typeof x==='object')?feeValueHtml(x,1):x;
-      else if(typeof v==='object')shown=feeValueHtml(v,1);
-      else shown=esc(String(v));
-      return `<div><small>${esc((x&&x.label)||'')}</small><strong>${shown==null?'':shown}</strong></div>`;
-    }).join('')}</section>`;
+    else if(b.type==='facts'){
+      /* facts 现在也常被模型用来写「这场活动只做三件事」这类引导语（headline）+
+         几条具体说明（items，label 常为空）。引导语以前会被丢掉，整块只剩几行孤立的字；
+         label 为空时也不再渲染一个空的 <small>。 */
+      const fit=(b.items||[]).map(x=>{
+        let v=(x&&typeof x==='object'&&!Array.isArray(x))?x.value:x;
+        let shown;
+        if(v==null)v=(x&&typeof x==='object')?feeValueHtml(x,1):x;
+        else if(typeof v==='object')shown=feeValueHtml(v,1);
+        else shown=esc(String(v));
+        const lab=(x&&x.label)?`<small>${esc(x.label)}</small>`:'';
+        return `<div>${lab}<strong>${shown==null?'':shown}</strong></div>`;
+      }).join('');
+      // 空块不上屏：宁可不渲染，也不要页面中间出现一块空白
+      if(fit)h+=`<section class="ed-facts">${(b.headline||b.title)?`<p class="ed-facts__lead">${esc(b.headline||b.title)}</p>`:''}${fit}</section>`;
+    }
     else if(b.type==='narrative'){
       const ok=resolvedRefs(refs,mm);
       const media=ok.length?`<div class="ed-narrative-media">${ok.map(r=>mediaHtml(r,mm)).join('')}</div>`:'';
@@ -433,19 +441,13 @@ function gearRow(p,opts,sub){
   /* 连详情页都没有的端（理论上不会发生）：退回只读行，绝不退化成「一点就下单」。 */
   return '<div class="gear-row'+(sub?' gear-row--sub':'')+'" title="查看装备详情">'+inner+'</div>';
 }
-/* 同一件装备会同时满足多项清单要求（「速干衣裤」与「防晒外套」都命中服装面料），
-   整行重复出现会把清单拉长一倍，看起来像推荐错了。第二次出现收成一行只读引用，
-   购买入口保留在首次出现处。 */
-function gearRowDup(p){
-  return '<div class="gear-row gear-row--dup" title="同一件装备，已在上方列出">'
-    +'<span class="gear-emoji">'+esc(p.emoji||'🧰')+'</span>'
-    +'<span class="gear-main"><b>'+esc(p.name)+'</b><small>同一件装备 · 已在上方列出</small></span></div>';
-}
+/* 旧 gearRowDup（同一件装备第二次出现时收成「已在上方列出」的只读行）已在 2026-10-09
+   随 renderPacking 重构删除：现在按装备聚合、一件装备全局只出现一次，不再需要补丁行。 */
 function renderPacking(master,opts){
   opts=opts||{};
   const list=master.checklist||[];
   /* chips 不再是哑的纯文本：哪几项商城真能配到，就要在清单里直接标出来——
-     顾客先扫一眼清单（✓ 的=能一键配齐），再往下看装备行，视线动线才是通的。 */
+     顾客先扫一眼清单（✓ 的=能一键配齐），再往下看分区。 */
   const g=opts.gear;
   const okTexts=new Set(((g&&g.items)||[])
     .filter(it=>(it.matches||[]).length||(it.substitutes||[]).length)
@@ -458,61 +460,84 @@ function renderPacking(master,opts){
   const items=g.items||[],extras=g.extras||[];
   if(!items.length&&!extras.length)return chips;
   const o={canBuy:!!opts.canBuy&&typeof window.buy==='function',manage:!!opts.manage};
-  /* 原则（2026-09-28 用户定）：推荐装备必须匹配商城，有货才显示、没货就不显示。
-     「商城暂无对应装备」占位与缺货品类提示是给老板看的运营信息（manage），
-     顾客看到的应当只有「清单 + 能买到的装备」——满屏"暂无"只会显得商城很空。 */
-  const visible=items.filter(it=>(it.matches||[]).length||(it.substitutes||[]).length);
-  const seen={};                                          // 已完整展示过的商品 id
-  const slot=(it)=>{
-    const ms=(it.matches||[]).map(p=>{
-      const id=Number(p.id||0);
-      if(id&&seen[id])return gearRowDup(p);
-      if(id)seen[id]=1;
-      return gearRow(p,o);
-    }).join('');
-    // 平替：清单项没有精确匹配时引擎给的「最接近的同类」。徽标与理由由后端生成，
-    // 这里只负责渲染；同样计入 seen，避免它又在「其他在售装备」里出现一次。
-    const subs=(it.substitutes||[]).map(p=>{
-      const id=Number(p.id||0);
-      if(id&&seen[id])return gearRowDup(p);
-      if(id)seen[id]=1;
-      return gearRow(p,o,true);
-    }).join('');
-    // 清单项本身认不出装备品类时（如"身份证"）不该说"商城没有"，那是两回事
-    const body=ms||subs
-      ||((it.tags||[]).length?'<div class="gear-none">商城暂无对应装备，可看看下方推荐装备</div>':'');
-    return '<div class="pack-slot"><div class="pack-need">'+esc(it.text)+'</div>'
-      +'<div class="pack-gear">'+body+'</div></div>';
+  /* ★ 2026-10-09 用户反馈重构（「一个装备只推荐出现一次，商城有的和没有的要分开」）：
+     以前是「一个清单项一个槽位、槽位里挂商品」，同一件商品跨多个清单项时，第二处只能留一行
+     「同一件装备·已在上方列出」——清单被拉长一倍，还看不出哪些是商城真能买到的、哪些得自己准备。
+     现在按**装备**聚合，整份清单只分两个区：
+       ① 商城可以配齐：每件商品全局只出现一次，卡上写清它满足了哪几项清单要求；
+       ② 这些请自己准备：清单里商城配不到的项，只列文字，不挂商品卡。 */
+  const goods=[],byKey={};
+  const keyOf=p=>{const id=Number((p&&p.id)||0);return id?('id:'+id):('n:'+String((p&&p.name)||''))};
+  const addGood=(p,need,isSub)=>{
+    if(!p)return;
+    const k=keyOf(p);let row=byKey[k];
+    if(!row){row={p,needs:[],sub:!!isSub};byKey[k]=row;goods.push(row)}
+    else if(row.sub&&!isSub)row.sub=false;   // 既是精确匹配又被当平替：按精确匹配呈现（实线卡）
+    const t=String(need||'').trim();
+    if(!t)return;
+    // 每个清单要求单独记是不是「平替」：同一件商品可能既顶了甲的缺，又是乙的正牌货
+    const hit=row.needs.find(n=>n.t===t);
+    if(!hit)row.needs.push({t,sub:!!isSub});
+    else if(hit.sub&&!isSub)hit.sub=false;
   };
-  const slots=(o.manage?items:visible).map(slot).join('');
+  /* 顾客视角只认「真能买到的」；运营视角（manage）连无匹配的清单项一起过一遍，好定位补货缺口。 */
+  const visible=items.filter(it=>(it.matches||[]).length||(it.substitutes||[]).length);
+  (o.manage?items:visible).forEach(it=>{
+    const need=String(it.text||'').trim();
+    const ms=it.matches||[],subs=it.substitutes||[];
+    if(ms.length||subs.length){ms.forEach(p=>addGood(p,need,false));subs.forEach(p=>addGood(p,need,true));}
+  });
+  // 「本次活动推荐装备」并进第一区：全局去重，已经出现过的商品不再列第二次
+  extras.forEach(p=>addGood(p,'',false));
+  /* 需要自备的 = 清单里有、商城配不到的项（以清单本身为准，而不是以引擎识别到的项为准，
+     否则「商城认不出品类」的那些会被悄悄吞掉，顾客以为全都买得到）。 */
+  const miss=[];
+  (list||[]).forEach(x=>{
+    const t=String(x||'').trim();
+    if(t&&!okTexts.has(t)&&miss.indexOf(t)<0)miss.push(t);
+  });
+  /* 卡上写清它满足了哪几项清单要求；平替的那一项单独标出来——
+     顾客得知道「这不是清单里那件，是商城目前最接近的同类」（引擎给的理由在卡片行里）。 */
+  const needTags=r=>r.needs.length
+    ? '<div class="pack-needs">'+r.needs.slice(0,4).map(n=>'<span'+(n.sub?' class="pack-needs__sub" title="商城没有清单里那件，这是最接近的同类"':'')+'>'+(n.sub?'平替 · ':'')+esc(n.t)+'</span>').join('')
+      +(r.needs.length>4?'<span class="pack-needs__more">+'+(r.needs.length-4)+'</span>':'')+'</div>'
+    : '';
+  const ownHtml=goods.length
+    ? '<div class="pack-sec pack-sec--own"><div class="pack-sec__head"><b>商城可以配齐</b>'
+      +'<span class="pack-sec__count">'+goods.length+' 件</span>'
+      +'<span class="pack-sec__hint">点开看规格与会员价</span></div>'
+      +'<div class="pack-goods'+(goods.length===1?' pack-goods--1':'')+'">'
+      +goods.map(r=>'<div class="pack-good">'+gearRow(r.p,o,r.sub)+needTags(r)+'</div>').join('')
+      +'</div></div>'
+    : '';
+  const missHtml=miss.length
+    ? '<div class="pack-sec pack-sec--miss"><div class="pack-sec__head"><b>这些请自己准备</b>'
+      +'<span class="pack-sec__count">商城暂无</span>'
+      +'<span class="pack-sec__hint">'+(o.manage?'可在商城上架补全':'按自己的习惯带去就好')+'</span></div>'
+      +'<div class="pack-miss">'+miss.map(t=>'<div class="pack-miss__item">'+esc(t)+'</div>').join('')+'</div></div>'
+    : '';
   const cov=g.coverage||{};
   const md=g.memberDiscount||null;
   const subCount=Number(cov.substituted||0);
-  let head='<div class="gear-head"><span class="eyebrow">按清单搭配</span><span class="gear-summary">清单 '
+  const head='<div class="gear-head"><span class="eyebrow">按清单搭配</span><span class="gear-summary">清单 '
     +Number(cov.needs||0)+' 项 · 商城可配 '+Number(cov.matched||0)+' 项'
     +(subCount?' · 平替 '+subCount+' 项':'')
     +(md?' · <b>'+esc(md.tierName)+' '+esc(String(md.discountZhe))+' 折</b>':'')
     +'</span></div>';
+  /* 运营视角额外给一句「哪些品类商城没有」——这是给老板补货看的；
+     顾客分区里只有「请自己准备」，不需要出现「缺货」这种字眼。 */
   let missLine='';
   if(o.manage){
-    const miss=[];
+    const cats=[];
     items.forEach(it=>{
-      // 已经给了平替的项不再算「缺」：整页都在说"暂无"会让顾客以为这家店什么都没有
       if((it.tags||[]).length&&!(it.matches||[]).length&&!(it.substitutes||[]).length){
         const l=(it.tagLabels||[])[0];
-        if(l&&miss.indexOf(l)<0)miss.push(l);
+        if(l&&cats.indexOf(l)<0)cats.push(l);
       }
     });
-    missLine=miss.length
-      ? '<div class="gear-missing">以下品类商城暂无，也未找到相近装备：'+esc(miss.join('、'))+'（可在商城上架补全）</div>'
-      : '';
+    missLine=cats.length?'<div class="gear-missing">以下品类商城暂无，也未找到相近装备：'+esc(cats.join('、'))+'（可在商城上架补全）</div>':'';
   }
-  // 「其他在售装备」是补充位：清单里已经出现过的商品不再重复列一次
-  const extraRows=extras.filter(p=>!seen[Number(p.id||0)]).map(p=>gearRow(p,o)).join('');
-  const extra=extraRows
-    ? '<div class="gear-extras"><div class="gear-extras-title">本次活动推荐装备</div><div class="pack-gear">'+extraRows+'</div></div>'
-    : '';
-  return head+chips+'<div class="pack-plan">'+slots+'</div>'+missLine+extra;
+  return head+chips+ownHtml+missHtml+missLine;
 }
 /* 费用说明的键名中文化。fees 是 AI 生成时落库的自由对象，键名常是 newCustomer /
    member / note 这类英文标识符 —— 直接渲染出来，顾客看到的是「newCustomer 498元/人」。

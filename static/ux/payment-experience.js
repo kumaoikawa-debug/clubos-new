@@ -91,7 +91,43 @@ async function localSimulatePayment(checkoutId,action){
   cancel.onclick=async()=>{const st=uxBusyOn(cancel);try{await post('/api/public/checkouts/'+checkoutId+'/cancel',{});finished=true;status.textContent='订单已取消，积分占用已释放';finish(null);dlg.close()}catch(e){status.textContent=e.message||'取消失败'}finally{uxBusyOff(st)}};
   return result;
 }
- window.signupNow=async function(){if(!currentAct||!currentOcc){toast('请先选择团期');return}if(Number(currentOcc.remaining)<bookingParticipants.length){toast('本团期剩余名额不足，请重新选择');return}const requireComplete=currentAct.participantPolicy?.allowIncompleteAtCheckout===false;
+ /* 报名前必须勾选同意活动规则（2026-10-09 用户要求）。
+   顾客点「立即报名」后先看到规则全文与一个必须勾选的同意框，未勾选时确认按钮不可用。
+   规则正文直接复用活动页下方那五块（同一份数据、同一套措辞），避免弹窗与页面两处说法不一致。 */
+function rulesConsent(a){
+ return new Promise(resolve=>{
+  /* 五个政策块的渲染函数在 web.js 里是全局函数声明；这里用 typeof 探一下，
+     万一某端没加载它们，也要给顾客一句能读的话，而不是空白弹窗。 */
+  const body=(typeof pointsPolicyHtml==='function')
+   ?pointsPolicyHtml(a)+refundPolicyHtml(a)+participantPolicyHtml(a)+noticesHtml(a)+disclaimerHtml(a)
+   :'<div class="w-policy"><p>请确认已阅读并同意本活动的积分、退款、报名与安全规则。</p></div>';
+  const node=document.createElement('div');node.className='ux-overlay ux-consent-overlay';
+  node.innerHTML='<div class="ux-dialog" role="dialog" aria-modal="true" aria-labelledby="uxConsentTitle">'
+   +'<div class="ux-dialog-head"><div><div class="eyebrow">BEFORE YOU BOOK</div>'
+   +'<h2 id="uxConsentTitle">报名前请确认</h2>'
+   +'<p>请阅读以下规则与要求，勾选同意后才能继续报名。</p></div>'
+   +'<button type="button" class="x" aria-label="关闭">×</button></div>'
+   +'<div class="ux-dialog-body"><div class="ux-consent-scroll">'+body+'</div>'
+   +'<label class="ux-consent-check"><input type="checkbox" id="uxConsentBox">'
+   +'<span>我已阅读并同意上述<b>活动积分规则 / 退款规则 / 报名人规则 / 注意事项 / 免责声明</b>的全部条款与要求</span></label>'
+   +'<div class="ux-inline-error" role="alert" hidden>请先勾选同意，才能继续报名</div></div>'
+   +'<div class="ux-dialog-foot"><button type="button" class="btn ghost ux-consent-cancel">再想想</button>'
+   +'<button type="button" class="btn ux-consent-ok" disabled>同意并继续报名</button></div></div>';
+  document.body.append(node);
+  const box=node.querySelector('#uxConsentBox'),ok=node.querySelector('.ux-consent-ok'),err=node.querySelector('.ux-inline-error');
+  let done=false,session=null;
+  const finish=v=>{if(done)return;done=true;node.remove();session&&session.release();resolve(v)};
+  box.onchange=()=>{ok.disabled=!box.checked;if(box.checked)err.hidden=true};
+  node.querySelector('.x').onclick=()=>finish(false);
+  node.querySelector('.ux-consent-cancel').onclick=()=>finish(false);
+  ok.onclick=()=>{if(!box.checked){err.hidden=false;box.focus();return}finish(true)};
+  session=window.uxDialogSession(node,{onEscape:()=>finish(false),initialFocus:'#uxConsentBox'});
+ });
+}
+window.signupNow=async function(){if(!currentAct||!currentOcc){toast('请先选择团期');return}
+  /* 同意确认放在最前面：没同意就谈不上名额与资料校验（取消 = 放弃报名，不弹别的提示）。 */
+  if(!await rulesConsent(currentAct))return;
+  if(Number(currentOcc.remaining)<bookingParticipants.length){toast('本团期剩余名额不足，请重新选择');return}const requireComplete=currentAct.participantPolicy?.allowIncompleteAtCheckout===false;
   for(let i=0;i<bookingParticipants.length;i++){const p=bookingParticipants[i];if(!p.name?.trim()){toast('请填写第 '+(i+1)+' 位参加人姓名');document.querySelector('#participantForms input')?.focus();return}if(!validPhone(p.phone)){toast('第 '+(i+1)+' 位参加人电话格式需要核对');return}if(requireComplete&&(!p.idType||!p.idNumber||!p.emergencyContactName||!validPhone(p.emergencyContactPhone))){toast('本活动要求付款前补齐第 '+(i+1)+' 位参加人的证件与紧急联系人资料');return}}
   // 校验放在锁外：资料没填全时立刻给提示，不该让「立即报名」闪一下忙态。
   return uxFlow('checkout',async()=>{

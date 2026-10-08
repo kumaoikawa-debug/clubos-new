@@ -73,6 +73,14 @@ _WRITING_CONTRACT = """文案与排版契约（2026-10-07 第二版，用户反�
   执行方案，你的任务是把执行方案**翻译成顾客的体验与获得**——让读者知道自己会经历什么、
   得到什么、需要自己准备什么；转不成顾客价值的内部细节，直接不写。
 
+- 禁令 J｜信息类字段也是文案（2026-10-09 用户反馈，同样适用于**每一场活动**的介绍）：
+  facts / info / cards / numbercards 里的文字，以及餐饮、装备、天气、路线、住宿、集合这类
+  描述性内容，**同样是你要写的文案，同样不许照搬方案**。方案里这类内容往往写成
+  「餐饮：户外牛肉汤锅（含精选黄牛腱肉、虾滑、肥牛等）」这样的参数串；品类名与数字保留，
+  但那句话必须由你重新组织成顾客读得进去的表达：把括号里的堆料写成具体说法、把「含…等」
+  这种清单腔改掉、把方案里的营销词换成人话。
+  自查办法：把你写的这段和方案原文并排看，如果只是把冒号换成了逗号，那就是照搬，必须重写。
+
 ★ **不许照抄。** 这是本文档最重要的一条：
   实测「把方案原文整段喂给模型」时，成品里 14.5% 的 8 字片段能在原文里逐字找到，
   最长有一段连续 31 个字与原文一字不差 —— 读起来就是把 PPT 的景点说明翻译了一遍。
@@ -195,17 +203,52 @@ def longest_common_span(a: str, b: str) -> int:
     return best
 
 
-def source_echo_blocks(blocks: list[dict[str, Any]], source_text: str, limit: int = 12) -> list[int]:
-    """返回「与原文连续重合 > limit 字」的 block 下标。"""
+# 要点表里属于「事实枚举」而不是「文案」的内容：价格、费用清单、日期、名额。
+# 它们本来就该与方案一字不差（费用包含什么不能编、价格不能改），拿它们去判「照抄」
+# 只会让模型白改写一遍，甚至把事实改歪。用户抱怨的是**描述性文字**被整句搬走。
+_FACT_LIKE = re.compile(r'(费用包?含|费用不含|包含[:：]|不含[:：]|[0-9]+\s*元|积分|¥|/人|^\d{4}[-./年])')
+
+
+def _echo_texts(b: dict[str, Any], deep: bool = False, limit: int = 12) -> list[tuple[str, int]]:
+    """一个 block 里「本应由模型重写」的文本片段，以及各自的判定门槛。
+
+    deep=True 时把要点表 / 卡片里的 value 也算进来（2026-10-09 用户反馈：详情里
+    「餐饮：户外牛肉汤锅（含精选黄牛腱肉、虾滑、肥牛等）」这种参数串就是照搬方案原文，
+    只查 headline/body 根本查不到它）。
+    ★ 要点表的门槛要比正文**低**：正文是长段落，12 字连续重合才叫抄；而要点表本来就是短语，
+    「徒步 + 颂钵冥想 + 自然拓染」这种 10 字串已经是明晃晃的照搬，用 12 字门槛会漏掉它。
+    日期、里程这类更短的 value（< short）不参与判定——它们本来就该与资料一字不差。
+    """
+    keys = ('headline', 'title', 'body', 'text', 'subtitle', 'caption', 'pull')
+    out = [(str(b.get(k) or ''), limit) for k in keys]
+    if deep:
+        short = max(6, limit - 4)
+        for x in (b.get('items') if isinstance(b.get('items'), list) else []):
+            v = x.get('value') if isinstance(x, dict) else (x if isinstance(x, str) else None)
+            if not isinstance(v, str) or len(v.strip()) < short:
+                continue
+            if _FACT_LIKE.search(v):      # 价格 / 费用清单 / 日期：属于事实，不判照抄
+                continue
+            out.append((v, short))
+        for x in (b.get('cards') if isinstance(b.get('cards'), list) else []):
+            if isinstance(x, dict):
+                out += [(str(x.get(k) or ''), limit) for k in ('title', 'text', 'body', 'content')]
+    return [(t, lim) for t, lim in out if t.strip()]
+
+
+def source_echo_blocks(blocks: list[dict[str, Any]], source_text: str, limit: int = 12,
+                       deep: bool = False) -> list[int]:
+    """返回「与原文连续重合 > limit 字」的 block 下标。deep=True 时连要点表一起查。"""
     if not source_text:
         return []
     bad = []
     for i, b in enumerate(blocks or []):
         if not isinstance(b, dict):
             continue
-        txt = ' '.join(str(b.get(k) or '') for k in ('headline', 'title', 'body', 'text'))
-        if txt.strip() and longest_common_span(txt, source_text) > limit:
-            bad.append(i)
+        for txt, lim in _echo_texts(b, deep, limit):
+            if longest_common_span(txt, source_text) > lim:
+                bad.append(i)
+                break
     return bad
 
 
@@ -231,6 +274,94 @@ def _echo_rewrite_prompt(blocks: list[dict[str, Any]], idxs: list[int], source_t
 
 资料原文（只用于核对事实，**它的句子不许再出现在成品里**）：
 {source_text[:8000]}"""
+
+
+DETAIL_ECHO_SYSTEM = ('你是中文户外旅行公众号的主编，擅长把「方案语言」改写成有人味的成稿句子，'
+                      '同时一个事实都不改。')
+
+_DETAIL_ECHO_PROMPT = """下面这些段落，是刚从活动方案改写出来的 C 端详情内容。问题：它们**几乎照抄了方案原句**
+（要点表里那种「餐饮：户外牛肉汤锅（含精选黄牛腱肉、虾滑、肥牛等）」的参数串也算照抄）。
+
+请只改写被指出的这几块，输出结构与输入完全一致的 JSON 数组：
+[{{"i":<原下标>,"headline":"","body":"","text":"","items":[{{"label":"","value":""}}]}}]
+
+改写要求：
+- 事实（数字 / 专名 / 时间 / 海拔 / 品类）一个都不许动，必须与方案完全一致；要点表的 label 原样保留。
+- 文字必须重写：把参数串写成顾客读得进去的句子——口语、有画面、有判断；括号里的堆料改成具体说法，
+  杜绝「含…等」这种清单腔，也不用方案里的营销词。
+- 任一成品句与方案原文的**连续重合不得超过 12 个字**（只把冒号换成逗号不算重写）。
+- 不许新增方案里没有的事实，也不许删掉方案里已有的事实。
+- 不要输出任何解释。
+
+待改写内容：{picked}
+
+方案原文（只用于核对事实，**它的句子不许再出现在成品里**）：
+{source}"""
+
+
+async def _rewrite_echo_detail(club_id: int, detail: dict[str, Any], source_text: str) -> bool:
+    """详情照抄闸门：命中「与原文连续重合 > 12 字」的 block，交回模型定向重写一次。
+
+    为什么详情也要这一道（2026-10-09 用户反馈「这些文案不要照搬方案」）：
+    渠道文案（公众号 / 小红书）早就有 source_echo_blocks + 定向重写，但**详情从来没有**，
+    于是详情页里那些「活动形式 / 路线 / 天气 / 餐饮 / 装备」行成了照搬方案原文的漏网区。
+    返回是否真的改到了内容；任何异常都吞掉——回炉失败就接受原稿，不能让整条生成链路挂掉。
+    """
+    if not isinstance(detail, dict) or not source_text:
+        return False
+    blocks = detail.get('blocks')
+    if not isinstance(blocks, list) or not blocks:
+        return False
+    bad = source_echo_blocks(blocks, source_text, deep=True)
+    if not bad:
+        return False
+    try:
+        picked = []
+        for i in bad:
+            b = blocks[i] if isinstance(blocks[i], dict) else {}
+            row = {'i': i, 'type': b.get('type') or 'narrative',
+                   'headline': b.get('headline') or b.get('title') or '',
+                   'body': b.get('body') or b.get('text') or ''}
+            if isinstance(b.get('items'), list):
+                row['items'] = [{'label': str((x.get('label') if isinstance(x, dict) else x) or ''),
+                                 'value': str((x.get('value') if isinstance(x, dict) else '') or '')}
+                                for x in b['items'] if isinstance(x, (dict, str))][:12]
+            picked.append(row)
+        fix = await generate_json(club_id=club_id, task_type='detail',
+                                  system_prompt=DETAIL_ECHO_SYSTEM,
+                                  user_prompt=_DETAIL_ECHO_PROMPT.format(
+                                      picked=json.dumps(picked, ensure_ascii=False),
+                                      source=source_text[:8000]))
+        rows = fix.data if fix else None
+        if isinstance(rows, dict):
+            rows = rows.get('blocks') or rows.get('items')
+        changed = False
+        for row in (rows or []):
+            if not isinstance(row, dict):
+                continue
+            i = row.get('i')
+            if not isinstance(i, int) or not (0 <= i < len(blocks)) or not isinstance(blocks[i], dict):
+                continue
+            tgt = blocks[i]
+            for k in ('headline', 'body', 'text'):
+                v = row.get(k)
+                if isinstance(v, str) and v.strip() and v.strip() != str(tgt.get(k) or '').strip():
+                    tgt[k] = v.strip()
+                    changed = True
+            new_items = row.get('items')
+            if isinstance(new_items, list) and new_items and isinstance(tgt.get('items'), list):
+                # 只回填模型真改过的 value：label 与条目数量以原结构为准，
+                # 免得模型在改写时顺手删掉一条（要点表少一行，顾客就少知道一件事）。
+                for j, orig in enumerate(tgt['items']):
+                    if j >= len(new_items) or not isinstance(orig, dict) or not isinstance(new_items[j], dict):
+                        continue
+                    nv = new_items[j].get('value')
+                    if isinstance(nv, str) and nv.strip() and nv.strip() != str(orig.get('value') or '').strip():
+                        orig['value'] = nv.strip()
+                        changed = True
+        return changed
+    except Exception:
+        return False
 
 
 def _ensure_media_refs(blocks: list[dict[str, Any]], photo_refs: list[str]) -> list[dict[str, Any]]:
@@ -909,6 +1040,21 @@ def _generic_beats(hl:list[dict[str,str]],text:str,location:str)->list[dict[str,
     return beats
 
 
+def _split_lines(txt:str)->list[str]:
+    """把模型写成一段多行文本的条目拆成行（去项目符号，最多 8 条）。"""
+    return [s.strip().lstrip('-·•').strip()
+            for s in re.split(r'[\n；;]+', str(txt or '')) if s.strip()][:8]
+
+
+def _lines_to_items(txt:str)->list[dict[str,str]]:
+    """「标签：值」逐行还原成 facts 的条目；没有冒号的行整行当值。"""
+    rows=[]
+    for s in _split_lines(txt):
+        m=re.match(r'^([^：:]{1,14})[：:]\s*(.+)$', s)
+        rows.append({'label':m.group(1).strip(),'value':m.group(2).strip()} if m else {'label':'','value':s})
+    return rows
+
+
 def _sanitize_blocks(blocks:list[dict[str,Any]],allowed_refs:set[str]|None=None)->list[dict[str,Any]]:
     """最终防线：清掉残留的结构标记、「写给编辑自己看」的元话语，以及不该上屏的图片。
 
@@ -948,6 +1094,23 @@ def _sanitize_blocks(blocks:list[dict[str,Any]],allowed_refs:set[str]|None=None)
             if btype in ('media','gallery') and not nb['mediaRefs']: continue
         texts=[str(nb.get(k) or '') for k in ('headline','subtitle','body','text')]
         if any(p in t for t in texts for p in _META_PHRASES): continue
+        # ★ 结构兜底（2026-10-09，实测 qwen3-max 会这么写）：模型把要点表写成一段多行文本放进 body，
+        #   而前端 facts / info 只认 items —— 结果是页面上出现一个**空白块**，整块内容凭空消失。
+        #   这里把「标签：值」逐行还原成条目，宁可见到朴素的一行，也不要一整块空白。
+        if btype in ('facts','info') and not (isinstance(nb.get('items'),list) and nb['items']):
+            raw=str(nb.get('body') or nb.get('text') or nb.get('caption') or '')
+            if btype=='facts':
+                rows=_lines_to_items(raw)
+                if rows:
+                    nb['items']=rows
+                    nb.pop('body',None); nb.pop('text',None)
+            else:
+                rows=_split_lines(raw)
+                if rows:
+                    nb['items']=rows
+                    nb.pop('body',None)
+                    # info 的标题前端读 title（headline 是别的块的字段），别让「费用说明」丢掉
+                    if not nb.get('title') and nb.get('headline'): nb['title']=nb['headline']
         out.append(nb)
     return out
 
@@ -1264,6 +1427,10 @@ hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言�
             data['detail']['blocks']=_sanitize_blocks(data['detail'].get('blocks') or [],allowed_refs=photos)
         # 事实回检：品牌名音译还原 + 编造地名告警（模型包装文案时会顺手改专名）
         apply_fact_guard(data,str(source.get('text') or ''))
+        # 照抄闸门（2026-10-09 用户反馈「这些文案不要照搬方案原文」）：详情此前从没有这一道，
+        # 要点表里「餐饮：户外牛肉汤锅（含精选黄牛腱肉、虾滑、肥牛等）」这类参数串就原样上了页。
+        # 命中「与原文连续重合 > 12 字」的段落交回模型定向重写一次，与渠道生成同一套手法。
+        await _rewrite_echo_detail(club_id, data.get('detail'), str(source.get('text') or ''))
         return data,gw
     data=_mock_activity(source)
     data['detail']['blocks']=_sanitize_blocks(_rotate_layout(data['detail'].get('blocks') or [],max(0,version_no-1)),allowed_refs=photos)
@@ -1330,6 +1497,8 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
         # 事实回检（换一版同样会改写专名，不能只在首次生成时守）
         apply_fact_guard({'activity_master':master if isinstance(master,dict) else {},'detail':detail},
                          str(source.get('text') or ''))
+        # 「换一版」同样要过照抄闸门：只守首次生成的话，第二版又会把方案原句搬回来。
+        await _rewrite_echo_detail(club_id, detail, str(source.get('text') or ''))
         return {'activity_master':master,'detail':detail},gw
     data=_mock_activity(source)
     detail=data['detail']

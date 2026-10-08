@@ -128,3 +128,33 @@
 .fee-row.is-no .info-chips>div::before{content:'✗';color:#a4907a;font-weight:800;margin-right:6px;font-size:11.5px}
 .fee-row.is-ok .info-chips>div{background:#eef5f0;border-color:#cfdfd5;color:#274a38}
 .fee-row.is-no .info-chips>div{background:#f7f4f0;border-color:#e8e0d6;color:#6d6155}
+
+/* ===== 出行清单重构（2026-10-09 用户反馈）=====
+   ① 一件装备全局只推荐一次（旧的「同一件装备·已在上方列出」补丁行已废弃）；
+   ② 「商城可以配齐」与「这些请自己准备」分成两个区，商城里有的和没有的不再混在一起。 */
+.pack-sec{margin-top:16px}
+.pack-sec__head{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px;margin-bottom:10px}
+.pack-sec__head b{font-size:13px;font-weight:800}
+.pack-sec__count{font-size:11px;font-weight:800;line-height:1;padding:4px 8px;border-radius:999px}
+.pack-sec--own .pack-sec__count{background:#e8f3ec;color:#2f6b48}
+.pack-sec--miss .pack-sec__count{background:#f3efe8;color:#8a7a63}
+.pack-sec__hint{font-size:11.5px;color:var(--muted)}
+.pack-goods{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;align-items:start}
+.pack-goods--1{grid-template-columns:1fr}
+.pack-good{display:flex;flex-direction:column;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden;transition:border-color .15s ease}
+.pack-good:hover{border-color:#a9c6bb}
+/* 卡片自己做外框，里面的商品行不再自带边框，否则会套两层框 */
+.pack-good .gear-row{border:0;border-radius:0;background:transparent;padding:11px 12px 9px;width:100%}
+.pack-good .gear-row.buyable:hover{transform:none;border-color:transparent}
+.pack-good .gear-row--sub{background:#fffdf6;border-bottom:1px dashed #efe6d2}
+.pack-needs{display:flex;flex-wrap:wrap;gap:5px;padding:8px 12px 11px;border-top:1px dashed #eef1ee}
+.pack-needs span{font-size:10.5px;line-height:1;color:#5b6b63;background:#f2f5f3;border-radius:6px;padding:4px 7px}
+/* 平替项：与精确匹配的实心标签区分开（虚线米色），顾客一眼知道这不是清单里那件 */
+.pack-needs .pack-needs__sub{background:#fdf7e8;color:#8a6d2f;border:1px dashed #ecd9ae;padding:3px 6px}
+.pack-needs .pack-needs__more{background:#eef1ee;color:#8b978f}
+.pack-miss{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.pack-miss__item{display:flex;align-items:center;background:#fbfaf7;border:1px dashed #e2ddd3;border-radius:10px;padding:11px 12px;font-size:13px;color:#4c5a53}
+@media(max-width:680px){.pack-goods,.pack-miss{grid-template-columns:1fr}}
+
+/* facts 的引导语（模型常用 facts 来写「这场活动只做三件事」这类开场）：整行一句，不套卡片底 */
+.ed-facts__lead{margin:0 0 8px;padding:0 2px;font-size:13.5px;font-weight:800;line-height:1.5;letter-spacing:.01em;color:inherit}

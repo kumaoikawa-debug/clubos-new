@@ -68,6 +68,30 @@ def test_echo_no_source_never_flags():
     assert source_echo_blocks(blocks, '') == []
 
 
+def test_echo_deep_flags_copied_fact_value():
+    """用户反馈的那一类：详情要点表里照搬方案原文的参数串（2026-10-09）。"""
+    blocks = [{'type': 'facts',
+               'items': [{'label': '活动形式', 'value': '徒步 + 颂钵冥想 + 自然拓染'}]}]
+    src = '活动形式：徒步+颂钵冥想+自然拓染，集合点见方案'
+    assert source_echo_blocks(blocks, src, deep=True) == [0], '要点表照抄必须被标出'
+    assert source_echo_blocks(blocks, src) == [], '浅查不该碰要点表（渠道那边只改正文）'
+
+
+def test_echo_deep_ignores_short_fact_values():
+    """日期/里程这类短事实本来就该与资料一字不差，不能判成照抄去白跑一次重写。"""
+    blocks = [{'type': 'facts', 'items': [{'label': 'DATE', 'value': '2026-10-24'}]}]
+    assert source_echo_blocks(blocks, '出发日期 2026-10-24 早上集合', deep=True) == []
+
+
+def test_echo_deep_skips_fact_like_values():
+    """价格 / 费用清单属于事实枚举（费用包含什么不能编），不参与照抄判定。"""
+    src = '费用包含：全程车费、午餐、颂钵课程、拓染材料、领队服务及保险。'
+    blocks = [{'type': 'facts', 'items': [{'label': '费用包含', 'value': src}]}]
+    assert source_echo_blocks(blocks, src, deep=True) == []
+    price = [{'type': 'facts', 'items': [{'label': '价格', 'value': '新客498元/人，会员可用1500积分兑换。'}]}]
+    assert source_echo_blocks(price, '新客498元/人，会员可用1500积分兑换。', deep=True) == []
+
+
 # ---------------- _ensure_media_refs ----------------
 
 def test_media_refs_filled_when_model_gave_none():

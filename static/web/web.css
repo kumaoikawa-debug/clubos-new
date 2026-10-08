@@ -1304,3 +1304,25 @@
 .web-shell .info-stack .fee-row.is-no .info-chips>div{background:#f7f4f0;border-color:#e8e0d6;color:#6d6155}
 .web-shell .info-stack .fee-row.is-ok .info-chips>div::before{content:'✓';color:#2f6b48;font-weight:800;margin-right:5px;font-size:11px}
 .web-shell .info-stack .fee-row.is-no .info-chips>div::before{content:'✗';color:#a4907a;font-weight:800;margin-right:5px;font-size:11px}
+
+/* ===== 报名前「同意规则」确认弹窗（2026-10-09 用户要求）=====
+   顾客点「立即报名」必须先勾选同意，未勾选时确认按钮保持不可用。
+   规则正文与页面下方那五块同源（复用同一批渲染函数），这里只负责滚动区与勾选行的样子。 */
+.ux-consent-overlay .ux-dialog{width:min(680px,94vw);max-height:88vh;display:flex;flex-direction:column}
+.ux-consent-scroll{max-height:min(52vh,460px);overflow:auto;padding:2px;border:1px solid var(--line,#e4e4e4);border-radius:12px;background:#fbfaf8}
+.ux-consent-scroll .w-block{margin:0;border:0;border-bottom:1px solid #ece7df;border-radius:0;background:transparent;padding:14px 14px 12px;box-shadow:none}
+.ux-consent-scroll .w-block:last-child{border-bottom:0}
+.ux-consent-scroll .w-block__head b{font-size:14px}
+.ux-consent-scroll .w-block__hint,
+.ux-consent-scroll .w-policy p{font-size:13px;line-height:1.7;color:#4a5852;margin:6px 0}
+.ux-consent-scroll .w-policy__list{margin:8px 0 0;padding-left:18px}
+.ux-consent-scroll .w-policy__list li{font-size:13px;line-height:1.7;color:#4a5852;margin:4px 0}
+.ux-consent-check{display:flex;gap:10px;align-items:flex-start;margin-top:14px;padding:13px 14px;border:1px solid #d8e2db;background:#f3f8f4;border-radius:12px;cursor:pointer;font-size:13.5px;line-height:1.6;color:#1f3a2e}
+.ux-consent-check input{width:20px;height:20px;margin:1px 0 0;flex:0 0 auto;accent-color:#2f6b48;cursor:pointer}
+.ux-consent-check b{color:#17342c}
+.ux-consent-overlay .ux-dialog-foot .ux-consent-ok:not(:disabled){background:#17342c;border-color:#17342c;color:#fff}
+.ux-consent-overlay .ux-dialog-foot .ux-consent-ok:disabled{opacity:.45;cursor:not-allowed}
+@media(max-width:520px){
+ .ux-consent-overlay .ux-dialog{width:96vw}
+ .ux-consent-scroll{max-height:44vh}
+}
