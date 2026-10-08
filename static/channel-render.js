@@ -832,13 +832,8 @@
       base.addColorStop(0, '#1f4a37'); base.addColorStop(1, '#2c755e');
       c.fillStyle = base; c.fillRect(0, 0, W, H);
     }
-    var g = c.createLinearGradient(0, 0, 0, H);
-    g.addColorStop(0, 'rgba(6,17,12,.72)');
-    g.addColorStop(0.45, 'rgba(6,17,12,.42)');
-    g.addColorStop(1, 'rgba(6,17,12,.93)');
-    c.fillStyle = g; c.fillRect(0, 0, W, H);
 
-    /* 俱乐部 logo：右上角白底圆角章。资料里没带 logo 图就自然缺席，不硬造。 */
+    /* 俱乐部 logo：资料里没带 logo 图就自然缺席，不硬造。 */
     var logoImg = ctx.logoUrl ? await loadImgSafe(ctx.logoUrl) : null;
 
     /* 报名二维码：真实可扫，指向该活动的 C 端报名页（与「分享活动」弹窗同一条链接）。
@@ -852,25 +847,40 @@
         if (!qr.width) qr = null;
       }
     } catch (e) { qr = null; }
-    var QR_S = qr ? 236 : 0;   // 右下角白卡边长；0 = 无二维码，布局退回全宽 CTA
 
-    var y = PAD + 60;
-    // 顶部：活动组织 + 招募
-    c.font = '800 26px ' + FONT;
-    c.fillStyle = 'rgba(214,235,224,.92)';
-    c.fillText((data.brand || '活动招募').toUpperCase(), PAD, y);
-    c.fillStyle = 'rgba(214,235,224,.55)';
-    c.fillText(String(ctx.date || '').toUpperCase(), PAD, y + 44);
-    y += 128;
+    /* 白底二维码卡：码 + 下方小字「扫码报名」（2026-10-08 用户要求：文字移到码下、字号调小，
+       不再要底部大胶囊 CTA）。 */
+    var QR_S = qr ? 216 : 0;
+    var QR_LBL = 34;
+    function drawQrCard(rightX, bottomY, centered) {
+      if (!qr) return null;
+      var cw = QR_S + 28, ch = QR_S + 28 + QR_LBL;
+      var x = centered ? Math.round((W - cw) / 2) : rightX - cw;
+      var y = bottomY - ch;
+      c.save();
+      c.fillStyle = 'rgba(255,255,255,.97)';
+      rr(c, x, y, cw, ch, 22); c.fill();
+      c.drawImage(qr, x + 14, y + 14, QR_S, QR_S);
+      c.fillStyle = '#14201c';
+      c.font = '600 24px ' + FONT;
+      c.textAlign = 'center';
+      c.fillText('扫码报名', x + cw / 2, y + 14 + QR_S + QR_LBL - 10);
+      c.restore();
+      return { x: x, y: y, w: cw, h: ch };
+    }
 
-    // 右上角 logo 章：白底圆角，logo 等比 contain 居中
-    if (logoImg) {
+    function shadow(on) {
+      if (on) { c.shadowColor = 'rgba(0,0,0,.38)'; c.shadowBlur = 16; c.shadowOffsetY = 2; }
+      else { c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0; }
+    }
+    function drawLogoChip(centered, ly) {
+      if (!logoImg) return null;
       try {
         var LH = 88;
         var iw0 = logoImg.naturalWidth || logoImg.width || 1;
         var ih0 = logoImg.naturalHeight || logoImg.height || 1;
         var LW = Math.max(LH, Math.min(300, Math.round(LH * (iw0 / ih0)) + 56));
-        var lx = W - PAD - LW, ly = PAD + 4;
+        var lx = centered ? Math.round((W - LW) / 2) : W - PAD - LW;
         c.save();
         c.fillStyle = 'rgba(255,255,255,.94)';
         rr(c, lx, ly, LW, LH, 22); c.fill();
@@ -878,82 +888,178 @@
         var dw = iw0 * fit, dh = ih0 * fit;
         c.drawImage(logoImg, lx + (LW - dw) / 2, ly + (LH - dh) / 2, dw, dh);
         c.restore();
-      } catch (e) { /* logo 画不上就不画，别毁整张海报 */ }
+        return { x: lx, y: ly, w: LW, h: LH };
+      } catch (e) { return null; }
     }
 
-    // 主标题
-    c.font = '900 92px ' + SERIF;
-    c.fillStyle = '#fff';
-    var hl = wrap(c, data.headline || ctx.title, W - PAD * 2).slice(0, 3);
-    y = drawLines(c, hl, PAD, y + 60, 112, 3) + 16;
-
-    // 副标题
-    if (data.subheadline) {
-      c.font = '400 36px ' + FONT;
-      c.fillStyle = 'rgba(238,246,242,.9)';
-      y = drawLines(c, wrap(c, data.subheadline, W - PAD * 2).slice(0, 3), PAD, y + 30, 56) + 14;
-    }
-
-    // 关键事实
+    var title = String(data.headline || ctx.title || '');
+    var sub = String(data.subheadline || '');
     var facts = (data.facts || []).filter(Boolean).slice(0, 4);
-    var auto = [];
-    if (ctx.location) auto.push(ctx.location);
-    if (ctx.price || ctx.price === 0) auto.push('¥' + ctx.price + ' / 人');
-    if (ctx.capacity) auto.push('限 ' + ctx.capacity + ' 人');
-    if (!facts.length) facts = auto;
-    if (facts.length) {
-      y += 26;
-      c.font = '700 34px ' + FONT;
-      facts.forEach(function (f) {
-        var t = String(f);
-        var w = c.measureText(t).width + 52;
-        w = Math.min(w, W - PAD * 2);
-        c.fillStyle = 'rgba(255,255,255,.16)';
-        rr(c, PAD, y - 34, w, 66, 33); c.fill();
-        c.fillStyle = '#fff';
-        c.fillText(t, PAD + 26, y + 10);
-        y += 84;
-      });
+    if (!facts.length) {
+      if (ctx.location) facts.push(ctx.location);
+      if (ctx.price || ctx.price === 0) facts.push('¥' + ctx.price + ' / 人');
+      if (ctx.capacity) facts.push('限 ' + ctx.capacity + ' 人');
     }
-
-    // 卖点（从底部往上排，避免长标题挤掉 CTA；右下角有二维码时文本让开那条竖带）
     var points = (data.sellingPoints || []).filter(Boolean).slice(0, 4);
-    if (points.length) {
-      var pw = W - PAD * 2 - 46 - (QR_S ? QR_S + 24 : 0);
-      var py = H - PAD - 150;
-      for (var i = points.length - 1; i >= 0; i--) {
-        c.font = '400 34px ' + FONT;
-        var ls = wrap(c, String(points[i]), pw).slice(0, 3);
-        py -= (ls.length - 1) * 50 + 46;
-        c.fillStyle = '#8cc2ad';
-        c.fillText('—', PAD, py + 10);
-        c.fillStyle = 'rgba(255,255,255,.94)';
-        drawLines(c, ls, PAD + 46, py + 10, 50);
-        py -= 20;
-        if (py < y + 40) break;
+
+    /* 版式不固定（2026-10-08 用户要求）：三套家族随机套用，不满意点「换一套版式」再换。
+       也可用 data.posterFamily / window.__posterFamily 指定：editor=信息海报 / pictorial=画报标语 / minimal=极简大字。 */
+    var FAMILIES = ['editor', 'pictorial', 'minimal'];
+    var forced = window.__posterFamily || data.posterFamily;
+    var family = FAMILIES.indexOf(forced) >= 0 ? forced
+               : FAMILIES[Math.floor(Math.random() * FAMILIES.length)];
+
+    /* ═══ 家族一 editor：信息海报（左对齐编辑排版，信息完整）═══ */
+    if (family === 'editor') {
+      var gA = c.createLinearGradient(0, 0, 0, H);
+      gA.addColorStop(0, 'rgba(6,17,12,.66)');
+      gA.addColorStop(0.45, 'rgba(6,17,12,.4)');
+      gA.addColorStop(1, 'rgba(6,17,12,.92)');
+      c.fillStyle = gA; c.fillRect(0, 0, W, H);
+
+      drawLogoChip(false, PAD + 4);
+
+      var y = PAD + 64;
+      c.font = '900 92px ' + SERIF;
+      c.fillStyle = '#fff';
+      shadow(true);
+      y = drawLines(c, wrap(c, title, W - PAD * 2).slice(0, 3), PAD, y + 58, 112, 3) + 10;
+      shadow(false);
+      if (sub) {
+        c.font = '400 36px ' + FONT;
+        c.fillStyle = 'rgba(238,246,242,.92)';
+        y = drawLines(c, wrap(c, sub, W - PAD * 2).slice(0, 3), PAD, y + 30, 56) + 8;
+      }
+      if (facts.length) {
+        y += 24;
+        c.font = '700 34px ' + FONT;
+        facts.forEach(function (f) {
+          var t = String(f);
+          var w = Math.min(c.measureText(t).width + 52, W - PAD * 2);
+          c.fillStyle = 'rgba(255,255,255,.16)';
+          rr(c, PAD, y - 34, w, 66, 33); c.fill();
+          c.fillStyle = '#fff';
+          c.fillText(t, PAD + 26, y + 10);
+          y += 84;
+        });
+      }
+      var cardA = drawQrCard(W - PAD, H - PAD, false);
+      if (points.length) {
+        var pwA = W - PAD * 2 - (cardA ? cardA.w + 40 : 0);
+        var pyA = H - PAD - 36;
+        for (var i = points.length - 1; i >= 0; i--) {
+          c.font = '400 34px ' + FONT;
+          var ls = wrap(c, String(points[i]), pwA).slice(0, 3);
+          pyA -= (ls.length - 1) * 50 + 46;
+          c.fillStyle = '#8cc2ad';
+          c.fillText('—', PAD, pyA + 10);
+          c.fillStyle = 'rgba(255,255,255,.94)';
+          drawLines(c, ls, PAD + 46, pyA + 10, 50);
+          pyA -= 20;
+          if (pyA < y + 36) break;
+        }
       }
     }
 
-    // 底部 CTA（有二维码时胶囊缩窄靠左，右侧留给白底二维码卡）
-    var pillW = W - PAD * 2 - (QR_S ? QR_S + 24 : 0);
-    var pillY = H - PAD - 104;
-    c.fillStyle = '#fff';
-    rr(c, PAD, pillY, pillW, 104, 52); c.fill();
-    c.fillStyle = '#14201c';
-    c.font = '800 38px ' + FONT;
-    var cta = String(data.cta || '扫码报名').slice(0, 22);
-    var cw = c.measureText(cta).width;
-    c.fillText(cta, PAD + (pillW - cw) / 2, pillY + 66);
-    if (QR_S) {
-      var qx = W - PAD - QR_S, qy = H - PAD - QR_S;
+    /* ═══ 家族二 pictorial：画报标语（大字居中 + 编号体验点 + 底部胶囊，品牌画报风）═══ */
+    else if (family === 'pictorial') {
+      var gB = c.createLinearGradient(0, 0, 0, H);
+      gB.addColorStop(0, 'rgba(6,17,12,.36)');
+      gB.addColorStop(0.4, 'rgba(6,17,12,.1)');
+      gB.addColorStop(1, 'rgba(6,17,12,.7)');
+      c.fillStyle = gB; c.fillRect(0, 0, W, H);
+
+      drawLogoChip(true, PAD);
+
+      c.font = '900 96px ' + SERIF;
       c.fillStyle = '#fff';
-      rr(c, qx, qy, QR_S, QR_S, 26); c.fill();
-      // QR canvas 自带 4 模块静区白边，再内缩 16px 露出白卡圆角
-      c.drawImage(qr, qx + 16, qy + 16, QR_S - 32, QR_S - 32);
+      shadow(true);
+      c.textAlign = 'center';
+      var tlB = wrap(c, title, W - PAD * 2 - 40).slice(0, 2);
+      drawLines(c, tlB, W / 2, H * 0.30 + 70, 120, 2);
+      shadow(false);
+      c.textAlign = 'left';
+
+      if (points.length) {
+        c.font = '400 34px ' + FONT;
+        var pyB = H * 0.50;
+        for (var j = 0; j < Math.min(3, points.length); j++) {
+          var linesB = wrap(c, '(' + (j + 1) + ') ' + String(points[j]), 620).slice(0, 2);
+          shadow(true);
+          c.fillStyle = '#fff';
+          if (j % 2 === 0) {
+            c.textAlign = 'left';
+            drawLines(c, linesB, PAD + 30, pyB, 50);
+          } else {
+            c.textAlign = 'right';
+            for (var k2 = 0; k2 < linesB.length; k2++) c.fillText(linesB[k2], W - PAD - 30, pyB + k2 * 50);
+          }
+          c.textAlign = 'left';
+          shadow(false);
+          pyB += linesB.length * 50 + 64;
+        }
+      }
+
+      var cardB = drawQrCard(W - PAD, H - PAD, false);
+      c.font = '500 34px ' + FONT;
+      var pillH = 72, pillY = H - PAD - pillH;
+      var dateStr = String(ctx.date || '').split(' ')[0].replace(/-/g, '.');
+      var items = [ctx.location, dateStr].filter(Boolean);
+      var gap = 24;
+      var widths = items.map(function (t) { return c.measureText(t).width + 72; });
+      var totalW = widths.reduce(function (a, b) { return a + b; }, 0) + gap * (items.length - 1);
+      var availW = W - PAD * 2 - (cardB ? cardB.w + 48 : 0);
+      var sx = PAD + Math.max(0, (availW - totalW) / 2);
+      items.forEach(function (t, idx) {
+        c.strokeStyle = 'rgba(255,255,255,.85)';
+        c.lineWidth = 2;
+        rr(c, sx, pillY, widths[idx], pillH, pillH / 2); c.stroke();
+        c.fillStyle = '#fff';
+        shadow(false);
+        c.fillText(t, sx + 36, pillY + pillH / 2 + 12);
+        sx += widths[idx] + gap;
+      });
+    }
+
+    /* ═══ 家族三 minimal：极简大字（居中标题 + 一行卖点 + 底部居中二维码）═══ */
+    else {
+      var gC = c.createLinearGradient(0, 0, 0, H);
+      gC.addColorStop(0, 'rgba(6,17,12,.3)');
+      gC.addColorStop(0.42, 'rgba(6,17,12,.36)');
+      gC.addColorStop(1, 'rgba(6,17,12,.9)');
+      c.fillStyle = gC; c.fillRect(0, 0, W, H);
+
+      drawLogoChip(true, PAD);
+
+      c.textAlign = 'center';
+      c.font = '900 100px ' + SERIF;
+      c.fillStyle = '#fff';
+      shadow(true);
+      var tlC = wrap(c, title, W - PAD * 2 - 60).slice(0, 2);
+      var tyC = H * 0.33;
+      drawLines(c, tlC, W / 2, tyC, 124, 2);
+      shadow(false);
+      var yC = tyC + tlC.length * 124 + 20;
+      if (sub) {
+        c.font = '400 36px ' + FONT;
+        c.fillStyle = 'rgba(238,246,242,.92)';
+        var slC = wrap(c, sub, W - PAD * 2 - 80).slice(0, 2);
+        drawLines(c, slC, W / 2, yC + 34, 54, 2);
+        yC += slC.length * 54;
+      }
+      if (facts.length) {
+        c.font = '600 32px ' + FONT;
+        c.fillStyle = 'rgba(255,255,255,.92)';
+        var flC = wrap(c, facts.map(String).join('   ·   '), W - PAD * 2 - 80).slice(0, 2);
+        drawLines(c, flC, W / 2, yC + 70, 52, 2);
+      }
+      c.textAlign = 'left';
+      drawQrCard(0, H - PAD, true);
     }
 
     host.innerHTML = '<div class="ch-poster-hold"></div>';
     host.querySelector('.ch-poster-hold').appendChild(cv);
+    cv.__posterFamily = family;
     return [cv];
   }
 
@@ -1110,17 +1216,23 @@
     }
 
     if (channel === 'poster') {
-      canvases = await paintPoster(data, ctx, stage);
+      var repaintPoster = async function () { canvases = await paintPoster(data, ctx, stage); };
+      canvases = await repaintPoster();
       btn('下载海报 PNG', '', async function () {
         await downloadCanvas(canvases[0], safeName(ctx.title) + '_海报_1080x1440.png');
         toast('海报已下载（1080×1440 PNG）');
+      });
+      var swapBtn = btn('换一套版式', 'secondary', async function () {
+        swapBtn.disabled = true;
+        try { await repaintPoster(); toast('已换一套版式'); }
+        finally { swapBtn.disabled = false; }
       });
       var ptxt = [data.headline || ctx.title, data.subheadline || '', (data.facts || []).join(' · '), (data.sellingPoints || []).join('\n'), data.cta || ''].filter(Boolean).join('\n');
       btn('复制海报文案', 'secondary', async function () {
         (await copyText(ptxt)) ? toast('文案已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
       });
-      note.textContent = '海报用活动真实封面 + AI 文案在本地合成，不额外消耗 Credits。右下角二维码直达该活动报名页' +
-        (ctx.status === 'published' ? '。' : '（活动发布后才能打开）。');
+      note.textContent = '海报用活动真实照片 + AI 文案在本地合成，三套版式随机套用（信息海报 / 画报标语 / 极简大字），' +
+        '不满意点「换一套版式」。二维码直达该活动报名页' + (ctx.status === 'published' ? '。' : '（活动发布后才能打开）。');
       return;
     }
 
