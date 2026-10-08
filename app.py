@@ -14,7 +14,7 @@ from document_parser import save_uploads, parse_sources, _image_kind
 from cost_guard import sanitize_for_frontend, master_has_cost_evidence
 from ai_engine import (generate_activity, generate_channel, regenerate_detail, detail_outline,
                        _fact_digest)
-from longpic import generate_longpic
+from longpic import generate_longpic, build_fact_pack
 from image_caption import caption_media, caption_lines, persist_captions
 from ai_billing import ensure_credits, charge_credits, credit_cost
 from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config,
@@ -1177,11 +1177,23 @@ async def channel_generate(club_id:int,activity_id:int,channel:str):
         # ② 要点表只给碎片不给整句：上一轮实测把原文整段喂给写作模型时，
         #    成品 8 字片段 14.5% 能在原文里逐字命中（最长连续 31 字），读起来像 PPT 译文。
         digest=await _fact_digest(club_id,source_text) if source_text else ''
+        # ③ 「顾客下单前要看的东西」往往都不在 detail 里，而在库里各班各组：
+        #    团期价格 → activity_occurrences，领队 → occurrence_leaders，
+        #    费用边界 / 自备装备 / 人员配置 → master.fees / checklist / publicFacts。
+        #    ★ 这些字段此前**从来没进过长图提示词**，所以长图上既没有领队也没有价格
+        #      （2026-10-08 老板反馈后要做的第一处接线）。
+        fact_pack=build_fact_pack(club_id,activity_id,master)
+        # ④ 版式种子：同一场活动每重新生成一次换一套版式；单次生成内预览与导出同源。
+        with conn() as _c:
+            _prev=_c.execute('SELECT COUNT(*) FROM content_assets WHERE club_id=? AND activity_id=? '
+                             "AND channel='longpic'",(club_id,activity_id)).fetchone()[0]
+        seed=activity_id*997+int(_prev or 0)
         try:
             content,usage=await generate_longpic(club_id,master,detail,cover_url=cover_url,
                                                  source_text=source_text,
                                                  caption_lines=caption_lines(master,caps),
-                                                 digest=digest)
+                                                 digest=digest,
+                                                 fact_pack=fact_pack,seed=seed)
         except AIGatewayError as e: raise HTTPException(502,str(e))
         if not content.get('html'):
             raise HTTPException(502,'模型没有返回可用的排版内容，请再试一次。')

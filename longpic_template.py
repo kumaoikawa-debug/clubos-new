@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import html as _html
+import random
 import re
 from typing import Any, Iterable
 
@@ -99,9 +100,12 @@ html,body{background:%(bg)s}
 /* ---------- hero ---------- */
 .hero{position:relative;height:1050px}
 .hero-bg{position:absolute;inset:0;width:100%%;height:100%%;object-fit:cover;object-position:center 42%%}
+/* ★ 2026-10-08：遮罩从「顶部 .78 全压」改成「上轻下重、中间通透」——
+   实测原来的强度把照片洗成一片灰白，而"以图片为主视觉"是硬要求；
+   标题可读性由 h1 的 text-shadow 保底。 */
 .hero-shade{position:absolute;inset:0;background:linear-gradient(180deg,
-  %(hero_fade)s.78) 0%%,%(hero_fade)s.20) 20%%,%(hero_fade)s0) 40%%,
-  %(hero_fade)s0) 58%%,%(hero_fade)s.72) 86%%,%(bg)s 100%%)}
+  %(hero_fade)s.42) 0%%,%(hero_fade)s.10) 22%%,%(hero_fade)s0) 44%%,
+  %(hero_fade)s0) 60%%,%(hero_fade)s.82) 88%%,%(bg)s 100%%)}
 .hero-in{position:relative;z-index:2;height:100%%;display:flex;flex-direction:column;padding:50px 50px 60px}
 .brandrow{display:flex;align-items:center;gap:16px}
 .brandrow span{font-size:19px;letter-spacing:3.6px;color:%(primary)s;font-weight:600}
@@ -111,7 +115,7 @@ html,body{background:%(bg)s}
   background:%(hero_fade)s.6)}
 .hero h1{font-size:66px;line-height:1.18;font-weight:900;letter-spacing:1.8px;color:%(ink)s;
   text-wrap:balance;
-  text-shadow:0 2px 24px %(hero_fade)s.75),0 0 54px %(hero_fade)s.45)}
+  text-shadow:0 2px 28px %(hero_fade)s.85),0 0 60px %(hero_fade)s.55)}
 .hero h1 em{font-style:normal;color:%(primary)s}
 .hero .sub{margin-top:22px;font-size:25px;color:%(muted)s;letter-spacing:1px;line-height:1.7}
 .hero .meta{margin-top:38px;display:flex;align-items:flex-start;gap:22px}
@@ -195,6 +199,73 @@ html,body{background:%(bg)s}
 /* ---------- quote ---------- */
 .quote{margin-top:38px;padding:32px 38px;border-left:6px solid %(primary)s;background:%(card)s;border-radius:0 18px 18px 0}
 .quote p{font-size:28px;line-height:1.7;font-weight:700;color:%(ink)s;letter-spacing:.6px}
+
+/* ---------- fee（费用包含 / 不含，双栏） ----------
+   2026-10-08 补：公众号长图要有「客人下单前必须知道」的信息，费用边界是第一位。
+   ★ 渲染前 _blk_fee 会再过一遍内部成本词黑名单闸门（INTERNAL_COST），
+     cost_guard 管 API 出口，这里管模板出口，两道闸互不替代。 */
+.fee{margin-top:38px;display:flex;gap:18px}
+.fee .col{flex:1;min-width:0;background:%(card)s;border:1px solid %(line2)s;border-radius:18px;padding:26px 24px}
+.fee .hd{font-size:21px;font-weight:800;letter-spacing:2.2px;color:%(primary)s;margin-bottom:14px}
+.fee .li{display:flex;gap:12px;font-size:21px;line-height:1.7;color:%(muted)s;padding:5px 0}
+.fee .ico{flex:none;width:26px;font-weight:800}
+.fee .yes .ico{color:%(primary)s}
+.fee .no .ico{color:%(faint)s}
+
+/* ---------- kit（出行装备清单） ---------- */
+.kit{margin-top:38px;background:%(card)s;border:1px solid %(line2)s;border-radius:18px;padding:28px 30px 24px}
+.kit .hd{font-size:22px;font-weight:800;letter-spacing:2.4px;color:%(primary)s;margin-bottom:18px}
+.kit .ul{display:flex;flex-wrap:wrap;gap:12px 26px}
+.kit .ul li{flex:1 1 44%%;display:flex;gap:13px;font-size:21px;line-height:1.6;color:%(ink)s;list-style:none}
+.kit .ul li::before{content:'';flex:none;width:9px;height:9px;border-radius:50%%;background:%(accent)s;margin-top:11px}
+
+/* ---------- prices（团期 / 价格表） ----------
+   ★ 价格必须是**真实正数**：_real_price() 会把 0 / 空 / 占位符挡掉 ——
+     素材没价时模型爱填 0，成品上印「¥0 / 人」比不写价格糟得多。 */
+.prices{margin-top:38px}
+.prices .row{display:flex;align-items:center;gap:22px;padding:24px 0;border-bottom:1px solid %(line2)s}
+.prices .row:first-child{border-top:1px solid %(line2)s}
+.prices .lb{flex:1;min-width:0}
+.prices .lb .l1{font-size:25px;font-weight:700;color:%(ink)s;letter-spacing:.6px}
+.prices .lb .l2{margin-top:5px;font-size:19px;color:%(faint)s;letter-spacing:1.6px}
+.prices .pr{flex:none;text-align:right}
+.prices .pr .v{font-size:38px;font-weight:900;color:%(primary)s;letter-spacing:.6px;line-height:1.1}
+.prices .pr .v small{font-size:21px;font-weight:700;margin-left:3px}
+.prices .pr .u{margin-top:4px;font-size:18px;color:%(faint)s;letter-spacing:1.6px}
+
+/* ══════════════════════════════════════════════════════════════════
+   版式变体（「随机排版」的正确做法：手写若干套，由**代码**抽签，
+   而不是把排版权交回模型 —— 见文件头"为什么要有这个文件"）
+   每个变体都是固定 CSS + 已验过安全，抽到哪一个都不会难看。
+   ══════════════════════════════════════════════════════════════════ */
+/* hero A / 现状：整屏大图 + 渐隐 + 标题压在画面下 1/3（标杆同款） */
+/* hero B：图在上半部（带下圆角），信息沉到下方留白 —— 照片偏暗时更清楚 */
+.hero.v-card .hero-bg{height:56%%;bottom:auto;border-radius:0 0 36px 36px}
+.hero.v-card .hero-shade{height:56%%;bottom:auto;border-radius:0 0 36px 36px}
+.hero.v-card .hero-in{justify-content:flex-end;padding-bottom:64px}
+.hero.v-card .hero-sp{display:none}
+/* hero C：封面式（图作淡底纹，大字居中）—— 杂志封面感，适合照片不多时
+   ★ 不透明度 0.16→0.30（2026-10-08 实机看：0.16 时照片几乎看不见，
+     而"以图片为主视觉"是老板的硬要求）；同时恢复一层很轻的渐隐，
+     保证居中大标题在任何照片上都读得清。 */
+.hero.v-cover .hero-bg{opacity:.42}
+.hero.v-cover .hero-shade{background:linear-gradient(180deg,
+  %(hero_fade)s.52) 0%%,%(hero_fade)s.20) 46%%,%(hero_fade)s.62) 100%%)}
+.hero.v-cover .hero-in{justify-content:center;text-align:center;align-items:center}
+.hero.v-cover .hero-sp{display:none}
+.hero.v-cover .hero-chip{align-self:center}
+.hero.v-cover h1{font-size:74px}
+.hero.v-cover .meta{justify-content:center}
+.hero.v-cover .brandrow{justify-content:center}
+/* stats 变体：卡片式（默认是无分隔线的横排数字栏） */
+.stats.v-cards{gap:14px}
+.stats.v-cards .stat{background:%(card)s;border:1px solid %(line2)s;border-radius:16px;padding:20px 18px}
+.stats.v-cards .stat+.stat{border-left:none;padding-left:18px}
+/* 图组变体：主次并排（2 图时不再永远等宽） / 内缩留白（大图呼吸感） */
+.duo.v-mj .ph:first-child{flex:1.55}
+.duo.v-inset{margin-left:28px;margin-right:28px}
+.photo-full.v-inset{margin-left:28px;margin-right:28px;border-radius:26px}
+.photo-tall.v-inset{margin-left:28px;margin-right:28px;border-radius:26px}
 
 /* ---------- signup（深色收尾） ---------- */
 .signup{margin-top:84px;padding:72px 50px 60px;background:%(dark)s;color:%(on_dark)s}
@@ -379,7 +450,29 @@ def _pic(ref: str, allowed: set[str], size: str = 'full', caption: str = '') -> 
 # ══════════════════════════════════════════════════════════════════════
 # 四、内容块渲染（每个 block 的版式是固定的，模型只填内容）
 # ══════════════════════════════════════════════════════════════════════
-def _blk_stats(b: dict, allowed: set[str]) -> str:
+class Ctx:
+    """一次渲染的上下文：图片白名单 + **版式抽签结果**。
+
+    ★ 关于「随机排版」：2026-10-08 老板提「随机排版能力不够」。随机**不能**交回模型里做
+      （那正是 v1/v2「乱排」的根因），正确做法是**代码手写若干套变体 → 由种子抽签**：
+      抽到哪一套都是验过的好版式，只是「这一次长这样」。种子 = 活动 id + 生成轮次，
+      所以同一场活动重生成会换一套版式、而预览/导出始终是同一套（可复现）。
+    """
+    __slots__ = ('allowed', 'hero', 'duo', 'photo', 'stats', 'photos')
+
+    def __init__(self, allowed: set[str] | None = None, seed: int = 0,
+                 photo_order: list[str] | None = None):
+        r = random.Random(int(seed) & 0x7FFFFFFF)
+        self.allowed = set(allowed or ())
+        # 有序清单：首屏兜底要取"第一张"（set 取不出顺序，会导致每次生成挑到不同的图）
+        self.photos = [x for x in (photo_order if photo_order is not None else sorted(self.allowed)) if x]
+        self.hero = r.choice(['', 'v-card', 'v-cover'])     # '' = 标杆原版（渐隐压图）
+        self.duo = r.choice(['', 'v-mj', 'v-inset'])
+        self.photo = r.choice(['', 'v-inset'])
+        self.stats = r.choice(['', 'v-cards'])
+
+
+def _blk_stats(b: dict, ctx: Ctx) -> str:
     items = _lst(b.get('items'))[:4]
     cells = []
     for it in items:
@@ -388,10 +481,11 @@ def _blk_stats(b: dict, allowed: set[str]) -> str:
             continue
         cells.append('<div class="stat"><div class="v">%s</div><div class="k">%s</div></div>'
                      % (_e(v), _e(k)))
-    return '<div class="stats">%s</div>' % ''.join(cells) if cells else ''
+    cls = ('stats ' + ctx.stats).strip()
+    return '<div class="%s">%s</div>' % (cls, ''.join(cells)) if cells else ''
 
 
-def _blk_params(b: dict, allowed: set[str]) -> str:
+def _blk_params(b: dict, ctx: Ctx) -> str:
     rows = []
     for it in _lst(b.get('items'))[:8]:
         d, p, note = _s(it, 'k') or _s(it, 'd'), _s(it, 'v'), _s(it, 'note')
@@ -403,14 +497,14 @@ def _blk_params(b: dict, allowed: set[str]) -> str:
     return '<div class="params">%s</div>' % ''.join(rows) if rows else ''
 
 
-def _blk_chips(b: dict, allowed: set[str]) -> str:
+def _blk_chips(b: dict, ctx: Ctx) -> str:
     items = [_s(x) if not isinstance(x, dict) else _s(x, 'text') for x in _lst(b.get('items'))[:8]]
     items = [i for i in items if i.strip()]
     return ('<div class="chips">%s</div>'
             % ''.join('<span class="chip">%s</span>' % _e(i) for i in items)) if items else ''
 
 
-def _blk_photos(b: dict, allowed: set[str]) -> str:
+def _blk_photos(b: dict, ctx: Ctx) -> str:
     items = _lst(b.get('items'))
     if not items:
         return ''
@@ -423,25 +517,31 @@ def _blk_photos(b: dict, allowed: set[str]) -> str:
     shots = [s for s in shots if s[0].strip()]
     if not shots:
         return ''
+    alw = ctx.allowed
     out = ''
     if len(shots) == 1:
-        out = _pic(shots[0][0], allowed, shots[0][2], shots[0][1])
+        cls = {'full': 'photo-full', 'tall': 'photo-tall', 'wide': 'photo-wide'}.get(shots[0][2], 'photo-full')
+        if ctx.photo:
+            cls += ' ' + ctx.photo
+        box = _img(shots[0][0], alw, cls)
+        if box:
+            out = box + ('<div class="cap en">%s</div>' % _e(shots[0][1]) if shots[0][1].strip() else '')
     elif len(shots) == 2:
-        pair = ''.join(_img(r, allowed) for r, _, _ in shots)
+        pair = ''.join(_img(r, alw) for r, _, _ in shots)
         if pair.count('<img') >= 2:
-            out = '<div class="duo">%s</div>' % pair
+            out = '<div class="duo %s">%s</div>' % (ctx.duo, pair)
             if shots[0][1]:
                 out += '<div class="cap en">%s</div>' % _e(shots[0][1])
         else:
-            out = _pic(shots[0][0], allowed, 'full', shots[0][1]) or _pic(shots[1][0], allowed, 'full', shots[1][1])
+            out = _pic(shots[0][0], alw, 'full', shots[0][1]) or _pic(shots[1][0], alw, 'full', shots[1][1])
     else:
-        head = _pic(shots[0][0], allowed, 'full', shots[0][1])
-        trio = ''.join(_img(r, allowed) for r, _, _ in shots[1:4])
+        head = _pic(shots[0][0], alw, 'full', shots[0][1])
+        trio = ''.join(_img(r, alw) for r, _, _ in shots[1:4])
         out = head + ('<div class="trio">%s</div>' % trio if trio.count('<img') >= 2 else '')
     return out
 
 
-def _blk_timeline(b: dict, allowed: set[str]) -> str:
+def _blk_timeline(b: dict, ctx: Ctx) -> str:
     rows = []
     for it in _lst(b.get('items'))[:12]:
         t, w, note = _s(it, 'time'), _s(it, 'what') or _s(it, 'text'), _s(it, 'note')
@@ -453,7 +553,7 @@ def _blk_timeline(b: dict, allowed: set[str]) -> str:
     return '<div class="tl">%s</div>' % ''.join(rows) if rows else ''
 
 
-def _blk_steps(b: dict, allowed: set[str]) -> str:
+def _blk_steps(b: dict, ctx: Ctx) -> str:
     rows = []
     for i, it in enumerate(_lst(b.get('items'))[:6], 1):
         no = _s(it, 'no') or ('%02d' % i)
@@ -469,23 +569,93 @@ def _blk_steps(b: dict, allowed: set[str]) -> str:
     return '<div class="steps">%s</div>' % ''.join(rows) if rows else ''
 
 
-def _blk_team(b: dict, allowed: set[str]) -> str:
+def _blk_team(b: dict, ctx: Ctx) -> str:
     rows = []
     for it in _lst(b.get('items'))[:8]:
         name, role, ref = _s(it, 'name'), _s(it, 'role'), _s(it, 'media') or _s(it, 'ref')
         if not name:
             continue
         ava = ('<img class="ava" src="{{media:%s}}" alt="">' % _e(ref)
-               if ref and (not allowed or ref in allowed)
+               if ref and (not ctx.allowed or ref in ctx.allowed)
                else '<div class="ava ava-init">%s</div>' % _e(name[0]))
         rows.append('<div class="tm">%s<div><div class="name">%s</div><div class="role">%s</div></div></div>'
-                    % (ava, _e(name), _e(role)))
+                    % (ava, _e(name), _nl2br(role)))
     return '<div class="team">%s</div>' % ''.join(rows) if rows else ''
 
 
-def _blk_quote(b: dict, allowed: set[str]) -> str:
+def _blk_quote(b: dict, ctx: Ctx) -> str:
     t = _s(b, 'text') or _s(b, 'v')
     return '<div class="quote"><p>%s</p></div>' % _nl2br(t) if t.strip() else ''
+
+
+def _blk_fee(b: dict, ctx: Ctx) -> str:
+    """费用包含 / 费用不含（双栏）。
+
+    ★ 顾客在长图里最常找的就是「到底含什么」。这里除了渲染，**再过一遍内部成本词闸门**
+      —— 数据源可能被脏数据污染，而这是要印出去的东西（依据：成本数据不得出现在任何前端）。
+    """
+    def clean(xs: list) -> list[str]:
+        out = []
+        for i in xs[:9]:
+            t = _s(i)
+            if t.strip() and not _INTERNAL_COST.search(t):
+                out.append(t)
+        return out
+
+    inc = clean(_lst(b.get('inc') or b.get('include')))
+    exc = clean(_lst(b.get('exc') or b.get('exclude') or b.get('no')))
+    if not (inc or exc):
+        return ''
+
+    def col(cls: str, hd: str, items: list[str], yes: bool) -> str:
+        if not items:
+            return ''
+        lis = ''.join('<div class="li"><div class="ico">%s</div><div>%s</div></div>'
+                      % ('✓' if yes else '✕', _e(i)) for i in items)
+        return '<div class="col %s"><div class="hd">%s</div>%s</div>' % (cls, hd, lis)
+
+    inner = col('yes', '费用包含', inc, True) + col('no', '费用不含', exc, False)
+    return '<div class="fee">%s</div>' % inner if inner else ''
+
+
+def _blk_kit(b: dict, ctx: Ctx) -> str:
+    """出行装备清单（务必自带什么）。"""
+    items = [_s(i) for i in _lst(b.get('items'))[:14]]
+    items = [i for i in items if i.strip()]
+    if not items:
+        return ''
+    hd = _s(b, 'title') or '出行装备清单'
+    return ('<div class="kit"><div class="hd">%s</div><ul class="ul">%s</ul></div>'
+            % (_e(hd), ''.join('<li>%s</li>' % _e(i) for i in items)))
+
+
+def _blk_prices(b: dict, ctx: Ctx) -> str:
+    """团期 / 价格表。
+
+    ★ 只有**真实正数**价格才渲染金额（_real_price）—— 素材没有售价时模型爱填 0，
+      成品上印「¥0 / 人」等于告诉客人免费，是事故。
+      若一个真价都没有，整块不渲染（只剩日期的价目表没有意义，交给 form 去说）。
+    """
+    rows, real = [], 0
+    for it in _lst(b.get('items'))[:6]:
+        label = _s(it, 'label') or _s(it, 'k')
+        date, note = _s(it, 'date'), _s(it, 'note')
+        unit = _s(it, 'unit') or '/ 人'
+        price = _s(it, 'price') or _s(it, 'v')
+        if not (label or date or price):
+            continue
+        l1 = label or date or '团期'
+        l2 = ' · '.join(x for x in [date if label else '', note] if x)
+        pv = ''
+        if _real_price(price):
+            real += 1
+            pv = '<div class="v"><small>¥</small>%s <small>%s</small></div>' % (_e(price), _e(unit))
+        rows.append(
+            '<div class="row"><div class="lb"><div class="l1">%s</div>%s</div><div class="pr">%s</div></div>'
+            % (_e(l1), '<div class="l2">%s</div>' % _e(l2) if l2 else '', pv))
+    if not rows or not real:
+        return ''
+    return '<div class="prices">%s</div>' % ''.join(rows)
 
 
 _BLOCK_RENDER = {
@@ -497,10 +667,20 @@ _BLOCK_RENDER = {
     'steps': _blk_steps,
     'team': _blk_team,
     'quote': _blk_quote,
+    # ↓ 2026-10-08 补：客人下单前要找的东西（费用边界 / 自备装备 / 团期价格）
+    'fee': _blk_fee,
+    'kit': _blk_kit,
+    'prices': _blk_prices,
+    # 别名容错：模型不照 block type 写是常态（这次 eth, 上一次换成 soan）
+    'cost': _blk_fee,
+    'checklist': _blk_kit,
+    'gear': _blk_kit,
+    'price': _blk_prices,
+    'occurrences': _blk_prices,
 }
 
 
-def _render_blocks(blocks: Iterable, allowed: set[str]) -> str:
+def _render_blocks(blocks: Iterable, ctx: Ctx) -> str:
     out = []
     for b in _lst(blocks):
         if not isinstance(b, dict):
@@ -509,7 +689,7 @@ def _render_blocks(blocks: Iterable, allowed: set[str]) -> str:
         if not fn:
             continue
         try:
-            piece = fn(b, allowed)
+            piece = fn(b, ctx)
         except Exception:
             piece = ''
         if piece:
@@ -520,15 +700,21 @@ def _render_blocks(blocks: Iterable, allowed: set[str]) -> str:
 # ══════════════════════════════════════════════════════════════════════
 # 五、整篇渲染
 # ══════════════════════════════════════════════════════════════════════
-def _render_hero(h: dict, allowed: set[str], cover_url: str | None) -> str:
+def _render_hero(h: dict, ctx: Ctx, cover_url: str | None = None) -> str:
     if not isinstance(h, dict):
         h = {}
+    allowed = ctx.allowed
     ref = _s(h, 'media') or _s(h, 'ref')
     bg = ''
     if ref and (not allowed or ref in allowed):
         bg = '{{media:%s}}' % _e(ref)
     elif cover_url:
         bg = _e(cover_url)
+    elif ctx.photos:
+        # ★ 2026-10-08 实测：模型有时**不给首屏选图**，而首屏是固定 1050px 高的容器，
+        #   没有图就变成一大片空白（用户第一眼看到的是一张"坏图"）。
+        #   没有封面就退回清单第一张 —— 宁可换一张图，也不能空着。
+        bg = '{{media:%s}}' % _e(ctx.photos[0])
     bg_html = '<img class="hero-bg" src="%s" alt="">' % bg if bg else '<div class="hero-bg"></div>'
 
     brand = _s(h, 'brand')
@@ -565,12 +751,13 @@ def _render_hero(h: dict, allowed: set[str], cover_url: str | None) -> str:
     en_loc = _s(h, 'enLoc') or _s(h, 'en_loc')
     en_html = '<div class="en-loc en">%s</div>' % _e(en_loc) if en_loc else ''
 
-    return ('<section class="hero">%s<div class="hero-shade"></div>'
+    hero_cls = ('hero ' + ctx.hero).strip()
+    return ('<section class="%s">%s<div class="hero-shade"></div>'
             '<div class="hero-in">%s<div class="hero-sp"></div>%s<h1>%s</h1>%s%s%s</div></section>'
-            % (bg_html, brand_html, chip_html, title_html, sub_html, meta_html, en_html))
+            % (hero_cls, bg_html, brand_html, chip_html, title_html, sub_html, meta_html, en_html))
 
 
-def _render_section(s: dict, allowed: set[str]) -> str:
+def _render_section(s: dict, ctx: Ctx) -> str:
     if not isinstance(s, dict):
         return ''
     eyebrow = _s(s, 'eyebrow') or _s(s, 'no')
@@ -581,14 +768,14 @@ def _render_section(s: dict, allowed: set[str]) -> str:
                   if title else '')
     lead = _s(s, 'lead') or _s(s, 'text')
     lead_html = '<p class="s-lead">%s</p>' % _nl2br(lead) if lead else ''
-    body = _render_blocks(s.get('blocks'), allowed)
+    body = _render_blocks(s.get('blocks'), ctx)
     note = _s(s, 'note')
     note_html = '<p class="s-note">%s</p>' % _nl2br(note) if note else ''
     inner = eye_html + title_html + lead_html + body + note_html
     return '<section class="sec">%s</section>' % inner if inner.strip() else ''
 
 
-def _render_signup(s: dict, allowed: set[str]) -> str:
+def _render_signup(s: dict, ctx: Ctx) -> str:
     if not isinstance(s, dict):
         s = {}
     parts = []
@@ -615,7 +802,7 @@ def _render_signup(s: dict, allowed: set[str]) -> str:
     prod = s.get('product')
     if isinstance(prod, dict):
         refs = [_s(r) for r in _lst(prod.get('media'))][:2]
-        pics = ''.join(_img(r, allowed) for r in refs if r.strip())
+        pics = ''.join(_img(r, ctx.allowed) for r in refs if r.strip())
         pics = pics if pics.count('<img') >= 2 else ''
         price, unit = _s(prod, 'price'), _s(prod, 'unit') or '/ 人'
         inc = [_s(i) for i in _lst(prod.get('inc'))]
@@ -630,7 +817,7 @@ def _render_signup(s: dict, allowed: set[str]) -> str:
                 parts.append(prod_html)
 
     # 二维码：只有调用方真的提供了二维码 ref 才渲染（否则会留一块破图占位）
-    if s.get('qr') and '__QR__' in allowed:
+    if s.get('qr') and '__QR__' in ctx.allowed:
         parts.append('<div class="qrwrap"><div class="qrcard"><img src="{{media:__QR__}}" alt=""></div>'
                      '<div class="scan">扫码报名咨询</div>'
                      '<div class="scan-tip">名额有限 · 先到先得</div></div>')
@@ -643,21 +830,25 @@ def _render_signup(s: dict, allowed: set[str]) -> str:
     return '<section class="signup">%s</section>' % ''.join(parts)
 
 
-def render(doc: dict, allowed_refs: set[str] | None = None, cover_url: str | None = None) -> str:
+def render(doc: dict, allowed_refs: set[str] | None = None, cover_url: str | None = None,
+           seed: int = 0, photo_order: list[str] | None = None) -> str:
     """把模型产出的内容 JSON 渲染成完整长图 HTML（含样式）。
 
     doc = {title, theme, hero, sections[], signup}；所有字段容错，缺了就不渲染那一块。
+
+    seed：版式抽签种子 —— 同一场活动每次「重新生成」换一个种子就换一套版式，
+    但**一次生成内**预览和导出必须同源，所以种子由调用方决定、不在这里随机。
     """
     doc = doc if isinstance(doc, dict) else {}
-    allowed = set(allowed_refs or set())
+    ctx = Ctx(allowed_refs, seed, photo_order)
     theme = str(doc.get('theme') or '').strip().lower()
     if theme not in THEMES:
         theme = DEFAULT_THEME
 
-    body = [_render_hero(doc.get('hero'), allowed, cover_url)]
+    body = [_render_hero(doc.get('hero'), ctx, cover_url)]
     for s in _lst(doc.get('sections')):
-        body.append(_render_section(s, allowed))
-    body.append(_render_signup(doc.get('signup'), allowed))
+        body.append(_render_section(s, ctx))
+    body.append(_render_signup(doc.get('signup'), ctx))
 
     html = ''.join(x for x in body if x)
     # 二维码：模板里占位，调用方若无二维码则整块已自带占位图（前端会替换 __QR__ 或按需删）
@@ -672,7 +863,7 @@ def structure_report(html: str) -> dict[str, int]:
     def n(pat: str) -> int:
         return len(re.findall(pat, html or '', re.I))
     return {
-        'hero': n(r'class="hero"'),
+        'hero': n(r'class="hero[ "]'),
         'sections': n(r'class="sec"'),
         'stats': n(r'class="stats"'),
         'params': n(r'class="params"'),
@@ -682,6 +873,9 @@ def structure_report(html: str) -> dict[str, int]:
         'quote': n(r'class="quote"'),
         'photos': n(r'class="ph[ "]'),
         'chips': n(r'class="chip"'),
+        'fee': n(r'class="fee"'),
+        'kit': n(r'class="kit"'),
+        'prices': n(r'class="prices"'),
         'signup': n(r'class="signup"'),
         'images_used': len(set(re.findall(r'\{\{media:([A-Za-z0-9_\-]+)\}\}', html or ''))),
     }

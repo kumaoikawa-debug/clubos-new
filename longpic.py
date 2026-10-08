@@ -30,12 +30,12 @@
   （地图截图、别的活动的照片）根本不会出现在给模型的清单里；出口再按白名单二次过滤。
 """
 from __future__ import annotations
-import json, re
+import json, re, traceback
 from typing import Any
 
 import longpic_template as T
 from ai_gateway import generate_json, record_mock_usage, GatewayResponse
-from cost_guard import scrub_cost_text
+from cost_guard import scrub_cost_text, is_cost_row
 
 # 图片占位符：模板只输出这个形态，出口会校验 ref 是否真实存在
 _PH = re.compile(r'\{\{\s*media\s*:\s*([A-Za-z0-9_\-]+)\s*\}\}')
@@ -124,6 +124,28 @@ _PROMPT = """## 你要做什么
   团队成员（姓名 + 角色）。**`media` 只有在清单里明确写着那是「人物 / 教练 / 导师的正面或半身照」时才填**，
   清单里没有人物照就**不要填 media**（系统会显示姓氏首字，比把风景照塞进头像位体面）。1 节最多 8 人。
 - `{"type":"quote","text":"一句值得单独放大、留在心里的话"}` 引语块（整篇最多 1~2 次）。
+- `{"type":"prices","items":[{"label":"10月24日 · 标准团","date":"2026-10-24","price":"498","unit":"/ 人","note":"余 13 位"}]}`
+  **团期 / 价格表**。下方「报名必用数据」里有 occurrences 就**必须**用它，多个团期全部列出；
+  `price` 只写真实正数（若某团期价格为 0 或不明，就别写 price 字段改用 note 说明）。
+- `{"type":"fee","inc":["户外牛肉汤锅午餐","专业领队服务"],"exc":["个人消费","往返大交通"]}`
+  **费用包含 / 不含**（双栏）。下方数据里有 `fees` 就必须用它；
+  `inc` / `exc` 只抄写给客人的条目，**内部成本明细（车费单价、工作餐、物料费、服务费）一条都不要进**。
+- `{"type":"kit","title":"自备装备","items":["防水防滑徒步鞋","透气速干衣裤","登山杖"]}`
+  **出行装备清单**。数据里有 checklist 就用它（最多 14 条，照抄不改写）。
+
+## 报名必用数据（系统从报名系统 / 活动方案里取出的**真实数据**，不是示例）
+__FACTS__
+
+## ★ 顾客下单前必须看到的信息（缺一块，这张图就不合格）
+下面 5 项，**只要上方数据里有，就必须写进成品**，且**只能照抄上面的数据**、不得改写数字或编补：
+1. **团期与价格** → 用 `prices` 组件逐个列出（label / 日期 / 价格 / 余位都要用真值）。
+2. **费用包含 / 不含** → 用 `fee` 组件照抄 `fees` 里的条目。
+3. **自备装备** → 用 `kit` 组件照抄 `checklist`。
+4. **带队阵容** → 用 `team`（有姓名/资质时）或 `params`（只有人数配置时，如 staffRatio 写「领队 3 人」）
+   写清**有几位领队、什么资质、有没有随队保障**。只写怎么带队，不写花名堂，
+   也不许把内部后勤人数当成专业卖点堆给客人。
+5. **报名信息**（signup.form）→ 时间 / 地点 / 集合点 / 名额，全部取自上方数据。
+这 5 项可以分布在各自的 section 里，**不要把五项挤进同一节**，也不要堆成一张密密麻麻的大表格。
 
 ## 选色规则（theme）
 - `"night"`：日照金山 / 星空 / 雪山 / 高原 / 藏地 / 唐卡 / 篝火 / 夜间 —— 与"暗调画面"相配；
@@ -197,6 +219,9 @@ __MEDIA__
 
 ## 活动事实锚点（Activity Master）
 __MASTER__
+
+## 报名必用数据（团期价格 / 领队 / 费用 / 装备，真实数据，必须写进成品）
+__FACTS__
 
 ## 方案事实要点表（碎片，不是成句；事实必须与它一致）
 __DIGEST__
@@ -306,7 +331,11 @@ def _doc_ok(rep: dict[str, int], has_photos: bool) -> tuple[bool, str]:
         return False, 'no signup'
     if rep.get('sections', 0) < 5:
         return False, 'sections=%d < 5' % rep.get('sections', 0)
-    rich = sum(rep.get(k, 0) for k in ('stats', 'params', 'timeline', 'steps', 'team', 'quote', 'chips'))
+    # ★ 2026-10-08：加入 fee / kit / prices 三个「顾客必看」组件后，验收口径必须同步，
+    #    否则模型照新契约写得再好也会被判 component blocks<4 → 退回旧的"模型直出 HTML"路径，
+    #    新组件一个都上不了（实测踩到，成品里价格/领队全没了）。
+    rich = sum(rep.get(k, 0) for k in ('stats', 'params', 'timeline', 'steps', 'team', 'quote', 'chips',
+                                       'fee', 'kit', 'prices'))
     if rich < 4:
         return False, 'component blocks=%d < 4' % rich
     if has_photos and rep.get('images_used', 0) < 3:
@@ -320,9 +349,11 @@ def _doc_ok(rep: dict[str, int], has_photos: bool) -> tuple[bool, str]:
 async def generate_longpic(club_id: int, activity_master: dict[str, Any],
                            detail: dict[str, Any], *, cover_url: str | None = None,
                            source_text: str = '', caption_lines: list[str] | None = None,
-                           digest: str = '') -> tuple[dict[str, Any], GatewayResponse]:
+                           digest: str = '', fact_pack: dict[str, Any] | None = None,
+                           seed: int = 0) -> tuple[dict[str, Any], GatewayResponse]:
     """返回 ({"title","html","usedRefs","droppedRefs","route"}, gateway_response)。"""
     master = activity_master if isinstance(activity_master, dict) else {}
+    pack = fact_pack if isinstance(fact_pack, dict) else {}
     media_lines = '\n'.join(caption_lines or []) or '（本次活动没有可用照片，不要使用任何图片）'
     fact_note = (f'## 方案事实要点表（碎片，不是成句；事实必须与它一致）\n{digest}\n'
                  if digest else
@@ -331,10 +362,13 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
     def _fill(tpl: str) -> str:
         return (tpl.replace('__MEDIA__', media_lines)
                    .replace('__MASTER__', json.dumps(master, ensure_ascii=False)[:9000])
-                   .replace('__DIGEST__', fact_note))
+                   .replace('__DIGEST__', fact_note)
+                   .replace('__FACTS__', facts_prompt(fact_pack)))
 
     allowed = _allowed_refs(caption_lines)
     has_photos = bool(allowed)
+    # 有序照片清单：给首屏兜底用（set 取不出"第一张"）
+    photo_order = [str(l).split('｜', 1)[0].strip() for l in (caption_lines or []) if str(l).strip()]
     cover_note = f'活动官方封面（已上传的主视觉，可用作首图）：{cover_url}\n' if cover_url else ''
 
     # ── 主路径：模型输出内容 JSON → 模板渲染 ──
@@ -350,10 +384,40 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
     html, route, dropped = '', 'template', []
 
     if doc:
+        # ① 先用真实数据补齐「顾客必看」的内容，再做结构验收
+        #    （顺序不能反：补齐本身会加 sections，先判断可能被误判成"太单薄"）
+        doc, _added = ensure_required_sections(doc, pack, photo_order)
         rep = _doc_quality(doc, allowed)
         ok, why = _doc_ok(rep, has_photos)
         if ok:
-            html = T.render(doc, allowed, cover_url)
+            # ② 文案质检：挑出 AI 腔 / 照抄 / 占位符，带问题清单让模型改一次。
+            #    只改一次（重试是有成本的，且改坏了还不如原稿 —— 见下面的采用条件）。
+            doc_before_fix = doc
+            issues = quality_report(doc, str(source_text or ''))
+            if issues:
+                gwf = await generate_json(
+                    club_id=club_id, task_type='longpic', system_prompt=_SYSTEM,
+                    user_prompt=(_REWRITE_PROMPT
+                                 .replace('__ISSUES__', '\n'.join('- ' + i for i in issues))
+                                 .replace('__DOC__', json.dumps(doc, ensure_ascii=False)[:16000])))
+                fixed = _extract_doc(gwf.data) if gwf and isinstance(gwf.data, dict) else None
+                if fixed:
+                    fixed, _ = ensure_required_sections(fixed, pack, photo_order)
+                    # 只有"确实改好了"才采用（以问题变少为准；否则保留原稿）
+                    if len(quality_report(fixed, str(source_text or ''))) < len(issues):
+                        doc = fixed
+            # ★ 渲染失败**不能静默吞掉**（2026-10-08 教训：吞了之后只知道"成品是空的"，
+            #   查了半天不知道是渲染炸了）。做法：打印堆栈给人看，并依次退回到
+            #   ① 改写后的稿子（若失败）② 改写前的原稿 —— 原稿至少是验过能渲染的。
+            for cand_doc in ((doc, doc_before_fix) if doc is not doc_before_fix else (doc,)):
+                try:
+                    cand_html = T.render(scrub_doc_text(cand_doc), allowed, cover_url, seed, photo_order)
+                except Exception:
+                    traceback.print_exc()
+                    continue
+                if cand_html:
+                    html, doc = cand_html, cand_doc
+                    break
         # 质量不够：如果模型同时给了现成 html 就用它，否则走回退
         if not html:
             cand = str(data.get('html') or data.get('body') or '')
@@ -382,7 +446,7 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
     html, dropped = _drop_unknown_refs(html, allowed)
     if route == 'model-html':
         html = _ensure_hero(html, caption_lines or [], allowed)
-    html = scrub_cost_text(html)
+    html = scrub_html_sentences(html) if route == 'template' else scrub_cost_text(html)
 
     title = str(data.get('title') or master.get('title') or '活动宣传长图').strip()
     return {'title': title, 'html': html, 'usedRefs': _used_refs(html),
@@ -425,6 +489,347 @@ def _ensure_hero(html: str, caption_lines: list[str], allowed: set[str]) -> str:
     hero = f'<figure style="margin:0 0 8px">{img}</figure>'
     return hero + html
 
+
+
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 成本清洗（★★ 2026-10-08 重大坑，改之前先读这段注释）
+# ══════════════════════════════════════════════════════════════════════
+# 成品整张变空，查到最后是这一行：`scrub_cost_text(整篇 HTML)`。
+# 那个函数的第一步是 `is_cost_row(整段)` —— 只要整段里出现**任意**一个 COST_LABELS 词
+# （「报价」「预算」「单价」「结算」「成本」… 全是宣传文案里可能顺手出现的词），
+# 整段就被判成「一行成本明细」→ 直接返回 ''。
+# 于是：加入价格 / 团期 / 人员配置之后的长图，第一次渲染成功 17638 字符，出口洗成 0。
+#
+# 正确做法分成两层，粒度都不可以再粗：
+#   ① **内容层** —— 渲染前把 doc 里每条文案字符串单独过一把（一条就是一行，正是
+#       scrub_cost_text 的设计粒度）；
+#   ② **HTML 层** —— 只按句删，**永不整体判定**。
+# 这样清洗能力一点没削弱（成本句照样被删），但不会再发生「整篇被误判」。
+_SCRUB_HTML_SPLIT = re.compile(r'(?<=[。；;\n>])')
+_SCRUB_SKIP_KEYS = frozenset({'type', 'media', 'ref', 'refs', 'date', 'no', 'unit', 'price',
+                              'theme', 'qr', 'label', 'accent', 'size', 'eyebrow'})
+
+
+def scrub_doc_text(obj: Any) -> Any:
+    """内容层清洗：递归处理 doc 里的每条文案（跳过结构化键，别把 block type 洗没了）。"""
+    if isinstance(obj, str):
+        return scrub_cost_text(obj)
+    if isinstance(obj, list):
+        return [scrub_doc_text(i) for i in obj]
+    if isinstance(obj, dict):
+        return {k: (obj[k] if k in _SCRUB_SKIP_KEYS else scrub_doc_text(obj[k])) for k in obj}
+    return obj
+
+
+def scrub_html_sentences(html: str) -> str:
+    """HTML 层清洗：按句删成本句，**不做整体判定**（见上面那段注释）。"""
+    parts = _SCRUB_HTML_SPLIT.split(str(html or ''))
+    kept = [p for p in parts if p.strip() and not is_cost_row(p)]
+    return ''.join(kept)
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 报名必用数据（FACT PACK）
+# ══════════════════════════════════════════════════════════════════════
+def build_fact_pack(club_id: int, activity_id: int, master: dict[str, Any] | None = None) -> dict[str, Any]:
+    """把「顾客下单前要知道的东西」从库里捞出来，喂给模型 + 用于兜底补齐。
+
+    ★ 2026-10-08 老板反馈「公众号长图里没有领队信息、没有活动价格」。
+      根因不是模型不肯写，而是**这些字段从来没进过提示词**：
+        · 团期价格    → activity_occurrences（price / start_at / label / 余位）
+        · 领队        → occurrence_leaders join club_leaders
+        · 人员配置    → master.publicFacts.staffRatio / master.services
+        · 费用含不含  → master.fees
+        · 自备装备    → master.checklist
+        · 交通集合    → master.publicFacts.transport
+      全部都在库里，只是从来没和长图管线连过线。这一次接通。
+    """
+    master = master if isinstance(master, dict) else {}
+    pf = master.get('publicFacts') if isinstance(master.get('publicFacts'), dict) else {}
+    pack: dict[str, Any] = {
+        'occurrences': [], 'leaders': [], 'fees': {'inc': [], 'exc': []}, 'checklist': [],
+        'staffRatio': str(pf.get('staffRatio') or ''),
+        'services': [str(x) for x in (master.get('services') or []) if str(x).strip()],
+        'gather': str(pf.get('transport') or ''),
+    }
+    try:
+        from db import conn as _dbconn, rows as _dbrows          # 延迟导入：避免模块环
+        with _dbconn() as c:
+            occ = _dbrows(c.execute(
+                'SELECT id,start_at,end_at,price,capacity,sold,label,status '
+                'FROM activity_occurrences WHERE activity_id=? AND club_id=? ORDER BY start_at',
+                (activity_id, club_id)))
+            for o in occ:
+                if str(o.get('status') or 'open') != 'open':
+                    continue
+                pack['occurrences'].append({
+                    'label': str(o.get('label') or '').strip(),
+                    'date': str(o.get('start_at') or '')[:10],
+                    'price': float(o.get('price') or 0),
+                    'capacity': int(o.get('capacity') or 0),
+                    'sold': int(o.get('sold') or 0)})
+            lead = _dbrows(c.execute(
+                'SELECT ol.name, ol.role FROM occurrence_leaders ol '
+                'JOIN activity_occurrences ao ON ao.id = ol.occurrence_id '
+                'WHERE ao.activity_id=? AND ol.club_id=?', (activity_id, club_id)))
+            seen = set()
+            for l in lead:
+                nm = str(l.get('name') or '').strip()
+                if not nm or nm in seen:
+                    continue
+                seen.add(nm)
+                pack['leaders'].append({'name': nm, 'role': str(l.get('role') or '领队').strip()})
+    except Exception:
+        pass
+    fees = master.get('fees') if isinstance(master.get('fees'), dict) else {}
+    pack['fees'] = {
+        'inc': [str(x).strip() for x in (fees.get('包含') or []) if str(x).strip()],
+        'exc': [str(x).strip() for x in (fees.get('不含') or []) if str(x).strip()],
+    }
+    pack['checklist'] = [str(x).strip() for x in (master.get('checklist') or []) if str(x).strip()]
+    return pack
+
+
+def facts_prompt(pack: dict[str, Any] | None) -> str:
+    """事实包 → 给模型看的一段紧凑文本（碎片，不是成句，避免它照抄）。"""
+    pack = pack if isinstance(pack, dict) else {}
+    out: list[str] = []
+    occ = [o for o in (pack.get('occurrences') or []) if isinstance(o, dict)]
+    if occ:
+        out.append('· 团期与价格（真值，照抄，不得估算）：')
+        for o in occ:
+            head = ' '.join(x for x in [str(o.get('label') or ''), str(o.get('date') or '')] if x) or '团期'
+            money = ('¥%g / 人' % float(o['price'])) if float(o.get('price') or 0) > 0 else '价格未定'
+            tail = ''
+            cap = int(o.get('capacity') or 0)
+            if cap > 0:
+                tail = ' · 名额 %d 人，余 %d 位' % (cap, max(cap - int(o.get('sold') or 0), 0))
+            out.append('  - %s｜%s%s' % (head, money, tail))
+    ld = [l for l in (pack.get('leaders') or []) if isinstance(l, dict) and l.get('name')]
+    if ld:
+        out.append('· 带队阵容：' + '；'.join('%s（%s）' % (l['name'], l.get('role') or '领队') for l in ld[:8]))
+    if pack.get('staffRatio'):
+        out.append('· 人员配置（原文）：%s' % pack['staffRatio'])
+    if pack.get('services'):
+        out.append('· 服务内容（原文）：' + '；'.join(str(x) for x in pack['services'][:8]))
+    fee = pack.get('fees') or {}
+    if fee.get('inc'):
+        out.append('· 费用包含：' + '；'.join(str(x) for x in fee['inc'][:9]))
+    if fee.get('exc'):
+        out.append('· 费用不含：' + '；'.join(str(x) for x in fee['exc'][:9]))
+    if pack.get('checklist'):
+        out.append('· 自备装备清单：' + '；'.join(str(x) for x in pack['checklist'][:14]))
+    if pack.get('gather'):
+        out.append('· 交通与集合（原文）：%s' % pack['gather'])
+    return '\n'.join(out) or '（这场活动暂时没有额外的结构化数据，团期 / 领队 / 费用都不要编）'
+
+
+# ★★ 代码兜底（与 longpic_template 里那三处兜底同源的手法）
+_REQ_PROBES = {'team': 'team', 'prices': 'prices', 'price': 'prices', 'fee': 'fee', 'cost': 'fee',
+               'kit': 'kit', 'checklist': 'kit', 'gear': 'kit'}
+
+
+def ensure_required_sections(doc: dict[str, Any], pack: dict[str, Any] | None,
+                            allowed_order: list[str] | None = None) -> tuple[dict[str, Any], list[str]]:
+    """模型漏写「顾客必看」内容时，用**真实数据**补齐对应 section。
+
+    ★ 为什么必须代码兜底：「提示词写了」≠「模型照做」。而这几项是**能不能发出去**的问题 ——
+      一张没有价格、没有领队、没有费用边界的长图，客人看完还得回头问一句「多少钱」。
+      宁可这一节是朴素的表格，也不能没有。
+    """
+    pack = pack if isinstance(pack, dict) else {}
+    if not isinstance(doc, dict) or not pack:
+        return doc, []
+    secs = [s for s in (doc.get('sections') or []) if isinstance(s, dict)]
+    have = {'team': False, 'prices': False, 'fee': False, 'kit': False}
+    for s in secs:
+        for b in (s.get('blocks') or []):
+            if not isinstance(b, dict):
+                continue
+            kind = _REQ_PROBES.get(str(b.get('type') or '').strip().lower())
+            if kind:
+                have[kind] = True
+    # 「已经写过了就别再补」★ judgement method：翻整篇（含导语正文），
+    # 只要 staffRatio / 任一 service 的名字已经出现在标题或正文里，就算覆盖。
+    # 2026-10-08 实测：原来只在 params 组件的 k/v 里找，结果模型把它写在第 4 节导语
+    # 「配备户外领队、瑜伽老师、摄影师及后勤保障人员」，兜底没认出来，
+    # 又补了两节一模一样的「带队与保障」—— 成品里出现三处重复。
+    # 首屏必须有图：模型漏选时用清单第一张补上（封面由调用方另行兜底）
+    order = [x for x in (allowed_order or []) if x]
+    hero = doc.get('hero') if isinstance(doc.get('hero'), dict) else None
+    if hero is not None and order and not str(hero.get('media') or hero.get('ref') or '').strip():
+        doc = dict(doc)
+        hero = dict(hero)
+        hero['media'] = order[0]
+        doc['hero'] = hero
+        added.append('首屏配图')
+
+    if not have['team']:
+        blob = json.dumps(secs, ensure_ascii=False)
+        for hint in [str(pack.get('staffRatio') or '')] + [str(x) for x in (pack.get('services') or [])]:
+            if hint and hint.strip() and hint.strip() in blob:
+                have['team'] = True
+                break
+
+    added: list[str] = []
+
+    def add(no: str, title: str, lead: str, blocks: list) -> None:
+        secs.append({'eyebrow': '%s' % no, 'title': title, 'lead': lead, 'blocks': blocks})
+        added.append(title)
+
+    idx = len(secs) + 1
+
+    # 1) 带队阵容：有真名用 team，只有人数配置用 params
+    if not have['team']:
+        ld = [l for l in (pack.get('leaders') or []) if isinstance(l, dict) and l.get('name')][:8]
+        if ld:
+            add('%02d — TEAM' % idx, '谁带你进山',
+                '这几位领队全程跟队，负责路线把控与安全保障。',
+                [{'type': 'team', 'items': [{'name': l['name'], 'role': l.get('role') or '领队'} for l in ld]}])
+            idx += 1
+        elif pack.get('staffRatio') or pack.get('services'):
+            items = []
+            if pack.get('staffRatio'):
+                items.append({'k': '人员配置', 'v': str(pack['staffRatio'])})
+            if pack.get('services'):
+                items.append({'k': '服务保障', 'v': '；'.join(str(x) for x in pack['services'][:6])})
+            add('%02d — TEAM' % idx, '带队与保障', '这一趟的人员配置与服务内容如下。',
+                [{'type': 'params', 'items': items}])
+            idx += 1
+
+    # 2) 团期与价格（只列真价；无真价就不补，避免出现「¥0 / 人」）
+    if not have['prices']:
+        real = [o for o in (pack.get('occurrences') or [])
+                if isinstance(o, dict) and float(o.get('price') or 0) > 0][:6]
+        if real:
+            items = []
+            for o in real:
+                tail = ''
+                cap = int(o.get('capacity') or 0)
+                if cap > 0:
+                    tail = '名额 %d 人 · 余 %d 位' % (cap, max(cap - int(o.get('sold') or 0), 0))
+                items.append({'label': str(o.get('label') or '').strip() or '团期',
+                              'date': str(o.get('date') or ''),
+                              'price': '%g' % float(o['price']), 'unit': '/ 人', 'note': tail})
+            add('%02d — ENROLL' % idx, '团期与费用', '可选团期与对应价格如下。',
+                [{'type': 'prices', 'items': items}])
+            idx += 1
+
+    # 3) 费用包含 / 不含（内部成本条目由模板 _blk_fee 再过一道黑名闸）
+    if not have['fee']:
+        fee = pack.get('fees') or {}
+        if fee.get('inc') or fee.get('exc'):
+            blk = {'type': 'fee'}
+            if fee.get('inc'):
+                blk['inc'] = [str(x) for x in fee['inc'][:9]]
+            if fee.get('exc'):
+                blk['exc'] = [str(x) for x in fee['exc'][:9]]
+            add('%02d — FEE' % idx, '费用包含什么', '报名前请把费用边界看清楚。', [blk])
+            idx += 1
+
+    # 4) 自备装备
+    if not have['kit']:
+        kit = [str(x) for x in (pack.get('checklist') or []) if str(x).strip()][:14]
+        if kit:
+            add('%02d — KIT' % idx, '自备装备', '这些装备请自行准备齐全。',
+                [{'type': 'kit', 'title': '自备装备清单', 'items': kit}])
+            idx += 1
+
+    if added:
+        doc = dict(doc)
+        doc['sections'] = secs
+    return doc, added
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 文案质检（不合格就让模型改一次 —— "文案处理能力"的落地）
+# ══════════════════════════════════════════════════════════════════════
+# AI 腔套话黑名单：这些句子搬到任何一场活动上都能用，等于什么都没说。
+_CLIQUE = re.compile(
+    r'不仅能|还能让你|让我们一起|邂逅一场|仿佛一幅|是一场与|远离喧嚣|亲近自然|释放压力|'
+    r'心灵之旅|治愈之旅|完美融合|不容错过|还在等什么|解锁|绝美秘境|必打卡|氛围感拉满|不负韶华')
+_PH_IN_TEXT = re.compile(r'(?:[xX]{2,}|TBD|[?]{2}|__+)')
+
+
+
+
+_REWRITE_PROMPT = """下面是你刚写完的一版长图内容 JSON，以及一份**问题清单**。
+你要做的是**改稿**：只改清单里点出的问题，**其它内容一个字都不要动**。
+
+## 硬性要求
+1. 改完输出**完整的新 JSON**（结构与原来完全一致，字段一个都不能少）。
+2. 不许因为改稿把团期价格、带队阵容、费用包含、装备清单这些内容改丢 ——
+   它们是整篇里最有用的部分。
+3. 替换掉的段落必须**换成本场活动独有的具体事实**（时刻 / 数字 / 专名 / 动作），
+   不许用另一句漂亮话顶替那句套话 —— 那就是换个姿势的废话。
+4. 只输出 JSON，不要 Markdown 代码围栏，不要解释。
+
+## 问题清单
+__ISSUES__
+
+## 原 JSON
+__DOC__"""
+
+def quality_report(doc: dict[str, Any], source_text: str = '') -> list[str]:
+    """给成品挑毛病，返回问题清单（空＝合格）。
+
+    三件事：**说清楚、不像 AI、没照抄**。
+    """
+    issues: list[str] = []
+    if not isinstance(doc, dict):
+        return ['doc 不是对象']
+    secs = [s for s in (doc.get('sections') or []) if isinstance(s, dict)]
+    texts: list[str] = []
+    for i, s in enumerate(secs, 1):
+        lead = str(s.get('lead') or s.get('text') or '').strip()
+        title = str(s.get('title') or '').strip()
+        if title and len(title) > 20:
+            issues.append('第%d节标题 %d 字 > 20，会折行难看，请压到 14 字内' % (i, len(title)))
+        if lead:
+            texts.append(lead)
+            if len(lead) < 40 and i <= 3:
+                issues.append('第%d节导语只有 %d 字，太薄；补这场活动独有的具体安排' % (i, len(lead)))
+            if _CLIQUE.search(lead):
+                issues.append('第%d节导语有 AI 腔套话（搬到别场活动也通用），换成具体事实' % i)
+            if _PH_IN_TEXT.search(lead):
+                issues.append('第%d节导语还留着占位符，删掉或改成诚实表述' % i)
+        for b in (s.get('blocks') or []):
+            if not isinstance(b, dict):
+                continue
+            for k in ('text', 'desc', 'what'):
+                v = str(b.get(k) or '')
+                if v:
+                    texts.append(v)
+                    if _CLIQUE.search(v):
+                        issues.append('第%d节里有 AI 腔套话：“%s”换成具体动作或数字' % (i, v[:18]))
+                    if _PH_IN_TEXT.search(v):
+                        issues.append('第%d节里有占位符：“%s”删掉' % (i, v[:18]))
+    # 照抄原文：连续 12 字以上是红线
+    src = str(source_text or '')
+    if src:
+        for t in texts:
+            t = re.sub(r'\s+', '', t)
+            for n in range(12, min(len(t), 40) + 1, 2):
+                frag = t[:n]
+                if len(frag) >= 12 and frag in re.sub(r'\s+', '', src):
+                    issues.append('有一段与方案原文连续重合超 12 字：“%s”，必须改写' % frag[:16])
+                    break
+    hero = doc.get('hero') if isinstance(doc.get('hero'), dict) else {}
+    for k in ('sub', 'meta'):
+        v = str(hero.get(k) or '')
+        if v and _PH_IN_TEXT.search(v):
+            issues.append('首屏 %s 里有占位符，删掉' % k)
+    # 去重：同一条问题可能出现多次
+    seen, uniq = set(), []
+    for it in issues:
+        key = re.sub(r'\d+', '#', it)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(it)
+    return uniq[:8]
 
 def _mock(master: dict[str, Any], detail: dict[str, Any], cover_url: str | None) -> dict[str, Any]:
     """mock 模式（演示 / 无模型配置）下的最小可用成品，避免内容中心出现空预览。

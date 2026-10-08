@@ -13,6 +13,8 @@
 产物是每张图 60 字以内的中文描述，成本远低于让写作模型反复试错。
 """
 from __future__ import annotations
+from urllib.parse import unquote
+from PIL import Image
 import json, os
 from pathlib import Path
 from typing import Any
@@ -153,6 +155,40 @@ def activity_context(master: dict[str, Any]) -> str:
     return out or '（资料未提供活动信息，只判断是否为地图/表格/logo/纯文字页）'
 
 
+def _ensure_media_meta(media: list[dict[str, Any]], static_root: Path | None = None) -> None:
+    """给缺 metam 的照片补 width / height / orientation / kind（就地改写）。
+
+    ★ 2026-10-08 实测：早期入库的活动（如 act1）media 只有 {ref,name,url}，
+      没有尺寸也没有 kind。而 caption_media 用 `width >= 600` 过滤「真正的照片」来
+      排除小图标 —— 缺 size 就等于全被判为"不是照片"，结果**整张长图一张图都没有**。
+      用户说「AI 生成能力不行」，有一部分根因其实在这里：不是模型不选图，是没图可选。
+      所以这里先把元数据补齐（读磁盘，成本很低），过滤条件本身保持不变 ——
+      小图/装饰图照样会被剔除。
+    """
+    # 默认按「本文件所在目录 / static」定位，不依赖进程 cwd（曾被 cwd 坑过）
+    root = Path(static_root) if static_root else Path(__file__).resolve().parent / 'static'
+    for m in media:
+        if int(m.get('width') or 0) > 0:
+            continue
+        u = str(m.get('url') or '').strip()
+        if not u.startswith('/static/'):
+            continue
+        try:
+            rel = unquote(u[len('/static/'):])
+            fp = (root / rel).resolve()
+            if not fp.is_file():
+                continue
+            with Image.open(fp) as im:
+                w, h = im.size
+            m['width'], m['height'] = int(w), int(h)
+            m.setdefault('orientation', 'landscape' if w >= h else 'portrait')
+            # 文件名里带 logo / 标识 的，别当照片（否则可能被选成长图首屏大图）
+            nm = str(m.get('name') or '').lower()
+            m.setdefault('kind', 'logo' if ('logo' in nm or '标识' in nm) else 'photo')
+        except Exception:
+            continue
+
+
 async def caption_media(club_id: int, master: dict[str, Any],
                         static_root: Path | None = None) -> dict[str, dict[str, Any]]:
     """给 master['media'] 里的 photo 补 desc / usable。返回 ref → {desc, usable}。
@@ -160,6 +196,7 @@ async def caption_media(club_id: int, master: dict[str, Any],
     任何失败都**静默降级为「无描述」**：写不出描述只是选图变差，不能让整条生成链路挂掉。
     """
     media = [m for m in (master.get('media') or []) if isinstance(m, dict)]
+    _ensure_media_meta(media, static_root)          # ★ 缺尺寸的历史数据先补齐
     photos = [m for m in media
               if (m.get('kind') or 'photo') == 'photo'
               and str(m.get('url') or '').strip()
@@ -251,6 +288,10 @@ async def caption_media(club_id: int, master: dict[str, Any],
 
 def caption_lines(master: dict[str, Any], caps: dict[str, dict[str, Any]]) -> list[str]:
     """把描述整理成给写作模型看的清单行。不可用的图**不列出**，从源头断掉选错图的可能。"""
+    # ★ 这里也要补一次元数据：caption_lines 是「出图清单」的公共入口，
+    #   只要有 width 缺失的图就会整批被下面的 `w < 600` 过滤掉 —— 而元数据缺失
+    #   是历史数据常有的事（act1 的 18 张图全都没有 width，结果长图一张图都没有）。
+    _ensure_media_meta([m for m in (master.get('media') or []) if isinstance(m, dict)])
     lines: list[str] = []
     for m in master.get('media') or []:
         if not isinstance(m, dict) or (m.get('kind') or 'photo') != 'photo':
