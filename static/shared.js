@@ -311,17 +311,70 @@ function renderPromo(detail,master={},opts={}){
       const ok=resolvedRefs(refs,mm);
       const media=ok.length?`<div class="ed-narrative-media">${ok.map(r=>mediaHtml(r,mm)).join('')}</div>`:'';
       /* 文案升级（2026-09-28 用户反馈「图片好看但文字没气势」）：
-         body 支持多段（数组或 \n 分隔），pull 是独立金句行——编辑排版的节奏全靠这两样。 */
+         body 支持多段（数组或 \n 分隔），pull 是独立金句行——编辑排版的节奏全靠这两样。
+         layout 变体（2026-10-08）：image-left / image-right 让图文左右错落，full 让首图整版铺满 +
+         文字叠在图上 —— 给模型更多"画报感"的拼法，避免每版都长一个样。 */
       const pull=b.pull?`<p class="ed-pull">${esc(b.pull)}</p>`:'';
-      h+=`<section class="ed-narrative ${ok.length?'has-media':''}${pull?' has-pull':''}"><div class="ed-copy">${b.eyebrow?`<div class="ed-kicker">${esc(b.eyebrow)}</div>`:''}<h2>${esc(b.headline||'')}</h2>${edParas(b.body||b.text||'')}${pull}</div>${media}</section>`;
-    }else if(b.type==='media'){
+      const copy=`<div class="ed-copy">${b.eyebrow?`<div class="ed-kicker">${esc(b.eyebrow)}</div>`:''}<h2>${esc(b.headline||'')}</h2>${edParas(b.body||b.text||'')}${pull}</div>`;
+      const layout=b.layout||'text-top';
+      if((layout==='image-left'||layout==='image-right')&&ok.length){
+        h+=`<section class="ed-narrative ed-narrative--split ${layout==='image-right'?'img-right':'img-left'} has-media">${layout==='image-right'?copy+media:media+copy}</section>`;
+      }else if(layout==='full'&&ok.length){
+        const url=mm[ok[0]]?.url||'';
+        h+=`<section class="ed-narrative ed-narrative--full${url?' has-photo':''}"${url?` style="background-image:linear-gradient(180deg,rgba(7,17,14,.06),rgba(7,17,14,.74)),url('${esc(url)}')"`:''}><div class="ed-narrative__fullcopy">${copy}</div></section>`;
+      }else{
+        h+=`<section class="ed-narrative ${ok.length?'has-media':''}${pull?' has-pull':''}">${copy}${media}</section>`;
+      }
+    }    else if(b.type==='media'){
       // 解析不到 url 的 ref 直接不排版：宁可少一张图，也不要满屏灰色占位块。
       const ok=resolvedRefs(refs,mm);
       if(ok.length||b.caption){
-        const layout=b.layout==='mosaic'?'mosaic':ok.length===2?'pair':ok.length>=3?'grid':'single';
-        h+=`<section class="ed-media ${layout}">${ok.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
+        if(b.layout==='full'&&ok.length){
+          // 整版铺满大图：让一张照片占满整段，公众号式的跨页视觉冲击。
+          h+=`<section class="ed-media ed-media--full">${ok.map(r=>{const u=mm[r]?.url||'';return `<figure class="editorial-media full-bleed"${u?` style="background-image:url('${esc(u)}')"`:''}></figure>`}).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
+        }else{
+          const layout=b.layout==='mosaic'?'mosaic':ok.length===2?'pair':ok.length>=3?'grid':'single';
+          h+=`<section class="ed-media ${layout}">${ok.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
+        }
       }
-    }else if(b.type==='gallery'){
+    }    /* ---- 2026-10-08 新增画报式组件：让第一段（引言宣传）拥有公众号长图级别的版式自由度 ---- */
+    else if(b.type==='bigimage'){
+      // 整版铺满大图 + 可选叠字标题/图注：画报式跨页图，给页面一个"呼吸的大瞬间"。
+      const ok=resolvedRefs(refs,mm);
+      if(ok.length){
+        const url=mm[ok[0]]?.url||'';
+        const cap=(b.title||b.text||b.caption)?`<div class="ed-bigimage__cap">${b.title?`<h3>${esc(b.title)}</h3>`:''}${b.text?`<p>${esc(b.text)}</p>`:''}${b.caption?`<span class="ed-caption">${esc(b.caption)}</span>`:''}</div>`:'';
+        h+=`<section class="ed-bigimage${url?' has-photo':''}"${url?` style="background-image:linear-gradient(180deg,rgba(7,17,14,.12),rgba(7,17,14,.62)),url('${esc(url)}')"`:''}>${cap}</section>`;
+      }
+    }
+    else if(b.type==='imagetext'){
+      // 杂志式图文左右：narrative 的"图在侧边"版本，更适合做体验/产品特写。
+      const ok=resolvedRefs(refs,mm);
+      const right=(b.layout||'')==='right';
+      const media=ok.length?`<div class="ed-imagetext__media${ok.length>1?' two':''}">${ok.map(r=>mediaHtml(r,mm)).join('')}</div>`:'';
+      const copy=`<div class="ed-imagetext__copy">${b.eyebrow?`<div class="ed-kicker">${esc(b.eyebrow)}</div>`:''}<h2>${esc(b.headline||'')}</h2>${edParas(b.body||b.text||'')}</div>`;
+      h+=media?`<section class="ed-imagetext ${right?'img-right':'img-left'}">${right?copy+media:media+copy}</section>`:`<section class="ed-narrative">${copy}</section>`;
+    }
+    else if(b.type==='cards'){
+      // 图标 + 标题 + 要点 的卡片网格：把"为什么值得 / 包含什么"做成视觉块，比纯文字段落更有节奏。
+      const items=(b.items||[]).filter(x=>x&&(x.title||x.text||x.icon));
+      if(items.length)h+=`<section class="ed-cards"><div class="ed-cards__grid">${items.map(x=>`<div class="ed-card"><span class="ed-card__ic">${esc(x.icon||'✦')}</span><div><b>${esc(x.title||'')}</b>${x.text?`<p>${esc(x.text)}</p>`:''}</div></div>`).join('')}</div></section>`;
+    }
+    else if(b.type==='numbercards'){
+      // 大数字统计卡：距离 / 海拔 / 天数 / 人数用大字号突出，比 facts 条更有冲击力。
+      const items=(b.items||[]).filter(x=>x&&(x.value!=null&&x.value!==''||x.label));
+      if(items.length)h+=`<section class="ed-numbercards">${items.map(x=>{const shown=esc(String(x.value==null?'':x.value));return `<div class="ed-numcard"><strong>${shown}</strong>${x.unit?`<i>${esc(x.unit)}</i>`:''}${x.label?`<span>${esc(x.label)}</span>`:''}</div>`}).join('')}</section>`;
+    }
+    else if(b.type==='highlight'){
+      // 高亮提示框：强调一句关键承诺或须知，与 narrative 区隔。
+      if(b.title||b.text)h+=`<section class="ed-highlight">${b.title?`<div class="ed-kicker">${esc(b.title)}</div>`:''}${edParas(b.text||'')}</section>`;
+    }
+    else if(b.type==='columns'){
+      // 双栏长文：无图时的多段排版，避免长文字平铺。
+      const t=edPlain(b.text||b.body||'');
+      if(t.trim())h+=`<section class="ed-columns">${edParas(b.text||b.body||'')}</section>`;
+    }
+    else if(b.type==='gallery'){
       const ok=resolvedRefs(refs,mm);
       if(ok.length)h+=`<section class="ed-gallery count-${Math.min(ok.length,4)}">${ok.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
     }
@@ -559,12 +612,20 @@ function feeListHtml(fees){
   if(!pairs.length)return '';
   return '<div class="fee-list">'+pairs.map(([k,v])=>{
     const label=k?(FEE_CN[String(k)]||FEE_CN[String(k).replace(/[_\-\s]/g,'').toLowerCase()]||k):'';
+    /* 「费用包含 / 费用不含」是资料里本来就分栏写给顾客的两组（✅ 含 / ❌ 不含）。
+       在这里给整行打一个极性类，chips 的 ✓/✗ 由 CSS 按谱系统一下发 ——
+       不往 feeValueHtml 里穿参数，嵌套多深的数组都能吃到同一个标记。 */
+    const pol=/不含|不包含|未含|自理|自费|exclude/i.test(String(k||''))?'is-no'
+             :(/包含|含|include/i.test(String(k||''))?'is-ok':'');
     // 顶层值传 depth=1：这样 feeValueHtml 展开出的子行才会带 `.sub`（缩进 + 76px 标签列）
     let inner=feeValueHtml(v,1);
     if(!inner)return '';
     if(inner.charAt(0)!=='<')inner='<p>'+inner+'</p>';   // 扁平标量也包 <p>，成为合法 flex 项
-    if(!label)return '<div class="fee-row">'+inner+'</div>';
-    return '<div class="fee-row"><b>'+esc(label)+'</b>'+inner+'</div>';
+    /* 极性类（--ok/--no）只是叠加在基础类 fee-row 之上的修饰，必须保留 fee-row 这个基类，
+       否则俱乐部端 .fee-row{display:flex} 的「标签 92px 列 + 内容」并排布局会失效（标签和正文堆叠）。 */
+    const cls='fee-row'+(pol?' '+pol:'');
+    if(!label)return '<div class="'+cls+'">'+inner+'</div>';
+    return '<div class="'+cls+'"><b>'+esc(label)+'</b>'+inner+'</div>';
   }).join('')+'</div>';
 }
 /* 行程数据形状归一：模型（真模型尤其）会输出多种形状 ——
@@ -589,6 +650,68 @@ function itineraryRows(list){
     rows.push({time:String(x.time||x.period||'').trim(),text:String(x.text||x.content||x.desc||x.detail||x.description||'').trim()});
   }
   return rows.filter(r=>r.time||r.text);
+}
+/* ★ 逐日行程折叠（2026-10-08 用户要求，用户截图实锤）：多日行程在页面上是一条条平铺，
+   3 天就是二三十行，顾客要滑很久才能看到费用与报名；「哪几行属于哪一天」还得靠
+   「Day 1 06:30」这种前缀去认。现在按天收成一条：DAY n ／ 时间范围 ／ 当天前几项预告 ／ N 项，
+   点开才展开当天明细（与主流 OTA 的行程卡一致）。**单日活动保持原来的平铺**，不套多余一层。 */
+const _DAY_CN={'一':'1','二':'2','三':'3','四':'4','五':'5','六':'6','七':'7','八':'8','九':'9','十':'10'};
+function dayNumOf(s){
+  const t=String(s==null?'':s).trim();
+  let m=t.match(/^(?:day|d)\s*([0-9]{1,2})\b/i);
+  if(m)return String(Number(m[1]));
+  m=t.match(/^第\s*([0-9]{1,2}|[一二三四五六七八九十])\s*[天日]/);
+  if(m){const v=m[1];return /^[0-9]+$/.test(v)?String(Number(v)):(_DAY_CN[v]||'');}
+  return '';
+}
+function stripDayPrefix(s){
+  return String(s==null?'':s)
+    .replace(/^\s*(?:day|d)\s*[0-9]{1,2}\s*[·:：\-–—,，、.．]?\s*/i,'')
+    .replace(/^\s*第\s*(?:[0-9]{1,2}|[一二三四五六七八九十])\s*[天日]\s*[·:：\-–—,，、.．]?\s*/,'')
+    .trim();
+}
+/* 归一后的行按天分组。日期前缀既可能在 time（"Day 1 06:30"）也可能在 text（"Day 1：抵达营地"）；
+   `{day,schedule:[…]}` 这类嵌套形状经 itineraryRows 会变成一条「Day N / 空正文」的标题行 ——
+   所以纯标题行只用来开新分组，不产出数据行。 */
+function itineraryGroups(list){
+  const out=[],seen={};let cur=null;
+  for(const r of itineraryRows(list)){
+    const rawT=(r.time||'').trim(),rawX=(r.text||'').trim();
+    const num=dayNumOf(rawT)||dayNumOf(rawX);
+    let time=rawT,text=rawX;
+    if(num){time=stripDayPrefix(rawT);if(!time)text=stripDayPrefix(rawX);}
+    if(num){
+      if(!seen[num]){cur={num:num,rows:[]};seen[num]=cur;out.push(cur);}
+      else cur=seen[num];
+      if(!text)continue;
+    }else if(!cur){
+      cur={num:'',rows:[]};out.push(cur);
+    }
+    cur.rows.push({time:time,text:text});
+  }
+  return out.filter(g=>g.rows.length);
+}
+function itinRowHtml(x){return `<div>${x.time?`<b>${esc(x.time)}</b>`:''}<p>${esc(x.text)}</p></div>`;}
+function itinDigest(rows){
+  const t=rows.map(r=>r.text).filter(Boolean).join(' · ');
+  return t.length>38?t.slice(0,38)+'…':t;
+}
+function itineraryBodyHtml(master){
+  const groups=itineraryGroups((master||{}).itinerary);
+  let all=[];groups.forEach(g=>{all=all.concat(g.rows)});
+  if(!all.length)return '<p class="sub">以最终活动通知为准</p>';
+  // 只有一天、或资料里压根没有日期前缀 → 保持平铺，不给单日行程套一层折叠
+  if(groups.length<2||!groups.some(g=>g.num))return `<div class="detail-list">${all.map(itinRowHtml).join('')}</div>`;
+  return '<div class="itin-days">'+groups.map((g,i)=>{
+    const times=g.rows.map(r=>r.time).filter(Boolean);
+    const range=times.length?(times[0]+(times.length>1&&times[times.length-1]!==times[0]?' – '+times[times.length-1]:'')):'';
+    return `<details class="itin-day"${i===0?' open':''}>`
+      +`<summary><span class="itin-day__no"><i>DAY</i><b>${esc(g.num||String(i+1))}</b></span>`
+      +`<span class="itin-day__main"><b class="itin-day__range">${esc(range||('第 '+(i+1)+' 天'))}</b>`
+      +`<small class="itin-day__digest">${esc(itinDigest(g.rows))}</small></span>`
+      +`<span class="itin-day__count">${g.rows.length} 项</span></summary>`
+      +`<div class="detail-list">${g.rows.map(itinRowHtml).join('')}</div></details>`;
+  }).join('')+'</div>';
 }
 /* detail.blocks 里已经排过行程时，结构化区不再重复渲染同一份 master.itinerary——
    此前「把一天安排得刚刚好」(promo timeline) 与「详细行程 ITINERARY」是同一份数据渲染两遍，
@@ -635,13 +758,18 @@ function initDetailNav(){
 function renderInfoStack(master,opts={}){
   const skip=opts.skip||[],has=k=>skip.indexOf(k)<0;
   let h='<div class="info-stack polished">';
-  if(has('itinerary'))h+=`<details open><summary>详细行程 <span>ITINERARY</span></summary><div class="detail-list">${itineraryRows(master.itinerary).map(x=>`<div>${x.time?`<b>${esc(x.time)}</b>`:''}<p>${esc(x.text)}</p></div>`).join('')||'<p class="sub">以最终活动通知为准</p>'}</div></details>`;
+  // 多日行程走按天折叠（itineraryBodyHtml），单日仍是平铺
+  if(has('itinerary'))h+=`<details open class="info-sec"><summary>详细行程 <span>ITINERARY</span></summary>${itineraryBodyHtml(master)}</details>`;
   /* 成本闸门（2026-10-06）：费用说明整块按内容决定是否渲染。
      成本行被后端/本地过滤后如果一条都不剩，就不要留一个只有「费用说明 PRICE」标题的空壳 ——
-     那既是个空栏目，又在提示顾客「这里原本有价格」。价格待定时由priceHtml 显示「价格待定」。 */
+     那既是个空栏目，又在提示顾客「这里原本有价格」。价格待定时由priceHtml 显示「价格待定」。
+     ★ 2026-10-08 用户截图实锤「这里的费用说明为空」：内容其实在（fees 有 6 项），
+     但这里写的是 `<details${has('itinerary')?'':' open'}>` —— 只要页面同时有「详细行程」，
+     费用说明就**默认折叠**；而 .info-stack summary 是 display:flex，浏览器不再画那个三角，
+     折叠态看起来就是一个只有标题的空壳。费用是顾客下决心前必看的一项，一律默认展开。 */
   if(has('fees')){
     const feeBody=feeListHtml(master.fees);
-    if(feeBody&&feeBody.replace(/<[^>]*>/g,'').trim())h+=`<details${has('itinerary')?'':' open'}><summary>费用说明 <span>PRICE</span></summary>${feeBody}</details>`;
+    if(feeBody&&feeBody.replace(/<[^>]*>/g,'').trim())h+=`<details open class="info-sec"><summary>费用说明 <span>PRICE</span></summary>${feeBody}</details>`;
   }
   if(has('packing'))h+=`<details open><summary>出行清单 <span>PACKING</span></summary>${renderPacking(master,opts)}</details>`;
   return h+'</div>';

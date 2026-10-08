@@ -46,3 +46,85 @@
 /* 成本闸门（2026-10-06）：活动来自成本表、俱乐部尚未定价时，价格位显示「价格待定」，
    而不是把成本价当售价露出。视觉上弱化为静默灰，不与真实售价抢眼。 */
 .price-pending{font-weight:700;color:var(--muted);font-size:.92em;letter-spacing:.5px}
+
+/* ===== 2026-10-08 画报式组件（renderPromo 第一段引言宣传用）===== */
+.ed-narrative--split{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:32px}
+.ed-narrative--split.img-left .ed-narrative-media{order:-1}
+.ed-narrative--split .ed-narrative-media{min-height:340px}
+.ed-narrative--full{min-height:520px;background:#13201c center/cover no-repeat;display:flex;align-items:flex-end;padding:48px;color:#fff}
+.ed-narrative--full .ed-narrative__fullcopy{max-width:680px;text-shadow:0 2px 26px rgba(4,10,8,.5)}
+.ed-narrative--full .ed-copy h2{color:#fff}
+.ed-narrative--full .ed-kicker{color:#d5e7df}
+.ed-narrative--full .ed-pull{color:#eff6f3}
+.ed-media--full{padding:0}
+.ed-media--full .full-bleed{min-height:560px;background:#13201c center/cover no-repeat}
+.ed-bigimage{min-height:560px;background:#13201c center/cover no-repeat;display:flex;align-items:flex-end;padding:48px;color:#fff}
+.ed-bigimage__cap{max-width:680px;text-shadow:0 2px 26px rgba(4,10,8,.5)}
+.ed-bigimage__cap h3{font-family:Georgia,"Noto Serif SC",serif;font-size:34px;line-height:1.1;margin:0 0 10px}
+.ed-bigimage__cap p{font-size:18px;line-height:1.7;margin:0}
+.ed-bigimage__cap .ed-caption{color:#dfe9e5}
+.ed-imagetext{display:grid;grid-template-columns:1fr 1fr;gap:30px;align-items:center;padding:54px 72px}
+.ed-imagetext.img-right .ed-imagetext__copy{order:-1}
+.ed-imagetext__media{display:grid;gap:10px}
+.ed-imagetext__media.two{grid-template-columns:1fr 1fr}
+.ed-imagetext__media .editorial-media{min-height:300px}
+.ed-imagetext__copy h2{font-family:Georgia,"Noto Serif SC",serif;font-size:30px;line-height:1.2;margin:0 0 16px}
+.ed-cards{padding:30px 44px}
+.ed-cards__grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}
+.ed-card{display:flex;gap:12px;background:#efe9dd;border-radius:14px;padding:18px}
+.ed-card__ic{font-size:22px;line-height:1.2;flex:0 0 auto}
+.ed-card b{display:block;font-size:15px;margin-bottom:5px}
+.ed-card p{margin:0;font-size:13.5px;line-height:1.55;color:#5b5246}
+.ed-numbercards{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#d8d0c2;margin:30px 0}
+.ed-numcard{background:#16231f;color:#fff;padding:30px 18px;text-align:center}
+.ed-numcard strong{display:block;font-size:30px;font-weight:850;line-height:1.05}
+.ed-numcard i{font-style:normal;font-size:13px;color:#9fd3bf;margin-left:3px}
+.ed-numcard span{display:block;font-size:12px;letter-spacing:1px;color:#a9bdb4;margin-top:10px}
+.ed-highlight{margin:30px 0;background:#f0e7d6;border-left:4px solid var(--brand2,#2f6b48);border-radius:12px;padding:28px 30px}
+.ed-highlight .ed-kicker{margin-bottom:10px}
+.ed-highlight p{font-family:Georgia,"Noto Serif SC",serif;font-size:21px;line-height:1.6;margin:0;color:#3a3329}
+.ed-columns{padding:40px 72px;columns:2;column-gap:40px}
+.ed-columns p{margin:0 0 16px;break-inside:avoid}
+@media(max-width:680px){
+  .ed-narrative--split,.ed-imagetext{grid-template-columns:1fr;gap:18px;padding:38px 24px}
+  .ed-narrative--split.img-left .ed-narrative-media,.ed-imagetext.img-right .ed-imagetext__copy{order:0}
+  .ed-narrative--full,.ed-bigimage,.ed-media--full .full-bleed{min-height:420px;padding:34px 24px}
+  .ed-bigimage__cap h3{font-size:27px}
+  .ed-cards{padding:18px}
+  .ed-cards__grid{grid-template-columns:1fr}
+  .ed-numbercards{grid-template-columns:1fr}
+  .ed-highlight{margin:24px 0;padding:22px 20px}
+  .ed-columns{padding:30px 24px;columns:1}
+}
+
+/* ===== 2026-10-08 逐日行程折叠（详细行程按天收起，点开看当天明细）=====
+   用户在俱乐部端看到 3 天 24 条行程一路平铺，要滑很久；改成每天一张条目：
+   [DAY n] 时间范围 + 当天前几项预告 ……… N 项 ▾，点开才展开当天明细。
+   单日活动不会走到这里（itineraryBodyHtml 会退回平铺），所以这里的样式只服务多日行程。 */
+.itin-days>.itin-day{background:#fbfaf7;border:1px solid var(--line);border-radius:13px;margin:9px 0;padding:0;overflow:hidden}
+.itin-days>.itin-day[open]{background:#fff}
+.itin-day>summary{display:flex;align-items:center;gap:12px;padding:12px 14px;cursor:pointer;list-style:none}
+.itin-day>summary::-webkit-details-marker{display:none}
+.itin-day__no{flex:0 0 42px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;line-height:1.05;color:var(--brand);border-right:1px solid var(--line);padding-right:10px;margin-right:2px}
+.itin-day__no i{font-style:normal;font-size:9px;font-weight:800;letter-spacing:1.1px;color:var(--muted)}
+.itin-day__no b{font-size:19px;font-weight:880}
+.itin-day__main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:3px}
+.itin-day__range{font-size:13.5px;font-weight:800;color:var(--text)}
+.itin-day__digest{font-size:12px;color:var(--muted);line-height:1.5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.itin-day__count{flex:0 0 auto;font-size:11px;color:var(--muted);letter-spacing:.5px}
+.itin-day>summary::after{content:'▾';flex:0 0 auto;font-size:12px;color:#a9b8b1;line-height:1;transition:transform .18s ease}
+.itin-day[open]>summary::after{transform:rotate(180deg)}
+.itin-day>.detail-list{padding:2px 14px 10px}
+.itin-day .detail-list>div{grid-template-columns:96px 1fr;gap:14px;padding:10px 0}
+.itin-day .detail-list p{font-size:13px}
+@media(max-width:680px){
+  .itin-day__digest{white-space:normal}
+  .itin-day__count{display:none}
+  .itin-day .detail-list>div{grid-template-columns:1fr;gap:3px}
+}
+/* 费用说明的「包含 / 不含」按资料原样分栏（✅ 含 / ❌ 不含），
+   极性类挂在整行上，行内所有 chips 一起吃到标记。 */
+.fee-row.is-ok .info-chips>div::before{content:'✓';color:#2f6b48;font-weight:800;margin-right:6px;font-size:11.5px}
+.fee-row.is-no .info-chips>div::before{content:'✗';color:#a4907a;font-weight:800;margin-right:6px;font-size:11.5px}
+.fee-row.is-ok .info-chips>div{background:#eef5f0;border-color:#cfdfd5;color:#274a38}
+.fee-row.is-no .info-chips>div{background:#f7f4f0;border-color:#e8e0d6;color:#6d6155}

@@ -19,7 +19,7 @@ SYSTEM = """你是 ClubOS 的 AI 活动内容主编（Editorial Director），�
 8. 输出严格 JSON，不要 Markdown，不要解释。
 """
 
-BLOCK_TYPES = "hero|lead|narrative|statement|media|gallery|facts|timeline|info|quote|divider|cta"
+BLOCK_TYPES = "hero|lead|narrative|statement|media|gallery|facts|timeline|info|quote|divider|cta|bigimage|imagetext|cards|numbercards|highlight|columns"
 
 # 文案契约（2026-10-07 重写）。
 # 旧契约要求「eyebrow 用 2~6 字场景词 / body 拆成一行一个 ≤30 字短句 / 每段都配一句对仗 pull」，
@@ -723,6 +723,27 @@ def _extract_structured(source:dict[str,Any])->dict[str,Any]:
         if kw in raw and kw not in items: items.append(kw)
     if items: out['fees']['费用包含']='、'.join(items[:14])
 
+    # ---- 费用不含：顾客自理项，定性不定量（绝不写金额/成本） ----
+    # 与「费用包含」对称：资料里常单列一栏「费用不含」（单房差、往返大交通、个人消费…）。
+    # 这些不是成本底价，是顾客该提前知道的边界，属于公开信息，可保留；只抓定性项名，
+    # 任何带「元 / ¥ / 数字金额」的片段一律丢弃（成本铁律不变）。
+    no_items=[]
+    for nkw in ['单房差','往返大交通','往返交通','个人消费','自费项目','行李托运','骑马','缆车','小费',
+                '温泉','景区内自费','氧气自费','保险自理','门票自理','签证','机票']:
+        if nkw in raw and nkw not in no_items: no_items.append(nkw)
+    m=re.search(r'费用不含[：:]\s*([^\n]{0,200})',raw)
+    if m:
+        for it in re.split(r'[、，,；;]+',m.group(1)):
+            it=_clean(it).strip('。. ')
+            if it and len(it)<=12 and it not in no_items and '元' not in it and '¥' not in it and not re.search(r'\d',it):
+                no_items.append(it)
+    if no_items:
+        # 去重：剔除被其他项完整包含的短串（如「温泉」⊂「温泉自费」），避免重复列项
+        kept=[]
+        for it in no_items[:10]:
+            if not any(it!=o and it in o for o in no_items): kept.append(it)
+        out['fees']['费用不含']=kept
+
     # ---- 服务：只写资料里明确提到的，不凭空补充；命中内部标记的一律丢弃 ----
     services=[]
     def _add(s):
@@ -955,6 +976,15 @@ def _mock_activity(source:dict[str,Any]):
     remaining=imgs[1:]
     if remaining[:4]: blocks.append({'type':'gallery','mediaRefs':remaining[:4]})
 
+    # 大数字统计卡：把距离/人数/费用做成视觉冲击，而不是塞进 facts 条（2026-10-08 新组件）。
+    _nc=[]
+    if distance: _nc.append({'value':distance,'label':'单日里程'})
+    if cap_extracted: _nc.append({'value':str(cap_val)+' 人','label':'成行人数'})
+    if price_text: _nc.append({'value':price_text,'label':'费用起'})
+    if len(_nc)>=2: blocks.append({'type':'numbercards','items':_nc[:3]})
+    # 整版大图：照片足够时铺一张跨页式的"呼吸大瞬间"（2026-10-08 新组件）。
+    if len(imgs)>=7 and remaining[6:7]: blocks.append({'type':'bigimage','mediaRefs':remaining[6:7],'caption':'往期同线路实拍'})
+
     # ---- 叙事：画像给「编辑判断」，没有画像时用资料里抽取的真实亮点 ----
     beats=prof.get('beats') or _generic_beats(hl,text,location)
     def _narr(b):
@@ -1157,9 +1187,10 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
   策划执行 10%、税费、毛利…）。这类数字**一个都不许出现在成品里** —— 不在 fees、不在正文、
   不在 narrative/statement/info/facts 的任何一句话里，也不要改写成「人均约 3800 元」「成本约 7.6 万」
   这种模糊说法。顾客看到成本价等于把利润结构摊在桌上。
-- fees 只允许写「费用包含」这一项（顾客该知道含什么：车费、门票、氧气、摄影…），
-  **只写项名、不写金额**；禁止输出 人均费用 / 合计 / 合计（未含税）/ 单价 / 小计 / 按人数报价 /
-  策划执行 / 备注 这类键。
+- fees 只允许写「费用包含」「费用不含」两项（都是顾客该知道的服务范围与自理项），
+  **只写项名、不写金额**；「费用不含」是顾客自理项（如 单房差、往返大交通、个人消费…），同样定性不定量。
+  禁止输出 人均费用 / 合计 / 合计（未含税）/ 单价 / 小计 / 按人数报价 / 策划执行 / 备注 这类键，
+  也禁止在「费用不含」里写任何金额或成本数字（成本铁律不变：成本底价一律不进 C 端）。
 - price 只在方案里出现**明确的对外报价**（售价 / 报名费 / 会员价 / 每人 288 元）时才填；
   资料里只有成本明细页时，price 留 0，由俱乐部自己定价 —— 绝不要把成本均价当对外售价填进去。
 - 成本、供应商报价、门店 SOP、话术禁区、内部沟通等内容属于内部资料，一律不得进入 C 端成品。
@@ -1183,9 +1214,12 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
   }}
 }}
 
-block 语义：
-hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=必要决策信息；quote=引用；divider=节奏。
-任何 block 都可省略、重复、自由排序。不要为了“结构完整”机械凑章节。照片多时主动做视觉编排，照片少时不要硬凑图片。
+block 语义（全部可自由省略 / 重复 / 排序，不要机械凑章节）：
+hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言；narrative=图文叙事（layout 可为 text-top/image-left/image-right/full）；statement=强观点短句；media=单图/双图/拼图/整版大图（layout: single/pair/mosaic/grid/full）；gallery=图片组；facts=关键事实条；timeline=时间线；info=必要决策信息；quote=引用；divider=节奏分隔；bigimage=整版铺满大图 + 可选叠字标题/图注（最适合做画报式跨页图）；imagetext=杂志左右图文（layout: left/right）；cards=图标+标题+要点 的卡片网格（把「为什么值得/包含什么」做成视觉块）；numbercards=大数字统计卡（距离/海拔/天数/人数用大字号突出）；highlight=高亮提示框（强调一句关键承诺或须知）；columns=双栏长文（无图时的多段排版）。
+★★ 排版自由铁律（2026-10-08 用户要求：第一段要像公众号长图文一样美观、每版都不同）：
+   C 端招募详情是一场活动的主视觉宣传，按「公众号长图文」的标准做 —— 多变的版式、大图铺陈、
+   图文穿插、卡片化要点。主动组合 bigimage / imagetext / numbercards / cards 这类视觉组件，
+   避免从头到尾都是同一套「标题 + 正文 + 图」。照片多时优先做视觉编排，照片少时用文字与卡片把吸引力撑起来。
 如果没有真正事实冲突，blocking_conflicts 必须为空，直接完成成品。"""
     gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,images=source.get('images'))
     photos=set(_photo_refs(source))

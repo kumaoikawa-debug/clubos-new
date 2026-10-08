@@ -500,3 +500,10 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
      因为内容高度只有渲染后才知道）。 */
   .ch-long-frame iframe{transform:scale(.52);transform-origin:top left;width:750px}
 }
+/* 2026-10-08 画报式组件：后台预览 pane 下的覆盖，让宽 pane 保留左右图文与卡片网格 */
+.act-pane .ed-narrative--split{grid-template-columns:1fr 1fr}
+.act-pane .ed-imagetext{grid-template-columns:1fr 1fr}
+.act-pane .ed-imagetext.img-right .ed-imagetext__copy{order:-1}
+.act-pane .ed-narrative--full,.act-pane .ed-bigimage,.act-pane .ed-media--full .full-bleed{min-height:360px;padding:30px}
+.act-pane .ed-numbercards{margin:24px 0}
+.act-pane .ed-highlight{margin:24px 0}

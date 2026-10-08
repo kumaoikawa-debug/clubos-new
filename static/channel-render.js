@@ -89,11 +89,20 @@
     var p = api('/api/club/' + CLUB + '/activities/' + activityId).then(function (a) {
       var master = a.activityMaster || {};
       var mm = mediaMap(master);
+      /* 海报要盖俱乐部的 logo：资料里被解析期标成 kind='logo' 的图就是品牌标识
+         （真实活动照片是 kind='photo'，不会误当 logo 拿来盖印）。取第一张。 */
+      var logoUrl = '';
+      Object.keys(mm).forEach(function (k) {
+        var m = mm[k];
+        if (!logoUrl && m && m.kind === 'logo' && m.url) logoUrl = toUrl(k, mm);
+      });
       return {
         club: CLUB,
         activityId: Number(activityId),
         master: master,
         mm: mm,
+        logoUrl: logoUrl,
+        status: a.status || '',
         coverUrl: a.cover ? ('/api/club/' + CLUB + '/activities/' + activityId + '/cover') : '',
         title: a.title || master.title || '活动',
         date: master.date || a.event_date || '',
@@ -798,6 +807,22 @@
     g.addColorStop(1, 'rgba(6,17,12,.93)');
     c.fillStyle = g; c.fillRect(0, 0, W, H);
 
+    /* 俱乐部 logo：右上角白底圆角章。资料里没带 logo 图就自然缺席，不硬造。 */
+    var logoImg = ctx.logoUrl ? await loadImgSafe(ctx.logoUrl) : null;
+
+    /* 报名二维码：真实可扫，指向该活动的 C 端报名页（与「分享活动」弹窗同一条链接）。
+       注：真正的「小程序码」要注册过微信小程序（appid/secret 调 wxacode 接口）才能出；
+       当前产品 C 端是网页，先落活动报名页二维码，将来接小程序只需把这张图换成 wxacode 返回的图。 */
+    var qr = null;
+    try {
+      if (window.ClubOSQR && window.ClubOSQR.draw) {
+        qr = document.createElement('canvas');
+        window.ClubOSQR.draw(qr, location.origin + '/web?club_id=' + ctx.club + '&activity=' + ctx.activityId);
+        if (!qr.width) qr = null;
+      }
+    } catch (e) { qr = null; }
+    var QR_S = qr ? 236 : 0;   // 右下角白卡边长；0 = 无二维码，布局退回全宽 CTA
+
     var y = PAD + 60;
     // 顶部：活动组织 + 招募
     c.font = '800 26px ' + FONT;
@@ -806,6 +831,24 @@
     c.fillStyle = 'rgba(214,235,224,.55)';
     c.fillText(String(ctx.date || '').toUpperCase(), PAD, y + 44);
     y += 128;
+
+    // 右上角 logo 章：白底圆角，logo 等比 contain 居中
+    if (logoImg) {
+      try {
+        var LH = 88;
+        var iw0 = logoImg.naturalWidth || logoImg.width || 1;
+        var ih0 = logoImg.naturalHeight || logoImg.height || 1;
+        var LW = Math.max(LH, Math.min(300, Math.round(LH * (iw0 / ih0)) + 56));
+        var lx = W - PAD - LW, ly = PAD + 4;
+        c.save();
+        c.fillStyle = 'rgba(255,255,255,.94)';
+        rr(c, lx, ly, LW, LH, 22); c.fill();
+        var fit = Math.min((LW - 44) / iw0, (LH - 32) / ih0);
+        var dw = iw0 * fit, dh = ih0 * fit;
+        c.drawImage(logoImg, lx + (LW - dw) / 2, ly + (LH - dh) / 2, dw, dh);
+        c.restore();
+      } catch (e) { /* logo 画不上就不画，别毁整张海报 */ }
+    }
 
     // 主标题
     c.font = '900 92px ' + SERIF;
@@ -842,13 +885,14 @@
       });
     }
 
-    // 卖点（从底部往上排，避免长标题挤掉 CTA）
+    // 卖点（从底部往上排，避免长标题挤掉 CTA；右下角有二维码时文本让开那条竖带）
     var points = (data.sellingPoints || []).filter(Boolean).slice(0, 4);
     if (points.length) {
+      var pw = W - PAD * 2 - 46 - (QR_S ? QR_S + 24 : 0);
       var py = H - PAD - 150;
       for (var i = points.length - 1; i >= 0; i--) {
         c.font = '400 34px ' + FONT;
-        var ls = wrap(c, String(points[i]), W - PAD * 2 - 46).slice(0, 3);
+        var ls = wrap(c, String(points[i]), pw).slice(0, 3);
         py -= (ls.length - 1) * 50 + 46;
         c.fillStyle = '#8cc2ad';
         c.fillText('—', PAD, py + 10);
@@ -859,14 +903,23 @@
       }
     }
 
-    // 底部 CTA
+    // 底部 CTA（有二维码时胶囊缩窄靠左，右侧留给白底二维码卡）
+    var pillW = W - PAD * 2 - (QR_S ? QR_S + 24 : 0);
+    var pillY = H - PAD - 104;
     c.fillStyle = '#fff';
-    rr(c, PAD, H - PAD - 104, W - PAD * 2, 104, 52); c.fill();
+    rr(c, PAD, pillY, pillW, 104, 52); c.fill();
     c.fillStyle = '#14201c';
     c.font = '800 38px ' + FONT;
     var cta = String(data.cta || '扫码报名').slice(0, 22);
     var cw = c.measureText(cta).width;
-    c.fillText(cta, (W - cw) / 2, H - PAD - 38);
+    c.fillText(cta, PAD + (pillW - cw) / 2, pillY + 66);
+    if (QR_S) {
+      var qx = W - PAD - QR_S, qy = H - PAD - QR_S;
+      c.fillStyle = '#fff';
+      rr(c, qx, qy, QR_S, QR_S, 26); c.fill();
+      // QR canvas 自带 4 模块静区白边，再内缩 16px 露出白卡圆角
+      c.drawImage(qr, qx + 16, qy + 16, QR_S - 32, QR_S - 32);
+    }
 
     host.innerHTML = '<div class="ch-poster-hold"></div>';
     host.querySelector('.ch-poster-hold').appendChild(cv);
@@ -1035,7 +1088,8 @@
       btn('复制海报文案', 'secondary', async function () {
         (await copyText(ptxt)) ? toast('文案已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
       });
-      note.textContent = '海报用活动真实封面 + AI 文案在本地合成，不额外消耗 Credits。';
+      note.textContent = '海报用活动真实封面 + AI 文案在本地合成，不额外消耗 Credits。右下角二维码直达该活动报名页' +
+        (ctx.status === 'published' ? '。' : '（活动发布后才能打开）。');
       return;
     }
 

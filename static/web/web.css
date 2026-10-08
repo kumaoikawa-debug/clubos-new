@@ -1264,3 +1264,43 @@
 .web-shell .w-me__uphead>span:first-child{flex:0 0 auto;white-space:nowrap}
 .web-shell .w-me__uphead>span:last-child{text-align:right;min-width:0}
 .w-me__svc .w-sec__head h2{font-size:15px;color:#16241c}
+/* 2026-10-08 画报式组件：C 端 560px 容器下的覆盖（窄屏以堆叠为主，整版图收一点高度） */
+.web-shell .ed-imagetext{grid-template-columns:1fr;gap:16px;padding:24px 18px}
+.web-shell .ed-imagetext.img-right .ed-imagetext__copy{order:0}
+.web-shell .ed-imagetext__media .editorial-media{min-height:220px}
+.web-shell .ed-narrative--split .ed-narrative-media{min-height:240px}
+.web-shell .ed-narrative--full,.web-shell .ed-bigimage,.web-shell .ed-media--full .full-bleed{min-height:360px;padding:28px 20px}
+.web-shell .ed-bigimage__cap h3{font-size:23px}
+.web-shell .ed-bigimage__cap p{font-size:15px}
+.web-shell .ed-cards{padding:14px}
+.web-shell .ed-numbercards{margin:18px 0}
+.web-shell .ed-numbercards .ed-numcard strong{font-size:26px}
+.web-shell .ed-highlight{margin:18px 0;padding:20px 18px}
+.web-shell .ed-highlight p{font-size:18px}
+.web-shell .ed-columns{padding:24px 18px;column-gap:22px}
+/* 2026-10-08 固定版块（积分/退款/报名人规则/注意事项/免责声明）正文样式 */
+.w-policy{padding:2px 0}
+.w-policy p{font-size:13.5px;line-height:1.65;color:#3f4f49;margin:0 0 11px}
+.w-policy p:last-child{margin-bottom:0}
+.w-policy__list{list-style:none;margin:4px 0 0;padding:0;display:grid;gap:10px}
+.w-policy__list li{position:relative;padding-left:18px;font-size:13.5px;line-height:1.62;color:#3f4f49}
+.w-policy__list li::before{content:'';position:absolute;left:2px;top:8px;width:7px;height:7px;border-radius:2px;background:var(--w-brand,#194b3d)}
+/* 2026-10-08 逐日行程折叠卡在 C 端（560px 容器）的覆盖：
+   .web-shell .info-stack details 会套到 .itin-day（它也是 <details>），把 0 内边距压成 13px，
+   内部 detail-list 会双重内边距；这里用更高特异性压回正确的逐日卡形态。 */
+.web-shell .info-stack .itin-day{background:#fbfaf7;border:1px solid var(--w-line);border-radius:13px;padding:0;margin:9px 0;overflow:hidden}
+.web-shell .info-stack .itin-day[open]{background:#fff}
+.web-shell .info-stack .itin-day>summary{min-height:0;font-weight:800;font-size:13.5px;align-items:center}
+.web-shell .info-stack .itin-day__no{border-right-color:var(--w-line);color:var(--w-brand)}
+.web-shell .info-stack .itin-day__digest{color:#7c8b82}
+.web-shell .info-stack .itin-day__count{color:#9aa8a0}
+.web-shell .info-stack .itin-day>.detail-list{padding:2px 14px 10px}
+.web-shell .info-stack .itin-day .detail-list>div{grid-template-columns:1fr;gap:3px;padding:10px 0}
+.web-shell .info-stack .itin-day .detail-list>div>b{color:var(--w-brand);font-weight:800;font-size:12.5px}
+/* 费用「包含 / 不含」极性标记在 C 端沿用绿/棕底，_chip 收成圆角矩形（不套 .info-chips 的胶囊） */
+.web-shell .info-stack .fee-row.is-ok .info-chips>div,
+.web-shell .info-stack .fee-row.is-no .info-chips>div{border-radius:8px;font-weight:600}
+.web-shell .info-stack .fee-row.is-ok .info-chips>div{background:#eef5f0;border-color:#cfdfd5;color:#274a38}
+.web-shell .info-stack .fee-row.is-no .info-chips>div{background:#f7f4f0;border-color:#e8e0d6;color:#6d6155}
+.web-shell .info-stack .fee-row.is-ok .info-chips>div::before{content:'✓';color:#2f6b48;font-weight:800;margin-right:5px;font-size:11px}
+.web-shell .info-stack .fee-row.is-no .info-chips>div::before{content:'✗';color:#a4907a;font-weight:800;margin-right:5px;font-size:11px}

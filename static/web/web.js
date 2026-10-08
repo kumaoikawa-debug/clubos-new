@@ -673,7 +673,7 @@ let a=await api(`/api/public/activities/${id}`);currentAct=a;
 /* 默认选中也要跳过已出发的团期：否则一进详情页按钮就是「立即报名 ¥xxx」，
    顾客点下去才被告知不能报。 */
 currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0&&!occExpired(o))||null;
-bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
+bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
 /* 回到活动列表。两个入口共用：详情页的「返回活动」、底部「活动」tab。 */
 function showActivityList(){
   const l=$('#activityList');if(l)l.style.display='block';
@@ -717,6 +717,58 @@ function leadersHtml(a){
     +`<div class="w-block__hint">由本俱乐部领队带队，出发前会在订单里给出集合与联络方式。</div></div></div>`
     +`<div class="w-lead__grid">${cards}</div></section>`;
 }
+/* ===== 活动详情固定版块（2026-10-08）：把政策数据渲染成面向顾客的版块 =====
+   这些版块的数据来自接口下发的 pointsPolicy / refundPolicy / participantPolicy，
+   此前只在 booking 卡里露出半个（退款简述、积分开关），报名人规则根本没有成块。
+   现在按用户要求的 11 版块顺序，把它们各自独立成块；注意事项 / 免责声明用标准文案。 */
+function pointsPolicyHtml(a){
+  const p=a.pointsPolicy||{};const e=p.effective||{};
+  if(!p.enabled&&!e.acceptClubPoints&&!e.earnClubPoints&&!e.acceptGearPoints)
+    return `<section class="w-block"><div class="w-block__head"><div><b>活动积分规则</b></div></div><div class="w-block__hint">本活动不参与积分体系；报名与装备消费均不产生积分，也不可使用积分抵扣。</div></section>`;
+  const lines=[];
+  lines.push(e.earnClubPoints?'报名并完成后，本次现金实付将按俱乐部规则累计活动积分。':'本活动报名不累计活动积分。');
+  if(e.acceptClubPoints)lines.push('报名时可使用活动积分抵扣现金，单笔最多抵扣活动金额的'+Number(p.clubPointsMaxDiscountPercent||100)+'%。');
+  else lines.push('本活动不可使用活动积分抵扣现金。');
+  if(e.acceptGearPoints)lines.push('装备消费积分（平台积分）可在结算时用于抵扣相关装备消费。');
+  return `<section class="w-block"><div class="w-block__head"><div><b>活动积分规则</b><div class="w-block__hint">积分的累计与抵扣由俱乐部与平台规则共同决定，具体以结算页计算为准。</div></div></div><div class="w-policy">${lines.map(t=>`<p>${esc(t)}</p>`).join('')}</div></section>`;
+}
+function refundPolicyHtml(a){
+  const p=a.refundPolicy||{};
+  if(!p.enabled)return `<section class="w-block"><div class="w-block__head"><div><b>活动退款规则</b></div></div><div class="w-block__hint">本活动不支持用户自主申请退款；如遇特殊情况，请联系俱乐部协商处理。</div></section>`;
+  const rules=(p.rules||[]).map(r=>`<li>${esc(r.label||('出发前'+Number(r.minHoursBefore||0)+'小时以上'))}：现金退款 ${Number(r.cashRefundPercent||0)}%</li>`).join('');
+  const after=(p.afterStartCashRefundPercent!=null&&p.afterStartCashRefundPercent!=='')?`<li>活动开始后：现金退款 ${Number(p.afterStartCashRefundPercent)}%</li>`:'';
+  const note=p.note?`<p class="w-block__hint" style="margin-top:8px">${esc(p.note)}</p>`:'';
+  return `<section class="w-block"><div class="w-block__head"><div><b>活动退款规则</b><div class="w-block__hint">系统按你申请退款时距团期开始的时间自动计算现金退款比例；积分与福利券按规则恢复。</div></div></div><ul class="w-policy__list">${rules}${after}</ul>${note}</section>`;
+}
+function participantPolicyHtml(a){
+  const p=a.participantPolicy||{};const max=Number(p.maxParticipantsPerOrder||8);
+  const li=[`单笔最多报名 ${max} 人；每位参加人占 1 个名额。`];
+  li.push(p.allowIncompleteAtCheckout===false
+    ?'本活动要求支付前完成全部报名资料（姓名、手机号、证件、紧急联系人）。'
+    :'可先报名支付；身份证 / 紧急联系人等资料可在「我的订单」后补。');
+  if(p.insuranceRequired)li.push('本活动需要保险资料，报名后请在订单中心维护投保信息。');
+  if(p.allowParticipantReplacement)li.push(`出发前至少 ${Number(p.replacementCutoffHours||0)} 小时，允许自助转让名额给其他人。`);
+  return `<section class="w-block"><div class="w-block__head"><div><b>报名人规则</b><div class="w-block__hint">付款人与实际参加人可以不同；多人报名按参加人数占名额与计价。</div></div></div><ul class="w-policy__list">${li.map(t=>`<li>${esc(t)}</li>`).join('')}</ul></section>`;
+}
+function noticesHtml(a){
+  return `<section class="w-block"><div class="w-block__head"><div><b>注意事项</b></div></div><div class="w-policy">
+    <p>① 报名前请确认自身身体状况适合本次户外活动；如有心脑血管疾病、高血压、糖尿病、哮喘、癫痫、孕期等不宜剧烈运动的情形，请勿报名，隐瞒健康状况参加所产生的一切后果由参加人自行承担。</p>
+    <p>② 活动期间请听从领队安排，不擅自离队、不进入未开放区域；因个人原因脱离队伍或违反安全指引造成的伤害、迷路、延误等，组织方不承担责任。</p>
+    <p>③ 如遇恶劣天气、地质灾害、政府管制或人数不足等不可抗力导致活动取消或改期，组织方将提前通知并协商退款或改期，不承担由此产生的额外交通、住宿等间接损失。</p>
+    <p>④ 户外环境存在固有风险（滑坠、落石、失温、野生动物等），请依清单准备装备，并自行确认或购买保险；组织方已尽合理提示与保障义务。</p>
+    <p>⑤ 请保持通讯畅通，出发前留意订单内的集合时间、地点与联络方式；迟到错过集合视为自动放弃，费用不退。</p>
+    <p>⑥ 保护自然环境，不乱扔垃圾、不破坏植被，请配合无痕山林（Leave No Trace）原则。</p>
+  </div></section>`;
+}
+function disclaimerHtml(a){
+  return `<section class="w-block"><div class="w-block__head"><div><b>免责声明</b></div></div><div class="w-policy">
+    <p>① 户外徒步、登山、露营等活动本身具有固有风险，参加人充分知悉并自愿承担由此可能产生的身体伤害、财产损失等风险。</p>
+    <p>② 组织方已按行业标准配备领队与基础保障，但不构成本活动零风险的承诺；因不可抗力、第三方原因或参加人自身原因导致的损害，组织方依法依约承担相应责任，超出部分由参加人自行承担。</p>
+    <p>③ 参加人应确保所填报名信息（含紧急联系人）真实有效并对其准确性负责；因信息错误导致的联络失败或救援延误，组织方不承担责任。</p>
+    <p>④ 报名参加即视为同意上述注意事项与免责声明全部条款，并授权组织方在活动必要范围内使用活动期间拍摄的影像资料用于活动记录与宣传。</p>
+    <p>⑤ 本声明未尽事宜，依据《中华人民共和国民法典》及相关法律法规处理；发生争议协商不成的，提交活动组织方所在地有管辖权的人民法院诉讼解决。</p>
+  </div></section>`;
+}
 function bookingHtml(a){
   const p=a.pointsPolicy||{}; const e=p.effective||{};
   /* 抵扣不该是顾客的算术题：额度由系统算好（后端 maxRedeemable），顾客只勾一下「用 / 不用」。
@@ -750,7 +802,7 @@ function bookingHtml(a){
     <div id="paxForms"></div>
     <div class="w-block__foot">${pp.allowIncompleteAtCheckout===false?'本活动要求支付前完成全部报名资料。':'可先报名支付；身份证 / 紧急联系人等资料可在「我的订单」后补。'}${pp.insuranceRequired?' · 本活动需要保险资料。':''}${cur>=maxPax?` · 单笔最多 ${maxPax} 人`:''}</div>
     <input type="hidden" id="participantCount" value="${cur}"></div>`;
-  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${earnNote}${refundPolicyBrief(a.refundPolicy)}${pointArea}<div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
+  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${earnNote}${pointArea}<div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
 }
 /* 团期卡：横向滑动的竖版卡片。竖排长列表在团期一多时把报名页拉得很长，
    而且「哪天 / 多少钱」要上下扫着比；卡片固定宽、一次并排露出两张左右，
