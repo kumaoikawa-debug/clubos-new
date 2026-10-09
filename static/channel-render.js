@@ -1209,10 +1209,15 @@
         var txt = paint.frame.contentDocument ? paint.frame.contentDocument.body.innerText : (data.title || '');
         (await copyText(txt)) ? toast('纯文本已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
       });
-      var route = (data && data.route) || 'template';
-      var bits = route === 'model-html'
-        ? 'AI 自己排的版式，直接按它的成品导出。'
-        : 'AI 按这场活动的资料自己组织内容（标题 / 文案 / 配图 / 团期价 / 领队），再套用 ClubOS 的杂志版式渲染成 750px 长图；同一场活动每次重新生成会换一套版式变体。';
+      var route = (data && data.route) || 'model-html';
+      var bits;
+      if (route === 'mock') {
+        bits = '演示模式（未接入模型，仅展示版式骨架）。';
+      } else if (route === 'model-html') {
+        bits = 'AI 按这场活动的气质自由排版（配色 / 版式 / 字体节奏每场不同），直接按它的成品导出。';
+      } else {
+        bits = '（自由排版未达标，已退回）ClubOS 固定杂志版式按本场资料渲染成 750px 长图。';
+      }
       if (paint.dropped > 0) bits += ' 有 ' + paint.dropped + ' 张配图被剔除（不是本活动的真实照片）。';
       note.textContent = bits;
       return;

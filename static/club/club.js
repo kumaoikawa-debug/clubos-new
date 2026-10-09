@@ -1,6 +1,6 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
-window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='credits'){await loadCredits();await loadAIUsage()};if(v==='analytics')await loadClubBI();if(v==='payaccount')await loadPayAccount();if(v==='points')await loadPointsPolicy();if(v==='biz')await loadBizSection()}
+window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='leaders')await loadLeaders();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='credits'){await loadCredits();await loadAIUsage()};if(v==='analytics')await loadClubBI();if(v==='payaccount')await loadPayAccount();if(v==='points')await loadPointsPolicy();if(v==='biz')await loadBizSection()}
 async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`AI Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>';loadClubAttention()}
 /* 工作台「待处理事项」：C 端产生新报名 / 新订单后，俱乐部没有主动提醒，只能自己进
    报名管理 / 商城去翻。这里把各视图里「需要人跟进」的数字汇总到工作台一张卡上，
@@ -95,7 +95,7 @@ function _occRange(o){
   const multi=!!(en&&en.md!==st.md);
   return {st,en,multi,full:en?`${st.md}（${st.wd}）${st.t} ～ ${en.md}（${en.wd}）${en.t}`:`${st.md}（${st.wd}）${st.t}`};
 }
-async function openActivity(id){try{_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','AI 详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="panel-title"><div><div class="eyebrow">AI EDITORIAL PREVIEW</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期</div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:'<span class="tag">已发布</span>'}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="notice" style="margin:10px 0 18px">AI 自己决定页面叙事、图片节奏和区块顺序；这里没有模板 A/B/C。</div><div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
+async function openActivity(id){try{LEADER_CTX='activity';if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','AI 详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="panel-title"><div><div class="eyebrow">AI EDITORIAL PREVIEW</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期</div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:'<span class="tag">已发布</span>'}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="notice" style="margin:10px 0 18px">AI 自己决定页面叙事、图片节奏和区块顺序；这里没有模板 A/B/C。</div><div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
    现在每行都给出「改时间 / 价格」与「删除」；并把两种容易被当成 bug 的状态直接标出来：
    ¥0 不是出错而是「价格待定」（成本表来源的活动在俱乐部定价前会归零），
    已停止报名的团期也要一眼可见，否则老板会以为 C 端还能报。 */
@@ -991,7 +991,7 @@ function renderLeaderCard(a,id){
       +`<div class="list-row__sub">擅长：${(r.specialties||[]).length?esc(r.specialties.join('、')):'未填写'}</div></div>`
       +`<div class="list-row__end"><button class="btn ghost" onclick="editLeader(${r.id},${id})">编辑</button>`
       +`<button class="btn ghost" onclick="removeLeader(${r.id},${id})">${r.status==='active'?'停用':'删除'}</button></div></div>`).join('')
-    ||'<div class="empty">资源库还没有领队，先新增一位</div>';
+    ||'<div class="empty">资源库还没有领队：可到左侧菜单「领队资源库」统一建档，也可以直接在这里新增</div>';
   const active=LEADER_FORM&&LEADER_FORM.mode==='edit'?(roster.find(x=>Number(x.id)===Number(LEADER_FORM.leaderId))||{}):{};
   return `<div class="card section" id="sec-leaders"><div class="panel-title">`
     +`<div><h3>带队领队</h3><div class="sub">从俱乐部领队资源库里挑人；系统按「带过同线路 / 同类型活动」自动推荐，推荐理由直接写在按钮上。</div></div>`
@@ -1024,7 +1024,7 @@ async function openLeaderPick(occId,actId){
   const occ=(lp.occurrences||[]).find(o=>Number(o.occurrenceId)===Number(occId))||{};
   const taken=new Set((occ.leaders||[]).map(x=>Number(x.leaderId||0)));
   const roster=(lp.roster||[]).filter(r=>r.status==='active'&&!taken.has(Number(r.id)));
-  if(!roster.length){showAlert({title:'没有可选的领队',message:'资源库里没有「在岗且尚未安排」的领队。请先在下方「领队资源库」里新增或恢复一位。'});return}
+  if(!roster.length){showAlert({title:'没有可选的领队',message:'资源库里没有「在岗且尚未安排」的领队。请到左侧菜单「领队资源库」新增或恢复一位，再回来指派。'});return}
   const recIds=new Set((occ.recommendations||[]).map(r=>Number(r.leaderId)));
   const opts=roster.slice().sort((x,y)=>(recIds.has(Number(y.id))?1:0)-(recIds.has(Number(x.id))?1:0)).map(r=>({value:String(r.id),
     label:`${r.name}（${r.role||'领队'}${(r.specialties||[]).length?' · 擅长'+r.specialties.join('/'):''}${recIds.has(Number(r.id))?' · 系统推荐':''}）`}));
@@ -1043,7 +1043,17 @@ const LEADER_ROLE_OPTS=[{value:'领队',label:'领队'},{value:'副领队',label
    内联展开后表单就长在领队卡片里，与下面的名册同屏，改完直接提交。 */
 let LEADER_FORM=null;
 
+/* 领队表单机器（内联表单 + 头像裁剪）同时服务两个宿主：
+   活动详情卡片（activity）与俱乐部级「领队资源库」页面（pool）。
+   LEADER_CTX 由宿主的加载函数设置；refreshLeaderPane / submitLeaderForm /
+   removeLeader 按它决定「提交/删完后重绘谁」。两套宿主切入时都要先收掉
+   对方打开的表单 —— #leaderInlineForm / #leaderCrop 是全局唯一 id，
+   两个宿主同时挂着表单会出现重复 id，裁剪面板会挂到第一个命中的那个上。 */
+let LEADER_CTX='activity';
+let POOL_ROSTER=[],POOL_SPECS=[];
+
 function refreshLeaderPane(){
+  if(LEADER_CTX==='pool'){renderPoolPane();return}
   if(!currentActivity||!$('#sec-leaders'))return;
   $('#sec-leaders').outerHTML=renderLeaderCard(currentActivity,currentActivity.id);
   // 整块重绘会把裁剪面板一起冲掉，但它背后是一个内存里的裁剪会话 ——
@@ -1066,7 +1076,7 @@ function leaderFormHtml(actId,r){
   // 本地预览优先：刚裁好的图还没上传（新增态更是连 id 都还没有），
   // 不显示预览的话「选完图什么都没变」= 用户以为上传没响应。
   const shown=(LEADER_FORM.preview||av);
-  const specs=(currentActivity&&currentActivity.leaderPlan&&currentActivity.leaderPlan.specialties)||[];
+  const specs=(LEADER_CTX==='pool')?POOL_SPECS:((currentActivity&&currentActivity.leaderPlan&&currentActivity.leaderPlan.specialties)||[]);
   return `<div class="leader-inline" id="leaderInlineForm">
     <div class="leader-inline__head">
       <div class="leader-av-cell">
@@ -1352,7 +1362,7 @@ async function submitLeaderForm(){
     });
     dropLeaderDraft();   // 连同没提交的预览一起回收，别把 objectURL 留在内存里
     LEADER_FORM=null;
-    await openActivity(actId);
+    if(LEADER_CTX==='pool')await loadLeaders();else await openActivity(actId);
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent=editing?'保存':'加入资源库'}
     showAlert({title:editing?'保存领队失败':'新增领队失败',message:e.message});
@@ -1402,7 +1412,8 @@ document.addEventListener('input',e=>{
 function editLeader(leaderId,actId){toggleLeaderForm('edit',actId,leaderId)}
 
 async function removeLeader(leaderId,actId){
-  const lp=(currentActivity&&Number(currentActivity.id)===Number(actId))?(currentActivity.leaderPlan||{}):{};
+  const lp=(LEADER_CTX==='pool')?{roster:POOL_ROSTER}
+    :((currentActivity&&Number(currentActivity.id)===Number(actId))?(currentActivity.leaderPlan||{}):{});
   const r=(lp.roster||[]).find(x=>Number(x.id)===Number(leaderId))||{};
   const active=r.status==='active';
   if(!await uxConfirm({title:active?'停用领队':'删除领队',danger:true,confirmText:active?'停用':'删除',
@@ -1411,9 +1422,56 @@ async function removeLeader(leaderId,actId){
   await uxFlow('removeLeader',async()=>{
     const res=await api(`/api/club/${CLUB}/leaders/${leaderId}`,{method:'DELETE'});
     toast(res.mode==='deactivated'?'已停用（带队记录保留）':'已删除');
-    await openActivity(actId);
+    if(LEADER_CTX==='pool')await loadLeaders();else await openActivity(actId);
   });
 }
+
+
+/* ---------------------------------------------------------------------------
+   俱乐部级「领队资源库」页面
+   名册管理过去只能一场一场钻进活动详情做——还没有活动时就建不了名册，
+   第一场活动只能手打。现在左侧导航有固定入口：在这里统一建档，
+   每场活动的「带队领队」直接挑人。表单与头像裁剪机器和活动详情共用
+   （见 LEADER_CTX），不复制第二套，避免两处行为漂移。
+--------------------------------------------------------------------------- */
+async function loadLeaders(){
+  LEADER_CTX='pool';
+  if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}
+  skel('#lpRoster',3);
+  try{
+    const r=await api(`/api/club/${CLUB}/leaders`);
+    POOL_ROSTER=(r&&r.leaders)||[];
+    POOL_SPECS=(r&&r.specialties)||[];
+    renderPoolPane();
+  }catch(e){POOL_ROSTER=[];POOL_SPECS=[];renderPoolPane();loaderError('#lpRoster',e,'领队资源库加载失败')}
+}
+
+function poolRosterRows(roster){
+  return roster.map(r=>`<div class="list-row leader-row"><div class="list-row__main">`
+      +`<div class="list-row__title">${leaderAvatar(r.name,r.avatar_url,'sm')}${esc(r.name)} <span class="tag ${r.status==='active'?'':'orange'}">${r.status==='active'?'在岗':'已停用'}</span></div>`
+      +`<div class="list-row__sub">${esc(r.role||'领队')}${r.phone?' · '+esc(r.phone):''}${r.base_city?' · 常驻 '+esc(r.base_city):''} · 累计带队 ${Number(r.assignedCount||0)} 次</div>`
+      +`<div class="list-row__sub">擅长：${(r.specialties||[]).length?esc(r.specialties.join('、')):'未填写'}</div></div>`
+      +`<div class="list-row__end"><button class="btn ghost" onclick="lpEditLeader(${r.id})">编辑</button>`
+      +`<button class="btn ghost" onclick="lpRemoveLeader(${r.id})">${r.status==='active'?'停用':'删除'}</button></div></div>`).join('')
+    ||'<div class="empty">资源库还没有领队：点右上角「＋ 新增领队」建好名册，之后每场活动直接挑人，系统也能开始按历史记录推荐。</div>';
+}
+
+function renderPoolPane(){
+  const roster=POOL_ROSTER||[];
+  const sum=$('#lpSummary');
+  if(sum)sum.innerHTML=`领队资源库 <b>${roster.length}</b> 人 · 在岗 <b>${roster.filter(x=>x.status==='active').length}</b> 人 · 累计带队 <b>${roster.reduce((s,x)=>s+Number(x.assignedCount||0),0)}</b> 次`;
+  const rowsEl=$('#lpRoster');
+  if(rowsEl)rowsEl.innerHTML=poolRosterRows(roster);
+  const fEl=$('#lpForm');
+  if(fEl)fEl.innerHTML=(LEADER_FORM&&LEADER_FORM.mode)
+    ?leaderFormHtml(0,LEADER_FORM.mode==='edit'?(roster.find(x=>Number(x.id)===Number(LEADER_FORM.leaderId))||{}):{})
+    :'';
+  mountLeaderCrop();
+}
+
+function lpToggleForm(){toggleLeaderForm('add',0)}
+function lpEditLeader(id){toggleLeaderForm('edit',0,id)}
+function lpRemoveLeader(id){removeLeader(id,0)}
 
 
 /* ---------------------------------------------------------------------------

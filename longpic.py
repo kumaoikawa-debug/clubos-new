@@ -17,11 +17,20 @@
     模型 → 结构化内容 JSON（theme / hero / sections[blocks] / signup）
     代码 → 用固定模板渲染 HTML（含 `<style>`，class 化）
 
-好处：
-  ① 版式不再随模型心情波动 —— 同一组件永远长同一个样，这就是"不乱排"的定义；
-  ② 模型只需操心「写什么」，不用操心「怎么排」，反而写得更好（不必分心算字号）；
-  ③ 安全面大幅收窄：模型不能再产出任意 HTML/属性，只能往预置字段填**纯文本**
-     （`longpic_template` 统一 `html.escape`）。
+    好处：
+      ① 版式不再随模型心情波动 —— 同一组件永远长同一个样，这就是"不乱排"的定义；
+      ② 模型只需操心「写什么」，不用操心「怎么排」，反而写得更好（不必分心算字号）；
+      ③ 安全面大幅收窄：模型不能再产出任意 HTML/属性，只能往预置字段填**纯文本**
+         （`longpic_template` 统一 `html.escape`）。
+
+▸ v4（2026-10-09，本版）：用户看长图仍觉得「还是固定模板」，要求**让模型自由排版、不同活动不同风格**。
+   于是把排版权**再交还给模型**——主路径改为模型直出整段 HTML（`route:"model-html"`），
+   并按活动气质给 4 类视觉原型（暗调情绪 / 暖色人文 / 清新自然 / 现代硬朗）让它每场自选一套。
+   但 v2 的教训（模型自由排版 = 每篇像学生第一版作业、同一资料两次不一样、容易垮版）不能白吃，所以：
+     · 保留 v3 的全部护栏（sanitize_html / 去坏图 / 首屏补图 / 成本闸 / 5 项必看数据）；
+     · 自由排版产出**先过 `_html_ok` 验收**（首屏有图、篇幅够、至少 2 张图、无成本泄漏），
+       不过就**退回 v3 模板**兜底——保证「有产出且安全」，不把翻车的版式发出去；
+     · 提示词里给一套**一致的字号阶梯与间距纪律**，把 v2 的「乱排」压回可控区间。
 
 安全与事实纪律（逐条保留，一条没少）：
 - 事实边界由 `_fact_digest` + 文案契约把关（挖细节 ≠ 编细节）；
@@ -231,6 +240,89 @@ __DIGEST__
 
 严格 JSON，不要 Markdown，不要解释。"""
 
+# ══════════════════════════════════════════════════════════════════════
+# 自由排版主路径（v4）：模型直出整段 HTML，按活动气质自己设计版式
+# ══════════════════════════════════════════════════════════════════════
+_FREE_SYSTEM = """你是一位资深公众号内容主编兼视觉设计师。你拿到一份活动方案和一批真实照片，
+要产出一张**能直接发布的 750px 宽宣传长图**——不是文案，是**整张图的 HTML**（版式、配色、字体节奏都由你定）。
+标准是「一本轻杂志的跨页」：干净、克制、有呼吸感，不是把资料填进表格。"""
+
+_FREE_PROMPT = """## 你的产出
+一个 JSON 对象，两个键：
+{
+  "title": "活动名 · 宣传长图（内部用）",
+  "html": "一段 HTML 片段（不是整页，不要 <html>/<head>/<body>），会被渲染成 750px 宽长图"
+}
+`html` 里**可以有且只有一个 `<style>` 块**放在最前面，用来定义这套设计的配色与基础排版
+（推荐用 CSS 变量，如 `--ink / --accent / --bg / --card`）；其余样式写在行内 `style="..."`。
+字体只用系统字体栈（PingFang SC / Microsoft YaHei / sans-serif），**不要 @import 外部字体、
+不要写 CSS url() 引外部图片**；图片一律用 `{{media:ref}}`。
+
+## ★ 视觉风格：每场活动都要不一样（这是核心要求）
+先判断这场活动的内在气质，再为它**单独设计一套视觉**，不要套任何固定模板或固定配色：
+- 暗调情绪（夜爬 / 星空 / 探洞 / 篝火 / 藏地夜景 / 高原落日）→ 深底、微光、字距收紧、克制留白；
+- 暖色人文（唐卡 / 非遗 / 古镇 / 市集 / 手作）→ 赭红 / 暖金、衬线感标题、画面有温度；
+- 清新自然（森林 / 溪流 / 花海 / 轻徒步 / 海岸）→ 墨绿 / 天青、大量留白、轻快；
+- 现代硬朗（攀岩 / 越野 / 城市周边 / 工业风）→ 高对比黑白 + 一点撞色、网格感、几何分割。
+以上只是灵感，你可以**自创**一种更贴合这场活动的调性；关键是「这场和那场一眼看上去就不是同一个模子」。
+但无论哪种风格，都要守住下面的排版纪律，否则会显得像没排过版。
+
+## ★ 排版纪律（守住这些，自由才有质感）
+- 画布 750px，左右边距 40~56px；底色自定（白 / 浅米 / 深色皆可，但要整篇统一）。
+- 建立一套**一致的字号阶梯**（如 主标题 40~46px / 区块标题 22~24px / 正文 16~18px /
+  眉标 12px+字距 2~4px / 强调数字 32~40px），**整篇只用这一套比例**，不要一处一个字号。
+- 区块之间留 40~56px 呼吸；圆角、分割线、底色卡的口径整篇统一；**不要随机字号 / 随机间距**。
+- 眉标用小字 + 字距做杂志感；强调数字用大字号 + 重字重。
+- **绝对不要**把「费用包含 / 装备建议」做成横向多列表格，用圆点列表或浅底信息卡。
+
+## ★ 结构锚点（这两块必须有，保证成品像样）
+1. **首屏**：一张满幅大图（`<img src="{{media:xxx}}">`），标题用大字号压在图上或图下，
+   带主办品牌行与一句本场专属定位；
+2. **结尾**：一块**深色**报名信息区，集中放「顾客下单前必看」的 5 项（见下方）。
+
+## 八条硬规则（不可违反）
+1. **不创造事实**：只用资料里出现过的日期 / 价格 / 地点 / 人名 / 机构 / 资质 / 装备 / 数字；
+   资料没写的字一个都不许补（尤其不许编资质、名额、折扣、评价）。
+2. 图片只能写成 `<img src="{{media:img_07}}" alt="" style="width:100%;display:block">`，
+   不要写任何其它 src、不要写 http 链接；清单里没有的 ref 一律不许用；同一张照片不要用两次。
+3. 成本、供应商、毛利、内部 SOP 一律不得出现（成品上印一行「人均 ¥xxxx」是事故）。
+4. 只允许这些标签：section div p h1 h2 h3 h4 strong em img figure figcaption ul ol li blockquote hr span small。
+5. 只输出一个 JSON 对象，不要 Markdown 代码围栏，不要解释文字。
+6. 所有文案是**纯文本**（可含换行）；不要写 `<br>` 之外的怪标签。
+7. **首屏 hero 与结尾 signup 必填**；整篇至少 8 个区块；可用照片时至少用 4 张不同的。
+8. 数字（里程 / 爬升 / 时长 / 价格 / 人数）**照资料原样写**，不要估算、不要换算。
+
+> ‼️ 本说明里出现的一切具体文字（品牌名、地名、日期、金额、社群名…）都只是「格式示意」，
+> 绝对不许出现在成品里；成品每个具体信息都必须来自上方真实资料；
+> 尤其品牌行 / 定位语（`enRoll` 那种英文小字）每场要现写，不许套固定说法、不许写别的活动的名字。
+
+## 顾客下单前必看的 5 项（只要上方数据里有，就必须写进成品，且只能照抄真值）
+1. **团期与价格** 2. **费用包含 / 不含** 3. **自备装备** 4. **带队阵容**（几位领队 / 资质 / 随队保障）
+5. **报名信息**（时间 / 地点 / 集合 / 名额）
+这 5 项可以分散在各自区块，不要挤成一团，也不要堆成密表。
+
+## 别写成 AI 腔
+- 小标题不要「XX之旅」「XX招募」或泛化情绪词；写判断句 / 信息句。
+- 正文是连贯段落（每段 2~4 句、60~180 字），不要一行一句靠换行装诗意。
+- 每节至少含 1 个**只有这场活动才有**的具体事实（数字 / 专名 / 动作 / 时刻）。
+- 与资料原文连续重合不得超过 12 个字。
+- 全篇正文合计 900~1500 字；不够就往资料里还有的具体安排上写
+  （几点集合、车程多久、谁带队、要不要自备什么、雨天怎么办），**不要靠形容词凑**。
+
+## 可用照片（ref｜横竖｜画面里实际有什么）
+__MEDIA__
+
+## 活动事实锚点（Activity Master）
+__MASTER__
+
+## 报名必用数据（团期价格 / 领队 / 费用 / 装备，真实数据，必须写进成品）
+__FACTS__
+
+## 方案事实要点表（碎片，不是成句；事实必须与它一致）
+__DIGEST__
+
+严格 JSON，不要 Markdown，不要解释。"""
+
 # 出口清洗：这些标签/属性即便提示词禁止，也一律从产物里剜掉。
 # 内容会被塞进 iframe srcdoc 与剪贴板，不能带着脚本走。
 _BAD_TAGS = re.compile(r'<\s*/?\s*(script|link|iframe|object|embed|form|input|button|video|audio|base|meta)\b[^>]*>',
@@ -346,6 +438,25 @@ def _doc_ok(rep: dict[str, int], has_photos: bool) -> tuple[bool, str]:
     return True, 'ok'
 
 
+def _html_ok(html: str, has_photos: bool) -> tuple[bool, str]:
+    """自由排版（model-html）产出的验收：宁可保守，翻车就退回模板兜底。"""
+    h = str(html or '')
+    # 首屏必须有图（前 1400 字符内出现 <img>）—— 没图的长图不像成品
+    if not _IMG_ANY.search(h[:1400]):
+        return False, 'no hero image'
+    # 纯文本字数至少 400，否则太空
+    text = re.sub(r'<[^>]+>', '', h)
+    if len(text.strip()) < 400:
+        return False, 'too thin (%d)' % len(text.strip())
+    # 有可用照片时，全篇至少用 2 张（避免只首屏一张）
+    if has_photos and len(_IMG_ANY.findall(h)) < 2:
+        return False, 'only 1 image'
+    # 成本句直接判死刑（长图主视觉印成本 = 事故）；整段含任意 COST_LABELS 词就拒
+    if is_cost_row(text):
+        return False, 'cost leaked'
+    return True, 'ok'
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 主流程
 # ══════════════════════════════════════════════════════════════════════
@@ -374,72 +485,76 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
     photo_order = [str(l).split('｜', 1)[0].strip() for l in (caption_lines or []) if str(l).strip()]
     cover_note = f'活动官方封面（已上传的主视觉，可用作首图）：{cover_url}\n' if cover_url else ''
 
-    # ── 主路径：模型输出内容 JSON → 模板渲染 ──
+    # ══════════════════════════════════════════════════════════════════
+    # 主路径（v4）：模型自由排版 → 直出 HTML（不同活动不同风格）
+    #   翻车（_html_ok 不过）就退回下面的模板兜底，保证「有产出且安全」。
+    # ══════════════════════════════════════════════════════════════════
     gw = await generate_json(club_id=club_id, task_type='longpic',
-                             system_prompt=_SYSTEM,
-                             user_prompt=(cover_note + _fill(_PROMPT)))
+                             system_prompt=_FREE_SYSTEM,
+                             user_prompt=(cover_note + _fill(_FREE_PROMPT)))
     if not gw:
-        return _mock(master, detail, cover_url), record_mock_usage(club_id, 'longpic', _PROMPT,
+        return _mock(master, detail, cover_url), record_mock_usage(club_id, 'longpic', _FREE_PROMPT,
                                                                    {'title': master.get('title', '')})
+    html, route, dropped, data = '', 'model-html', [], {}
+    if isinstance(gw.data, dict):
+        cand = str(gw.data.get('html') or gw.data.get('body') or gw.data.get('content') or '')
+        cand = sanitize_html(cand)
+        if len(cand) > 400 and _html_ok(cand, has_photos)[0]:
+            html, data = cand, gw.data
 
-    data = gw.data if isinstance(gw.data, dict) else {}
-    doc = _extract_doc(data)
-    html, route, dropped = '', 'template', []
-
-    if doc:
-        # ① 先用真实数据补齐「顾客必看」的内容，再做结构验收
-        #    （顺序不能反：补齐本身会加 sections，先判断可能被误判成"太单薄"）
-        doc, _added = ensure_required_sections(doc, pack, photo_order)
-        rep = _doc_quality(doc, allowed)
-        ok, why = _doc_ok(rep, has_photos)
-        if ok:
-            # ② 文案质检：挑出 AI 腔 / 照抄 / 占位符，带问题清单让模型改一次。
-            #    只改一次（重试是有成本的，且改坏了还不如原稿 —— 见下面的采用条件）。
-            doc_before_fix = doc
-            issues = quality_report(doc, str(source_text or ''))
-            if issues:
-                gwf = await generate_json(
-                    club_id=club_id, task_type='longpic', system_prompt=_SYSTEM,
-                    user_prompt=(_REWRITE_PROMPT
-                                 .replace('__ISSUES__', '\n'.join('- ' + i for i in issues))
-                                 .replace('__DOC__', json.dumps(doc, ensure_ascii=False)[:16000])))
-                fixed = _extract_doc(gwf.data) if gwf and isinstance(gwf.data, dict) else None
-                if fixed:
-                    fixed, _ = ensure_required_sections(fixed, pack, photo_order)
-                    # 只有"确实改好了"才采用（以问题变少为准；否则保留原稿）
-                    if len(quality_report(fixed, str(source_text or ''))) < len(issues):
-                        doc = fixed
-            # ★ 渲染失败**不能静默吞掉**（2026-10-08 教训：吞了之后只知道"成品是空的"，
-            #   查了半天不知道是渲染炸了）。做法：打印堆栈给人看，并依次退回到
-            #   ① 改写后的稿子（若失败）② 改写前的原稿 —— 原稿至少是验过能渲染的。
-            for cand_doc in ((doc, doc_before_fix) if doc is not doc_before_fix else (doc,)):
-                try:
-                    cand_html = T.render(scrub_doc_text(cand_doc), allowed, cover_url, seed, photo_order)
-                except Exception:
-                    traceback.print_exc()
-                    continue
-                if cand_html:
-                    html, doc = cand_html, cand_doc
-                    break
-        # 质量不够：如果模型同时给了现成 html 就用它，否则走回退
-        if not html:
-            cand = str(data.get('html') or data.get('body') or '')
-            if cand and len(cand) > 400:
-                html, route = sanitize_html(cand), 'model-html'
-            else:
-                route = 'fallback(%s)' % why
-
+    # ── 兜底路径：结构化内容 JSON → 模板渲染（自由排版翻车时的稳定产出）──
     if not html:
-        # ── 回退路径：模型直出 HTML（老实现，保证"有产出"）──
-        gw2 = await generate_json(club_id=club_id, task_type='longpic',
-                                  system_prompt=_FALLBACK_SYSTEM,
-                                  user_prompt=(cover_note + _fill(_FALLBACK_PROMPT)))
-        if gw2 and isinstance(gw2.data, dict):
-            cand = str(gw2.data.get('html') or gw2.data.get('body') or gw2.data.get('content') or '')
-            cand = sanitize_html(cand)
-            if cand:
-                html, route, gw = cand, 'model-html', gw2
-                data = gw2.data
+        route = 'template'
+        gw = await generate_json(club_id=club_id, task_type='longpic',
+                                 system_prompt=_SYSTEM,
+                                 user_prompt=(cover_note + _fill(_PROMPT)))
+        if not gw:
+            return _mock(master, detail, cover_url), record_mock_usage(club_id, 'longpic', _PROMPT,
+                                                                       {'title': master.get('title', '')})
+        data = gw.data if isinstance(gw.data, dict) else {}
+        doc = _extract_doc(data)
+        if doc:
+            # ① 先用真实数据补齐「顾客必看」的内容，再做结构验收
+            #    （顺序不能反：补齐本身会加 sections，先判断可能被误判成"太单薄"）
+            doc, _added = ensure_required_sections(doc, pack, photo_order)
+            rep = _doc_quality(doc, allowed)
+            ok, why = _doc_ok(rep, has_photos)
+            if ok:
+                # ② 文案质检：挑出 AI 腔 / 照抄 / 占位符，带问题清单让模型改一次。
+                #    只改一次（重试是有成本的，且改坏了还不如原稿 —— 见下面的采用条件）。
+                doc_before_fix = doc
+                issues = quality_report(doc, str(source_text or ''))
+                if issues:
+                    gwf = await generate_json(
+                        club_id=club_id, task_type='longpic', system_prompt=_SYSTEM,
+                        user_prompt=(_REWRITE_PROMPT
+                                     .replace('__ISSUES__', '\n'.join('- ' + i for i in issues))
+                                     .replace('__DOC__', json.dumps(doc, ensure_ascii=False)[:16000])))
+                    fixed = _extract_doc(gwf.data) if gwf and isinstance(gwf.data, dict) else None
+                    if fixed:
+                        fixed, _ = ensure_required_sections(fixed, pack, photo_order)
+                        # 只有"确实改好了"才采用（以问题变少为准；否则保留原稿）
+                        if len(quality_report(fixed, str(source_text or ''))) < len(issues):
+                            doc = fixed
+                # ★ 渲染失败**不能静默吞掉**（2026-10-08 教训：吞了之后只知道"成品是空的"，
+                #   查了半天不知道是渲染炸了）。做法：打印堆栈给人看，并依次退回到
+                #   ① 改写后的稿子（若失败）② 改写前的原稿 —— 原稿至少是验过能渲染的。
+                for cand_doc in ((doc, doc_before_fix) if doc is not doc_before_fix else (doc,)):
+                    try:
+                        cand_html = T.render(scrub_doc_text(cand_doc), allowed, cover_url, seed, photo_order)
+                    except Exception:
+                        traceback.print_exc()
+                        continue
+                    if cand_html:
+                        html, doc = cand_html, cand_doc
+                        break
+            # 质量不够：如果模型同时给了现成 html 就用它，否则走回退
+            if not html:
+                cand = str(data.get('html') or data.get('body') or '')
+                if cand and len(cand) > 400:
+                    html, route = sanitize_html(cand), 'model-html'
+                else:
+                    route = 'fallback(%s)' % why
 
     if not html:
         # 两条路都没产出：交回给调用方，前端会提示重试，不落一个空成品
@@ -452,6 +567,11 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
     html = scrub_html_sentences(html) if route == 'template' else scrub_cost_text(html)
 
     title = str(data.get('title') or master.get('title') or '活动宣传长图').strip()
+    # 模型爱在标题后挂「· 宣传长图（内部用）」这类自我注释——那是给它的任务说明，
+    # 不是给顾客看的文案。出口处剥掉，剥完为空再回退活动标题。
+    _t = re.sub(r'[（(][^）)]*(内部|示意|草稿|样例|示例)[^）)]*[）)]', '', title)
+    _t = re.sub(r'[·•]\s*宣传长图\s*$', '', _t).strip(' ··-——')
+    if _t: title = _t
     return {'title': title, 'html': html, 'usedRefs': _used_refs(html),
             'droppedRefs': dropped, 'route': route}, gw
 
