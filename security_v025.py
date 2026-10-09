@@ -264,27 +264,47 @@ def _member_owns_path(path: str, request: Request, identity: dict, payload: dict
 
 
 async def authorize_request(request: Request) -> dict | None:
-    """Return authenticated principal or raise. Strict policy applies only in production."""
-    if not IS_PROD: return None
+    """Return authenticated principal or raise.
+
+    2026-10-09 安全修复（线上裸奔事故）：此前 demo 模式直接 `return None`，
+    /api/club/* 全部免鉴权——未登录可读报名（含手机号）、可删除/改写任意数据
+    （实证：未鉴权 DELETE 返回 200 并删掉了线上内容资产）。
+    现在 demo 模式与 production 共用同一套检查（_authorize_shared），差异仅在：
+      · demo 跳过 body 体积上限（资料上传 pptx 远超 1MB）；
+      · demo 跳过 commerce webhook secret 强校验（本地支付商没有 secret）；
+      · demo 不禁用 _DEMO_ONLY 端点（C 端报名/下单依赖它们，线上语义必须保留）；
+      · demo 放行 /api/public/* 全部方法（C 端匿名浏览/报名是产品语义）；
+      · demo 的 /api/club 公开读仅限 activities / content / ai-mode（数据核对探针依赖）；
+      · demo 页面壳（/club 等）不拦，由前端跳登录（保持现有 UX）；
+      · demo 非 GET 不强制 CSRF 头（SameSite=Lax 已挡跨站携带 cookie；保持既有脚本兼容）。
+    """
+    return await _authorize_shared(request, strict=IS_PROD)
+
+
+async def _authorize_shared(request: Request, strict: bool) -> dict | None:
     path, method = request.url.path, request.method
     length = request.headers.get('content-length')
-    if length:
+    if strict and length:
         try:
             if int(length) > (20*1024*1024 if path.endswith('/ai-generate') else 1024*1024):
                 _forbidden('request too large', 413)
         except ValueError: _forbidden('invalid content length',400)
-    if method == 'OPTIONS': _forbidden('CORS preflight not enabled')
+    if method == 'OPTIONS':
+        if strict: _forbidden('CORS preflight not enabled')
+        return None
     if path in ('/api/health','/login','/api/auth/login','/api/auth/logout'):
         return None
     if path.startswith('/static/uploads/') or path.startswith('/static/demo/'):
-        _forbidden('media access requires a protected asset service',404)
+        if strict: _forbidden('media access requires a protected asset service',404)
+        return None
     if path.startswith('/static/'):
         return None
-    if path in ('/docs','/redoc','/openapi.json'):
+    if strict and path in ('/docs','/redoc','/openapi.json'):
         _forbidden('disabled',404)
     if path.startswith('/api/payments/') and path.endswith('/notify'):
         return None # provider verification is performed by the payment adapter itself
     if path.startswith('/api/commerce/events/'):
+        if not strict: return None
         event = path.rsplit('/',1)[-1]
         if event in _UNVERIFIED_EVENTS: _forbidden('unverified money event disabled',403)
         expected = os.getenv('CLUBOS_COMMERCE_WEBHOOK_SECRET','')
@@ -292,10 +312,21 @@ async def authorize_request(request: Request) -> dict | None:
             _forbidden('invalid commerce secret',401)
         return None
     if path=='/api/public/club-applications' and method=='POST':
-        public_rate_limit(request,'club-application',3,3600)
+        if strict:
+            public_rate_limit(request,'club-application',3,3600)
+            return None
         return None
-    if any(rx.fullmatch(path) for rx in _DEMO_ONLY): _forbidden('demo-only endpoint disabled')
+    if strict and any(rx.fullmatch(path) for rx in _DEMO_ONLY): _forbidden('demo-only endpoint disabled')
     if method == 'GET' and any(rx.fullmatch(path) for rx in _PUBLIC_READ): return None
+    if not strict:
+        # demo 语义保留：C 端匿名（public/* 全方法）+ 页面壳 + 俱乐部公开读探针。
+        if path.startswith('/api/public/'): return None
+        if path in ('/','/platform','/club','/web','/leader'): return None
+        if method in ('GET','HEAD') and (
+            re.fullmatch(r'/api/club/\d+/activities(?:/\d+)?', path)
+            or re.fullmatch(r'/api/club/\d+/content(?:/\d+)?', path)
+            or re.fullmatch(r'/api/club/\d+/ai-mode', path)):
+            return None
     if path in ('/','/platform','/club','/web','/leader'):
         identity, _=get_identity(request)
         expected = {'/':'club','/platform':'platform','/club':'club','/web':'member','/leader':'leader'}[path]
@@ -304,7 +335,7 @@ async def authorize_request(request: Request) -> dict | None:
         return identity
     identity, mode = get_identity(request)
     if not identity: _forbidden('authentication required',401)
-    if mode == 'cookie' and method not in ('GET','HEAD'):
+    if strict and mode == 'cookie' and method not in ('GET','HEAD'):
         csrf = request.headers.get('x-clubos-csrf','')
         if not csrf or not hmac.compare_digest(_hash(csrf),identity['csrf_hash']): _forbidden('CSRF validation failed')
         origin = request.headers.get('origin')
