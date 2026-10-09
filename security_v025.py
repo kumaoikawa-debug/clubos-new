@@ -16,6 +16,15 @@ IS_PROD = MODE == 'production'
 if MODE not in {'demo', 'production'}:
     raise RuntimeError('CLUBOS_SECURITY_MODE must be demo or production')
 
+# ★ 内测开放开关（2026-10-09 应用户要求「测试阶段不要设密码」）：
+#   CLUBOS_TEST_OPEN=1 时管理端不设登录门槛（等价于早期 demo 语义，前端不会被踢到登录页）。
+#   ⚠️ 公开链接上的一把总钥匙：任何拿到链接的人都能读报名（含手机号）并改写数据。
+#   仅限内测演示期；正式对客前删掉这个环境变量即恢复拦截，代码无需回改。
+#   生产模式（CLUBOS_SECURITY_MODE=production）永远忽略本开关。
+TEST_OPEN = (not IS_PROD) and os.getenv('CLUBOS_TEST_OPEN', '').strip().lower() in ('1', 'true', 'yes', 'on')
+if TEST_OPEN:
+    print('[security] CLUBOS_TEST_OPEN=1: 登录门槛已关闭（内测演示专用，请勿对客开放）', flush=True)
+
 # Routes that are explicitly disabled, regardless of authentication, in production.
 _DEMO_ONLY = (
     re.compile(r'^/api/public/checkouts/[^/]+/confirm$'),
@@ -174,6 +183,21 @@ def get_identity(request: Request) -> tuple[dict | None, str | None]:
     return (account,mode) if account else (None,None)
 
 
+def test_open_identity(role: str = 'club', club_id: int = 1) -> dict | None:
+    """内测期兜底身份：仅在 TEST_OPEN 下用于 /api/auth/me。
+
+    原因：浏览器里可能残留过期的 clubos_csrf cookie，前端据此调用 /api/auth/me，
+    若返回 401 就会被弹回登录页——与「测试期不要密码」的目标冲突。这里给一个
+    真实存在的俱乐部账号身份，让前端拿到 clubId 后正常进入后台。
+    """
+    if not TEST_OPEN: return None
+    with conn() as c:
+        account = row(c.execute("SELECT * FROM auth_accounts WHERE status='active' AND role=? AND club_id=? ORDER BY id LIMIT 1", (role, club_id)))
+        if not account:
+            account = row(c.execute("SELECT * FROM auth_accounts WHERE status='active' AND role='club' ORDER BY id LIMIT 1"))
+    return dict(account) if account else None
+
+
 def revoke_session(request: Request) -> None:
     bearer = request.headers.get('authorization','')
     token = bearer[7:].strip() if bearer.lower().startswith('bearer ') else request.cookies.get('clubos_session','')
@@ -277,7 +301,13 @@ async def authorize_request(request: Request) -> dict | None:
       · demo 的 /api/club 公开读仅限 activities / content / ai-mode（数据核对探针依赖）；
       · demo 页面壳（/club 等）不拦，由前端跳登录（保持现有 UX）；
       · demo 非 GET 不强制 CSRF 头（SameSite=Lax 已挡跨站携带 cookie；保持既有脚本兼容）。
+
+    另：内测期可显式打开 CLUBOS_TEST_OPEN=1 完全免除登录门槛（见 TEST_OPEN），
+    那时的行为与修复前的 demo 一致——这是有意为之的临时开关，不是默认策略。
     """
+    if TEST_OPEN:
+        # 内测开放：不做身份/角色/归属校验，也不拦截任何管理接口。
+        return None
     return await _authorize_shared(request, strict=IS_PROD)
 
 

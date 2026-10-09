@@ -69,7 +69,12 @@ async def security_boundary(request:Request,call_next):
     return response
 
 @app.get('/login')
-def login_page(): return FileResponse(STATIC/'login.html')
+def login_page():
+    # 内测开放模式（CLUBOS_TEST_OPEN=1）下没有登录这回事，直接送进俱乐部后台，
+    # 避免老书签/跳转把测试同学挡在登录页。
+    from security_v025 import TEST_OPEN
+    if TEST_OPEN: return RedirectResponse('/club', status_code=307)
+    return FileResponse(STATIC/'login.html')
 
 @app.post('/api/auth/login')
 def login_account(request:Request,payload:dict=Body(...)):
@@ -81,8 +86,11 @@ def login_account(request:Request,payload:dict=Body(...)):
 
 @app.get('/api/auth/me')
 def auth_me(request:Request):
-    from security_v025 import public_identity
+    from security_v025 import public_identity, TEST_OPEN, test_open_identity
     identity,_=get_identity(request)
+    # 内测开放模式：即使浏览器残留过期会话 cookie，也返回一个可用的俱乐部身份，
+    # 避免前端被弹回登录页（CLUBOS_TEST_OPEN=1，仅内测）。
+    if not identity and TEST_OPEN: identity=test_open_identity()
     if not identity: raise HTTPException(401,'authentication required')
     profile=public_identity(identity)
     if identity['role'] in ('member','leader') and identity.get('user_id'):
