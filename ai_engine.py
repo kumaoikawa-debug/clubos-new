@@ -1565,6 +1565,70 @@ def normalize_channel_blocks(data:dict[str,Any])->dict[str,Any]:
     return data
 
 
+def normalize_poster(data:dict[str,Any],fallback_title:str='')->dict[str,Any]:
+    """把模型返回的任意形状归一成海报字段（headline/subheadline/facts/sellingPoints/cta/mediaRefs）。
+
+    为什么需要（2026-10-09 用户截图实证）：海报 brief 要的是 headline/subheadline/facts/sellingPoints，
+    但提示词里那段「输出结构（强制）」当时是**所有渠道共用**的 {"title","summary","blocks"}（公众号那一套），
+    模型老老实实照着后者输出 → 前端拿不到 headline / sellingPoints / facts，
+    海报上就只剩「活动标题 + 一行灰字（地点·价格·名额）+ 一个大白二维码方块」，
+    老板的原话是「一点设计感都没有」。这里在出口做一次归一：新形状原样放行，旧形状也救得回来。
+    """
+    if not isinstance(data,dict): data={}
+    out=dict(data)
+    def s(v):
+        if isinstance(v,str): return v.strip()
+        if isinstance(v,(int,float)): return str(v)
+        if isinstance(v,dict):
+            for k in ('text','value','label','title','content','desc','name','body'):
+                if isinstance(v.get(k),str) and v[k].strip(): return v[k].strip()
+        return ''
+    blocks=[b for b in (data.get('blocks') or []) if isinstance(b,dict)]
+    def first_text(types):
+        for b in blocks:
+            if types and (b.get('type') or '') not in types: continue
+            for k in ('headline','title','text','body','summary','content'):
+                if isinstance(b.get(k),str) and b[k].strip(): return b[k].strip()
+        return ''
+    headline=s(data.get('headline') or data.get('title') or data.get('headlineMain')) or fallback_title
+    sub=s(data.get('subheadline') or data.get('subtitle') or data.get('summary')) or first_text(('lead','statement'))
+    facts=[]
+    for x in (data.get('facts') or data.get('info') or data.get('factList') or []):
+        t=s(x)
+        if t and t not in facts: facts.append(t)
+    if not facts:
+        for b in blocks:
+            if (b.get('type') or '')!='facts': continue
+            for it in (b.get('items') or []):
+                t=s(it)
+                if t and t not in facts: facts.append(t)
+    pts=[]
+    for x in (data.get('sellingPoints') or data.get('selling_points') or data.get('highlights') or
+              data.get('points') or []):
+        t=s(x)
+        if t and t not in pts: pts.append(t)
+    if not pts:
+        # 旧形状（blocks）里没有卖点字段，就拿各节小标题当卖点 —— 它们是模型自己写的判断句
+        for b in blocks:
+            if (b.get('type') or '') not in ('narrative','statement','info','lead','media','gallery'): continue
+            t=s(b.get('headline') or b.get('title') or b.get('eyebrow'))
+            if t and len(t)<=20 and t not in pts: pts.append(t)
+    cta=s(data.get('cta') or data.get('action')) or '扫码报名'
+    refs=[x for x in (data.get('preferredMediaRefs') or data.get('mediaRefs') or [])
+          if isinstance(x,str) and x.strip()]
+    if not refs:
+        for b in blocks:
+            for r in (b.get('mediaRefs') or []):
+                if isinstance(r,str) and r.strip() and r not in refs: refs.append(r)
+    out['headline']=headline
+    out['subheadline']=sub
+    out['facts']=facts[:4]
+    out['sellingPoints']=pts[:5]
+    out['cta']=cta
+    out['preferredMediaRefs']=refs[:3]
+    return out
+
+
 async def generate_channel(club_id:int,activity_master:dict[str,Any],detail:dict[str,Any],channel:str,
                            cover_url:str|None=None,source_text:str='')->tuple[dict[str,Any],GatewayResponse]:
     labels={'wechat':'微信公众号','xhs':'小红书','poster':'活动招募海报','recap':'活动回顾'}
@@ -1613,6 +1677,25 @@ cta、preferredMediaRefs[]（真实照片 ref）。""",
     detail_view={k:v for k,v in (detail or {}).items()
                  if k in ('activityUnderstanding','coreSellingIdea','editorialIntent') and v} \
                 if isinstance(detail,dict) else {}
+    # 「输出结构（强制）」必须按渠道给 —— ★ 2026-10-09：此前所有渠道共用公众号那一套 {title,summary,blocks}，
+    # 模型照抄，海报渠道拿回来的是空字段（headline/facts/sellingPoints 全无），
+    # 成品退化成「活动标题 + 一行灰字 + 一个大白二维码」（老板截图投诉「一点设计感都没有」）。
+    # 海报要的是它自己那套字段，别再让模型猜。
+    structures={
+        'wechat':'{"title":"","summary":"","blocks":[{"type":"lead|narrative|statement|media|gallery|facts|timeline|quote|cta","headline":"","body":"","mediaRefs":[],"items":[{"label":"","value":""}]}]}',
+        'recap':'{"title":"","summary":"","blocks":[{"type":"lead|narrative|statement|media|gallery|facts|timeline|quote|cta","headline":"","body":"","mediaRefs":[],"items":[{"label":"","value":""}]}]}',
+        'xhs':'{"titleOptions":["","",""],"hook":"","body":"","tags":[],"imageSequence":[]}',
+        'poster':'{"headline":"","subheadline":"","facts":[],"sellingPoints":[],"cta":"","preferredMediaRefs":[]}',
+    }
+    structure_notes={
+        'wechat':'正文**必须全部放进 blocks 数组**。不要自作主张换成 lead / narrative / facts / closing 这类顶层键——前端只读 blocks，形状一变，整篇内容就会渲染成空白页。',
+        'recap':'正文**必须全部放进 blocks 数组**，形状与公众号一致。',
+        'xhs':'**不要返回 blocks**，只按上面的字段名输出。',
+        'poster':('facts 只写真实值（时间 / 地点 / 价格 / 人数），每条 ≤ 10 字；'
+                  'sellingPoints 3~5 条，每条 ≤ 12 字、带具体细节（数字或专名）、彼此不重复；'
+                  'headline ≤ 12 字；subheadline ≤ 20 字，是一句能立住的主张；'
+                  'preferredMediaRefs 只填真实照片的 ref。**不要返回 blocks。**'),
+    }
     prompt=f"""基于同一场活动，重新创作 {labels.get(channel,channel)} 原生内容。不是活动详情删减版。
 {cover_note}
 Activity Master（事实锚点）：{json.dumps(activity_master,ensure_ascii=False)}
@@ -1623,9 +1706,8 @@ Activity Master（事实锚点）：{json.dumps(activity_master,ensure_ascii=Fal
 本渠道要求：
 {briefs.get(channel,'')}
 输出结构（强制；字段名不得改动）：
-{{"title":"","summary":"","blocks":[{{"type":"lead|narrative|statement|media|gallery|facts|timeline|quote|cta","headline":"","body":"","mediaRefs":[],"items":[{{"label":"","value":""}}]}}]}}
-正文**必须全部放进 blocks 数组**。不要自作主张换成 lead / narrative / facts / closing 这类顶层键——
-前端只读 blocks，形状一变，整篇内容就会渲染成空白页。
+{structures.get(channel,structures['wechat'])}
+{structure_notes.get(channel,'')}
 严格 JSON，不要 Markdown，不要解释。"""
     gw=await generate_json(club_id=club_id,task_type=channel,system_prompt=SYSTEM,user_prompt=prompt)
     # 渠道成品（海报 / 小红书九宫格）同样只能用真实照片：品牌 logo 与空白底图不能上去
@@ -1637,6 +1719,7 @@ Activity Master（事实锚点）：{json.dumps(activity_master,ensure_ascii=Fal
         data=gw.data or {}
         # 模型自创结构（lead/narrative/facts/closing）时把内容救回 blocks，别让前端渲染空白
         if channel in ('wechat','recap'): data=normalize_channel_blocks(data)
+        elif channel=='poster': data=normalize_poster(data,str(activity_master.get('title') or ''))
         if cover_url: data['coverUrl']=cover_url
         if isinstance(data.get('blocks'),list):
             # ① 照抄闸门：与原文连续重合超限的段落交回模型定向重写一次（详见 source_echo_blocks 注释）
@@ -1674,6 +1757,22 @@ Activity Master（事实锚点）：{json.dumps(activity_master,ensure_ascii=Fal
              and m.get('ref') and (m.get('kind') or 'photo')=='photo']
     if channel=='wechat':data={'title':title,'summary':idea,'coverUrl':cover_url,'blocks':detail.get('blocks',[])[:6]+[{'type':'cta','headline':'查看活动详情并报名'}]}
     elif channel=='xhs':data={'titleOptions':[title,f"周末去{activity_master.get('location','山里')}，这次不赶行程"],'hook':idea,'body':idea+'\n\n具体日期、费用和报名信息见活动详情。','tags':['户外','周末去哪儿','自然'],'imageSequence':([cover_url] if cover_url else [])+gallery[:8],'coverUrl':cover_url}
-    elif channel=='poster':data={'headline':title,'subheadline':idea,'facts':[activity_master.get('date',''),activity_master.get('location','')],'sellingPoints':[idea],'cta':'扫码查看详情与报名','preferredMediaRefs':([cover_url] if cover_url else [])+gallery[:1],'coverUrl':cover_url}
+    elif channel=='poster':
+        # 演示模式也要给足版式需要的字段，否则海报只剩标题 + 一行灰字（看不出设计）
+        _facts=[str(x) for x in (activity_master.get('date'),activity_master.get('location')) if x]
+        try:
+            _p=activity_master.get('price')
+            if _p not in (None,''): _facts.append('¥%g / 人'%float(_p))
+        except (TypeError,ValueError): pass
+        if activity_master.get('capacity'): _facts.append('限 %s 人'%activity_master['capacity'])
+        _pts=[]
+        for x in (activity_master.get('services') or []):
+            t=x if isinstance(x,str) else ((x.get('name') or x.get('title') or '') if isinstance(x,dict) else '')
+            t=str(t).strip()
+            if t and len(t)<=12 and t not in _pts: _pts.append(t)
+        if not _pts and idea: _pts=[idea[:12]]
+        data={'headline':title,'subheadline':idea or str(activity_master.get('location') or ''),
+              'facts':_facts[:4],'sellingPoints':_pts[:4],'cta':'扫码报名',
+              'preferredMediaRefs':([cover_url] if cover_url else [])+gallery[:1],'coverUrl':cover_url}
     else:data={'needsActualData':True,'title':f'{title}｜活动回顾','message':'请上传现场照片或领队记录后再生成真实活动回顾。'}
     return data,record_mock_usage(club_id,channel,prompt,data)

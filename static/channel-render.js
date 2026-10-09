@@ -15,6 +15,7 @@
   var LABEL = { wechat: '微信公众号图文', longpic: 'AI 宣传长图', xhs: '小红书图文', poster: '活动招募海报', recap: '活动回顾' };
   var ICON = { wechat: '📰', longpic: '🖼', xhs: '📕', poster: '🎽', recap: '📷' };
   var _chSeq = 0;   /* 成品预览层标题 id 计数：叠开两层时 aria-labelledby 不能撞名 */
+  var _posterCycle = 0;  /* 海报版式确定性循环计数：避免随机抽到最素版式 */
   var FONT = '"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif';
   var SERIF = 'Georgia,"Songti SC","Noto Serif SC",serif';
 
@@ -93,7 +94,13 @@
     if (_ctxCache[activityId]) return _ctxCache[activityId];
     // 媒体 url 要改写成公开代理地址（生产 /static/uploads/* 全 404），在这里记住活动 id
     setMediaActivityId(activityId);
-    var p = api('/api/club/' + CLUB + '/activities/' + activityId).then(function (a) {
+    /* 品牌信息（俱乐部名 / 口号 / 品牌 logo）与活动资料一起取：海报顶部的品牌带要用。
+       取不到就当"没设品牌"，只少一个 logo，不阻断渲染。 */
+    var p = Promise.all([
+      api('/api/club/' + CLUB + '/activities/' + activityId),
+      api('/api/club/' + CLUB + '/settings').catch(function () { return null; })
+    ]).then(function (res) {
+      var a = res[0], st = res[1] || {};
       var master = a.activityMaster || {};
       var mm = mediaMap(master);
       /* 海报在俱乐部后台本地合成，媒体走 /api/club/ 鉴权路由：
@@ -121,19 +128,18 @@
           }
         return '';
       }
-      /* 海报要盖俱乐部的 logo：资料里被解析期标成 kind='logo' 的图就是品牌标识
-         （真实活动照片是 kind='photo'，不会误当 logo 拿来盖印）。取第一张。 */
-      var logoUrl = '';
-      Object.keys(mm).forEach(function (k) {
-        var m = mm[k];
-        if (!logoUrl && m && m.kind === 'logo' && m.url) logoUrl = clubMediaUrl(m.url);
-      });
+      /* 品牌 logo 只用「俱乐部设置 · 品牌」里老板自己上传的那张。
+         ★ 不再回退到资料里 kind='logo' 的图：那通常是客户/场地/赞助方塞进 PPT 的标识
+           （实测 2026-10-09：毕棚沟方案 img_01 是一张近乎全白的线条插画），
+           盖进白胶囊里就是一团白斑，比不加 logo 还丑。没设品牌 logo 就只出纯文字品牌带。 */
       return {
         club: CLUB,
         activityId: Number(activityId),
         master: master,
         mm: mm,
-        logoUrl: logoUrl,
+        logoUrl: st.logoUrl ? abs(st.logoUrl) : '',
+        brandName: String(st.name || ''),
+        brandSlogan: String(st.slogan || ''),
         status: a.status || '',
         mediaClubUrl: mediaClubUrl,
         firstPhotoClubUrl: firstPhotoClubUrl,
@@ -818,34 +824,246 @@
     return { poster: poster, photos: photos.filter(Boolean) };
   }
 
-  /* ---------- 海报（canvas 1080×1440）---------- */
+  /* ---------- 海报（canvas 1080×1440）----------
+     ★ 2026-10-09 重做：用户拿 4 张参考图来，说旧版「一点设计感都没有」。
+     旧版不是配色问题，是**没有设计系统**：没有品牌带、整张只有一个字号层级、
+     事实平铺成一行灰字、二维码一个大白方块居中比正文还抢眼，而且三套版式是**随机**套的
+     —— 老板抽到最素的那套，就是那张「标题 + 灰字 + 二维码」。
+     新版按参考图的结构重建一套版式语言：
+       品牌带（logo + 俱乐部名 + 口号 + 日期胶囊）→ 主标题（大字号 / 紧凑行距）
+       → 副标（一句主张）→ 卖点条（白胶囊，参考图里最"设计"的一笔）→ 实拍主视觉（全幅）
+       → 价格块（¥ 放大 + 单位缩小）→ 二维码卡（码 + 「扫码报名」+ 一圈细描边）
+       → 底部图标行（地点 / 名额 / 日期 / 卖点各配一个线性图标，像参考图 1 底部那四格）。
+     配色从主视觉照片推出来（秋色林场→琥珀色带、草甸雪山→墨绿色带），每一场活动自带一套色。
+     三套版式都按这套语言实现：画报 / 深色杂志 / 极简影像。默认第一套，
+     「换一套版式」循环切换（**不再随机** —— 随机等于把最差的一套推给老板）。 */
+
+  /* --- 海报共用：颜色 / 字距 / 图标 / 日期 --- */
+
+  function _rgb2hsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    var mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn, h = 0, s = 0, l = (mx + mn) / 2;
+    if (d) {
+      s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
+      if (mx === r) h = ((g - b) / d + (g < b ? 6 : 0));
+      else if (mx === g) h = ((b - r) / d + 2);
+      else h = ((r - g) / d + 4);
+      h /= 6;
+    }
+    return [h, s, l];
+  }
+  function _hsl2rgb(h, s, l) {
+    function f(p, q, t) {
+      if (t < 0) t += 1; if (t > 1) t -= 1;
+      if (t < 1 / 6) return p + (q - p) * 6 * t;
+      if (t < 1 / 2) return q;
+      if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+      return p;
+    }
+    if (s <= 0) { var v = Math.round(l * 255); return [v, v, v]; }
+    var q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
+    return [Math.round(f(p, q, h + 1 / 3) * 255), Math.round(f(p, q, h) * 255), Math.round(f(p, q, h - 1 / 3) * 255)];
+  }
+  function _rgba(cl, a) { return 'rgba(' + cl[0] + ',' + cl[1] + ',' + cl[2] + ',' + a + ')'; }
+  function _rgb(cl) { return 'rgb(' + cl[0] + ',' + cl[1] + ',' + cl[2] + ')'; }
+
+  var _TONE_DEFAULT = { deep: [16, 30, 25], deep2: [8, 16, 13], mid: [30, 58, 46], light: [44, 82, 66], accent: [226, 240, 232] };
+
+  /* 从主视觉推「本场专属」配色。照片本身偏灰时强制补一点饱和度 ——
+     不给色会让整张海报发灰，那正是「没设计感」的样子。 */
+  function toneFromImage(img) {
+    if (!img) return _TONE_DEFAULT;
+    try {
+      var S = 32, cv = document.createElement('canvas'), i;
+      cv.width = S; cv.height = S;
+      var x = cv.getContext('2d');
+      x.drawImage(img, 0, 0, S, S);
+      var d = x.getImageData(0, 0, S, S).data, r = 0, g = 0, b = 0, n = 0;
+      for (i = 0; i < d.length; i += 4) { if (d[i + 3] < 8) continue; r += d[i]; g += d[i + 1]; b += d[i + 2]; n++; }
+      if (!n) return _TONE_DEFAULT;
+      var hsl = _rgb2hsl(r / n, g / n, b / n), h = hsl[0];
+      var s = Math.min(0.55, Math.max(hsl[1], 0.30));
+      return {
+        deep: _hsl2rgb(h, s, 0.13), deep2: _hsl2rgb(h, s, 0.06), mid: _hsl2rgb(h, s, 0.25),
+        light: _hsl2rgb(h, s, 0.36), accent: _hsl2rgb(h, Math.min(0.72, s * 1.6), 0.75)
+      };
+    } catch (e) { return _TONE_DEFAULT; }   /* 跨域图 getImageData 会抛 → 退回默认色 */
+  }
+
+  /* 字距文本：letterSpacing 只有很新的内核支持，逐字画最稳。
+     海报的「设计感」有一大半来自字距 —— 参考图 3 / 4 的小字全是拉开的。 */
+  function lsWidth(c, text, sp) {
+    text = String(text == null ? '' : text);
+    var w = 0, i;
+    for (i = 0; i < text.length; i++) w += c.measureText(text[i]).width + (sp || 0);
+    return Math.max(0, w - (sp || 0));
+  }
+  function lsText(c, text, x, y, sp, align) {
+    text = String(text == null ? '' : text); sp = sp || 0;
+    var w = lsWidth(c, text, sp), sx = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x, i, ch;
+    for (i = 0; i < text.length; i++) { ch = text[i]; c.fillText(ch, sx, y); sx += c.measureText(ch).width + sp; }
+    return w;
+  }
+  function lsFit(c, text, maxW, sp) {
+    text = String(text == null ? '' : text);
+    if (lsWidth(c, text, sp) <= maxW) return text;
+    var out = '', i;
+    for (i = 0; i < text.length; i++) {
+      if (lsWidth(c, out + text[i] + '…', sp) > maxW) break;
+      out += text[i];
+    }
+    return out ? out + '…' : text.slice(0, 1);
+  }
+
+  /* --- 线性图标（纯 canvas 路径，不依赖字体 / 外链） --- */
+  function _pen(c, x, y, u) {
+    function X(a) { return x + a * u; }
+    function Y(b) { return y + b * u; }
+    return {
+      m: function (a, b) { c.moveTo(X(a), Y(b)); },
+      l: function (a, b) { c.lineTo(X(a), Y(b)); },
+      q: function (a, b, a2, b2) { c.quadraticCurveTo(X(a), Y(b), X(a2), Y(b2)); },
+      circle: function (a, b, r) { c.moveTo(X(a) + r * u, Y(b)); c.arc(X(a), Y(b), r * u, 0, Math.PI * 2); },
+      arc: function (a, b, r, s0, s1) { c.moveTo(X(a) + Math.cos(s0) * r * u, Y(b) + Math.sin(s0) * r * u); c.arc(X(a), Y(b), r * u, s0, s1); },
+      rect: function (a, b, w, h, cr) {
+        if (!cr) { c.moveTo(X(a), Y(b)); c.lineTo(X(a + w), Y(b)); c.lineTo(X(a + w), Y(b + h)); c.lineTo(X(a), Y(b + h)); c.closePath(); return; }
+        c.moveTo(X(a + cr), Y(b));
+        c.arcTo(X(a + w), Y(b), X(a + w), Y(b + h), cr * u);
+        c.arcTo(X(a + w), Y(b + h), X(a), Y(b + h), cr * u);
+        c.arcTo(X(a), Y(b + h), X(a), Y(b), cr * u);
+        c.arcTo(X(a), Y(b), X(a + w), Y(b), cr * u);
+        c.closePath();
+      },
+      close: function () { c.closePath(); }
+    };
+  }
+  var ICONS = {
+    camera: function (c, P) { P.rect(2.4, 7, 19.2, 13, 2.6); P.circle(12, 13.6, 3.7); P.m(8.4, 7); P.l(9.7, 3.9); P.l(14.3, 3.9); P.l(15.6, 7); },
+    tent: function (c, P) { P.m(12, 3.4); P.l(21.4, 20.4); P.l(2.6, 20.4); P.close(); P.m(9.2, 20.4); P.l(12, 11.4); P.l(14.8, 20.4); },
+    bed: function (c, P) { P.rect(2.6, 12.4, 18.8, 7.2, 1.6); P.m(2.6, 19.6); P.l(2.6, 8.4); P.m(5.4, 12.4); P.l(5.4, 9.6); P.l(16, 9.6); P.l(16, 12.4); },
+    car: function (c, P) { P.m(2.6, 15.4); P.l(4.6, 9.4); P.l(19.4, 9.4); P.l(21.4, 15.4); P.m(2.6, 15.4); P.l(21.4, 15.4); P.circle(7, 17.6, 2.2); P.circle(17, 17.6, 2.2); },
+    snow: function (c, P) { P.m(12, 3.2); P.l(12, 20.8); P.m(4.4, 7.6); P.l(19.6, 16.4); P.m(19.6, 7.6); P.l(4.4, 16.4); P.m(9.4, 5.6); P.l(12, 7.8); P.l(14.6, 5.6); P.m(9.4, 18.4); P.l(12, 16.2); P.l(14.6, 18.4); },
+    leaf: function (c, P) { P.m(4.4, 19.6); P.q(4.6, 9.4, 12.2, 3.6); P.q(19.8, 9.6, 19.6, 19.6); P.q(12, 22.4, 4.4, 19.6); P.close(); P.m(6.6, 17.8); P.l(15.4, 8.6); },
+    mountain: function (c, P) { P.m(2.2, 20.2); P.l(9, 5.8); P.l(13.6, 14.4); P.l(16.8, 9.2); P.l(21.8, 20.2); P.close(); },
+    users: function (c, P) { P.circle(9.2, 8.2, 3.6); P.arc(9.2, 20.2, 6.6, Math.PI, Math.PI * 2); P.circle(17.6, 9.4, 2.8); P.arc(17.6, 20.2, 5, Math.PI, Math.PI * 2); },
+    calendar: function (c, P) { P.rect(3, 5.4, 18, 15.6, 2.2); P.m(3, 10.4); P.l(21, 10.4); P.m(8, 3.2); P.l(8, 7.2); P.m(16, 3.2); P.l(16, 7.2); P.m(7.4, 14.6); P.l(9.6, 14.6); P.m(13.4, 14.6); P.l(15.6, 14.6); },
+    bowl: function (c, P) { P.arc(12, 13.4, 7.8, 0, Math.PI); P.m(4.2, 13.4); P.l(19.8, 13.4); P.circle(12, 5.2, 1.5); },
+    shield: function (c, P) { P.m(12, 3); P.l(19.4, 6); P.l(19.4, 12); P.q(19.4, 18.4, 12, 21.2); P.q(4.6, 18.4, 4.6, 12); P.l(4.6, 6); P.close(); },
+    flag: function (c, P) { P.m(5.6, 3); P.l(5.6, 21.4); P.m(5.6, 4.8); P.l(19.4, 8); P.l(5.6, 11.4); },
+    coin: function (c, P) { P.circle(12, 12, 8.8); P.m(14.8, 8.8); P.l(10.6, 8.8); P.l(10.6, 15.2); P.m(9.4, 12.2); P.l(14.6, 12.2); },
+    star: function (c, P) { var r1 = 8.8, r2 = 3.7, i, a, rr2; for (i = 0; i < 10; i++) { a = -Math.PI / 2 + i * Math.PI / 5; rr2 = (i % 2) ? r2 : r1; if (i === 0) P.m(12 + Math.cos(a) * rr2, 12 + Math.sin(a) * rr2); else P.l(12 + Math.cos(a) * rr2, 12 + Math.sin(a) * rr2); } P.close(); },
+    pin: function (c, P) { P.arc(12, 9.6, 6.4, Math.PI, Math.PI * 2); P.m(5.6, 9.6); P.l(12, 21.4); P.l(18.4, 9.6); P.circle(12, 9.6, 2.2); },
+    clock: function (c, P) { P.circle(12, 12, 8.8); P.m(12, 6.8); P.l(12, 12); P.l(16.2, 14.2); }
+  };
+  function drawIcon(c, name, cx, cy, size, color, lw) {
+    var u = size / 24;
+    c.save();
+    c.strokeStyle = color; c.lineWidth = lw || Math.max(1.3, size / 13);
+    c.lineCap = 'round'; c.lineJoin = 'round';
+    c.beginPath();
+    (ICONS[name] || ICONS.star)(c, _pen(c, cx - 12 * u, cy - 12 * u, u));
+    c.stroke();
+    c.restore();
+  }
+  /* 卖点 → 图标的判据表。顺序即优先级：先把「酒店 / 相机 / 帐篷」这类硬特征挑出来，
+     再谈宽泛的「山 / 林 / 景」（否则「3 晚高档酒店」会被「山」类规则抢走）。 */
+  var ICON_RULES = [
+    [/摄影|拍摄|跟拍|写真|航拍|无人机|相机|机位|大片/, 'camera'],
+    [/露营|帐篷|营地|天幕|扎营/, 'tent'],
+    [/酒店|住宿|民宿|客栈|入住|床位|温泉|房间/, 'bed'],
+    [/包车|车|交通|自驾|接送|高铁|航班/, 'car'],
+    [/雪|冰川|海拔|高原/, 'snow'],
+    [/红叶|秋|花|草原|森林|云海|湖|风景|景观|自然/, 'leaf'],
+    [/徒步|登山|穿越|溯溪|攀|山|野径|林间/, 'mountain'],
+    [/名额|人数|限|小团|成行|队伍|向导|领队|老师|团体/, 'users'],
+    [/天|晚|日期|出发|时间|行程|期数/, 'calendar'],
+    [/餐|食|火锅|茶|美食|宴/, 'bowl'],
+    [/保险|安全|保障|应急|医疗|救援/, 'shield'],
+    [/证书|纪念|礼|赠|结营|手作|唐卡|绘制|课程/, 'flag'],
+    [/费用|价|元|¥|包含/, 'coin'],
+    [/独家|专属|优选|品质|升级|全含|无购物|纯玩|不赶|守护/, 'star']
+  ];
+  function iconFor(text, idx) {
+    var t = String(text == null ? '' : text), i;
+    for (i = 0; i < ICON_RULES.length; i++) if (ICON_RULES[i][0].test(t)) return ICON_RULES[i][1];
+    return ['star', 'mountain', 'leaf', 'calendar'][(idx || 0) % 4];
+  }
+
+  /* 团期日期 → 海报上的短标签。资料里常见占位符（"2026 / 10.xx — 10.xx"）：
+     把它印在海报上比不印更糟，所以占位符直接判空。 */
+  function _dateParts(s) {
+    s = String(s == null ? '' : s);
+    if (!s || /[xX]{2}|[?？]/.test(s)) return [];
+    var out = [], m, re = /(\d{4})\s*[-/.年]\s*(\d{1,2})\s*[-/.月]\s*(\d{1,2})/g;
+    while ((m = re.exec(s))) out.push({ m: +m[2], d: +m[3] });
+    if (!out.length) {
+      re = /(\d{1,2})\s*月\s*(\d{1,2})/g;
+      while ((m = re.exec(s))) out.push({ m: +m[1], d: +m[2] });
+    }
+    return out;
+  }
+  function dateLabel(s) {
+    var p = _dateParts(s);
+    if (!p.length) return '';
+    var f = function (x) { return x.m + '.' + x.d; };
+    return p.length === 1 ? f(p[0]) : (f(p[0]) + ' — ' + f(p[p.length - 1]));
+  }
 
   async function paintPoster(data, ctx, host) {
-    var W = 1080, H = 1440, PAD = 84;
+    var W = 1080, H = 1440, PAD = 72, CW = W - PAD * 2;
     var cv = document.createElement('canvas');
     cv.width = W; cv.height = H;
     var c = cv.getContext('2d');
 
-    /* 海报背景走俱乐部路由（与 logo 同理：草稿活动 / 品牌图公开代理不服务）。
-       优先 AI 指定的图 ref，再退活动封面，最后退清单里第一张真实照片。 */
+    /* 主视觉：AI 指定的 ref 优先，其次活动封面，最后清单里第一张真实照片。
+       俱乐部端一律走带鉴权的 /api/club 媒体路由（草稿活动的公开代理按设计 404）。 */
     var pref = (data.preferredMediaRefs || [])[0];
     var bgUrl = (pref && ctx.mm[pref] && ctx.mm[pref].url) ? ctx.mediaClubUrl(pref)
-              : (ctx.coverUrl || ctx.firstPhotoClubUrl());
+      : (ctx.coverUrl || ctx.firstPhotoClubUrl());
     var img = bgUrl ? await loadImgSafe(bgUrl) : null;
-
-    if (img) { c.save(); drawCover.call(c, img, 0, 0, W, H); c.restore(); }
-    else {
-      var base = c.createLinearGradient(0, 0, W, H);
-      base.addColorStop(0, '#1f4a37'); base.addColorStop(1, '#2c755e');
-      c.fillStyle = base; c.fillRect(0, 0, W, H);
-    }
-
-    /* 俱乐部 logo：资料里没带 logo 图就自然缺席，不硬造。 */
     var logoImg = ctx.logoUrl ? await loadImgSafe(ctx.logoUrl) : null;
+    var tone = toneFromImage(img);
+    var ACCENT = _rgb(tone.accent), INK = _rgb(tone.deep2);
 
-    /* 报名二维码：真实可扫，指向该活动的 C 端报名页（与「分享活动」弹窗同一条链接）。
-       注：真正的「小程序码」要注册过微信小程序（appid/secret 调 wxacode 接口）才能出；
-       当前产品 C 端是网页，先落活动报名页二维码，将来接小程序只需把这张图换成 wxacode 返回的图。 */
+    /* ---- 文案：只用真实资料，缺就少画一块，不编 ---- */
+    function factText(x) {
+      if (x == null) return '';
+      if (typeof x === 'string') return x.trim();
+      if (typeof x === 'number') return String(x);
+      if (typeof x === 'object') {
+        var a = x.label || x.name || x.title || '', b = (x.value != null ? x.value : (x.text || x.content || ''));
+        return String(a && b ? (a + ' ' + b) : (a || b || '')).trim();
+      }
+      return '';
+    }
+    function usable(t, maxLen) {
+      t = String(t == null ? '' : t).trim();
+      if (!t || t.length > (maxLen || 26)) return '';
+      if (/成本|毛利|进价|询价|档期/.test(t)) return '';   /* 内部口径的词一律不上海报 */
+      return t;
+    }
+    var headline = usable(data.headline || data.title || ctx.title, 40) || String(ctx.title || '');
+    var sub = usable(data.subheadline || data.subtitle || data.summary, 40);
+    var points = [];
+    (data.sellingPoints || data.highlights || []).forEach(function (x) {
+      var t = usable(factText(x), 24);
+      if (t && points.indexOf(t) < 0) points.push(t);
+    });
+    var facts = [];
+    (data.facts || data.info || []).forEach(function (x) {
+      var t = usable(factText(x), 20);
+      /* 价格 / 名额 / 地点已经在版式里各有一处，别再用 facts 复制一遍 */
+      if (!t || /[¥￥]|元\s*\/\s*人|^\s*限\s*\d+|^\s*\d+\s*人\s*$/.test(t)) return;
+      if (facts.indexOf(t) < 0) facts.push(t);
+    });
+    var loc = usable(ctx.location, 24);
+    var price = (ctx.price === 0 || ctx.price) ? String(ctx.price).replace(/\.0$/, '') : '';
+    var cap = ctx.capacity ? String(ctx.capacity) : '';
+    var dlab = dateLabel(ctx.date);
+    var cta = usable(data.cta, 10);
+    var qrLabel = cta || '扫码报名';
+
+    /* 二维码：真实可扫，指向该活动的 C 端报名页（与「分享活动」弹窗同一条链接）。 */
     var qr = null;
     try {
       if (window.ClubOSQR && window.ClubOSQR.draw) {
@@ -855,213 +1073,328 @@
       }
     } catch (e) { qr = null; }
 
-    /* 白底二维码卡：码 + 下方小字「扫码报名」（2026-10-08 用户要求：文字移到码下、字号调小，
-       不再要底部大胶囊 CTA）。 */
-    var QR_S = qr ? 216 : 0;
-    var QR_LBL = 34;
-    function drawQrCard(rightX, bottomY, centered) {
-      if (!qr) return null;
-      var cw = QR_S + 28, ch = QR_S + 28 + QR_LBL;
-      var x = centered ? Math.round((W - cw) / 2) : rightX - cw;
-      var y = bottomY - ch;
-      c.save();
-      c.fillStyle = 'rgba(255,255,255,.97)';
-      rr(c, x, y, cw, ch, 22); c.fill();
-      c.drawImage(qr, x + 14, y + 14, QR_S, QR_S);
-      c.fillStyle = '#14201c';
-      c.font = '600 24px ' + FONT;
-      c.textAlign = 'center';
-      c.fillText('扫码报名', x + cw / 2, y + 14 + QR_S + QR_LBL - 10);
-      c.restore();
-      return { x: x, y: y, w: cw, h: ch };
-    }
-
     function shadow(on) {
-      if (on) { c.shadowColor = 'rgba(0,0,0,.38)'; c.shadowBlur = 16; c.shadowOffsetY = 2; }
+      if (on) { c.shadowColor = 'rgba(0,0,0,.42)'; c.shadowBlur = 18; c.shadowOffsetY = 3; }
       else { c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0; }
     }
-    function drawLogoChip(centered, ly) {
-      if (!logoImg) return null;
-      try {
-        var LH = 88;
-        var iw0 = logoImg.naturalWidth || logoImg.width || 1;
-        var ih0 = logoImg.naturalHeight || logoImg.height || 1;
-        var LW = Math.max(LH, Math.min(300, Math.round(LH * (iw0 / ih0)) + 56));
-        var lx = centered ? Math.round((W - LW) / 2) : W - PAD - LW;
-        c.save();
-        c.fillStyle = 'rgba(255,255,255,.94)';
-        rr(c, lx, ly, LW, LH, 22); c.fill();
-        var fit = Math.min((LW - 44) / iw0, (LH - 32) / ih0);
-        var dw = iw0 * fit, dh = ih0 * fit;
-        c.drawImage(logoImg, lx + (LW - dw) / 2, ly + (LH - dh) / 2, dw, dh);
-        c.restore();
-        return { x: lx, y: ly, w: LW, h: LH };
-      } catch (e) { return null; }
-    }
 
-    var title = String(data.headline || ctx.title || '');
-    var sub = String(data.subheadline || '');
-    var facts = (data.facts || []).filter(Boolean).slice(0, 4);
-    if (!facts.length) {
-      if (ctx.location) facts.push(ctx.location);
-      if (ctx.price || ctx.price === 0) facts.push('¥' + ctx.price + ' / 人');
-      if (ctx.capacity) facts.push('限 ' + ctx.capacity + ' 人');
-    }
-    var points = (data.sellingPoints || []).filter(Boolean).slice(0, 4);
-
-    /* 版式不固定（2026-10-08 用户要求）：三套家族随机套用，不满意点「换一套版式」再换。
-       也可用 data.posterFamily / window.__posterFamily 指定：editor=信息海报 / pictorial=画报标语 / minimal=极简大字。 */
-    var FAMILIES = ['editor', 'pictorial', 'minimal'];
-    var forced = window.__posterFamily || data.posterFamily;
-    var family = FAMILIES.indexOf(forced) >= 0 ? forced
-               : FAMILIES[Math.floor(Math.random() * FAMILIES.length)];
-
-    /* ═══ 家族一 editor：信息海报（左对齐编辑排版，信息完整）═══ */
-    if (family === 'editor') {
-      var gA = c.createLinearGradient(0, 0, 0, H);
-      gA.addColorStop(0, 'rgba(6,17,12,.66)');
-      gA.addColorStop(0.45, 'rgba(6,17,12,.4)');
-      gA.addColorStop(1, 'rgba(6,17,12,.92)');
-      c.fillStyle = gA; c.fillRect(0, 0, W, H);
-
-      drawLogoChip(false, PAD + 4);
-
-      var y = PAD + 64;
-      c.font = '900 92px ' + SERIF;
+    /* 白底二维码卡：四周留白 ≥ 18px（少于这个数手机扫不动），码下一行小字。 */
+    function qrCard(rightX, bottomY, size) {
+      if (!qr) return null;
+      size = size || 188;
+      var pad = 18, lbl = 36, cw = size + pad * 2, ch = size + pad * 2 + lbl;
+      var x = Math.round(rightX - cw), y = Math.round(bottomY - ch);
+      c.save();
+      c.shadowColor = 'rgba(0,0,0,.38)'; c.shadowBlur = 26; c.shadowOffsetY = 7;
       c.fillStyle = '#fff';
-      shadow(true);
-      y = drawLines(c, wrap(c, title, W - PAD * 2).slice(0, 3), PAD, y + 58, 112, 3) + 10;
-      shadow(false);
-      if (sub) {
-        c.font = '400 36px ' + FONT;
-        c.fillStyle = 'rgba(238,246,242,.92)';
-        y = drawLines(c, wrap(c, sub, W - PAD * 2).slice(0, 3), PAD, y + 30, 56) + 8;
-      }
-      if (facts.length) {
-        y += 24;
-        c.font = '700 34px ' + FONT;
-        facts.forEach(function (f) {
-          var t = String(f);
-          var w = Math.min(c.measureText(t).width + 52, W - PAD * 2);
-          c.fillStyle = 'rgba(255,255,255,.16)';
-          rr(c, PAD, y - 34, w, 66, 33); c.fill();
-          c.fillStyle = '#fff';
-          c.fillText(t, PAD + 26, y + 10);
-          y += 84;
-        });
-      }
-      var cardA = drawQrCard(W - PAD, H - PAD, false);
-      if (points.length) {
-        var pwA = W - PAD * 2 - (cardA ? cardA.w + 40 : 0);
-        var pyA = H - PAD - 36;
-        for (var i = points.length - 1; i >= 0; i--) {
-          c.font = '400 34px ' + FONT;
-          var ls = wrap(c, String(points[i]), pwA).slice(0, 3);
-          pyA -= (ls.length - 1) * 50 + 46;
-          c.fillStyle = '#8cc2ad';
-          c.fillText('—', PAD, pyA + 10);
-          c.fillStyle = 'rgba(255,255,255,.94)';
-          drawLines(c, ls, PAD + 46, pyA + 10, 50);
-          pyA -= 20;
-          if (pyA < y + 36) break;
-        }
-      }
+      rr(c, x, y, cw, ch, 24); c.fill();
+      c.restore();
+      c.drawImage(qr, x + pad, y + pad, size, size);
+      c.fillStyle = INK;
+      c.font = '700 23px ' + FONT;
+      lsText(c, qrLabel, x + cw / 2, y + pad + size + 27, 1.6, 'center');
+      return { x: x, y: y, w: cw, h: ch };
+    }
+    /* 二维码卡外面再加一圈同色细描边 —— 参考图 3 的二维码不是一块孤零零的白，是有"框"的 */
+    function qrRing(card) {
+      if (!card) return;
+      c.save();
+      c.strokeStyle = _rgba(tone.accent, .55); c.lineWidth = 2;
+      rr(c, card.x - 9, card.y - 9, card.w + 18, card.h + 18, 32); c.stroke();
+      c.restore();
     }
 
-    /* ═══ 家族二 pictorial：画报标语（大字居中 + 编号体验点 + 底部胶囊，品牌画报风）═══ */
-    else if (family === 'pictorial') {
-      var gB = c.createLinearGradient(0, 0, 0, H);
-      gB.addColorStop(0, 'rgba(6,17,12,.36)');
-      gB.addColorStop(0.4, 'rgba(6,17,12,.1)');
-      gB.addColorStop(1, 'rgba(6,17,12,.7)');
-      c.fillStyle = gB; c.fillRect(0, 0, W, H);
-
-      drawLogoChip(true, PAD);
-
-      c.font = '900 96px ' + SERIF;
-      c.fillStyle = '#fff';
-      shadow(true);
-      c.textAlign = 'center';
-      var tlB = wrap(c, title, W - PAD * 2 - 40).slice(0, 2);
-      drawLines(c, tlB, W / 2, H * 0.30 + 70, 120, 2);
-      shadow(false);
-      c.textAlign = 'left';
-
-      if (points.length) {
-        c.font = '400 34px ' + FONT;
-        var pyB = H * 0.50;
-        for (var j = 0; j < Math.min(3, points.length); j++) {
-          var linesB = wrap(c, '(' + (j + 1) + ') ' + String(points[j]), 620).slice(0, 2);
-          shadow(true);
-          c.fillStyle = '#fff';
-          if (j % 2 === 0) {
-            c.textAlign = 'left';
-            drawLines(c, linesB, PAD + 30, pyB, 50);
-          } else {
-            c.textAlign = 'right';
-            for (var k2 = 0; k2 < linesB.length; k2++) c.fillText(linesB[k2], W - PAD - 30, pyB + k2 * 50);
-          }
-          c.textAlign = 'left';
-          shadow(false);
-          pyB += linesB.length * 50 + 64;
-        }
+    /* 品牌标识：白胶囊里放 logo —— 不管 logo 本身是深色还是浅色，都保证看得清。 */
+    function logoPillW(h) {
+      if (!logoImg) return 0;
+      var iw = logoImg.naturalWidth || logoImg.width || 1, ih = logoImg.naturalHeight || logoImg.height || 1;
+      var pad = Math.round(h * 0.19), inner = h - pad * 2;
+      return Math.max(h, Math.min(300, Math.round(inner * (iw / ih)) + pad * 2));
+    }
+    function drawLogoPill(x, y, h) {
+      var w = logoPillW(h);
+      if (!w) return null;
+      var iw = logoImg.naturalWidth || logoImg.width || 1, ih = logoImg.naturalHeight || logoImg.height || 1;
+      var pad = Math.round(h * 0.19);
+      c.save();
+      c.fillStyle = 'rgba(255,255,255,.96)';
+      rr(c, x, y, w, h, h / 2); c.fill();
+      var fit = Math.min((w - pad * 2) / iw, (h - pad * 2) / ih);
+      c.drawImage(logoImg, x + (w - iw * fit) / 2, y + (h - ih * fit) / 2, iw * fit, ih * fit);
+      c.restore();
+      return { x: x, y: y, w: w, h: h };
+    }
+    /* 品牌带：logo + 俱乐部名 + 口号。左对齐 / 居中两种，返回下一行的 y。 */
+    function brandBlock(mode, yTop, h, small) {
+      var name = ctx.brandName, slo = ctx.brandSlogan;
+      if (mode === 'center') {
+        var pw = logoPillW(h), x = yTop, cx = W / 2;
+        if (pw) { drawLogoPill(Math.round(cx - pw / 2), yTop, h); x = yTop + h + (small ? 14 : 20); }
+        if (name) { c.fillStyle = '#fff'; c.font = (small ? '700 32px ' : '800 38px ') + FONT; lsText(c, name, cx, x + 30, 4, 'center'); x += 30; }
+        if (slo) { c.fillStyle = 'rgba(255,255,255,.7)'; c.font = '500 19px ' + FONT; lsText(c, slo, cx, x + 30, 2.4, 'center'); x += 30; }
+        return x;
       }
-
-      var cardB = drawQrCard(W - PAD, H - PAD, false);
-      c.font = '500 34px ' + FONT;
-      var pillH = 72, pillY = H - PAD - pillH;
-      var dateStr = String(ctx.date || '').split(' ')[0].replace(/-/g, '.');
-      var items = [ctx.location, dateStr].filter(Boolean);
-      var gap = 24;
-      var widths = items.map(function (t) { return c.measureText(t).width + 72; });
-      var totalW = widths.reduce(function (a, b) { return a + b; }, 0) + gap * (items.length - 1);
-      var availW = W - PAD * 2 - (cardB ? cardB.w + 48 : 0);
-      var sx = PAD + Math.max(0, (availW - totalW) / 2);
-      items.forEach(function (t, idx) {
-        c.strokeStyle = 'rgba(255,255,255,.85)';
-        c.lineWidth = 2;
-        rr(c, sx, pillY, widths[idx], pillH, pillH / 2); c.stroke();
-        c.fillStyle = '#fff';
-        shadow(false);
-        c.fillText(t, sx + 36, pillY + pillH / 2 + 12);
-        sx += widths[idx] + gap;
-      });
+      var lx = PAD, pw2 = logoPillW(h);
+      if (pw2) { drawLogoPill(PAD, yTop, h); lx = PAD + pw2 + 22; }
+      var ny = yTop + ((slo && name) ? 32 : h / 2 + 13);
+      if (name) { c.fillStyle = '#fff'; c.font = (small ? '700 32px ' : '800 38px ') + FONT; lsText(c, name, lx, ny, 3, 'left'); }
+      if (slo) { c.fillStyle = 'rgba(255,255,255,.72)'; c.font = '500 20px ' + FONT; lsText(c, slo, lx + 1, ny + 30, 2.2, 'left'); }
+      return yTop + h;
     }
 
-    /* ═══ 家族三 minimal：极简大字（居中标题 + 一行卖点 + 底部居中二维码）═══ */
-    else {
-      var gC = c.createLinearGradient(0, 0, 0, H);
-      gC.addColorStop(0, 'rgba(6,17,12,.3)');
-      gC.addColorStop(0.42, 'rgba(6,17,12,.36)');
-      gC.addColorStop(1, 'rgba(6,17,12,.9)');
-      c.fillStyle = gC; c.fillRect(0, 0, W, H);
+    /* 主视觉铺满整张（照片比例不合时居中裁切，不拉变形） */
+    function drawPhotoFull() {
+      if (img) { c.save(); drawCover.call(c, img, 0, 0, W, H); c.restore(); return; }
+      var g = c.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, _rgb(tone.mid)); g.addColorStop(1, _rgb(tone.deep2));
+      c.fillStyle = g; c.fillRect(0, 0, W, H);
+    }
 
-      drawLogoChip(true, PAD);
-
-      c.textAlign = 'center';
-      c.font = '900 100px ' + SERIF;
-      c.fillStyle = '#fff';
-      shadow(true);
-      var tlC = wrap(c, title, W - PAD * 2 - 60).slice(0, 2);
-      var tyC = H * 0.33;
-      drawLines(c, tlC, W / 2, tyC, 124, 2);
-      shadow(false);
-      var yC = tyC + tlC.length * 124 + 20;
-      if (sub) {
-        c.font = '400 36px ' + FONT;
-        c.fillStyle = 'rgba(238,246,242,.92)';
-        var slC = wrap(c, sub, W - PAD * 2 - 80).slice(0, 2);
-        drawLines(c, slC, W / 2, yC + 34, 54, 2);
-        yC += slC.length * 54;
+    /* 底部图标行：卖点用剩的 + 真实事实（地点 / 名额 / 日期），互不重复。 */
+    function rowItems() {
+      var out = [], used = {};
+      function push(t, ic) {
+        t = usable(t, 14); if (!t || used[t]) return;
+        used[t] = 1; out.push({ text: t, icon: ic || iconFor(t, out.length) });
       }
-      if (facts.length) {
-        c.font = '600 32px ' + FONT;
+      points.slice(3).forEach(function (t) { push(t); });
+      if (loc) push(loc, 'pin');
+      if (cap) push('限 ' + cap + ' 人', 'users');
+      if (dlab) push(dlab, 'calendar');
+      facts.forEach(function (t) { if (out.length < 4) push(t); });
+      return out.slice(0, 4);
+    }
+    function drawRow(items, topY, h) {
+      if (!items.length) return;
+      var cell = CW / items.length;
+      for (var i = 0; i < items.length; i++) {
+        var cx = PAD + cell * (i + 0.5);
+        drawIcon(c, items[i].icon, cx, topY + h * 0.34, 30, _rgba(tone.accent, .95), 2);
+        c.font = '500 23px ' + FONT;
         c.fillStyle = 'rgba(255,255,255,.92)';
-        var flC = wrap(c, facts.map(String).join('   ·   '), W - PAD * 2 - 80).slice(0, 2);
-        drawLines(c, flC, W / 2, yC + 70, 52, 2);
+        lsText(c, lsFit(c, items[i].text, cell - 26, 1), cx, topY + h * 0.72, 1, 'center');
       }
+    }
+
+    /* 版式：默认第一套；「换一套版式」循环切换（不随机 —— 随机会把最差的一套推给老板） */
+    var FAM = ['magazine', 'noir', 'film'];
+    var ALIAS = { editor: 'magazine', pictorial: 'film', minimal: 'film', poster: 'magazine' };
+    var forced = window.__posterFamily || data.posterFamily;
+    if (ALIAS[forced]) forced = ALIAS[forced];
+    var family = FAM.indexOf(forced) >= 0 ? forced : FAM[_posterCycle++ % FAM.length];
+
+    /* ═══ 版式一 magazine：画报（顶部色带 + 全幅主视觉 + 底部信息带，参考图 1/2）═══ */
+    if (family === 'magazine') {
       c.textAlign = 'left';
-      drawQrCard(0, H - PAD, true);
+      c.font = '900 100px ' + FONT;
+      var tL = wrap(c, headline, CW - 20).slice(0, 2), TLH = 108;
+      c.font = '400 30px ' + FONT;
+      var sL = sub ? wrap(c, sub, CW - 40).slice(0, 2) : [];
+      var strips = points.slice(0, 3);
+      c.font = '600 24px ' + FONT;
+      var stripT = strips.join('   ｜   ');
+      if (strips.length > 2 && lsWidth(c, stripT, 1) > CW - 130) {
+        strips = strips.slice(0, 2); stripT = strips.join('   ｜   ');
+      }
+      if (!strips.length) stripT = '';
+
+      var yBrand = 54, brandH = 76;
+      var yTitle = yBrand + brandH + 64;
+      var titleBottom = yTitle + (tL.length - 1) * TLH;
+      var ySub = titleBottom + 52, subBottom = ySub + (sL.length - 1) * 46;
+      var yStrip = subBottom + (sL.length ? 44 : 20), stripH = 62;
+      var photoTop = Math.round(stripT ? (yStrip + stripH / 2 + 36) : (subBottom + 48));
+
+      /* 主视觉在下、色带在上、交界处羽化 —— 参考图 1/2 就是照片融进色里的 */
+      if (img) { c.save(); drawCover.call(c, img, 0, photoTop, W, H - photoTop); c.restore(); }
+      var gb = c.createLinearGradient(0, 0, 0, photoTop);
+      gb.addColorStop(0, _rgb(tone.deep)); gb.addColorStop(.5, _rgb(tone.mid)); gb.addColorStop(1, _rgb(tone.light));
+      c.fillStyle = gb; c.fillRect(0, 0, W, photoTop);
+      if (img) {
+        var gf = c.createLinearGradient(0, photoTop, 0, photoTop + 130);
+        gf.addColorStop(0, _rgba(tone.light, 1)); gf.addColorStop(.55, _rgba(tone.light, .42)); gf.addColorStop(1, _rgba(tone.light, 0));
+        c.fillStyle = gf; c.fillRect(0, photoTop, W, 130);
+      }
+      /* 底部压暗：价格 / 二维码 / 图标行都落在这层上 */
+      var gd = c.createLinearGradient(0, H - 640, 0, H);
+      gd.addColorStop(0, _rgba(tone.deep2, 0)); gd.addColorStop(.46, _rgba(tone.deep2, .56));
+      gd.addColorStop(1, _rgba(tone.deep2, .95));
+      c.fillStyle = gd; c.fillRect(0, H - 640, W, 640);
+
+      /* 顶部：品牌 + 日期胶囊 */
+      brandBlock('left', yBrand, brandH);
+      if (dlab) {
+        c.font = '700 26px ' + FONT;
+        var dw = lsWidth(c, dlab, 2) + 52, px = W - PAD - dw, py = yBrand + 12, ph = 52;
+        c.save();
+        c.fillStyle = 'rgba(255,255,255,.17)'; rr(c, px, py, dw, ph, ph / 2); c.fill();
+        c.strokeStyle = 'rgba(255,255,255,.44)'; c.lineWidth = 1.5; rr(c, px, py, dw, ph, ph / 2); c.stroke();
+        c.restore();
+        c.fillStyle = '#fff';
+        lsText(c, dlab, px + dw / 2, py + ph / 2 + 9, 2, 'center');
+      }
+      /* 主标题 */
+      c.fillStyle = '#fff'; c.font = '900 100px ' + FONT;
+      shadow(true);
+      drawLines(c, tL, PAD, yTitle, TLH, 2);
+      shadow(false);
+      if (sL.length) {
+        c.fillStyle = 'rgba(255,255,255,.88)'; c.font = '400 30px ' + FONT;
+        drawLines(c, sL, PAD, ySub, 46, 2);
+      }
+      /* 卖点条（白胶囊 + 深色字 = 参考图里最"设计"的一笔） */
+      if (stripT) {
+        c.font = '600 24px ' + FONT;
+        var sw = Math.min(CW, lsWidth(c, stripT, 1) + 96), sx = Math.round((W - sw) / 2);
+        c.save();
+        c.shadowColor = 'rgba(0,0,0,.28)'; c.shadowBlur = 20; c.shadowOffsetY = 6;
+        c.fillStyle = 'rgba(255,255,255,.95)';
+        rr(c, sx, yStrip - stripH / 2, sw, stripH, stripH / 2); c.fill();
+        c.restore();
+        c.fillStyle = INK;
+        lsText(c, stripT, W / 2, yStrip + 9, 1, 'center');
+      }
+      /* 底部：价格块（左）+ 二维码（右）+ 图标行 */
+      var y1 = H - 430;
+      c.fillStyle = ACCENT; rr(c, PAD, y1, 56, 5, 2.5); c.fill();
+      var bigPre = price ? '¥' : '', bigNum = price || (cap ? cap : '');
+      var bigUnit = price ? '/ 人' : (cap ? '个名额' : '');
+      var bigLabel = price ? '活动费用' : (cap ? '招募名额' : '');
+      if (!bigNum) { bigNum = loc ? loc.slice(0, 6) : ''; bigLabel = '目的地'; bigUnit = ''; }
+      c.font = '600 22px ' + FONT; c.fillStyle = 'rgba(255,255,255,.6)';
+      if (bigLabel) lsText(c, bigLabel, PAD, y1 + 50, 3, 'left');
+      if (bigNum) {
+        var bx = PAD, by = y1 + 156;
+        c.font = '700 40px ' + FONT;
+        var pw3 = bigPre ? c.measureText(bigPre).width + 6 : 0;
+        c.font = '900 92px ' + FONT;
+        var nw = c.measureText(bigNum).width;
+        if (bigPre) { c.fillStyle = ACCENT; c.font = '700 40px ' + FONT; c.fillText(bigPre, bx, by - 32); }
+        c.fillStyle = '#fff'; c.font = '900 92px ' + FONT; c.fillText(bigNum, bx + pw3, by);
+        if (bigUnit) { c.fillStyle = 'rgba(255,255,255,.7)'; c.font = '500 26px ' + FONT; c.fillText(bigUnit, bx + pw3 + nw + 14, by - 2); }
+      }
+      var cardA = qrCard(W - PAD, H - 196, 186);
+      qrRing(cardA);
+      var rTop = H - 176;
+      c.fillStyle = 'rgba(0,0,0,.28)'; c.fillRect(0, rTop, W, 176);
+      c.fillStyle = _rgba(tone.accent, .38); c.fillRect(PAD, rTop, CW, 1.5);
+      drawRow(rowItems(), rTop, 176);
+    }
+
+    /* ═══ 版式二 noir：深色杂志（居中字距标题 + 信息胶囊 + 居中二维码，参考图 3）═══ */
+    else if (family === 'noir') {
+      drawPhotoFull();
+      var gn = c.createLinearGradient(0, 0, 0, H);
+      /* 中部压得更深一点：标题正下方的副标题 / 卖点行会落在照片最亮处（雪山/天空），
+         只靠 .28 的浅遮罩会「白字压白雪」看不清（2026-10-09 实测 noir 的卖点行几乎糊掉）。 */
+      gn.addColorStop(0, _rgba(tone.deep, .62)); gn.addColorStop(.42, _rgba(tone.deep, .44));
+      gn.addColorStop(.66, _rgba(tone.deep, .68)); gn.addColorStop(1, _rgba(tone.deep2, .95));
+      c.fillStyle = gn; c.fillRect(0, 0, W, H);
+
+      c.textAlign = 'center';
+      var y = brandBlock('center', 58, 68) + 40;
+      c.font = '900 92px ' + FONT;
+      var tL2 = wrap(c, headline, CW - 20).slice(0, 2), TLH2 = 104;
+      c.fillStyle = '#fff'; shadow(true);
+      y = drawLines(c, tL2, W / 2, y + 64, TLH2, 2);
+      shadow(false);
+      y += 24;
+      c.fillStyle = _rgba(tone.accent, .55);
+      c.fillRect(Math.round(W / 2 - 75), y, 150, 2);
+      if (sub) {
+        c.font = '500 27px ' + FONT; c.fillStyle = 'rgba(255,255,255,.94)';
+        var sL2 = wrap(c, sub, CW - 120).slice(0, 2);
+        shadow(true);
+        sL2.forEach(function (t, i) { lsText(c, t, W / 2, y + 48 + i * 44, 2.6, 'center'); });
+        shadow(false);
+        y += 48 + (sL2.length - 1) * 44;
+      }
+      if (points.length) {
+        c.font = '600 25px ' + FONT; c.fillStyle = 'rgba(255,255,255,.97)';
+        shadow(true);
+        lsText(c, lsFit(c, points.slice(0, 3).join('　·　'), CW - 60, 2), W / 2, y + 58, 2, 'center');
+        shadow(false);
+      }
+      var info = [];
+      if (dlab) info.push(['活动时间', dlab]);
+      if (loc) info.push(['目的地', loc]);
+      if (price) info.push(['活动费用', '¥' + price + ' / 人']);
+      else if (cap) info.push(['招募名额', '限 ' + cap + ' 人']);
+      else if (facts.length) info.push(['活动信息', facts[0]]);
+      var iy = Math.max(y + 120, H * (info.length >= 3 ? .47 : .52));
+      info.slice(0, 3).forEach(function (it) {
+        c.font = '600 24px ' + FONT;
+        var tw = Math.min(CW, lsWidth(c, it[0], 3) + 58), ph = 48, px2 = Math.round((W - tw) / 2);
+        c.save();
+        c.fillStyle = 'rgba(255,255,255,.15)'; rr(c, px2, iy, tw, ph, ph / 2); c.fill();
+        c.strokeStyle = 'rgba(255,255,255,.3)'; c.lineWidth = 1.5; rr(c, px2, iy, tw, ph, ph / 2); c.stroke();
+        c.restore();
+        c.fillStyle = '#fff'; lsText(c, it[0], W / 2, iy + 33, 3, 'center');
+        c.font = '600 31px ' + FONT; c.fillStyle = 'rgba(255,255,255,.96)';
+        c.fillText(lsFit(c, it[1], CW - 40, 0), W / 2, iy + ph + 46);
+        iy += ph + 96;
+      });
+      c.textAlign = 'left';
+      var cardB = qrCard(W / 2 + 108, H - 52, 172);
+      qrRing(cardB);
+    }
+
+    /* ═══ 版式三 film：极简影像（全幅照片主导 + 左下文本块，参考图 4）═══ */
+    else {
+      drawPhotoFull();
+      var gtop = c.createLinearGradient(0, 0, 0, 250);
+      gtop.addColorStop(0, _rgba(tone.deep, .55)); gtop.addColorStop(1, _rgba(tone.deep, 0));
+      c.fillStyle = gtop; c.fillRect(0, 0, W, 250);
+      var gcb = c.createLinearGradient(0, H * .36, 0, H);
+      gcb.addColorStop(0, _rgba(tone.deep2, 0)); gcb.addColorStop(.5, _rgba(tone.deep2, .58));
+      gcb.addColorStop(1, _rgba(tone.deep2, .92));
+      c.fillStyle = gcb; c.fillRect(0, H * .36, W, H * .64);
+
+      c.textAlign = 'left';
+      brandBlock('left', 52, 60, true);
+
+      var qrC = qrCard(W - PAD, H - 58, 152);
+      var textW = CW - (qrC ? qrC.w + 36 : 0);
+      c.font = '500 25px ' + FONT;
+      var pL = points.slice(0, 3).map(function (t) { return lsFit(c, t, textW - 34, 1.2); });
+      c.font = '400 29px ' + FONT;
+      var sL3 = sub ? wrap(c, sub, textW - 10).slice(0, 2) : [];
+      c.font = '400 96px ' + SERIF;
+      var tL3 = wrap(c, headline, textW - 10).slice(0, 2), TLH3 = 106;
+      var factsLine = [price ? ('¥' + price + ' / 人') : '', cap ? ('限 ' + cap + ' 人') : ''].filter(Boolean).join('     ·     ');
+      var eyebrow = [dlab, loc].filter(Boolean).join('  ·  ');
+
+      var hRule = 30, hEyebrow = eyebrow ? 46 : 0, hSub = sL3.length ? (sL3.length * 46 + 22) : 0;
+      var yTop3 = Math.round(H - 150 - (hRule + hEyebrow + tL3.length * TLH3 + hSub + pL.length * 44));
+      yTop3 = Math.max(yTop3, 230);
+
+      c.fillStyle = ACCENT; rr(c, PAD, yTop3, 48, 5, 2.5); c.fill();
+      var yy = yTop3 + hRule;
+      if (eyebrow) {
+        c.font = '500 23px ' + FONT; c.fillStyle = 'rgba(255,255,255,.76)';
+        lsText(c, lsFit(c, eyebrow, textW, 2.6), PAD, yy + 30, 2.6, 'left');
+        yy += 46;
+      }
+      c.fillStyle = '#fff'; c.font = '400 96px ' + SERIF;
+      shadow(true); drawLines(c, tL3, PAD, yy + 78, TLH3, 2); shadow(false);
+      yy += tL3.length * TLH3;
+      if (sL3.length) {
+        yy += 22;
+        c.fillStyle = 'rgba(255,255,255,.86)'; c.font = '400 29px ' + FONT;
+        drawLines(c, sL3, PAD, yy + 30, 46, 2);
+        yy += sL3.length * 46;
+      }
+      yy += 18;
+      pL.forEach(function (t) {
+        c.fillStyle = ACCENT; c.fillRect(PAD, yy + 14, 18, 3);
+        c.fillStyle = 'rgba(255,255,255,.9)'; c.font = '500 25px ' + FONT;
+        lsText(c, t, PAD + 32, yy + 22, 1.2, 'left');
+        yy += 44;
+      });
+      if (factsLine) {
+        c.font = '600 24px ' + FONT; c.fillStyle = 'rgba(255,255,255,.88)';
+        lsText(c, lsFit(c, factsLine, textW, 2.4), PAD, H - 88, 2.4, 'left');
+      }
     }
 
     host.innerHTML = '<div class="ch-poster-hold"></div>';
