@@ -1209,7 +1209,10 @@
         var txt = paint.frame.contentDocument ? paint.frame.contentDocument.body.innerText : (data.title || '');
         (await copyText(txt)) ? toast('纯文本已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
       });
-      var bits = '模型自己排的版式，直接按它的成品导出，不走固定模板。';
+      var route = (data && data.route) || 'template';
+      var bits = route === 'model-html'
+        ? 'AI 自己排的版式，直接按它的成品导出。'
+        : 'AI 按这场活动的资料自己组织内容（标题 / 文案 / 配图 / 团期价 / 领队），再套用 ClubOS 的杂志版式渲染成 750px 长图；同一场活动每次重新生成会换一套版式变体。';
       if (paint.dropped > 0) bits += ' 有 ' + paint.dropped + ' 张配图被剔除（不是本活动的真实照片）。';
       note.textContent = bits;
       return;

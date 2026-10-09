@@ -65,6 +65,9 @@ _PROMPT = """## 你要做什么
 6. **首屏 hero 与结尾 signup 必填**；`sections` 至少 5 节。
 7. 数字（里程/爬升/时长/价格/人数）**照资料原样写**，不要估算、不要换算。
 8. 图片清单里有可用照片时，全篇**至少用 4 张不同的**。
+> ‼️ **本说明里出现的一切具体文字（品牌名、社群名、地名、日期、金额、菜品、人名等）都只是「格式示意」，绝对不许出现在成品里。**
+> 成品里每一个具体信息都必须来自上方真实资料；凡你自己不知道该填什么，就用本场资料里的说法，**不要搬示例**。
+> 尤其 `hero.chip` / `signup.enRoll` 这类"定位语"，每场活动都要现写一套，不许套用任何固定说法。
 
 ## JSON 结构（严格按这个来；带 * 的必填）
 ```json
@@ -72,8 +75,8 @@ _PROMPT = """## 你要做什么
   "title": "内部用的成品标题（活动名 · 宣传长图）",
   "theme": "paper 或 night（见下方选色规则）",
   "hero": {
-    "brand": "顶部品牌行，如 icebreaker × 远拓户外（资料有才写）",
-    "chip": "标题上方的小胶囊，一句定位，如「Natural Club · 品牌社群活动」",
+    "brand": "顶部品牌行：主办方 / 联名品牌（形如「A × B」）。资料里有真实联名品牌就写它；**没有联名就把「主办俱乐部」的名字写进来**；两者都没有才留空。不要照抄示例里的任何品牌名",
+    "chip": "标题上方的小胶囊：**本场活动专属**的一句定位（约 8~14 字），形如「主办方 · 活动性质」。主办方用资料里的联名品牌或「主办俱乐部」名，活动性质取本场玩法（徒步 / 探洞 / 颂钵 / 唐卡…）。**每场活动的 chip 都必须由你自己现写、彼此不同**；严禁复用本说明里的措辞，也严禁把**任何别的活动 / 社群的名字**搬进来",
     "title": "主标题：**每行 6~8 个字**（硬性，超过 9 个字会挤到下一行、版式就垮了），用 \\n 分成两行。写成有画面感的两小句",
     "accent": "主标题里要**高亮**的那 3~6 个字（必须是 title 里原样出现的一段）",
     "sub": "副标题，一行亮出核心玩法（如「森林徒步 × 颂钵音疗 × 自然拓染」）+ 一行地点",
@@ -92,7 +95,7 @@ _PROMPT = """## 你要做什么
     }
   ],
   "signup": {
-    "enRoll": "顶上一行英文小字，如 JOIN NATURAL CLUB",
+    "enRoll": "顶上一行英文小字，2~4 个词，与本场活动定位对应（如 JOIN US / EXPLORE THE WILD）。**必须自己现写，不要照抄任何示例文字，也不要写成别的活动的名字**",
     "title": "收尾大标题，两行，如「带走一身装备\\n和一天的森林」",
     "sub": "一行英文/日期落款",
     "form": [{"k":"时间","v":"2026 年 9 月 19 日（周六）","note":"1 天往返"}],
@@ -550,6 +553,7 @@ def build_fact_pack(club_id: int, activity_id: int, master: dict[str, Any] | Non
     pf = master.get('publicFacts') if isinstance(master.get('publicFacts'), dict) else {}
     pack: dict[str, Any] = {
         'occurrences': [], 'leaders': [], 'fees': {'inc': [], 'exc': []}, 'checklist': [],
+        'club': '',
         'staffRatio': str(pf.get('staffRatio') or ''),
         'services': [str(x) for x in (master.get('services') or []) if str(x).strip()],
         'gather': str(pf.get('transport') or ''),
@@ -557,6 +561,11 @@ def build_fact_pack(club_id: int, activity_id: int, master: dict[str, Any] | Non
     try:
         from db import conn as _dbconn, rows as _dbrows          # 延迟导入：避免模块环
         with _dbconn() as c:
+            # 主办俱乐部名：master 里没有这一项，模型就无从知道"这是谁办的活动"，
+            # 品牌行/chip 只能瞎写（2026-10-09 用户反馈「长图印了别的活动/社群的名字」）。
+            _cl = _dbrows(c.execute('SELECT name FROM clubs WHERE id=?', (club_id,)))
+            if _cl:
+                pack['club'] = str(_cl[0].get('name') or '').strip()
             occ = _dbrows(c.execute(
                 'SELECT id,start_at,end_at,price,capacity,sold,label,status '
                 'FROM activity_occurrences WHERE activity_id=? AND club_id=? ORDER BY start_at',
@@ -596,6 +605,8 @@ def facts_prompt(pack: dict[str, Any] | None) -> str:
     """事实包 → 给模型看的一段紧凑文本（碎片，不是成句，避免它照抄）。"""
     pack = pack if isinstance(pack, dict) else {}
     out: list[str] = []
+    if pack.get('club'):
+        out.append('· 主办俱乐部（品牌行 / chip 的主办方就用它，除非资料里有联名品牌）：%s' % pack['club'])
     occ = [o for o in (pack.get('occurrences') or []) if isinstance(o, dict)]
     if occ:
         out.append('· 团期与价格（真值，照抄，不得估算）：')
