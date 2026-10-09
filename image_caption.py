@@ -15,7 +15,7 @@
 from __future__ import annotations
 from urllib.parse import unquote
 from PIL import Image
-import json, os
+import json, os, re
 from pathlib import Path
 from typing import Any
 
@@ -32,19 +32,63 @@ _CAPTION_SYSTEM = """你是户外活动摄影的资料管理员。看图，然�
 你看图不是为了找美图，而是为了让文案同事知道哪张图能配哪句话。"""
 
 _CAPTION_PROMPT = """这些图片来自同一份活动方案 PPT。逐张写一句中文描述（20~45字，只说画面里看得见的东西），
-并判断它能不能用作**本次活动**的宣传配图。
+给 2~4 个主题标签，并判断它能不能用作**本次活动**的宣传配图。
+
+本次活动的约定主题标签（优先从这里选，确实都不是时才自造）：
+住宿 / 餐食 / 唐卡与绘画 / 人像与藏装 / 雪山与山景 / 云海与天空 / 森林与秋色 / 徒步与队伍 /
+手作与制作 / 动物 / 交通工具 / 建筑与寺院 / 文字海报 / 其它
+
+tags 的用途：写作模型要靠它把「讲什么」的段落配「是什么」的图（讲酒店的段落只能配住宿图，
+讲唐卡的只能配唐卡图）。所以标签必须写画面里**真实存在**的东西，不要写「美景」「氛围」这类空词。
 
 本次活动：{ctx}
 
 usable=false 的情形（从紧）：地图/路线图、行程表、纯文字页、logo、二维码、图表、
 以及**明显不属于本次活动**的照片（与上述地点、地形、植被、季节明显不符，例如混入的其它线路）。
 
-输出 JSON：{{"items":[{{"ref":"img_01","usable":true,"desc":"..."}}]}}
+输出 JSON：{{"items":[{{"ref":"img_01","usable":true,"tags":["住宿","建筑与寺院"],"desc":"..."}}]}}
 ref 必须原样抄回。只输出 JSON。"""
+
+# 送进视觉模型前统一降采样：一张 4000×6000 的手机原图 base64 后有几 MB，
+# 六张一批经常把请求拖到十几秒甚至超时，而打标只需要「看得出画面里是什么」。
+# 缩到最长边 1024、JPEG q82 后视觉判断质量不变，token 与耗时都降一个量级。
+_SHRINK_MAX = 1024
+_SHRINK_Q = 82
+
+
+def _shrink(path: Path) -> Path:
+    """把图片压到最长边 _SHRINK_MAX 再喂模型；任何失败都原样返回。"""
+    try:
+        with Image.open(path) as im:
+            im = im.convert('RGB')
+            w, h = im.size
+            scale = _SHRINK_MAX / float(max(w, h) or 1)
+            if scale < 1:
+                im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+            out = Path('/tmp') / ('clubos_cap_s_%s_%s.jpg' % (os.getpid(), abs(hash(str(path))) % 10 ** 8))
+            im.save(out, 'JPEG', quality=_SHRINK_Q, optimize=True)
+            return out
+    except Exception:
+        return path
 
 
 def _norm_ref(x: Any) -> str:
     return str(x or '').strip()
+
+
+def _parse_tags(v: Any) -> list[str]:
+    """tags 归一：数组 / 「住宿、餐食」这种顿号串 / 单个字符串，都收成 2~4 个短标签。"""
+    raw: list[str] = []
+    if isinstance(v, list):
+        raw = [str(x) for x in v]
+    elif isinstance(v, str):
+        raw = [p for p in re.split(r'[、,，/\|]+', v)]
+    out: list[str] = []
+    for x in raw:
+        t = str(x or '').strip()
+        if t and t not in out and len(t) <= 10:
+            out.append(t)
+    return out[:4]
 
 
 def _parse_items(data: Any) -> dict[str, dict[str, Any]]:
@@ -79,11 +123,12 @@ def _parse_items(data: Any) -> dict[str, dict[str, Any]]:
         if not ref:
             continue
         desc = str(it.get('desc') or it.get('caption') or it.get('description') or '').strip()
+        tags = _parse_tags(it.get('tags') or it.get('labels') or it.get('topics'))
         # usable 只认明确的布尔值；模型漏字段时**默认可用**（与旧行为一致，不因描述缺失而全灭）
         usable = it.get('usable')
         if usable is None:
             usable = it.get('ok', it.get('isUsable', True))
-        out[ref] = {'usable': bool(usable), 'desc': desc[:80]}
+        out[ref] = {'usable': bool(usable), 'desc': desc[:80], 'tags': tags}
     return out
 
 
@@ -103,21 +148,41 @@ def _json_from_text(txt: str) -> Any:
     return None
 
 
+def _static_paths(root: Path, url: str) -> list[Path]:
+    """把 /static/... 的相对 url 解析成候选本地路径。
+
+    ★ 2026-10-09 修掉一个「两处约定不一致」的老坑：_ensure_media_meta 把 static_root
+      当成 **static 目录**（root + 'uploads/...'），_local_file 却当成 **项目根**
+      （root + 'static/uploads/...'）。同一个参数两种含义，调用方无论传哪个都会有一半
+      功能坏掉；传错时 _local_file 返回 None，视觉打标就整批静默降级（实测：act39 的
+      28 张照片一张都没打上标签，对图逻辑随之失效）。这里改为「两种都试」，谁的组合
+      真实存在就用谁，调用方传项目根或 static 目录都能工作。
+    """
+    rel = url[len('/static/'):] if url.startswith('/static/') else url.lstrip('/')
+    cands = [root / rel]
+    if rel.startswith('static/'):
+        cands.append(root / rel[len('static/'):])
+    else:
+        cands.append(root / 'static' / rel)
+    cands.append(root.parent / rel)
+    return cands
+
+
 def _local_file(m: dict[str, Any], static_root: Path | None) -> Path | None:
     """把 media 条目解析成本机上真实存在的图片路径。
 
     ★ 为什么不能直接用 m['path']（2026-10-07 实测踩坑）：
       线上落库的 path 是**容器内绝对路径** `/workspace/static/uploads/...`，
       在本地机器上永远不存在；曾经直接 read_bytes 抛 FileNotFoundError。
-      而 url 是 `/static/uploads/...` 这样的相对路径，拼上项目根目录就是真实文件。
+      而 url 是 `/static/uploads/...` 这样的相对路径，拼上项目目录就是真实文件。
       所以顺序是：url → 本地磁盘（最快，不走网络）→ path → 都没有才下载。
     """
     url = str(m.get('url') or '').strip()
     root = Path(static_root) if static_root else Path(__file__).resolve().parent
     if url.startswith('/static/'):
-        p = root / url.lstrip('/')
-        if p.is_file():
-            return p
+        for p in _static_paths(root, url):
+            if p.is_file():
+                return p
     p2 = str(m.get('path') or '').strip()
     if p2:
         p = Path(p2)
@@ -125,9 +190,10 @@ def _local_file(m: dict[str, Any], static_root: Path | None) -> Path | None:
             return p
         # 容器路径 → 砍掉 /workspace 前缀再试一次（同一份代码在容器里跑时前缀可能不同）
         if '/workspace/' in p2:
-            p = root / p2.split('/workspace/', 1)[1].lstrip('/')
-            if p.is_file():
-                return p
+            tail = p2.split('/workspace/', 1)[1]
+            for cand in _static_paths(root, '/' + tail):
+                if cand.is_file():
+                    return cand
     return None
 
 
@@ -174,9 +240,9 @@ def _ensure_media_meta(media: list[dict[str, Any]], static_root: Path | None = N
         if not u.startswith('/static/'):
             continue
         try:
-            rel = unquote(u[len('/static/'):])
-            fp = (root / rel).resolve()
-            if not fp.is_file():
+            rel = unquote(u)
+            fp = next((p for p in _static_paths(root, rel) if p.is_file()), None)
+            if fp is None:
                 continue
             with Image.open(fp) as im:
                 w, h = im.size
@@ -191,16 +257,27 @@ def _ensure_media_meta(media: list[dict[str, Any]], static_root: Path | None = N
 
 async def caption_media(club_id: int, master: dict[str, Any],
                         static_root: Path | None = None) -> dict[str, dict[str, Any]]:
-    """给 master['media'] 里的 photo 补 desc / usable。返回 ref → {desc, usable}。
+    """给 master['media'] 里的 photo 补 desc / usable / tags。返回 ref → {desc, usable, tags}。
 
     任何失败都**静默降级为「无描述」**：写不出描述只是选图变差，不能让整条生成链路挂掉。
     """
     media = [m for m in (master.get('media') or []) if isinstance(m, dict)]
     _ensure_media_meta(media, static_root)          # ★ 缺尺寸的历史数据先补齐
+    # ★ 阈值曾经是「宽 >= 600」，把「竖构图但宽度不到 600」的正常照片整批漏掉
+    #   （act39 的 6 张 538×744 / 387×547… 就是这么被跳过的：既不进清单、也拿不到描述，
+    #   最后只能被模型凭 ref 乱塞进正文哪一段）。改判「短边 >= 240」——
+    #   这个尺寸以下才是 logo / 二维码 / 图标这类不该当配图的东西。
+    def _big_enough(m: dict[str, Any]) -> bool:
+        w = int(m.get('width') or 0)
+        h = int(m.get('height') or 0)
+        if w and h:
+            return min(w, h) >= 240
+        return max(w, h) >= 600
+
     photos = [m for m in media
               if (m.get('kind') or 'photo') == 'photo'
               and str(m.get('url') or '').strip()
-              and int(m.get('width') or 0) >= 600]
+              and _big_enough(m)]
     if not photos:
         return {}
 
@@ -210,22 +287,32 @@ async def caption_media(club_id: int, master: dict[str, Any],
     for m in photos:
         ref = _norm_ref(m.get('ref'))
         if m.get('desc') and m.get('usable') is not None:
-            cached[ref] = {'usable': bool(m.get('usable')), 'desc': str(m.get('desc'))[:80]}
+            cached[ref] = {'usable': bool(m.get('usable')), 'desc': str(m.get('desc'))[:80],
+                           'tags': _parse_tags(m.get('tags'))}
         else:
             todo.append(m)
     if not todo:
         return cached
 
     ctx = activity_context(master)
-    for i in range(0, len(todo), _BATCH):
-        chunk = todo[i:i + _BATCH]
+    # 按批并发：一批 6 张图，38 张照片串行要跑 7 轮、每轮十几秒，会把整条生成拖到几分钟。
+    # 视觉调用之间互不依赖，并发跑（默认 4 路）耗时降到约 1/3，失败照样单批降级。
+    import asyncio
+
+    chunks = [todo[i:i + _BATCH] for i in range(0, len(todo), _BATCH)]
+    concurrency = max(1, int(os.getenv('AI_CAPTION_CONCURRENCY', '4') or 4))
+
+    async def _one(chunk: list[dict[str, Any]]) -> None:
         payload: list[dict[str, Any]] = []
         batch_media: list[dict[str, Any]] = []
         tmp_files: list[Path] = []
         for m in chunk:
             local = _local_file(m, static_root)
             if local is not None:
-                payload.append({'path': str(local)})
+                sh = _shrink(local)
+                if sh is not local:
+                    tmp_files.append(sh)
+                payload.append({'path': str(sh)})
                 batch_media.append(m)
                 continue
             # 磁盘上没有（远程库 / 换了机器）→ 下载到临时目录再喂给模型
@@ -241,13 +328,13 @@ async def caption_media(club_id: int, master: dict[str, Any],
                 tmp = Path('/tmp') / ('clubos_cap_%s_%s' % (os.getpid(), _norm_ref(m.get('ref'))))
                 tmp.write_bytes(r.content)
                 tmp_files.append(tmp)
-                payload.append({'path': str(tmp)})
+                payload.append({'path': str(_shrink(tmp))})
                 batch_media.append(m)
             except Exception:
                 continue
         if not payload:
-            continue
-        prompt = ('请为这 %d 张图逐张写描述并判断可用性。图片与 ref 的对应顺序如下（务必原样使用这些 ref）：\n%s'
+            return
+        prompt = ('请为这 %d 张图逐张写描述、给主题标签并判断可用性。图片与 ref 的对应顺序如下（务必原样使用这些 ref）：\n%s'
                  % (len(payload), '\n'.join(_norm_ref(m.get('ref')) for m in batch_media)))
         prompt = _CAPTION_PROMPT.replace('{ctx}', ctx) + '\n' + prompt
         gw = None
@@ -268,7 +355,7 @@ async def caption_media(club_id: int, master: dict[str, Any],
             except Exception:
                 pass
         if not gw:
-            continue
+            return
         parsed = _parse_items(gw.data)
         # ref 全军覆没但条目数对得上 → 按顺序对齐（模型偶尔会用 index/序号代替 ref）
         if not any(_norm_ref(m.get('ref')) in parsed for m in batch_media):
@@ -283,6 +370,12 @@ async def caption_media(club_id: int, master: dict[str, Any],
                 # 写回 master：同一活动的后续生成直接复用，不再重复调用视觉模型
                 m['desc'] = parsed[ref]['desc']
                 m['usable'] = parsed[ref]['usable']
+                if parsed[ref].get('tags'):
+                    m['tags'] = parsed[ref]['tags']
+
+    for i in range(0, len(chunks), concurrency):
+        await asyncio.gather(*[_one(c) for c in chunks[i:i + concurrency]],
+                             return_exceptions=True)
     return cached
 
 
@@ -306,7 +399,11 @@ def caption_lines(master: dict[str, Any], caps: dict[str, dict[str, Any]]) -> li
         if not usable:
             continue          # 地图截图 / 别的活动的照片：不给模型看，它就不会选
         orient = '竖图' if h >= w else '横图'
-        lines.append(f'{ref}｜{orient}｜{desc or "（暂无描述）"}')
+        tags = _parse_tags(cap.get('tags') or m.get('tags'))
+        head = ((' / '.join(tags)) + '｜') if tags else ''
+        # 行格式：img_07｜竖图｜住宿 / 建筑与寺院｜雪山脚下的藏式酒店客房，白墙木窗
+        # 主题标签放在描述前面：模型选图主要靠「主题对不对」，描述是它写图注、核对细节用的。
+        lines.append(f'{ref}｜{orient}｜{head}{desc or "（暂无描述）"}')
     return lines
 
 
@@ -320,6 +417,8 @@ def persist_captions(master: dict[str, Any], caps: dict[str, dict[str, Any]]) ->
         if cap:
             m['desc'] = cap.get('desc') or m.get('desc') or ''
             m['usable'] = bool(cap.get('usable'))
+            if cap.get('tags'):
+                m['tags'] = cap['tags']
     # 清理临时下载的文件
     for f in Path('/tmp').glob('clubos_cap_*'):
         try:

@@ -444,7 +444,14 @@ function renderPromo(detail,master={},opts={}){
       const rows=itineraryRows(b.items||b.body||[]);
       if(rows.length)h+=`<section class="ed-section ed-timeline"><div class="ed-section-head"><div class="ed-kicker">SCHEDULE</div><h2>${esc(b.title||b.headline||'行程')}</h2></div><div class="timeline-list">${rows.map(x=>`<div class="timeline-item"><time>${esc(x.time)}</time><p>${esc(x.text)}</p></div>`).join('')}</div></section>`;
     }
-    else if(b.type==='info')h+=`<section class="ed-section ed-info"><div class="ed-section-head"><div class="ed-kicker">GOOD TO KNOW</div><h2>${esc(b.title||'出发前知道')}</h2></div><div class="info-chips">${(b.items||[]).map(x=>`<div>${esc(x)}</div>`).join('')}</div></section>`;
+    else if(b.type==='info'){
+      /* 「出发前知道」改结构化列表（2026-10-09 用户反馈「一排文字密密麻麻，没有可读性」）：
+         旧版把每条须知整句塞进一个胶囊，两条以上的长须知就变成一堵字墙。 */
+      const notes=infoNotes(b.items);
+      h+=`<section class="ed-section ed-info"><div class="ed-section-head"><div class="ed-kicker">GOOD TO KNOW</div><h2>${esc(b.title||'出发前知道')}</h2></div>`
+        +(notes.length?`<div class="info-list">${notes.map((n,i)=>`<div class="info-note"><span class="info-note__i">${i+1}</span><div class="info-note__b">${n.t?`<b>${esc(n.t)}</b>`:''}<p>${esc(n.d)}</p></div></div>`).join('')}</div>`:'')
+        +`</section>`;
+    }
     else if(b.type==='quote')h+=`<section class="ed-quote">“${esc(b.text||'')}”</section>`;
     else if(b.type==='divider')h+='<div class="ed-divider"></div>';
     // cta 块不再渲染（2026-09-28 用户反馈）：详情页中部出现「立即报名」大块很突兀，
@@ -562,7 +569,7 @@ function renderPacking(master,opts){
     ? '<div class="pack-sec pack-sec--miss"><div class="pack-sec__head"><b>这些请自己准备</b>'
       +'<span class="pack-sec__count">商城暂无</span>'
       +'<span class="pack-sec__hint">'+(o.manage?'可在商城上架补全':'按自己的习惯带去就好')+'</span></div>'
-      +'<div class="pack-miss">'+miss.map(t=>'<div class="pack-miss__item">'+esc(t)+'</div>').join('')+'</div></div>'
+      +'<div class="pack-own">'+miss.map(t=>'<div class="pack-own__item"><span class="pack-own__ico">'+esc(packEmoji(t))+'</span><span class="pack-own__txt">'+esc(t)+'</span></div>').join('')+'</div></div>'
     : '';
   const cov=g.coverage||{};
   const md=g.memberDiscount||null;
@@ -726,6 +733,56 @@ function itineraryRows(list){
     rows.push({time:String(x.time||x.period||'').trim(),text:String(x.text||x.content||x.desc||x.detail||x.description||'').trim()});
   }
   return rows.filter(r=>r.time||r.text);
+}
+/* 「出发前知道」条目归一 + 拆小标题。
+   AI 给的 items 有纯字符串（「高原反应：提前一周…」）也有 {title,text} 两种形状。
+   ★ 只在「前半段确实像小标题」时才拆 —— 分隔符前 2~12 字、不含句读、后面还有正文。
+     否则「请携带身份证原件，用于景区实名预约」这类整句会被误切成两半，反而更难读。 */
+function infoNotes(list){
+  const out=[];
+  for(const x of (list||[])){
+    if(x==null)continue;
+    if(typeof x==='object'){
+      const t=String(x.title||x.label||x.k||x.name||'').trim();
+      const d=String(x.text||x.desc||x.content||x.detail||x.description||x.v||x.value||'').trim();
+      if(!t&&!d)continue;
+      out.push(t?{t,d}:{t:'',d:d});
+      continue;
+    }
+    const s=String(x).trim();
+    if(!s)continue;
+    const m=s.match(/^([^\s：:｜|，。；！？,.!?]{2,12})\s*[：:｜|]\s*([\s\S]+)$/);
+    if(m&&m[2].trim().length>=2)out.push({t:m[1].trim(),d:m[2].trim()});
+    else out.push({t:'',d:s});
+  }
+  return out;
+}
+/* 自备项的品类图标：按关键词猜一个，猜不出就用通用背包。
+   目的不是卖萌 —— 是让「这些请自己准备」和上面「商城可以配齐」的商品卡用同一套清单语言
+   （图标方块 + 一行说明），而不是一堵虚线框。顺序有讲究：先判「雨衣」这种跨品类词，
+   再判「衣/裤」，否则雨衣会落到服装图标上。 */
+const PACK_EMOJI=[
+  ['🪪',/身份证|证件|护照|户口|学生证|驾照|门票/],
+  ['💊',/药|红景天|感冒|创可贴|晕车|葡萄糖|氧气|镇痛/],
+  ['🧢',/帽/],
+  ['🧴',/防晒|唇膏|护肤|洗漱|毛巾|牙刷|化妆品/],
+  ['☂️',/雨衣|雨|伞/],
+  ['🥾',/鞋|袜/],
+  ['🧥',/衣|裤|外套|冲锋|羽绒|抓绒|帽子|手套|围巾/],
+  ['🕶️',/墨镜|太阳镜|眼镜/],
+  ['🎒',/包|行李|箱/],
+  ['🔦',/手电|头灯|照明|灯/],
+  ['🔋',/充电|电源|数据线|插头|电池/],
+  ['📷',/相机|拍照|手机|摄影/],
+  ['💵',/现金|零钱|支付/],
+  ['🍫',/零食|能量|干粮|巧克力|补给|路餐/],
+  ['🥤',/水杯|保温杯|水壶|饮用水|热水/],
+  ['🧗',/登山杖|护膝|冰爪|雪套/],
+];
+function packEmoji(t){
+  const s=String(t==null?'':t);
+  for(const e of PACK_EMOJI){ if(e[1].test(s))return e[0]; }
+  return '🎒';
 }
 /* ★ 逐日行程折叠（2026-10-08 用户要求，用户截图实锤）：多日行程在页面上是一条条平铺，
    3 天就是二三十行，顾客要滑很久才能看到费用与报名；「哪几行属于哪一天」还得靠

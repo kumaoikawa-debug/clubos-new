@@ -809,6 +809,18 @@ async def activity_detail_regenerate(club_id:int,activity_id:int,payload:dict=Bo
             c.execute('UPDATE activities SET activity_master_json=?,title=?,event_date=?,location=?,price=?,capacity=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(
                 jdump(new_master),new_master.get('title') or a['title'],new_master.get('date') or a['event_date'],
                 new_master.get('location') or a['location'],float(new_master.get('price') or 0),int(new_master.get('capacity') or 0),activity_id))
+        else:
+            # ★ 「换一版」也会给照片补上视觉打标（画面描述 + 主题标签）。不写回去，下一版又要
+            #   重新调一遍视觉模型、重新花一次钱（每张图一次调用，几十张就是几十次）。
+            #   只在「确实新打上了标」时才写，且事实字段一个都不碰。
+            _old=jload(a['activity_master_json'],{}) or {}
+            _oldref={str(x.get('ref')):x for x in _old.get('media') or [] if isinstance(x,dict)}
+            _gained=any(isinstance(x,dict) and x.get('desc')
+                        and not (_oldref.get(str(x.get('ref'))) or {}).get('desc')
+                        for x in new_master.get('media') or [])
+            if _gained:
+                c.execute('UPDATE activities SET activity_master_json=?,source_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',
+                          (jdump(new_master),jdump(_source_for_storage(source)),activity_id))
         c.execute('UPDATE activities SET detail_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(jdump(detail),activity_id))
         _finalize_detail_version(c,version_id=version_id,activity_id=activity_id,detail=detail,master=new_master,
                                  credits=cost,gateway=usage.provider,model=usage.model)

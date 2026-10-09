@@ -1,9 +1,14 @@
 from __future__ import annotations
 import json,re
+from pathlib import Path
 from typing import Any
 from ai_gateway import generate_json, record_mock_usage, GatewayResponse
+from image_caption import caption_media, caption_lines
 from cost_guard import (scrub_cost_text, scrub_cost_data, sanitize_for_frontend, is_cost_row,
                         is_cost_key, has_cost_context, master_has_cost_evidence)
+
+# 图片落盘根目录（与 app.py 的 STATIC 一致）。视觉打标要读真实文件，不能用 cwd 拼路径。
+STATIC_DIR = Path(__file__).resolve().parent / 'static'
 
 SYSTEM = """你是 ClubOS 的 AI 活动内容主编（Editorial Director），不是模板填充器。
 老板/领队只负责提供真实资料和照片，你负责像资深户外活动策划、编辑、文案与视觉主编一起工作一样，直接产出可发布成品。
@@ -1241,7 +1246,7 @@ def media_catalog(source:dict[str,Any],master:dict[str,Any]|None=None)->list[dic
     """
     # kind 由解析期判定（photo / logo）：它既让 live 提示词能要求「只用 photo」，
     # 也让前端在需要时能知道某张图是品牌标而不是照片。缺失按 photo 处理。
-    keys=('ref','name','url','width','height','orientation','source','page','kind')
+    keys=('ref','name','url','width','height','orientation','source','page','kind','desc','usable','tags')
     catalog={}
     def add(x):
         if not isinstance(x,dict):return
@@ -1319,10 +1324,208 @@ def _rotate_layout(blocks:list[dict[str,Any]],variant:int)->list[dict[str,Any]]:
     return out
 
 
+# ── 图文对应（2026-10-09 用户反馈：文案在讲酒店，配图却是火锅和烧烤）───────────
+# 根因：生成详情时模型拿到的媒体清单只有 img_01/宽高/来源，**看不到画面里是什么**，
+# 配图等于随机抽。修法分三层：① 视觉打标（image_caption）把「画面里有什么」变成
+# 文字清单；② 提示词按主题标签规定「讲什么配什么」；③ 出口再跑一次确定性对题检查，
+# 明显错配就换成更对题的未用图，找不到就撤掉这张图（宁可只有文字，也不配错图）。
+
+_PHOTO_MATCH_RULES = """
+★★ 图文对应铁律（2026-10-09 用户反馈：文案在讲酒店，配的却是火锅和烧烤）：
+- 每张图必须和它所在区块的文字讲**同一件事**。选图只按上面清单里的主题标签判断：
+  讲住宿只配「住宿」的图；讲餐饮只配「餐食」；讲唐卡只配「唐卡与绘画」；讲藏装只配
+  「人像与藏装」；讲徒步配「徒步与队伍」；讲雪山/日照/云海配「山景与天象」；讲吃住之外的
+  森林花海配「森林与植被」。
+- gallery / media 图片组是「某一段文字的多张实拍」，必须紧跟它所说明的那段内容，组内主题一致。
+  不要把餐食图摆到住宿段落下面当氛围图。
+- 一张图全篇只出现一次：同一个 ref 不许出现在两个区块里（gallery 之间也不行）。
+- **找不到对得上的图就别给这个区块配图**。整块只有文字，也比配错图好：顾客看到
+  「讲酒店配火锅」，只会认为这家俱乐部不专业。
+- 图注（caption）只写画面上真实存在的东西，不要写画面里没有的承诺。
+"""
+
+# 主题词表：只用于「判断图文是不是在讲两件事」。同类词命中即视为同一主题。
+# ★ 只用**具体名词**，不要放「住宿 / 餐饮」这类抽象词：视觉模型给的标签里就有「住宿」，
+#   一旦它也当成关键词，帐篷照（标签=住宿）就会命中酒店段落——而酒店配上帐篷同样是错配。
+_TOPIC_WORDS=(
+    ('住宿',('酒店','民宿','客房','房间','标间','大床','床铺','床头','大堂','前台','客栈','别墅','庭院','阳台','木屋','浴室','洗手间')),
+    ('营地与帐篷',('帐篷','营地','露营','睡袋','天幕','营地灯')),
+    ('餐食',('火锅','餐','饭','菜','烤肉','烧烤','美食','食物','碗','盘','糌粑','甜茶','奶茶','茶壶','早餐','午餐','晚餐','野餐','汤锅','点心','咖啡','水果','牛肉')),
+    ('唐卡与绘画',('唐卡','绘制','画笔','颜料','佛像','经书','手绘','描线','上色','造像','素描')),
+    ('人像与藏装',('人像','合影','藏装','服饰','穿着','拍照','女子','男子','游客','人群','背影','笑脸','自拍')),
+    ('山景与天象',('雪山','云海','银河','星空','日落','日出','金山','日照','经幡','峡谷','冰川','彩虹','湖','海子')),
+    ('森林与植被',('森林','树林','落叶','草甸','草原','苔藓','彩林','花海','草地')),
+    ('徒步与队伍',('徒步','登山','行走','小路','栈道','背包','爬升','公路','队伍','队列','山脊','小径')),
+    ('动物',('牦牛','马匹','牛羊','羊群','小狗','鸟群')),
+    ('交通',('大巴','巴士','汽车','飞机','火车','缆车','座椅','车厢')),
+    ('手作与体验',('手作','制作','捏','揉','非遗','手工艺','抽打','搅拌')),
+    ('建筑与寺院',('寺院','寺庙','白塔','经堂','碉楼','门楼','白墙','屋顶')),
+)
+
+def _block_text(b:dict[str,Any])->str:
+    return ' '.join(str(b.get(k) or '') for k in ('headline','body','text','title','caption','pull'))
+
+def _topic_set(s:str)->set[str]:
+    t=str(s or '')
+    return {name for name,words in _TOPIC_WORDS if any(w in t for w in words)}
+
+def _bigrams(s:str)->set[str]:
+    t=re.sub(r'[^\u4e00-\u9fa5]','',str(s or ''))
+    return {t[i:i+2] for i in range(len(t)-1)}
+
+def _img_text(m:dict[str,Any])->str:
+    tags=m.get('tags') if isinstance(m.get('tags'),list) else []
+    return (str(m.get('desc') or '')+' '+' '.join(str(x) for x in tags)).strip()
+
+def _match_score(text_topics:set[str],text_bg:set[str],img:dict[str,Any])->int|None:
+    """图与这段文字的匹配分：主题同类最重，字面重合次之，主题互斥直接扣分。
+
+    **没有打标信息的图返回 None**（未知），调用方必须把它当「中性」处理：
+    既不能因为「没描述」就把这张图撤掉，也不能把它当候选换进来 ——
+    否则打标失败时会把整页图片全删光（2026-10-09 实测踩过）。
+    """
+    info=_img_text(img)
+    if not info:
+        return None
+    it=_topic_set(info)
+    bg=_bigrams(info)
+    score=2*len(bg&text_bg)
+    if text_topics and (it&text_topics):score+=4
+    if text_topics and it and not (it&text_topics):score-=5
+    return score
+
+def _align_block_media(blocks:list[dict[str,Any]],catalog:list[dict[str,Any]],
+                       allowed:set[str]|None=None)->list[dict[str,Any]]:
+    """出口对题检查：全篇去重 + 明显错配就换图/撤图。
+
+    保守策略（重要）：只有当**文字里有明确主题词**、且当前图与之主题互斥（或存在明显更对题的
+    未用图）时才动手。没有主题词的区块（纯氛围 gallery）只做去重，不擅自重排 —— 判据不足时
+    宁可不动，否则会把本来合理的排版搅乱（与 longpic 的 `_html_ok` 同一条教训：过严会误杀好成品）。
+    """
+    if not blocks:return blocks
+    by_ref={str(m.get('ref')):m for m in (catalog or []) if isinstance(m,dict) and m.get('ref')}
+    allow=set(allowed or [])
+    def ok_ref(r):return (not allow) or (r in allow)
+    # ① 去重：同一 ref 全篇只保留第一次出现的位置
+    used:set[str]=set()
+    for b in blocks:
+        if not isinstance(b,dict):continue
+        refs=b.get('mediaRefs')
+        if not isinstance(refs,list):continue
+        keep=[]
+        for r in refs:
+            r=str(r)
+            if ok_ref(r) and r not in used:
+                used.add(r);keep.append(r)
+        b['mediaRefs']=keep
+    # ② 对题：文字区块按自身主题，纯图片区块按「紧邻的上一段文字」的主题（读者就是这么理解的）
+    pool=[str(m.get('ref')) for m in by_ref.values()]
+    for i,b in enumerate(blocks):
+        if not isinstance(b,dict):continue
+        refs=list(b.get('mediaRefs') or [])
+        if not refs:continue
+        txt=_block_text(b)
+        tt=_topic_set(txt)
+        if not tt:
+            for j in range(i-1,max(-1,i-3),-1):        # 往前最多看两块
+                prev=_topic_set(_block_text(blocks[j]))
+                if prev:tt=prev;txt=_block_text(blocks[j]);break
+        if not tt:continue                              # 主题判据不足：不动
+        tb=_bigrams(txt)
+        mine=set(refs)
+        out=[]
+        for r in refs:
+            cur=_match_score(tt,tb,by_ref.get(r,{}))
+            best,bs=None,None
+            for ref in pool:
+                if ref in used:continue
+                s=_match_score(tt,tb,by_ref.get(ref,{}))
+                if s is None:continue                   # 没有打标信息的图不当候选（未知不等于合适）
+                if bs is None or s>bs:bs,best=s,ref
+            if cur is None:
+                out.append(r);continue                  # 这张没有打标信息：保持不动
+            if best is not None and bs>=cur+3:
+                used.add(best);out.append(best);continue  # 存在明显更对题的图 → 换掉
+            if cur<0 and (bs is None or bs<=0):
+                continue                                # 明显错配且没有更对题的图 → 撤掉这张
+            out.append(r)
+        # ★ 本块最终没留下的图要从「已占用」里释放：否则一个被整块撤掉的 gallery
+        #   会把 6 张照片永久锁死，后面的段落明明该用它们却拿不到（顺序效应，实测踩过）。
+        for r in mine:
+            if r not in out:used.discard(r)
+        b['mediaRefs']=out
+    return blocks
+
+async def _prepare_photo_picker(club_id:int,source:dict[str,Any],catalog:list[dict[str,Any]],
+                               master:dict[str,Any]|None=None)->dict[str,Any]:
+    """给候选照片做视觉打标，产出「按画面内容选图」的清单。
+
+    返回 {'lines':[...], 'allowed':set(ref), 'ok':bool}。
+    ok=False 表示打标不可用（无照片 / 模型不支持视觉 / 大面积失败），调用方退回旧行为
+    （直接把图片喂给模型），**绝不能因为打标失败让整页缺图**。
+    """
+    photo_refs=[str(m.get('ref')) for m in catalog
+                if (m.get('kind') or 'photo')=='photo' and str(m.get('url') or '').strip()]
+    if not photo_refs:
+        return {'lines':[],'allowed':set(),'ok':False}
+    ctx=dict(master or {})
+    if not ctx.get('title') or not ctx.get('location'):
+        try:st=_extract_structured(source)
+        except Exception:st={}
+        for k in ('title','location','date'):
+            if not ctx.get(k):ctx[k]=st.get(k) or ''
+        if not ctx.get('publicFacts'):ctx['publicFacts']=st.get('publicFacts') or {}
+    holder={'media':catalog,'title':ctx.get('title'),'location':ctx.get('location'),
+            'date':ctx.get('date'),'publicFacts':ctx.get('publicFacts') or {}}
+    try:
+        caps=await caption_media(club_id,holder,STATIC_DIR)
+    except Exception:
+        caps={}
+    if not caps:
+        return {'lines':[],'allowed':set(photo_refs),'ok':False}
+    # 写回 source 的媒体条目：同一活动「换一版」时直接复用，不再重复调用视觉模型
+    for bucket in ('media_manifest','images'):
+        for x in source.get(bucket) or []:
+            if not isinstance(x,dict):continue
+            cap=caps.get(str(x.get('ref') or ''))
+            if cap:
+                x['desc']=cap.get('desc');x['usable']=cap.get('usable')
+                if cap.get('tags'):x['tags']=cap['tags']
+    for m in catalog:
+        cap=caps.get(str(m.get('ref') or ''))
+        if cap:
+            m['desc']=cap.get('desc');m['usable']=cap.get('usable')
+            if cap.get('tags'):m['tags']=cap['tags']
+    # ★ 「换一版」路径的 master.media 也要补上（2026-10-09 实测踩坑）：只写 source 的话，
+    #   app.py 判断「有没有新打上标」看的是 master.media，永远为假 → 每次换版都重新调一遍
+    #   视觉模型、重新花一次钱（act39 实测第二轮白跑了 1 次调用）。
+    for m in (master or {}).get('media') or []:
+        if not isinstance(m,dict):continue
+        cap=caps.get(str(m.get('ref') or ''))
+        if cap:
+            m['desc']=cap.get('desc');m['usable']=cap.get('usable')
+            if cap.get('tags'):m['tags']=cap['tags']
+    lines=caption_lines({'media':catalog},caps)
+    if len(lines)<max(3,len(photo_refs)//2):     # 打标基本失败：退回旧行为，别让整页缺图
+        return {'lines':[],'allowed':set(photo_refs),'ok':False}
+    unusable={r for r,c in caps.items() if not c.get('usable')}
+    return {'lines':lines,'allowed':set(photo_refs)-unusable,'ok':True}
+
+def _photo_block(pick:dict[str,Any],media_json:str)->str:
+    """给提示词的图片段：打标成功给「按画面内容」的清单，失败退回原始媒体 JSON。"""
+    if not pick.get('ok'):
+        return ('媒体清单（只能引用这些 ref；kind=\'photo\' 才是真实照片）：\n'+media_json)
+    return ('可用照片清单（**选图只能从这份清单里挑**；格式：ref｜横竖｜主题标签｜画面内容）：\n'
+            +'\n'.join(pick['lines'])
+            +'\n\n清单里没有出现的 ref 是品牌 logo / 空白底图 / 地图截图 / 不属于本次活动的照片，一律不得引用。')
+
 async def generate_activity(club_id:int,source:dict[str,Any],*,direction:str='',
                             previous_detail:dict[str,Any]|None=None,
                             version_no:int=1)->tuple[dict[str,Any],GatewayResponse]:
-    media=json.dumps(source.get('media_manifest',[]),ensure_ascii=False)
+    catalog=media_catalog(source,None)
+    # 视觉打标：让模型「看得见图里是什么」。不做这一步，选图就等于随机抽（2026-10-09 图文错配的根因）。
+    pick=await _prepare_photo_picker(club_id,source,catalog)
+    photo_block=_photo_block(pick,json.dumps(source.get('media_manifest',[]),ensure_ascii=False))
     prompt=f"""你收到的是老板/领队提供的完整活动原始资料。直接完成两件事：
 A. 提取 Activity Master（事实与业务真相）；
 B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
@@ -1330,8 +1533,7 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
 原始资料（保留原始上下文）：
 {source.get('text','')}
 
-媒体清单（只能引用这些 ref；kind='photo' 才是真实照片）：
-{media}
+{photo_block}
 
 ★★ 多份资料怎么分工（2026-10-09 用户要求：方案 + 额外照片可以一起丢给你，由你自行识别组合）：
 - 「原始资料」按 [文件: 名称] 分段。**有正文的那份就是活动方案**，是事实的唯一来源：
@@ -1350,6 +1552,7 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
 - 品牌 logo 一律不得出现在详情页任何位置（hero / gallery / media 都不行）。活动确实需要品牌
   标识时，那是「单独上传 logo / 封面」的事，不由你从资料里挑图。
 - 没有可用照片时不要硬排图，用文字把吸引力撑起来。
+{_PHOTO_MATCH_RULES}
 
 ★★ 事实保真铁律（2026-10-04 用户反馈：包装要好看，但**不许编**）：
 - 专有名词一律逐字照抄原文，禁止音译、意译、美化或凭空生成。**资料里没出现过的地名/
@@ -1423,8 +1626,11 @@ hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言�
    图文穿插、卡片化要点。主动组合 bigimage / imagetext / numbercards / cards 这类视觉组件，
    避免从头到尾都是同一套「标题 + 正文 + 图」。照片多时优先做视觉编排，照片少时用文字与卡片把吸引力撑起来。
 如果没有真正事实冲突，blocking_conflicts 必须为空，直接完成成品。"""
-    gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,images=source.get('images'))
-    photos=set(_photo_refs(source))
+    # 打标成功时不再把几十张原图塞进请求：清单里已经有「画面里是什么」，
+    # 模型按文字选图更准、更快、更省 —— 38 张原图 base64 进去只会稀释注意力。
+    gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,
+                           images=None if pick['ok'] else source.get('images'))
+    photos=pick['allowed'] or set(_photo_refs(source))
     if gw:
         data=gw.data if isinstance(gw.data,dict) else {}
         # 模型只负责「引用」ref，媒体条目本身必须以真实上传/磁盘资料为准。
@@ -1434,8 +1640,10 @@ hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言�
         if catalog or not isinstance(master.get('media'),list):master['media']=catalog
         data['activity_master']=master
         if isinstance(data.get('detail'),dict):
-            # 提示词已要求只用照片，这里再兜一层：模型若引用了品牌 logo / 空白图的 ref，直接剔除
+            # 提示词已要求只用照片，这里再兜一层：模型若引用了品牌 logo / 空白图 / 地图截图，直接剔除
             data['detail']['blocks']=_sanitize_blocks(data['detail'].get('blocks') or [],allowed_refs=photos)
+            # 出口对题检查：去重 + 明显错配就换图/撤图（提示词之外的最后一道保证）
+            data['detail']['blocks']=_align_block_media(data['detail']['blocks'],catalog,photos)
         # 事实回检：品牌名音译还原 + 编造地名告警（模型包装文案时会顺手改专名）
         apply_fact_guard(data,str(source.get('text') or ''))
         # 照抄闸门（2026-10-09 用户反馈「这些文案不要照搬方案原文」）：详情此前从没有这一道，
@@ -1461,9 +1669,18 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
         data,usage=await generate_activity(club_id,source,direction=direction,
                                            previous_detail=previous_detail,version_no=version_no)
         return {'activity_master':data.get('activity_master') or master,'detail':data.get('detail') or {}},usage
-    media=json.dumps(source.get('media_manifest',[]),ensure_ascii=False)
+    catalog=media_catalog(source,master)
+    # 打标结果已写进 master.media（首次生成时落库）→ 换一版直接复用，不再重复调用视觉模型；
+    # 老活动第一次换版时 master 里没有 desc，这里会补一次打标。
+    pick=await _prepare_photo_picker(club_id,source,catalog,master)
+    photo_block=_photo_block(pick,json.dumps(source.get('media_manifest',[]),ensure_ascii=False))
+    # ★ master.media 里那一串 img_01…img_38 **不能**原样进提示词（2026-10-09 实测踩坑）：
+    #   换一版时模型看见这串 ref，就会绕开「可用照片清单」自己挑，实测把一张没有画面描述、
+    #   根本不在清单里的图（img_09）塞进了唐卡段落。事实只读 ≠ 媒体清单可读，媒体只能走 photo_block。
+    master_facts={k:v for k,v in (master or {}).items() if k!='media'}
+    master_facts['mediaCount']=len((master or {}).get('media') or [])
     prompt=f"""Activity Master（事实，只读；不要重新提取，也不要修改其中任何一项）：
-{json.dumps(master,ensure_ascii=False)}
+{json.dumps(master_facts,ensure_ascii=False)}
 {_revision_block(direction,previous_detail,version_no)}
 你的任务：只重新创作 C 端招募详情的 block 方案（页面叙事、图片节奏、区块顺序）。
 不得新增事实：日期、地点、价格、人数、行程、费用、出行清单、领队、资质一律以 Activity Master 与原始资料为准。
@@ -1471,14 +1688,14 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
 原始资料（只用于取用真实细节，不是重新提取事实）：
 {source.get('text','')}
 
-媒体清单（只能引用这些 ref；kind='photo' 才是真实照片）：
-{media}
+{photo_block}
 
 图片与清单铁律（与首次生成同一标准）：
 - 只能引用 kind='photo' 的 ref。kind='logo' 的是品牌标志 / 字标横幅 / 空白底图 / 截图 /
   扁平赞助商海报，一律不得出现在详情页任何位置；品牌标识只能靠「单独上传 logo / 封面」解决。
 - 严禁输出 title 为「装备建议 / 出行清单 / 装备清单 / 携带清单 / 着装建议」之类的 info block：
   平台会在详情页下方单独渲染「出行清单」，重复出块会让同一份清单出现两遍。
+{_PHOTO_MATCH_RULES}
 
 {_WRITING_CONTRACT}
 - 方案里的 [Slide N] / [Page N] 只是解析用的页码骨架，绝不能出现在任何 C 端字段里。
@@ -1498,13 +1715,15 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
 block 语义：
 hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=必要决策信息；quote=引用；divider=节奏。
 任何 block 都可省略、重复、自由排序。不要为了「结构完整」机械凑章节。照片多时主动做视觉编排，照片少时不要硬凑图片。"""
-    gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,images=source.get('images'))
-    photos=set(_photo_refs(source))
+    gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,
+                           images=None if pick['ok'] else source.get('images'))
+    photos=pick['allowed'] or set(_photo_refs(source))
     if gw:
         payload=gw.data or {}
         detail=payload.get('detail') if isinstance(payload.get('detail'),dict) else payload
         if isinstance(detail,dict):
             detail['blocks']=_sanitize_blocks(detail.get('blocks') or [],allowed_refs=photos)
+            detail['blocks']=_align_block_media(detail['blocks'],catalog,photos)
         # 事实回检（换一版同样会改写专名，不能只在首次生成时守）
         apply_fact_guard({'activity_master':master if isinstance(master,dict) else {},'detail':detail},
                          str(source.get('text') or ''))

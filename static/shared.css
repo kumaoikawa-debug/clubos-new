@@ -152,9 +152,23 @@
 /* 平替项：与精确匹配的实心标签区分开（虚线米色），顾客一眼知道这不是清单里那件 */
 .pack-needs .pack-needs__sub{background:#fdf7e8;color:#8a6d2f;border:1px dashed #ecd9ae;padding:3px 6px}
 .pack-needs .pack-needs__more{background:#eef1ee;color:#8b978f}
-.pack-miss{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
-.pack-miss__item{display:flex;align-items:center;background:#fbfaf7;border:1px dashed #e2ddd3;border-radius:10px;padding:11px 12px;font-size:13px;color:#4c5a53}
-@media(max-width:680px){.pack-goods,.pack-miss{grid-template-columns:1fr}}
+/* 「这些请自己准备」改成一整张清单面板（2026-10-09 用户反馈「需要给顾客呈现出最美的页面」）：
+   旧版是虚线框两列网格、一格一句散着摆，和上面「商城可以配齐」的实线商品卡完全不是一个质感，
+   看着像没做完的草稿。现在用同一套语言：整块米色面板 + 图标方块 + 一行说明 + 发丝分隔线。 */
+.pack-own{background:#fbf8f1;border:1px solid #efe7d8;border-radius:14px;padding:4px 14px}
+.pack-own__item{display:grid;grid-template-columns:34px 1fr;gap:11px;align-items:center;padding:10px 0;border-bottom:1px solid #f1ead9}
+.pack-own__item:last-child{border-bottom:0}
+.pack-own__ico{width:34px;height:34px;border-radius:10px;background:#f4efe3;display:grid;place-items:center;font-size:16px;line-height:1}
+.pack-own__txt{font-size:13.5px;line-height:1.6;color:#48554d}
+@media(max-width:680px){.pack-goods{grid-template-columns:1fr}}
+
+/* 「出发前知道」结构化（2026-10-09 用户反馈「一排文字密密麻麻，没有可读性」）：
+   整句塞胶囊 → 拆成「序号 + 小标题 + 说明」，长须知也能扫读，不再是一堵字墙。 */
+.info-list{display:grid;gap:10px}
+.info-note{display:grid;grid-template-columns:26px 1fr;gap:12px;align-items:start;background:#fff;border:1px solid #e9e3d7;border-radius:14px;padding:14px 16px}
+.info-note__i{width:26px;height:26px;border-radius:50%;background:#eef4f0;color:#2f6b48;font-size:12px;font-weight:800;display:grid;place-items:center;line-height:1}
+.info-note__b b{display:block;font-size:14.5px;font-weight:800;color:#20362c;margin-bottom:5px;letter-spacing:.01em}
+.info-note__b p{margin:0;font-size:13.5px;line-height:1.8;color:#5a655e}
 
 /* facts 的引导语（模型常用 facts 来写「这场活动只做三件事」这类开场）：整行一句，不套卡片底 */
 .ed-facts__lead{margin:0 0 8px;padding:0 2px;font-size:13.5px;font-weight:800;line-height:1.5;letter-spacing:.01em;color:inherit}
