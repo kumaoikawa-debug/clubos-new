@@ -137,7 +137,9 @@
         activityId: Number(activityId),
         master: master,
         mm: mm,
-        logoUrl: st.logoUrl ? abs(st.logoUrl) : '',
+        /* ?v= 时间戳：服务端 logo 固定文件名覆盖写、URL 不变，不禁缓存就永远吃旧图
+           （2026-10-09 用户反馈「上传之后换不了」）—— 海报每次渲染强制拿最新。 */
+        logoUrl: st.logoUrl ? abs(st.logoUrl) + (abs(st.logoUrl).indexOf('?') < 0 ? '?v=' + Date.now() : '') : '',
         brandName: String(st.name || ''),
         brandSlogan: String(st.slogan || ''),
         status: a.status || '',
@@ -1078,30 +1080,53 @@
       else { c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0; }
     }
 
-    /* 白底二维码卡：四周留白 ≥ 18px（少于这个数手机扫不动），码下一行小字。 */
-    function qrCard(rightX, bottomY, size) {
+    /* 二维码图章：圆形融入式（参考「中国山地色」海报的圆码）——
+       白圆盘当静区（圆半径 = 码对角一半 + 静区，保证手机扫得动），码中心嵌品牌 logo
+       圆章（QR 纠错可承受 ~1/5 直径遮挡），外圈确定性装饰点，码下白字标签。
+       ★ 不再用白色圆角大卡片 —— 那像补丁一样贴在海报上（2026-10-09 用户反馈）。 */
+    function qrStamp(cx, cy, size) {
       if (!qr) return null;
-      size = size || 188;
-      var pad = 18, lbl = 36, cw = size + pad * 2, ch = size + pad * 2 + lbl;
-      var x = Math.round(rightX - cw), y = Math.round(bottomY - ch);
+      size = size || 170;
+      var R = Math.round(size * 0.707 + 16);
       c.save();
-      c.shadowColor = 'rgba(0,0,0,.38)'; c.shadowBlur = 26; c.shadowOffsetY = 7;
+      c.shadowColor = 'rgba(0,0,0,.4)'; c.shadowBlur = 24; c.shadowOffsetY = 6;
       c.fillStyle = '#fff';
-      rr(c, x, y, cw, ch, 24); c.fill();
+      c.beginPath(); c.arc(cx, cy, R, 0, Math.PI * 2); c.fill();
       c.restore();
-      c.drawImage(qr, x + pad, y + pad, size, size);
-      c.fillStyle = INK;
-      c.font = '700 23px ' + FONT;
-      lsText(c, qrLabel, x + cw / 2, y + pad + size + 27, 1.6, 'center');
-      return { x: x, y: y, w: cw, h: ch };
-    }
-    /* 二维码卡外面再加一圈同色细描边 —— 参考图 3 的二维码不是一块孤零零的白，是有"框"的 */
-    function qrRing(card) {
-      if (!card) return;
+      /* 装饰点环：固定角度序列（不随机 —— 随机会一张一个样），大小/颜色疏密相间 */
+      var dotAng = [15, 55, 100, 150, 200, 235, 285, 330];
+      for (var di = 0; di < dotAng.length; di++) {
+        var a = dotAng[di] * Math.PI / 180, dr2 = R + 12 + (di % 2) * 6;
+        c.fillStyle = di % 2 ? _rgba(tone.accent, .9) : 'rgba(255,255,255,.85)';
+        c.beginPath();
+        c.arc(cx + Math.cos(a) * dr2, cy + Math.sin(a) * dr2, di % 2 ? 3.5 : 6, 0, Math.PI * 2);
+        c.fill();
+      }
+      var qs2 = size;
       c.save();
-      c.strokeStyle = _rgba(tone.accent, .55); c.lineWidth = 2;
-      rr(c, card.x - 9, card.y - 9, card.w + 18, card.h + 18, 32); c.stroke();
+      c.imageSmoothingEnabled = false;               /* 码模块要硬边，平滑会糊掉解码 */
+      c.drawImage(qr, cx - qs2 / 2, cy - qs2 / 2, qs2, qs2);
       c.restore();
+      /* 中心 logo 圆章：★ 直径必须 ≤ 码宽 ~1/4（实测 39% 直接扫不出，23% 可扫），
+         cover 裁切 + 细白描边；没 logo 就不加，码面更干净 */
+      if (logoImg) {
+        var mr = Math.round(qs2 * 0.1) + 2;
+        c.save();
+        c.beginPath(); c.arc(cx, cy, mr, 0, Math.PI * 2); c.clip();
+        var iw = logoImg.naturalWidth || logoImg.width || 1, ih = logoImg.naturalHeight || logoImg.height || 1;
+        var fit = Math.max(mr * 2 / iw, mr * 2 / ih);
+        c.drawImage(logoImg, cx - iw * fit / 2, cy - ih * fit / 2, iw * fit, ih * fit);
+        c.restore();
+        c.strokeStyle = 'rgba(255,255,255,.95)'; c.lineWidth = 3;
+        c.beginPath(); c.arc(cx, cy, mr, 0, Math.PI * 2); c.stroke();
+      }
+      /* 码下标签：白字 + 投影直接落在海报上，无卡片 */
+      c.fillStyle = '#fff';
+      c.font = '700 25px ' + FONT;
+      shadow(true);
+      lsText(c, qrLabel, cx, cy + R + 34, 2.2, 'center');
+      shadow(false);
+      return { x: cx - R, y: cy - R, w: R * 2, h: R * 2 + 44 };
     }
 
     /* 品牌标识：logo 直接融入海报，不再套白胶囊（logo 图多自带白底，
@@ -1317,8 +1342,7 @@
         c.fillStyle = '#fff'; c.font = '900 92px ' + FONT; c.fillText(bigNum, bx + pw3, by);
         if (bigUnit) { c.fillStyle = 'rgba(255,255,255,.7)'; c.font = '500 26px ' + FONT; c.fillText(bigUnit, bx + pw3 + nw + 14, by - 2); }
       }
-      var cardA = qrCard(W - PAD, H - 196, 186);
-      qrRing(cardA);
+      var cardA = qrStamp(W - PAD - 140, H - 380, 170);
       var rTop = H - 176;
       c.fillStyle = 'rgba(0,0,0,.28)'; c.fillRect(0, rTop, W, 176);
       c.fillStyle = _rgba(tone.accent, .38); c.fillRect(PAD, rTop, CW, 1.5);
@@ -1379,8 +1403,7 @@
         iy += ph + 96;
       });
       c.textAlign = 'left';
-      var cardB = qrCard(W / 2 + 108, H - 52, 172);
-      qrRing(cardB);
+      var cardB = qrStamp(W / 2, H - 240, 170);
     }
 
     /* ═══ 版式三 film：极简影像（全幅照片主导 + 左下文本块，参考图 4）═══ */
@@ -1397,8 +1420,8 @@
       c.textAlign = 'left';
       brandBlock('left', 52, 60, true);
 
-      var qrC = qrCard(W - PAD, H - 58, 152);
-      var textW = CW - (qrC ? qrC.w + 36 : 0);
+      var qrC = qrStamp(W - PAD - 125, H - 200, 165);
+      var textW = CW - (qrC ? qrC.w + 30 : 0);
       c.font = '500 25px ' + FONT;
       var pL = points.slice(0, 3).map(function (t) { return lsFit(c, t, textW - 34, 1.2); });
       c.font = '400 29px ' + FONT;

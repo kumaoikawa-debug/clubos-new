@@ -1384,7 +1384,9 @@ def _serve_club_logo(club_id:int,ext:str):
     if ext not in _PUBLIC_IMAGE_EXT: raise HTTPException(404,'不支持的图片格式')
     fp=UPLOAD/f'{int(club_id)}'/'brand'/f'logo{ext}'
     if not fp.is_file(): raise HTTPException(404,'logo 文件已丢失')
-    return FileResponse(fp)
+    # no-store：logo 固定文件名覆盖写，URL 不带版本号 —— 不禁缓存的话换图后
+    # 浏览器一直吃旧图（2026-10-09 用户反馈「上传之后一直换不了」）。
+    return FileResponse(fp, headers={'Cache-Control':'no-store'})
 
 @app.get('/api/club/{club_id}/settings/logo.{ext}')
 def club_settings_logo(club_id:int,ext:str):

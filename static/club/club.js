@@ -1722,6 +1722,9 @@ async function uploadClubLogo(input){
   try{
     const r=await api(`/api/club/${CLUB}/settings/logo`,{method:'POST',body:fd});
     clubLogoUrl=r.logoUrl||'';
+    // 服务端是固定文件名覆盖写，URL 不变 —— 加时间戳强制绕过浏览器缓存，
+    // 否则「上传成功了但预览/海报还是旧图」（2026-10-09 用户反馈）。
+    if (clubLogoUrl) clubLogoUrl+=(clubLogoUrl.indexOf('?')<0?'?':'&')+'t='+Date.now();
     const prev=$('#setLogoPrev');if(prev)prev.innerHTML=clubLogoImgHtml();
     toast('Logo 已更新');
     const wrap=input.closest('div[style*="margin-top"]')?.parentElement; // 移除按钮按需出现
