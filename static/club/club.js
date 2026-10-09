@@ -487,9 +487,22 @@ async function loadContent(){
   $('#channelArea').innerHTML=cards.map(x=>`<div class="card channel-card"><div><strong>${x[1]}</strong><p>${x[2]}</p><div class="sub">当前活动：${esc(a.title)}</div></div><button class="btn secondary" onclick="genChannel('${x[0]}',${a.id})">AI 生成${x[1]}</button></div>`).join('');
   // 已生成内容里补上「这是哪场活动的」——以前只显示 活动 #12，活动一多就认不出来。
   const byId={}; acts.forEach(x=>{byId[x.id]=x});
-  $('#contentList').innerHTML=(content||[]).map(x=>{const t=byId[x.activity_id];const cur=Number(x.activity_id)===Number(window.__contentActId);return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title||channelLabel(x.channel))}</div><div class="list-row__sub">${t?`活动：${esc(t.title)}`:`活动 #${x.activity_id}`} · ${esc(x.created_at||'')}</div></div><div class="list-row__end"><span class="tag">${esc(channelLabel(x.channel))}</span>${t&&!cur?`<button class="btn ghost" onclick="actPickChoose(${x.activity_id})">切到这场</button>`:''}<button class="btn secondary" onclick="openContentAsset(${x.id})">查看成品</button></div></div>`}).join('')
+  $('#contentList').innerHTML=(content||[]).map(x=>{const t=byId[x.activity_id];const cur=Number(x.activity_id)===Number(window.__contentActId);return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title||channelLabel(x.channel))}</div><div class="list-row__sub">${t?`活动：${esc(t.title)}`:`活动 #${x.activity_id}`} · ${esc(x.created_at||'')}</div></div><div class="list-row__end"><span class="tag">${esc(channelLabel(x.channel))}</span>${t&&!cur?`<button class="btn ghost" onclick="actPickChoose(${x.activity_id})">切到这场</button>`:''}<button class="btn secondary" onclick="openContentAsset(${x.id})">查看成品</button><button class="btn ghost" style="color:var(--danger,#b54644)" title="删除这条已生成内容" onclick="deleteContentAsset(${x.id})">删除</button></div></div>`}).join('')
     ||'<div class="empty">还没有渠道内容</div>';
   }catch(e){loaderError('#channelArea',e,'内容中心加载失败')}
+}
+/* 删除一条已生成的宣发内容（过期物料清理，2026-10-09 用户提出）。
+   前端 uxConfirm 危险确认 + 后端按 club 归属硬闸；只删内容记录本身，
+   活动、报名、积分账本一概不动。 */
+async function deleteContentAsset(assetId){
+  if(!await uxConfirm({title:'删除这条内容',danger:true,confirmText:'确认删除',
+    message:'该条已生成的宣传物料将删除，不可撤销；只删这条内容记录，活动与报名数据不受影响。'}))return;
+  await uxFlow('deleteContentAsset',async()=>{
+    try{await api(`/api/club/${CLUB}/content/${assetId}`,{method:'DELETE'})}
+    catch(e){showAlert({title:'删除失败',message:e.message});return}
+    toast('内容已删除');
+    await loadContent();
+  });
 }
 function channelLabel(c){return (window.ChannelRender&&ChannelRender.label(c))||c}
 async function genChannel(ch,id){

@@ -1228,6 +1228,19 @@ def content_detail(club_id:int,asset_id:int):
     a['content']=jload(a.pop('body_json'),{})
     return a
 
+@app.delete('/api/club/{club_id}/content/{asset_id}')
+def content_delete(club_id:int,asset_id:int):
+    """删除已生成的宣发内容（过期物料清理，用户 2026-10-09 提出）。
+
+    只删 content_assets 这一条记录本身——不碰活动、报名、积分账本；
+    海报/长图是渲染时现合成的，没有落盘的成品文件需要清理。
+    严格按 club 归属过滤，跨俱乐部删除一律 404。"""
+    with conn() as c:
+        a=row(c.execute('SELECT id FROM content_assets WHERE id=? AND club_id=?',(asset_id,club_id)))
+        if not a: raise HTTPException(404,'内容不存在或已删除')
+        c.execute('DELETE FROM content_assets WHERE id=? AND club_id=?',(asset_id,club_id))
+    return {'ok':True}
+
 @app.get('/api/club/{club_id}/registrations')
 def registrations(club_id:int):
     with conn() as c:return rows(c.execute('''SELECT r.*,a.title activity_title,u.name,u.phone,o.label occurrence_label,o.start_at,
