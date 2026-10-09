@@ -528,8 +528,9 @@ def _html_ok(html: str, has_photos: bool, must_have: list[tuple[str, str]] | Non
     # 行程时间线膨胀（10 行流水账占半张图，2026-10-09 用户反馈）—— 时刻超过 18 个（约 9 节点）打回
     if len(re.findall(r'\d{1,2}:\d{2}', text)) > 18:
         return False, 'timeline too long'
-    # 关键信息重复：「费用包含」出现 ≥2 次说明同一信息在多个区块复述（2026-10-09 用户反馈）
-    if text.count('费用包含') > 1:
+    # 关键信息重复：「费用包含」出现 ≥3 次说明同一信息在多个区块复述（2026-10-09 用户反馈）。
+    #   阈值取 3：单标题 + 双栏（含/不含）天然出现 2 次不算重复，避免误杀好成品逼退模板兜底。
+    if text.count('费用包含') > 2:
         return False, 'duplicated fee section'
     return True, 'ok'
 
@@ -575,7 +576,8 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
     if '完整行程时间线' in d_note:
         must_have.append(('行程时刻', r'\d{1,2}:\d{2}'))
     if '注意事项' in d_note or '报名' in d_note:
-        must_have.append(('注意事项', r'注意|资格|提醒|必读|须知|不可|仅限|限制'))
+        # 放宽到高原 / 海拔 / 携带等真实覆盖词，避免模型用同义表述被误判退回模板兜底
+        must_have.append(('注意事项', r'注意|须知|提示|提醒|务必|请勿|不可|仅限|资格|限制|高原|海拔|携带'))
 
     allowed = _allowed_refs(caption_lines)
     has_photos = bool(allowed)
@@ -587,18 +589,23 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
     # 主路径（v4）：模型自由排版 → 直出 HTML（不同活动不同风格）
     #   翻车（_html_ok 不过）就退回下面的模板兜底，保证「有产出且安全」。
     # ══════════════════════════════════════════════════════════════════
-    gw = await generate_json(club_id=club_id, task_type='longpic',
-                             system_prompt=_FREE_SYSTEM,
-                             user_prompt=(cover_note + _fill(_FREE_PROMPT)))
+    html, route, dropped, data = '', 'model-html', [], {}
+    gw = None
+    for _attempt in range(2):  # 模型非确定性：好结果靠重试兜住，避免一翻车就掉进模板兜底
+        gw = await generate_json(club_id=club_id, task_type='longpic',
+                                 system_prompt=_FREE_SYSTEM,
+                                 user_prompt=(cover_note + _fill(_FREE_PROMPT)))
+        if not gw:
+            continue
+        if isinstance(gw.data, dict):
+            cand = str(gw.data.get('html') or gw.data.get('body') or gw.data.get('content') or '')
+            cand = sanitize_html(cand)
+            if len(cand) > 400 and _html_ok(cand, has_photos, must_have)[0]:
+                html, data = cand, gw.data
+                break
     if not gw:
         return _mock(master, detail, cover_url), record_mock_usage(club_id, 'longpic', _FREE_PROMPT,
                                                                    {'title': master.get('title', '')})
-    html, route, dropped, data = '', 'model-html', [], {}
-    if isinstance(gw.data, dict):
-        cand = str(gw.data.get('html') or gw.data.get('body') or gw.data.get('content') or '')
-        cand = sanitize_html(cand)
-        if len(cand) > 400 and _html_ok(cand, has_photos, must_have)[0]:
-            html, data = cand, gw.data
 
     # ── 兜底路径：结构化内容 JSON → 模板渲染（自由排版翻车时的稳定产出）──
     if not html:

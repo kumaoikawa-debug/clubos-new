@@ -543,7 +543,7 @@ def _blk_photos(b: dict, ctx: Ctx) -> str:
 
 def _blk_timeline(b: dict, ctx: Ctx) -> str:
     rows = []
-    for it in _lst(b.get('items'))[:12]:
+    for it in _lst(b.get('items'))[:8]:
         t, w, note = _s(it, 'time'), _s(it, 'what') or _s(it, 'text'), _s(it, 'note')
         if not (t or w):
             continue
