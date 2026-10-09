@@ -867,6 +867,17 @@
     return [Math.round(f(p, q, h + 1 / 3) * 255), Math.round(f(p, q, h) * 255), Math.round(f(p, q, h - 1 / 3) * 255)];
   }
   function _rgba(cl, a) { return 'rgba(' + cl[0] + ',' + cl[1] + ',' + cl[2] + ',' + a + ')'; }
+  /* 圆角矩形路径（不依赖 ctx.roundRect，兼容旧内核） */
+  function rrPath(x, px, py, pw, ph, pr) {
+    pr = Math.min(pr, pw / 2, ph / 2);
+    x.beginPath();
+    x.moveTo(px + pr, py);
+    x.arcTo(px + pw, py, px + pw, py + ph, pr);
+    x.arcTo(px + pw, py + ph, px, py + ph, pr);
+    x.arcTo(px, py + ph, px, py, pr);
+    x.arcTo(px, py, px + pw, py, pr);
+    x.closePath();
+  }
   function _rgb(cl) { return 'rgb(' + cl[0] + ',' + cl[1] + ',' + cl[2] + ')'; }
 
   var _TONE_DEFAULT = { deep: [16, 30, 25], deep2: [8, 16, 13], mid: [30, 58, 46], light: [44, 82, 66], accent: [226, 240, 232] };
@@ -1080,23 +1091,28 @@
       else { c.shadowColor = 'transparent'; c.shadowBlur = 0; c.shadowOffsetY = 0; }
     }
 
-    /* 二维码图章：圆形融入式（参考「中国山地色」海报的圆码）——
-       白圆盘当静区（圆半径 = 码对角一半 + 静区，保证手机扫得动），码中心嵌品牌 logo
-       圆章（QR 纠错可承受 ~1/5 直径遮挡），外圈确定性装饰点，码下白字标签。
-       ★ 不再用白色圆角大卡片 —— 那像补丁一样贴在海报上（2026-10-09 用户反馈）。 */
+    /* 二维码图章：白色圆角贴纸紧贴码面（静区≈2 模块，保证扫得动）+ 柔和投影，
+       码中心嵌品牌 logo（抠底原色版，直径 ≤ 码宽 ~1/5，QR 纠错可承受），
+       外圈确定性装饰点，码下白字标签。
+       ★ 大白圆盘废弃 —— 圆包方天然浪费 27% 面积，白得像补丁（2026-10-09 用户反馈「不要白底」）；
+         圆角贴纸是「设计过的贴纸」而不是「打的补丁」。 */
     function qrStamp(cx, cy, size) {
       if (!qr) return null;
       size = size || 170;
-      var R = Math.round(size * 0.707 + 16);
+      var quiet = Math.max(12, Math.round(size * 0.085));
+      var side = size + quiet * 2;
+      var rad = Math.round(side * 0.22);
       c.save();
       c.shadowColor = 'rgba(0,0,0,.4)'; c.shadowBlur = 24; c.shadowOffsetY = 6;
       c.fillStyle = '#fff';
-      c.beginPath(); c.arc(cx, cy, R, 0, Math.PI * 2); c.fill();
+      rrPath(c, cx - side / 2, cy - side / 2, side, side, rad);
+      c.fill();
       c.restore();
       /* 装饰点环：固定角度序列（不随机 —— 随机会一张一个样），大小/颜色疏密相间 */
       var dotAng = [15, 55, 100, 150, 200, 235, 285, 330];
+      var dotR = Math.round(side * 0.72);
       for (var di = 0; di < dotAng.length; di++) {
-        var a = dotAng[di] * Math.PI / 180, dr2 = R + 12 + (di % 2) * 6;
+        var a = dotAng[di] * Math.PI / 180, dr2 = dotR + 12 + (di % 2) * 6;
         c.fillStyle = di % 2 ? _rgba(tone.accent, .9) : 'rgba(255,255,255,.85)';
         c.beginPath();
         c.arc(cx + Math.cos(a) * dr2, cy + Math.sin(a) * dr2, di % 2 ? 3.5 : 6, 0, Math.PI * 2);
@@ -1107,33 +1123,32 @@
       c.imageSmoothingEnabled = false;               /* 码模块要硬边，平滑会糊掉解码 */
       c.drawImage(qr, cx - qs2 / 2, cy - qs2 / 2, qs2, qs2);
       c.restore();
-      /* 中心 logo 圆章：★ 直径必须 ≤ 码宽 ~1/4（实测 39% 直接扫不出，23% 可扫），
-         cover 裁切 + 细白描边；没 logo 就不加，码面更干净 */
-      if (logoImg) {
+      /* 中心 logo：用抠底原色版（logoColor），直径 ≤ 码宽 ~1/5（实测 39% 扫不出、23% 可扫）。
+         ★ 不再画原始 logoImg —— 带底色的 logo 缩成一颗色点，像补丁（2026-10-09 用户反馈）。
+         白色贴纸底上白描边没有意义，去掉。 */
+      if (logoColor) {
         var mr = Math.round(qs2 * 0.1) + 2;
         c.save();
         c.beginPath(); c.arc(cx, cy, mr, 0, Math.PI * 2); c.clip();
-        var iw = logoImg.naturalWidth || logoImg.width || 1, ih = logoImg.naturalHeight || logoImg.height || 1;
+        var iw = logoColor.width || 1, ih = logoColor.height || 1;
         var fit = Math.max(mr * 2 / iw, mr * 2 / ih);
-        c.drawImage(logoImg, cx - iw * fit / 2, cy - ih * fit / 2, iw * fit, ih * fit);
+        c.drawImage(logoColor, cx - iw * fit / 2, cy - ih * fit / 2, iw * fit, ih * fit);
         c.restore();
-        c.strokeStyle = 'rgba(255,255,255,.95)'; c.lineWidth = 3;
-        c.beginPath(); c.arc(cx, cy, mr, 0, Math.PI * 2); c.stroke();
       }
       /* 码下标签：白字 + 投影直接落在海报上，无卡片 */
       c.fillStyle = '#fff';
       c.font = '700 25px ' + FONT;
       shadow(true);
-      lsText(c, qrLabel, cx, cy + R + 34, 2.2, 'center');
+      lsText(c, qrLabel, cx, cy + side / 2 + 34, 2.2, 'center');
       shadow(false);
-      return { x: cx - R, y: cy - R, w: R * 2, h: R * 2 + 44 };
+      return { x: cx - side / 2, y: cy - side / 2, w: side, h: side + 44 };
     }
 
-    /* 品牌标识：logo 直接融入海报，不再套白胶囊（logo 图多自带白底，
-       套进浅色容器就是「圆圈里又一层白底」，2026-10-09 用户反馈）。
-       三步处理：① 白底（近白角）抠成透明；② 徽章型（彩色实底）保留原色直接融合，
-       深色字标（透明底深色线条/文字）染成白色适配深色海报（用户允许改 logo 颜色）；
-       ③ 轻投影压在海报上。 */
+    /* 品牌标识：logo 直接融入海报，不套任何容器（2026-10-09 用户反馈两轮）。
+       处理管线：① 取四角+四边中点颜色，若为「均匀底色」（白底/浅蓝底都算 ——
+       远拓新 logo 是浅蓝实底，只认近白会漏）则整片抠成透明并羽化边缘；
+       ② 抠底后剩余笔迹偏暗 → 染白版（mono，适配深色海报），原色版（color）留给
+       白色贴纸里的二维码中心章；③ 染白版画上海报时带轻投影。 */
     function logoStamp(img) {
       var iw = img.naturalWidth || img.width || 1, ih = img.naturalHeight || img.height || 1;
       if (iw < 2 || ih < 2) return null;
@@ -1144,35 +1159,54 @@
       var d;
       try { d = x.getImageData(0, 0, iw, ih); } catch (e) { return null; }
       var p = d.data, n = iw * ih;
-      /* ① 背景色取四角均值，仅当接近白才抠（彩色实底徽章绝不抠，否则徽章被掏空） */
-      var cr = 0, cg = 0, cb = 0, cs = [[0, 0], [iw - 1, 0], [0, ih - 1], [iw - 1, ih - 1]];
-      cs.forEach(function (q) { var o = (q[1] * iw + q[0]) * 4; cr += p[o]; cg += p[o + 1]; cb += p[o + 2]; });
-      cr /= 4; cg /= 4; cb /= 4;
-      var bgWhite = (cr + cg + cb) / 3 > 235;
+      /* ① 底色采样：四角 + 四边中点，取均值；散度小 = 均匀底色（不限白色） */
+      var pts = [[0, 0], [iw - 1, 0], [0, ih - 1], [iw - 1, ih - 1],
+                 [Math.floor(iw / 2), 0], [Math.floor(iw / 2), ih - 1], [0, Math.floor(ih / 2)], [iw - 1, Math.floor(ih / 2)]];
+      var sr = 0, sg = 0, sb = 0;
+      pts.forEach(function (q) { var o = (q[1] * iw + q[0]) * 4; sr += p[o]; sg += p[o + 1]; sb += p[o + 2]; });
+      sr /= pts.length; sg /= pts.length; sb /= pts.length;
+      var spread = 0;
+      pts.forEach(function (q) {
+        var o = (q[1] * iw + q[0]) * 4;
+        spread = Math.max(spread, Math.abs(p[o] - sr) + Math.abs(p[o + 1] - sg) + Math.abs(p[o + 2] - sb));
+      });
+      var uniform = spread < 110;   /* 8 个采样点颜色接近 → 整图有均匀底 */
       var opaque = 0, sumLum = 0;
       for (var i = 0; i < p.length; i += 4) {
-        if (bgWhite) {
-          var dr = p[i] - cr, dg = p[i + 1] - cg, db = p[i + 2] - cb;
+        if (uniform) {
+          var dr = p[i] - sr, dg = p[i + 1] - sg, db = p[i + 2] - sb;
           var dist = Math.sqrt(dr * dr + dg * dg + db * db);
-          if (dist < 30) { p[i + 3] = 0; continue; }          /* 白背景 → 透明 */
-          if (dist < 90) { p[i + 3] = Math.round(p[i + 3] * dist / 90); }  /* 边缘抗锯齿柔和过渡 */
+          if (dist < 34) { p[i + 3] = 0; continue; }                       /* 底色 → 透明 */
+          if (dist < 100) { p[i + 3] = Math.round(p[i + 3] * dist / 100); } /* 边缘抗锯齿羽化 */
         }
         if (p[i + 3] > 40) { opaque++; sumLum += (p[i] + p[i + 1] + p[i + 2]) / 3; }
       }
-      /* ② 类型判定：剩余不透明占比高 = 实底徽章（保原色）；
-         占比低且偏暗 = 深色字标/线条标（染白，否则压深色海报看不见） */
-      var badge = opaque / n > 0.45;
-      var darkMark = !badge && opaque > 0 && (sumLum / opaque) < 130;
-      if (darkMark) {
-        for (i = 0; i < p.length; i += 4) {
-          if (!p[i + 3]) continue;
-          p[i] = 255; p[i + 1] = 255; p[i + 2] = 255;
-        }
-      }
+      /* 抠完几乎不剩东西（整图就是一块底色）→ 放弃处理，原样返回 */
+      if (opaque < n * 0.02) return null;
+      var color = cv;
       x.putImageData(d, 0, 0);
-      return cv;
+      /* ② 剩余笔迹偏暗 = 深色字标 → 染白适配深色海报（用户允许改 logo 颜色） */
+      var mono;
+      if (opaque > 0 && sumLum / opaque < 150) {
+        var mv = document.createElement('canvas'); mv.width = iw; mv.height = ih;
+        var mx = mv.getContext('2d');
+        if (!mx) return { mono: color, color: color };
+        mx.putImageData(d, 0, 0);
+        var md = mx.getImageData(0, 0, iw, ih), mp = md.data;
+        for (i = 0; i < mp.length; i += 4) {
+          if (!mp[i + 3]) continue;
+          mp[i] = 255; mp[i + 1] = 255; mp[i + 2] = 255;
+        }
+        mx.putImageData(md, 0, 0);
+        mono = mv;
+      } else {
+        mono = color;   /* 本身偏亮/彩色笔迹，原色即可 */
+      }
+      return { mono: mono, color: color };
     }
     var logoMono = logoImg ? logoStamp(logoImg) : null;
+    var logoColor = logoMono ? logoMono.color : null;
+    if (logoMono) logoMono = logoMono.mono;
     function logoW(h) {
       if (!logoMono) return 0;
       var iw = logoMono.width, ih = logoMono.height;
