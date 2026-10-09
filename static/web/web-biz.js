@@ -193,6 +193,47 @@ window.loadMemberCenter=async function(){
 window.loadMemberInfo=window.loadMemberCenter;
 window.openMemberCard=window.openMemberCard||function(){wv('wme')};
 
+/* ── ⑤ 品牌外壳（俱乐部设置 DIY · 2026-10-09）────────────────────────────
+   HTML 骨架里的「远拓户外」只是占位 —— 真名/logo/口号来自俱乐部设置，
+   启动时拉 /api/public/clubs/{id} 覆盖：顶栏 logo+名字、<title>、首页品牌条。
+   没配 logo/口号时保持原样（不渲染空壳）。幂等：重复调用只重画同内容。 */
+let _brandApplied=false;
+window.applyClubBrand=async function(){
+  if(_brandApplied)return;_brandApplied=true;
+  let c=null;
+  try{c=await api(`/api/public/clubs/${CLUB}`)}catch(e){return}
+  if(!c)return;
+  const name=String(c.name||'').trim();
+  if(name){
+    const top=document.querySelector('.web-top strong');
+    if(top)top.textContent=name;
+    document.title=name;
+  }
+  const logo=String(c.logoUrl||'');
+  if(logo){
+    const top=document.querySelector('.web-top');
+    if(top&&!top.querySelector('.web-top__logo')){
+      const img=document.createElement('img');
+      img.className='web-top__logo';img.alt='';img.src=logo;
+      img.style.cssText='width:28px;height:28px;border-radius:8px;object-fit:cover';
+      img.onerror=()=>img.remove();
+      top.insertBefore(img,top.firstChild);
+    }
+  }
+  const slogan=String(c.slogan||'').trim();
+  if(slogan){
+    const feed=$('#homeFeed');
+    if(feed&&!document.getElementById('brandStrip')){
+      const bar=document.createElement('div');
+      bar.id='brandStrip';
+      bar.style.cssText='display:flex;align-items:center;gap:10px;margin:2px 0 12px;color:var(--ink-soft,#6b6f66);font-size:13px';
+      bar.innerHTML=(logo?`<img src="${esc(logo)}" alt="" style="width:22px;height:22px;border-radius:6px;object-fit:cover" onerror="this.remove()">`:'')
+        +`<span>${esc(slogan)}</span>`;
+      feed.parentNode.insertBefore(bar,feed);
+    }
+  }
+};
+
 /* ── 视图切换挂载：切到哪块就加载哪块（幂等，重复切不重复拉）──────────────── */
 const _wv=window.wv;
 window.wv=function(id,btn){
@@ -208,6 +249,6 @@ window.wv=function(id,btn){
 /* 首次进入也挂一次（wv 首调发生在 web.js 的 start 里，本文件后加载已接管）。
    loadWability 也在这里跑一次：导航入口的显示与否要在**页面加载时**就定下来，
    否则老板没配业务介绍时，「户外能力」入口会一直挂在那儿，点进去才发现是空的。 */
-if(document.readyState!=='loading'){loadHome();loadWability()}
-else document.addEventListener('DOMContentLoaded',()=>{loadHome();loadWability()});
+if(document.readyState!=='loading'){loadHome();loadWability();applyClubBrand()}
+else document.addEventListener('DOMContentLoaded',()=>{loadHome();loadWability();applyClubBrand()});
 })();

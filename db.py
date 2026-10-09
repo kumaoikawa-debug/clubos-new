@@ -130,6 +130,9 @@ def _backfill_v028_leader_avatar(c):
     _ensure_column(c,'club_leaders','avatar_url','avatar_url TEXT')
 
 def _run_compat_migrations(c):
+    # v0.29 俱乐部设置：品牌 DIY（logo / slogan），名字本列就有
+    _ensure_column(c,'clubs','logo_url','logo_url TEXT')
+    _ensure_column(c,'clubs','slogan','slogan TEXT')
     _ensure_column(c,'clubs','contact_name','contact_name TEXT')
     _ensure_column(c,'clubs','contact_phone','contact_phone TEXT')
     _ensure_column(c,'clubs','city','city TEXT')

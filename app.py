@@ -1318,6 +1318,87 @@ def _leader_specs(raw)->list[str]:
     return seen
 
 
+# ── 俱乐部设置：品牌 DIY（名称 / logo / slogan）+ 联系方式 ────────────────────
+# 订阅 SaaS 的俱乐部在这里自助包装自己的前端：C 端顶栏的名字、logo、首页品牌条
+# 都从这里取（public_club 白名单下发，见 _club_public_brand）。
+_CLUB_SETTINGS_FIELDS=('name','slogan','city','contact_name','contact_phone')
+
+@app.get('/api/club/{club_id}/settings')
+def club_settings_get(club_id:int):
+    x=club_or_404(club_id)
+    return {'name':x['name'],'slogan':x.get('slogan') or '','city':x.get('city') or '',
+            'contactName':x.get('contact_name') or '','contactPhone':x.get('contact_phone') or '',
+            'logoUrl':x.get('logo_url') or ''}
+
+@app.put('/api/club/{club_id}/settings')
+def club_settings_put(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    fields={}
+    for f in _CLUB_SETTINGS_FIELDS:
+        if f not in payload: continue
+        v=str(payload.get(f) or '').strip()
+        if f=='name' and not v: raise HTTPException(400,'俱乐部名称不能为空')
+        if f=='name' and len(v)>40: raise HTTPException(400,'俱乐部名称过长（上限 40 字）')
+        if f=='slogan' and len(v)>60: raise HTTPException(400,'品牌口号过长（上限 60 字）')
+        fields[f]=v or None
+    if 'logo_url' in payload:
+        # 仅供「移除 logo」置空；设置新值必须走上传端点（它负责落盘和带扩展名）
+        fields['logo_url']=str(payload.get('logo_url') or '').strip() or None
+    if not fields: raise HTTPException(400,'没有需要更新的字段')
+    with conn() as c:
+        sets=','.join(f'{k}=?' for k in fields)
+        c.execute(f'UPDATE clubs SET {sets} WHERE id=?',(*fields.values(),club_id))
+    return {'ok':True,'updated':sorted(fields.keys())}
+
+@app.post('/api/club/{club_id}/settings/logo')
+@app.post('/api/club/{club_id}/settings/logo.{ext}')
+async def club_settings_logo_upload(club_id:int,file:UploadFile=File(...),ext:str=''):
+    """上传/替换俱乐部 logo。落 uploads/{club}/brand/logo{ext}，DB 存俱乐部域代理地址。"""
+    club_or_404(club_id)
+    real=Path(file.filename or '').suffix.lower()
+    if real not in _PUBLIC_IMAGE_EXT: raise HTTPException(400,'仅支持图片文件：png/jpg/jpeg/webp/gif')
+    if ext and '.'+str(ext).lower().lstrip('.')!=real:
+        raise HTTPException(400,'路径里的扩展名与文件后缀不一致')
+    data=await file.read()
+    if len(data) > 5*1024*1024: raise HTTPException(413,'图片过大（上限 5MB）')
+    dest=UPLOAD/str(club_id)/'brand'
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest/f'logo{real}').write_bytes(data)
+    for stale in dest.glob('logo.*'):
+        if stale.suffix.lower()!=real: stale.unlink(missing_ok=True)
+    url=f'/api/club/{club_id}/settings/logo{real}'
+    with conn() as c:
+        c.execute('UPDATE clubs SET logo_url=? WHERE id=?',(url,club_id))
+    return {'logoUrl':url}
+
+_LOGO_URL_RE=re.compile(r'^/api/club/(\d+)/settings/logo(\.[a-z0-9]{2,5})$', re.I)
+
+def _serve_club_logo(club_id:int,ext:str):
+    """把 clubs.logo_url 还原成磁盘上的那张图（形状校验后按路由参数拼路径，不掺任意片段）。"""
+    with conn() as c:
+        r=row(c.execute('SELECT logo_url FROM clubs WHERE id=?',(club_id,)))
+    if not r or not r['logo_url']: raise HTTPException(404,'该俱乐部还没有设置 logo')
+    m=_LOGO_URL_RE.match(str(r['logo_url']))
+    if not m or int(m.group(1))!=int(club_id): raise HTTPException(404,'该俱乐部还没有设置 logo')
+    ext='.'+str(ext).lower().lstrip('.')
+    if ext not in _PUBLIC_IMAGE_EXT: raise HTTPException(404,'不支持的图片格式')
+    fp=UPLOAD/f'{int(club_id)}'/'brand'/f'logo{ext}'
+    if not fp.is_file(): raise HTTPException(404,'logo 文件已丢失')
+    return FileResponse(fp)
+
+@app.get('/api/club/{club_id}/settings/logo.{ext}')
+def club_settings_logo(club_id:int,ext:str):
+    """后台/登录态代理。"""
+    return _serve_club_logo(club_id,ext)
+
+@app.get('/api/public/clubs/{club_id}/logo.{ext}')
+def public_club_logo(club_id:int,ext:str):
+    """C 端公开代理（无登录态）。生产只放行 active 俱乐部。"""
+    x=club_or_404(club_id)
+    if IS_PROD and x['status']!='active':raise HTTPException(404,'not found')
+    return _serve_club_logo(club_id,ext)
+
+
 @app.get('/api/club/{club_id}/leaders')
 def club_leaders_list(club_id:int):
     club_or_404(club_id)
@@ -1780,9 +1861,17 @@ def public_club(club_id:int):
     x=club_or_404(club_id)
     if IS_PROD:
         if x['status']!='active':raise HTTPException(404,'not found')
-        out={k:x.get(k) for k in ('id','name','city')}
+        # 品牌白名单（俱乐部设置 DIY 下发）：logo 以公开代理地址给出 ——
+        # DB 里存的 /api/club/... 代理要登录态，C 端拿去是 401/404。
+        out={k:x.get(k) for k in ('id','name','city','slogan')}
+        if x.get('logo_url'):
+            m=_LOGO_URL_RE.match(str(x['logo_url']))
+            if m: out['logoUrl']=f'/api/public/clubs/{club_id}/logo{m.group(2)}'
     else:
         out=dict(x)
+        if x.get('logo_url'):
+            m=_LOGO_URL_RE.match(str(x['logo_url']))
+            if m: out['logoUrl']=f'/api/public/clubs/{club_id}/logo{m.group(2)}'
     # 业务介绍区：未配置或关闭 → None，C 端整节隐藏（空壳板块比没有板块更伤信任）。
     # 图片在这里就换成公开代理地址（生产 /static/uploads/* 是 404）。
     out.pop('biz_section_json',None)

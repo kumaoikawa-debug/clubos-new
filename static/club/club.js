@@ -1,6 +1,6 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
-window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='leaders')await loadLeaders();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='credits'){await loadCredits();await loadAIUsage()};if(v==='analytics')await loadClubBI();if(v==='payaccount')await loadPayAccount();if(v==='points')await loadPointsPolicy();if(v==='biz')await loadBizSection()}
+window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='leaders')await loadLeaders();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='credits'){await loadCredits();await loadAIUsage()};if(v==='analytics')await loadClubBI();if(v==='payaccount')await loadPayAccount();if(v==='points')await loadPointsPolicy();if(v==='biz')await loadBizSection();if(v==='settings')await loadSettings()}
 async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`AI Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>';loadClubAttention()}
 /* 工作台「待处理事项」：C 端产生新报名 / 新订单后，俱乐部没有主动提醒，只能自己进
    报名管理 / 商城去翻。这里把各视图里「需要人跟进」的数字汇总到工作台一张卡上，
@@ -1647,6 +1647,87 @@ async function loadAIUsage(){
       +`<div class="list-row__end"><strong>${u.credits_charged!=null?('-'+u.credits_charged+' Credits'):(u.provider_cost!=null?money(u.provider_cost):'—')}</strong></div>`
       +`</div></div>`).join('')||'<div class="empty">还没有 AI 调用记录</div>';
   }catch(e){ box.innerHTML='<div class="empty">读取失败：'+esc(e.message)+'</div>' }
+}
+
+
+/* ===== 俱乐部设置（品牌 DIY · 2026-10-09）=================================
+   订阅套件的俱乐部在这里自助包装自己的前端：名称 / logo / 口号 / 城市 / 联系人。
+   保存后 C 端顾客看到的门面（顶栏名字、logo、首页品牌条）跟着变。
+   logo 上传走独立端点（POST …/settings/logo），表单文本走 PUT …/settings；
+   保存成功后同步刷新后台侧栏的品牌名，前后台看到的永远同一个名字。 */
+let clubLogoUrl='';
+async function loadSettings(){
+  const box=$('#settingsBody');if(!box)return;
+  box.innerHTML='<div class="empty">正在加载设置…</div>';
+  let s;
+  try{s=await api(`/api/club/${CLUB}/settings`)}
+  catch(e){loaderError('#settingsBody',e,'设置读取失败');return}
+  clubLogoUrl=s.logoUrl||'';
+  box.innerHTML=`
+  <div class="form-grid">
+    <label class="w-field"><span>俱乐部名称 *</span><input id="setName" maxlength="40" value="${esc(s.name||'')}" placeholder="例如：远拓户外"></label>
+    <label class="w-field"><span>品牌口号（C 端首页品牌条）</span><input id="setSlogan" maxlength="60" value="${esc(s.slogan||'')}" placeholder="例如：把周末还给山野"></label>
+    <label class="w-field"><span>所在城市</span><input id="setCity" maxlength="30" value="${esc(s.city||'')}" placeholder="例如：成都"></label>
+    <label class="w-field"><span>联系人</span><input id="setContact" maxlength="20" value="${esc(s.contactName||'')}" placeholder="姓名"></label>
+    <label class="w-field"><span>联系电话</span><input id="setPhone" maxlength="20" value="${esc(s.contactPhone||'')}" placeholder="手机号"></label>
+  </div>
+  <div style="margin-top:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <span id="setLogoPrev" style="width:56px;height:56px;border-radius:12px;overflow:hidden;background:var(--bg-soft,#f2f0ea);display:inline-flex;align-items:center;justify-content:center;flex:none">${clubLogoImgHtml()}</span>
+    <div>
+      <div style="font-weight:600">俱乐部 Logo</div>
+      <div class="sub">显示在 C 端顶栏与首页品牌条；方图最佳，5MB 内 png/jpg/webp</div>
+    </div>
+    <label class="btn secondary" style="cursor:pointer;margin-left:auto">选择图片<input type="file" id="setLogoFile" accept="image/*" style="display:none" onchange="uploadClubLogo(this)"></label>
+    ${clubLogoUrl?`<button class="btn ghost" type="button" onclick="removeClubLogo()">移除</button>`:''}
+  </div>
+  <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn" type="button" onclick="saveClubSettings()">保存设置</button>
+    <span class="sub" id="setSaveTip" style="align-self:center"></span>
+  </div>
+  <div class="hr" style="margin:18px 0"></div>
+  <div style="font-weight:600;margin-bottom:6px">更多俱乐部级配置</div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn secondary" type="button" onclick="document.querySelector('.nav button[data-view=&quot;biz&quot;]')?.click()">业务介绍（C 端「户外能力」页）</button>
+    <button class="btn secondary" type="button" onclick="document.querySelector('.nav button[data-view=&quot;leaders&quot;]')?.click()">领队资源库（带队名册）</button>
+  </div>`;
+}
+function clubLogoImgHtml(){
+  return clubLogoUrl?`<img src="${esc(clubLogoUrl)}" alt="logo" style="width:100%;height:100%;object-fit:cover" onerror="this.parentNode.textContent='图'">`:'⚙';
+}
+async function saveClubSettings(){
+  const tip=$('#setSaveTip');if(tip)tip.textContent='';
+  const payload={name:$('#setName')?.value||'',slogan:$('#setSlogan')?.value||'',
+    city:$('#setCity')?.value||'',contact_name:$('#setContact')?.value||'',contact_phone:$('#setPhone')?.value||''};
+  try{
+    await api(`/api/club/${CLUB}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(tip)tip.textContent='已保存 ✓';
+    toast('俱乐部设置已保存，C 端门面已同步');
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
+}
+async function uploadClubLogo(input){
+  const f=input.files&&input.files[0];if(!f)return;
+  const fd=new FormData();fd.append('file',f);
+  try{
+    const r=await api(`/api/club/${CLUB}/settings/logo`,{method:'POST',body:fd});
+    clubLogoUrl=r.logoUrl||'';
+    const prev=$('#setLogoPrev');if(prev)prev.innerHTML=clubLogoImgHtml();
+    toast('Logo 已更新');
+    const wrap=input.closest('div[style*="margin-top"]')?.parentElement; // 移除按钮按需出现
+    if(wrap&&!wrap.querySelector('[onclick="removeClubLogo()"]')){
+      const b=document.createElement('button');b.className='btn ghost';b.type='button';b.textContent='移除';
+      b.setAttribute('onclick','removeClubLogo()');wrap.appendChild(b);
+    }
+  }catch(e){showAlert({title:'Logo 上传失败',message:e.message||'请重试'})}
+  input.value='';
+}
+async function removeClubLogo(){
+  try{
+    await api(`/api/club/${CLUB}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({logo_url:''})});
+  }catch(e){}
+  clubLogoUrl='';
+  const prev=$('#setLogoPrev');if(prev)prev.innerHTML=clubLogoImgHtml();
+  const btn=document.querySelector('#settingsBody [onclick="removeClubLogo()"]');if(btn)btn.remove();
+  toast('已移除 Logo');
 }
 
 

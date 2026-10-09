@@ -5,6 +5,8 @@ CREATE TABLE IF NOT EXISTS clubs (
   name TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'active',
   plan TEXT NOT NULL DEFAULT 'pro',
+  logo_url TEXT,
+  slogan TEXT,
   biz_section_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

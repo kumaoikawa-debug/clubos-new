@@ -2,8 +2,8 @@
 (function(){
  const page=uxPage();
  const platformGroups=[['工作空间',['pdash']],['组织与资源',['clubs','pcredits','ppoints','pbenefits']],['商品与供应链',['products','supply','warehouse','analytics']],['交易与服务',['orders','aftersales','commissions']],['财务',['finance']]];
-const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activities','content','regs','execution','leaders','points']],['客户与增长',['members','mall','biz']],['账户',['credits','payaccount']]];
-const glyphs={pdash:'◫',clubs:'♧',pcredits:'◎',ppoints:'◈',pbenefits:'◇',products:'▤',supply:'⇄',warehouse:'▦',finance:'¥',analytics:'▥',orders:'▤',aftersales:'↺',commissions:'⇥',dash:'◫',activities:'⌁',content:'✦',regs:'▤',execution:'⤴',leaders:'⚑',members:'♧',mall:'◇',credits:'◎',payaccount:'¥',points:'◈',biz:'▧'};
+const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activities','content','regs','execution','leaders','points']],['客户与增长',['members','mall','biz']],['账户',['credits','payaccount','settings']]];
+const glyphs={pdash:'◫',clubs:'♧',pcredits:'◎',ppoints:'◈',pbenefits:'◇',products:'▤',supply:'⇄',warehouse:'▦',finance:'¥',analytics:'▥',orders:'▤',aftersales:'↺',commissions:'⇥',dash:'◫',activities:'⌁',content:'✦',regs:'▤',execution:'⤴',leaders:'⚑',members:'♧',mall:'◇',credits:'◎',payaccount:'¥',points:'◈',biz:'▧',settings:'⚙'};
  const leafLabel={pdash:'平台概览',dash:'工作台',analytics:page==='platform'?'商城经营 / 补货':'经营驾驶舱'};
  const nav=document.querySelector('.nav'),bar=document.querySelector('.topbar');
  function roleName(){return page==='platform'?'总平台管理':page==='club'?'俱乐部经营':'用户端'}
