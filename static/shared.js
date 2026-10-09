@@ -203,6 +203,54 @@ async function api(url,opt={}){
   }
   return run;
 }
+/* ── 身份证件：类型清单 + 号码校验（四端共用）───────────────────────────────
+   C 端报名表单与「我的订单 · 补资料」共用同一份清单、同一套校验；
+   后端 clubos_domain/participants.py 有一份等价实现（ID_TYPES / id_number_error），
+   两边规则必须一起改，否则会出现「前端放过、后端 409 打回」的体验裂缝。
+
+   为什么类型必须是选单而不是手打：这份资料是拿去投保与实名出行的，
+   自由文本会写出「身份証」「身份证/护照」这种没法进保单的值；
+   号码错一位，保险公司在出险时才退件，那时已经来不及了。
+
+   校验刻意分两档（宁松勿严，别把真实证件挡在门外）：
+   · 身份证 / 居住证 —— 有法定校验位，18 位必须过 MOD 11-2（15 位老证只查格式）；
+   · 其余证件 —— 各国/各证种编号规则并不统一，只校验字符集与长度区间。 */
+const ID_TYPES=[
+  {v:'身份证',label:'居民身份证',re:/^(\d{15}|\d{17}[\dXx])$/,chk:1,ph:'18 位，末位可为 X'},
+  {v:'护照',label:'护照',re:/^[A-Za-z0-9]{5,18}$/,ph:'字母或数字，5-18 位'},
+  {v:'港澳居民来往内地通行证',label:'港澳居民来往内地通行证（回乡证）',re:/^[A-Za-z0-9]{8,12}$/,ph:'如 H12345678'},
+  {v:'台湾居民来往大陆通行证',label:'台湾居民来往大陆通行证（台胞证）',re:/^[A-Za-z0-9]{8,12}$/,ph:'8 位数字或字母+数字'},
+  {v:'大陆居民往来港澳通行证',label:'大陆居民往来港澳通行证',re:/^[A-Za-z0-9]{8,12}$/,ph:'如 C12345678'},
+  {v:'大陆居民往来台湾通行证',label:'大陆居民往来台湾通行证',re:/^[A-Za-z0-9]{8,12}$/,ph:'如 T12345678'},
+  {v:'港澳台居民居住证',label:'港澳/台湾居民居住证',re:/^(\d{15}|\d{17}[\dXx])$/,chk:1,ph:'18 位，末位可为 X'},
+  {v:'外国人永久居留身份证',label:'外国人永久居留身份证',re:/^[A-Za-z0-9]{10,18}$/,ph:'如 ABC123456789012'},
+  {v:'军官证',label:'军官证',re:/^[\u4e00-\u9fa5A-Za-z0-9\-]{4,20}$/,ph:'证件上的完整编号'},
+  {v:'士兵证',label:'士兵证',re:/^[\u4e00-\u9fa5A-Za-z0-9\-]{4,20}$/,ph:'证件上的完整编号'},
+  {v:'出生医学证明',label:'出生医学证明（未满 16 周岁）',re:/^[A-Za-z0-9]{10,12}$/,ph:'1 位字母 + 9 位数字'},
+  {v:'其他证件',label:'其他证件',re:/^[A-Za-z0-9\-\/]{4,25}$/,ph:'证件上的完整编号'}
+];
+function idTypeLabel(v){const t=ID_TYPES.find(x=>x.v===v);return t?t.label:(v||'')}
+function idTypeOptionsHtml(sel){
+  const cur=sel||'';
+  return '<option value=""'+(cur?'':' selected')+'>请选择证件类型</option>'
+    +ID_TYPES.map(t=>`<option value="${esc(t.v)}"${t.v===cur?' selected':''}>${esc(t.label)}</option>`).join('');
+}
+function idTypePlaceholder(v){const t=ID_TYPES.find(x=>x.v===v);return t?t.ph:'证件上的完整编号'}
+/* 居民身份证校验位：GB 11643-1999（ISO 7064 MOD 11-2）。
+   返回空串＝通过；否则返回一句能直接 toast 给顾客看的话。 */
+const _ID_W=[7,9,10,5,8,4,2,1,6,3,7,9,10,5,8,4,2],_ID_C='10X98765432';
+function idNumberError(type,value){
+  const no=String(value||'').trim();
+  if(!no)return '请填写证件号码';
+  const t=ID_TYPES.find(x=>x.v===type);
+  if(!t)return '请选择证件类型';
+  if(!t.re.test(no))return `证件号码格式不正确（${t.label}：${t.ph}）`;
+  if(t.chk&&no.length===18){
+    let sum=0;for(let i=0;i<17;i++)sum+=Number(no[i])*_ID_W[i];
+    if(_ID_C[sum%11]!==no[17].toUpperCase())return '身份证号码校验位不正确，请核对后重新填写';
+  }
+  return '';
+}
 function money(n){return '¥'+Number(n||0).toLocaleString('zh-CN',{maximumFractionDigits:2})}
 /* 活动价显示：成本为 0 / 缺失 / 被标记为待定时，一律显示「价格待定」，绝不把成本底价当售价露出。
    `pending` 由后端在「活动来自成本表」时打上（priceFrom='pending'）；即便没有该标记，

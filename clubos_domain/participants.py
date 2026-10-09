@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -7,7 +8,10 @@ from typing import Any
 DEFAULT_POLICY = {
     "maxParticipantsPerOrder": 8,
     "allowIncompleteAtCheckout": True,
-    "requiredAtCheckout": ["name", "phone"],
+    # 证件必选（2026-10-09 产品硬规则）：付款前必须提交证件类型 + 证件号码，
+    # 不受 allowIncompleteAtCheckout 影响 —— 证件是投保与实名出行的前提，
+    # 出发前再补俱乐部来不及出保单；允许后补的只是紧急联系人等资料。
+    "requiredAtCheckout": ["name", "phone", "idType", "idNumber"],
     "requiredBeforeDeparture": ["name", "phone", "idType", "idNumber", "emergencyContactName", "emergencyContactPhone"],
     "insuranceRequired": True,
     "insuranceBearer": "club",
@@ -25,6 +29,57 @@ FIELD_MAP = {
     "relationToPayer": "relation_to_payer",
     "notes": "notes",
 }
+
+# 报错里的字段名一律中文化：400/409 的 detail 会原样 toast 给顾客，
+# 露出 "idType" 这种键名等于没提示。
+FIELD_LABELS = {
+    "name": "姓名",
+    "phone": "手机号",
+    "idType": "证件类型",
+    "idNumber": "证件号码",
+    "emergencyContactName": "紧急联系人",
+    "emergencyContactPhone": "紧急联系人电话",
+}
+
+# 证件类型清单 + 号码格式校验 —— 与 static/shared.js 的 ID_TYPES / idNumberError
+# 一一对应（改一处必须同步另一处，否则「前端放过、后端 409」或反向）。
+# 校验刻意分两档（宁松勿严，别把真实证件挡在门外）：
+# · 身份证 / 居住证 —— 有法定校验位，18 位必须过 MOD 11-2（15 位老证只查格式）；
+# · 其余证件 —— 各国/各证种编号规则并不统一，只校验字符集与长度区间。
+ID_TYPES = [
+    {"v": "身份证", "re": re.compile(r"^(\d{15}|\d{17}[\dXx])$"), "chk": True, "ph": "18 位，末位可为 X"},
+    {"v": "护照", "re": re.compile(r"^[A-Za-z0-9]{5,18}$"), "chk": False, "ph": "字母或数字，5-18 位"},
+    {"v": "港澳居民来往内地通行证", "re": re.compile(r"^[A-Za-z0-9]{8,12}$"), "chk": False, "ph": "如 H12345678"},
+    {"v": "台湾居民来往大陆通行证", "re": re.compile(r"^[A-Za-z0-9]{8,12}$"), "chk": False, "ph": "8 位数字或字母+数字"},
+    {"v": "大陆居民往来港澳通行证", "re": re.compile(r"^[A-Za-z0-9]{8,12}$"), "chk": False, "ph": "如 C12345678"},
+    {"v": "大陆居民往来台湾通行证", "re": re.compile(r"^[A-Za-z0-9]{8,12}$"), "chk": False, "ph": "如 T12345678"},
+    {"v": "港澳台居民居住证", "re": re.compile(r"^(\d{15}|\d{17}[\dXx])$"), "chk": True, "ph": "18 位，末位可为 X"},
+    {"v": "外国人永久居留身份证", "re": re.compile(r"^[A-Za-z0-9]{10,18}$"), "chk": False, "ph": "如 ABC123456789012"},
+    {"v": "军官证", "re": re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9\-]{4,20}$"), "chk": False, "ph": "证件上的完整编号"},
+    {"v": "士兵证", "re": re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9\-]{4,20}$"), "chk": False, "ph": "证件上的完整编号"},
+    {"v": "出生医学证明", "re": re.compile(r"^[A-Za-z0-9]{10,12}$"), "chk": False, "ph": "1 位字母 + 9 位数字"},
+    {"v": "其他证件", "re": re.compile(r"^[A-Za-z0-9\-/]{4,25}$"), "chk": False, "ph": "证件上的完整编号"},
+]
+IDENTITY_FIELDS = ("idType", "idNumber")
+_ID_WEIGHTS = (7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2)
+_ID_CODES = "10X98765432"
+
+
+def id_number_error(id_type: str, number: str) -> str:
+    """返回空串＝通过；否则返回一句能直接给顾客看的话（与前端 idNumberError 同规则）。"""
+    no = str(number or "").strip()
+    if not no:
+        return "请填写证件号码"
+    spec = next((t for t in ID_TYPES if t["v"] == id_type), None)
+    if spec is None:
+        return "请选择证件类型"
+    if not spec["re"].match(no):
+        return f"证件号码格式不正确（{spec['v']}：{spec['ph']}）"
+    if spec["chk"] and len(no) == 18:
+        s = sum(int(no[i]) * _ID_WEIGHTS[i] for i in range(17))
+        if _ID_CODES[s % 11] != no[17].upper():
+            return "身份证号码校验位不正确，请核对后重新填写"
+    return ""
 
 @dataclass
 class ParticipantPolicy:
@@ -57,6 +112,15 @@ class ParticipantService:
         data["allowParticipantReplacement"] = bool(data.get("allowParticipantReplacement", True))
         data["requiredAtCheckout"] = list(data.get("requiredAtCheckout") or ["name", "phone"])
         data["requiredBeforeDeparture"] = list(data.get("requiredBeforeDeparture") or data["requiredAtCheckout"])
+        # 证件必选硬规则在读取处统一并入：旧活动库里存的 requiredAtCheckout 多半还是
+        # ["name","phone"]，逐条迁移存库配置不如在出口兜住 —— 俱乐部即便保存过
+        # 「允许先付款后补资料」，也只放宽紧急联系人，证件两项永远在必填清单里。
+        for key in ("requiredAtCheckout", "requiredBeforeDeparture"):
+            merged = list(data.get(key) or [])
+            for f in IDENTITY_FIELDS:
+                if f not in merged:
+                    merged.append(f)
+            data[key] = merged
         return ParticipantPolicy(data)
 
     def persist(self, c, *, activity_id: int, club_id: int, payload: dict[str, Any]) -> ParticipantPolicy:
@@ -87,9 +151,16 @@ class ParticipantService:
             if not x["relationToPayer"]:
                 x["relationToPayer"] = "本人" if idx == 1 and x["phone"] == str(payer_phone or "") else "同行人"
             required_now = policy.data["requiredAtCheckout"] if policy.data.get("allowIncompleteAtCheckout", True) else policy.data["requiredBeforeDeparture"]
+            # 证件必选硬闸（from_activity 已并入，这里防御性再并一次）：任何代码路径
+            # ——报名结算、demo 直报、转名额——都经过本函数，改这里等于全部闸住。
+            required_now = list(dict.fromkeys(list(required_now) + list(IDENTITY_FIELDS)))
             missing_checkout = [f for f in required_now if not str(x.get(f) or "").strip()]
             if missing_checkout:
-                raise ValueError(f"第{idx}位参加人缺少报名必填资料：{', '.join(missing_checkout)}")
+                labels = "、".join(FIELD_LABELS.get(f, f) for f in missing_checkout)
+                raise ValueError(f"第{idx}位参加人缺少报名必填资料：{labels}")
+            id_err = id_number_error(x["idType"], x["idNumber"])
+            if id_err:
+                raise ValueError(f"第{idx}位参加人{id_err}")
             x["formStatus"] = self._form_status(x, policy.data)
             normalized.append(x)
         return normalized, policy
@@ -170,6 +241,12 @@ class ParticipantService:
                 val = str(payload.get(api_key) or "").strip()
                 merged[api_key] = val
                 sets.append(f"{col}=?"); vals.append(val)
+        # 补资料与报名同一套证件校验：这份资料是投保用的，乱号进了保单出险时才暴露。
+        # 只在本次提交涉及证件时校验（按合并后的值），不拦只补紧急联系人的历史订单。
+        if ("idType" in payload) or ("idNumber" in payload):
+            id_err = id_number_error(merged.get("idType", ""), merged.get("idNumber", ""))
+            if id_err:
+                raise ValueError(id_err)
         status = self._form_status(merged, policy)
         sets.append("form_status=?"); vals.append(status)
         sets.append("updated_at=CURRENT_TIMESTAMP")

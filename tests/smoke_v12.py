@@ -71,7 +71,7 @@ assert ps['completeCount']==0  # IDs/emergency contacts intentionally deferred.
 # Supplement one attendee's required pre-departure data.
 pid=ps['participants'][1]['id']
 upd=ok('patch',f'/api/public/registrations/{rid}/participants/{pid}',json={
-    'idType':'身份证','idNumber':'510100199001010001',
+    'idType':'身份证','idNumber':'510100199001010005',
     'emergencyContactName':'林先生','emergencyContactPhone':'13900000000'
 }).json()
 assert upd['form_status']=='complete'

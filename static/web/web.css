@@ -676,13 +676,24 @@
 .w-fld{display:grid;gap:5px;min-width:0}
 .w-fld>span{font-size:11px;font-weight:600;color:var(--w-muted)}
 .w-fld>span i{color:var(--w-accent);font-style:normal;margin-left:2px}
-.w-fld input{
+.w-fld input,.w-fld select{
   width:100%;min-height:40px;padding:9px 11px;border:1px solid var(--w-line);border-radius:10px;
   background:#fff;color:var(--w-ink);font-family:inherit;font-size:13px;outline:0;
   transition:border-color .2s,box-shadow .2s;
 }
-.w-fld input:focus{border-color:#b9c8bd;box-shadow:0 0 0 3px rgba(21,98,67,.08)}
+.w-fld input:focus,.w-fld select:focus{border-color:#b9c8bd;box-shadow:0 0 0 3px rgba(21,98,67,.08)}
 .w-fld input::placeholder{color:#aab3ad}
+/* 证件类型是选单（shared.js 的 ID_TYPES）：隐藏原生箭头，画一个与整套图标
+   同笔画的 chevron；占位态（未选择）文字置灰，与 input 的 placeholder 一致。 */
+.w-fld select{
+  appearance:none;-webkit-appearance:none;padding-right:32px;cursor:pointer;
+  background-image:url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237a8a82' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat;background-position:right 11px center;background-size:13px;
+}
+.w-fld select:invalid,.w-fld select[data-empty="1"]{color:#8a9590}
+/* 校验不过的字段：红框 + 字段内联报错（点「立即报名」时由 paxShowError 写入） */
+.w-fld input.is-bad,.w-fld select.is-bad{border-color:#c0392b;box-shadow:0 0 0 3px rgba(192,57,43,.10)}
+.w-fld .fld-err{color:#c0392b;font-size:11px;line-height:1.5}
 
 /* 提交按钮：把「要付多少」写在按钮上，省掉一次「点了才知道多少钱」的往返 */
 .w-submit{

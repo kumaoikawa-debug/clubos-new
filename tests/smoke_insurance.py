@@ -30,7 +30,7 @@ aid=ok('get','/api/public/clubs/1/activities').json()[0]['id']
 start=(datetime.now()+timedelta(days=3)).replace(microsecond=0).isoformat(sep=' ')
 oid=ok('post',f'/api/club/1/activities/{aid}/occurrences',json={'startAt':start,'price':260,'capacity':6,'label':'保险自动化-未来团'}).json()['id']
 ok('post',f'/api/club/1/activities/{aid}/publish')
-participants=[{'name':'保险甲','phone':'13830000001','relationToPayer':'本人','idType':'身份证','idNumber':'510100199001010301','emergencyContactName':'甲家属','emergencyContactPhone':'13930000001'}]
+participants=[{'name':'保险甲','phone':'13830000001','relationToPayer':'本人','idType':'身份证','idNumber':'510100199001010304','emergencyContactName':'甲家属','emergencyContactPhone':'13930000001'}]
 co=ok('post',f'/api/public/activities/{aid}/checkout',json={'name':'保险甲','phone':'13830000001','occurrenceId':oid,'participants':participants}).json()
 paid=ok('post',f"/api/public/checkouts/{co['checkoutId']}/pay",json={'provider':'local','simulateSuccess':True}).json()['result']
 rid=paid['registrationId']
@@ -64,7 +64,7 @@ assert len(cjobs)==1 and cjobs[0]['status']=='done'
 start_past=(datetime.now()-timedelta(days=3)).replace(microsecond=0).isoformat(sep=' ')
 oid2=ok('post',f'/api/club/1/activities/{aid}/occurrences',json={'startAt':start_past,'price':260,'capacity':6,'label':'保险自动化-过去团'}).json()['id']
 ok('post',f'/api/club/1/activities/{aid}/publish')
-co2=ok('post',f'/api/public/activities/{aid}/checkout',json={'name':'保险乙','phone':'13830000002','occurrenceId':oid2,'participants':[{'name':'保险乙','phone':'13830000002','relationToPayer':'本人','idType':'身份证','idNumber':'510100199001010302','emergencyContactName':'乙家属','emergencyContactPhone':'13930000002'}]}).json()
+co2=ok('post',f'/api/public/activities/{aid}/checkout',json={'name':'保险乙','phone':'13830000002','occurrenceId':oid2,'participants':[{'name':'保险乙','phone':'13830000002','relationToPayer':'本人','idType':'身份证','idNumber':'510100199001010312','emergencyContactName':'乙家属','emergencyContactPhone':'13930000002'}]}).json()
 rid2=ok('post',f"/api/public/checkouts/{co2['checkoutId']}/pay",json={'provider':'local','simulateSuccess':True}).json()['result']['registrationId']
 with app.conn() as dbc:
     occ2=dict(dbc.execute('SELECT * FROM activity_occurrences WHERE id=?',(oid2,)).fetchone())

@@ -32,7 +32,7 @@ assert 'private_key' not in json.dumps(club_acc).lower()
 # Activity checkout -> club payment account.
 aid=ok('get','/api/public/clubs/1/activities').json()[0]['id']
 a=ok('get',f'/api/public/activities/{aid}').json(); oid=a['occurrences'][0]['id']
-co=ok('post',f'/api/public/activities/{aid}/checkout',json={'name':'林野','phone':'13800000001','occurrenceId':oid,'clubPoints':0,'gearPoints':0,'participants':[{'name':'林野','phone':'13800000001'}]}).json()
+co=ok('post',f'/api/public/activities/{aid}/checkout',json={'name':'林野','phone':'13800000001','occurrenceId':oid,'clubPoints':0,'gearPoints':0,'participants':[{'name':'林野','phone':'13800000001','idType':'身份证','idNumber':'510100199001010005'}]}).json()
 pay=ok('post',f"/api/public/checkouts/{co['checkoutId']}/pay",json={'simulateSuccess':True}).json()
 assert pay['paymentStatus']=='succeeded'
 with app.conn() as dbc:

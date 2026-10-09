@@ -127,8 +127,21 @@ function rulesConsent(a){
 window.signupNow=async function(){if(!currentAct||!currentOcc){toast('请先选择团期');return}
   /* 同意确认放在最前面：没同意就谈不上名额与资料校验（取消 = 放弃报名，不弹别的提示）。 */
   if(!await rulesConsent(currentAct))return;
-  if(Number(currentOcc.remaining)<bookingParticipants.length){toast('本团期剩余名额不足，请重新选择');return}const requireComplete=currentAct.participantPolicy?.allowIncompleteAtCheckout===false;
-  for(let i=0;i<bookingParticipants.length;i++){const p=bookingParticipants[i];if(!p.name?.trim()){toast('请填写第 '+(i+1)+' 位参加人姓名');document.querySelector('#participantForms input')?.focus();return}if(!validPhone(p.phone)){toast('第 '+(i+1)+' 位参加人电话格式需要核对');return}if(requireComplete&&(!p.idType||!p.idNumber||!p.emergencyContactName||!validPhone(p.emergencyContactPhone))){toast('本活动要求付款前补齐第 '+(i+1)+' 位参加人的证件与紧急联系人资料');return}}
+  if(Number(currentOcc.remaining)<bookingParticipants.length){toast('本团期剩余名额不足，请重新选择');return}
+  const requireComplete=currentAct.participantPolicy?.allowIncompleteAtCheckout===false;
+  /* 证件必选（2026-10-09 用户要求）：证件类型 + 证件号码在付款之前必须交齐并过格式
+     校验，这一条不受俱乐部「允许先付款、后补资料」开关影响 —— 证件是投保与实名出行
+     的前提，出发前再补俱乐部来不及出保单；允许后补的只是紧急联系人（按俱乐部策略）。
+     校验失败把红框 + 内联文案落在具体字段上（paxShowError，web.js），而不是只 toast 一闪；
+     后端 participants.normalize_for_checkout 还有同规则硬闸，双保险。 */
+  if(typeof paxClearAllErrors==='function')paxClearAllErrors();
+  for(let i=0;i<bookingParticipants.length;i++){const p=bookingParticipants[i];
+    if(!p.name?.trim()){if(typeof paxShowError==='function')paxShowError(i,'name','请填写姓名');toast('请填写第 '+(i+1)+' 位参加人姓名');return}
+    if(!validPhone(p.phone)){if(typeof paxShowError==='function')paxShowError(i,'phone','手机号格式需要核对');toast('第 '+(i+1)+' 位参加人电话格式需要核对');return}
+    if(!p.idType){if(typeof paxShowError==='function')paxShowError(i,'idType','请选择证件类型');toast('请选择第 '+(i+1)+' 位参加人的证件类型');return}
+    const idErr=(typeof idNumberError==='function')?idNumberError(p.idType,p.idNumber):(!String(p.idNumber||'').trim()?'请填写证件号码':'');
+    if(idErr){if(typeof paxShowError==='function')paxShowError(i,'idNumber',idErr);toast('第 '+(i+1)+' 位参加人'+(idErr.startsWith('请')?'：':'的')+idErr);return}
+    if(requireComplete&&(!p.emergencyContactName||!validPhone(p.emergencyContactPhone))){if(typeof paxShowError==='function')paxShowError(i,'emergencyContactName','本活动要求付款前补齐紧急联系人资料');toast('本活动要求付款前补齐第 '+(i+1)+' 位参加人的紧急联系人资料');return}}
   // 校验放在锁外：资料没填全时立刻给提示，不该让「立即报名」闪一下忙态。
   return uxFlow('checkout',async()=>{
    try{const cp=Number(document.getElementById('clubUse')?.value||0),gp=Number(document.getElementById('gearUse')?.value||0),code=document.getElementById('benefitUse')?.value||'';const q=await post('/api/public/activities/'+currentAct.id+'/checkout',{name:PAYER_NAME,phone:PAYER_PHONE,occurrenceId:currentOcc.id,clubPoints:cp,gearPoints:gp,voucherCodes:code?[code]:[],participants:bookingParticipants});const paid=await payCheckout(q);if(!paid)return;await receipt('报名成功',[['参加人数',(paid.participantCount||bookingParticipants.length)+' 人'],['实际支付',money(paid.cashPaid)],['获得活动积分',String(paid.clubPointsEarned||0)]]);await loadWallet();await openAct(currentAct.id)}catch(e){toast(e.message||'报名未完成，请到订单查看状态')}

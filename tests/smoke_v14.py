@@ -33,9 +33,9 @@ red=ok('post',f'/api/public/clubs/1/benefits/{bid}/redeem',json={'userId':1}).js
 voucher=red['voucherCode']
 
 participants=[
- {'name':'林野','phone':'13800000001','relationToPayer':'本人'},
- {'name':'同行乙','phone':'13814000002','relationToPayer':'朋友'},
- {'name':'同行丙','phone':'13814000003','relationToPayer':'朋友'},
+ {'name':'林野','phone':'13800000001','relationToPayer':'本人','idType':'身份证','idNumber':'510100199001010005'},
+ {'name':'同行乙','phone':'13814000002','relationToPayer':'朋友','idType':'身份证','idNumber':'510100199001010013'},
+ {'name':'同行丙','phone':'13814000003','relationToPayer':'朋友','idType':'身份证','idNumber':'510100199001010312'},
 ]
 co=ok('post',f'/api/public/activities/{aid}/checkout',json={
     'name':'林野','phone':'13800000001','occurrenceId':oid,'participants':participants,

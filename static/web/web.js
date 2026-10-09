@@ -673,7 +673,10 @@ let a=await api(`/api/public/activities/${id}`);currentAct=a;
 /* 默认选中也要跳过已出发的团期：否则一进详情页按钮就是「立即报名 ¥xxx」，
    顾客点下去才被告知不能报。 */
 currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0&&!occExpired(o))||null;
-bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
+/* 参加人默认带一位：付款人自己（relationToPayer=本人）。
+   证件类型默认「身份证」—— 绝大多数参加人是大陆居民；不是的话号码格式校验会
+   逼着顾客把类型换成护照/台胞证等（号码按类型校验，选错类型过不去）。 */
+bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'身份证',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
 /* 回到活动列表。两个入口共用：详情页的「返回活动」、底部「活动」tab。 */
 function showActivityList(){
   const l=$('#activityList');if(l)l.style.display='block';
@@ -743,9 +746,11 @@ function refundPolicyHtml(a){
 function participantPolicyHtml(a){
   const p=a.participantPolicy||{};const max=Number(p.maxParticipantsPerOrder||8);
   const li=[`单笔最多报名 ${max} 人；每位参加人占 1 个名额。`];
+  /* 证件必填是产品硬规则（2026-10-09 用户要求），不随俱乐部的「可后补」开关变化：
+     允许后补的只是紧急联系人这类资料，证件在付款前就必须交齐。 */
   li.push(p.allowIncompleteAtCheckout===false
     ?'本活动要求支付前完成全部报名资料（姓名、手机号、证件、紧急联系人）。'
-    :'可先报名支付；身份证 / 紧急联系人等资料可在「我的订单」后补。');
+    :'证件类型与证件号码为必填，付款前必须填写；紧急联系人等资料可在「我的订单」后补。');
   if(p.insuranceRequired)li.push('本活动需要保险资料，报名后请在订单中心维护投保信息。');
   if(p.allowParticipantReplacement)li.push(`出发前至少 ${Number(p.replacementCutoffHours||0)} 小时，允许自助转让名额给其他人。`);
   return `<section class="w-block"><div class="w-block__head"><div><b>报名人规则</b><div class="w-block__hint">付款人与实际参加人可以不同；多人报名按参加人数占名额与计价。</div></div></div><ul class="w-policy__list">${li.map(t=>`<li>${esc(t)}</li>`).join('')}</ul></section>`;
@@ -768,6 +773,14 @@ function disclaimerHtml(a){
     <p>④ 报名参加即视为同意上述注意事项与免责声明全部条款，并授权组织方在活动必要范围内使用活动期间拍摄的影像资料用于活动记录与宣传。</p>
     <p>⑤ 本声明未尽事宜，依据《中华人民共和国民法典》及相关法律法规处理；发生争议协商不成的，提交活动组织方所在地有管辖权的人民法院诉讼解决。</p>
   </div></section>`;
+}
+/* 报名卡底部那行提示文案：初始渲染（bookingHtml）与改人数（setParticipantCount）
+   各写了一份，措辞早就对不上了。收拢成一处，改文案只改这里。 */
+function paxFootText(pp,maxPax,cur){
+  const head=pp?.allowIncompleteAtCheckout===false
+    ?'本活动要求支付前完成全部报名资料。'
+    :'证件类型与证件号码为必填 · 紧急联系人等可在「我的订单」后补。';
+  return `${head}${pp?.insuranceRequired?' · 本活动需要保险资料。':''}${cur>=maxPax?` · 单笔最多 ${maxPax} 人`:''}`;
 }
 function bookingHtml(a){
   const p=a.pointsPolicy||{}; const e=p.effective||{};
@@ -800,7 +813,7 @@ function bookingHtml(a){
       </div>
     </div>
     <div id="paxForms"></div>
-    <div class="w-block__foot">${pp.allowIncompleteAtCheckout===false?'本活动要求支付前完成全部报名资料。':'可先报名支付；身份证 / 紧急联系人等资料可在「我的订单」后补。'}${pp.insuranceRequired?' · 本活动需要保险资料。':''}${cur>=maxPax?` · 单笔最多 ${maxPax} 人`:''}</div>
+    <div class="w-block__foot">${paxFootText(pp,maxPax,cur)}</div>
     <input type="hidden" id="participantCount" value="${cur}"></div>`;
   return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${earnNote}${pointArea}<div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
 }
@@ -845,7 +858,7 @@ function refundPolicyBrief(p){
 }
 function setParticipantCount(v){
   const max=Number(currentAct?.participantPolicy?.maxParticipantsPerOrder||8),n=Math.max(1,Math.min(max,Number(v||1)));
-  while(bookingParticipants.length<n)bookingParticipants.push({name:'',phone:'',relationToPayer:'同行人',idType:'',idNumber:'',emergencyContactName:'',emergencyContactPhone:''});
+  while(bookingParticipants.length<n)bookingParticipants.push({name:'',phone:'',relationToPayer:'同行人',idType:'身份证',idNumber:'',emergencyContactName:'',emergencyContactPhone:''});
   bookingParticipants=bookingParticipants.slice(0,n);
   if($('#participantCount'))$('#participantCount').value=n;
   /* 步进器的数字与两端的禁用态一并更新：只改隐藏 input 的话，加号到了上限还能点。 */
@@ -856,8 +869,7 @@ function setParticipantCount(v){
     if(minus)minus.disabled=n<=1;
     if(plus)plus.disabled=n>=max;
     const foot=document.querySelector('#bookingCard .w-block__foot');
-    const ins=currentAct?.participantPolicy?.insuranceRequired?' · 本活动需要保险资料。':'';
-    if(foot)foot.textContent=`${currentAct?.participantPolicy?.allowIncompleteAtCheckout===false?'本活动要求支付前完成全部报名资料。':'可先报名支付；身份证 / 紧急联系人等资料可在「我的订单」后补。'}${ins}${n>=max?` · 单笔最多 ${max} 人`:''}`;
+    if(foot)foot.textContent=paxFootText(currentAct?.participantPolicy||{},max,n);
   }
   renderParticipantForms(); refreshQuote();
 }
@@ -869,7 +881,10 @@ function removeParticipant(i){
 function participantField(i,key,val){bookingParticipants[i][key]=val}
 /* 参加人资料：每位参加人一张卡、字段各自带标签。
    早前是 6 个裸 input 挤在一条 .notice 里、只有 placeholder 没有标签 —— 填到第 6 个框
-   就记不清这行到底是「证件号码」还是「紧急联系人电话」。 */
+   就记不清这行到底是「证件号码」还是「紧急联系人电话」。
+   证件两项（2026-10-09 用户要求）为付款前必填：类型用 shared.js 的 ID_TYPES 选单
+   （自由文本写不出「居民身份证 / 台胞证」这种能进保单的值），号码按类型校验格式。
+   每个字段带 data-pax/data-key，校验失败时 paxShowError 能定位到具体输入框聚焦。 */
 function renderParticipantForms(){
   const box=$('#paxForms');if(!box)return;
   box.innerHTML=bookingParticipants.map((p,i)=>`<div class="w-pax">
@@ -878,16 +893,48 @@ function renderParticipantForms(){
     <div class="w-pax__grid">
       ${paxField(i,'name','姓名',p.name,{req:1,ph:'与证件一致'})}
       ${paxField(i,'phone','手机号',p.phone,{req:1,type:'tel',ph:'11 位手机号'})}
-      ${paxField(i,'idType','证件类型',p.idType,{ph:'如 身份证'})}
-      ${paxField(i,'idNumber','证件号码',p.idNumber,{ph:'可支付后补'})}
+      ${paxField(i,'idType','证件类型',p.idType,{req:1,options:1})}
+      ${paxField(i,'idNumber','证件号码',p.idNumber,{req:1,ph:idTypePlaceholder(p.idType)})}
       ${paxField(i,'emergencyContactName','紧急联系人',p.emergencyContactName,{ph:'可支付后补'})}
       ${paxField(i,'emergencyContactPhone','紧急联系人电话',p.emergencyContactPhone,{ph:'可支付后补'})}
     </div></div>`).join('');
 }
 function paxField(i,key,label,val,o){
   o=o||{};
-  return `<label class="w-fld"><span>${label}${o.req?'<i aria-hidden="true">*</i>':''}</span>
-    <input type="${o.type||'text'}" value="${esc(val||'')}" placeholder="${o.ph||''}" autocomplete="off" oninput="participantField(${i},'${key}',this.value)"></label>`;
+  const mark=o.req?'<i aria-hidden="true">*</i>':'';
+  const ctl=o.options
+    ?`<select data-empty="${val?'0':'1'}" onchange="participantIdType(${i},this.value)">${idTypeOptionsHtml(val)}</select>`
+    :`<input type="${o.type||'text'}" value="${esc(val||'')}" placeholder="${o.ph||''}" autocomplete="off" oninput="participantField(${i},'${key}',this.value)">`;
+  return `<label class="w-fld" data-pax="${i}" data-key="${key}"><span>${label}${mark}</span>${ctl}</label>`;
+}
+/* 证件类型变化：同步证件号码输入框的占位示例（按类型给格式提示），并清掉错误高亮。
+   刻意不整卡重渲染 —— 重渲染会丢焦点，顾客正输到一半会被打断。 */
+function participantIdType(i,v){
+  bookingParticipants[i].idType=v;
+  const sel=document.querySelector(`#paxForms [data-pax="${i}"][data-key="idType"] select`);
+  if(sel)sel.dataset.empty=v?'0':'1';
+  const inp=document.querySelector(`#paxForms [data-pax="${i}"][data-key="idNumber"] input`);
+  if(inp){inp.placeholder=idTypePlaceholder(v);inp.classList.remove('is-bad')}
+  paxClearError(i,'idType');
+}
+/* 报名校验的反馈落在字段里，而不只是 toast：手机上 toast 一闪就没了，
+   顾客不知道红的是哪个框。paxShowError 定位字段 → 红框 + 内联文案 + 聚焦。 */
+function paxClearError(i,key){
+  const fld=document.querySelector(`#paxForms [data-pax="${i}"][data-key="${key}"]`);if(!fld)return;
+  fld.querySelector('.fld-err')?.remove();
+  fld.querySelector('.is-bad')?.classList.remove('is-bad');
+}
+function paxShowError(i,key,msg){
+  const fld=document.querySelector(`#paxForms [data-pax="${i}"][data-key="${key}"]`);if(!fld)return;
+  const ctl=fld.querySelector('input,select');
+  if(ctl){ctl.classList.add('is-bad');if(ctl.focus)ctl.focus({preventScroll:false})}
+  let err=fld.querySelector('.fld-err');
+  if(!err){err=document.createElement('span');err.className='fld-err';err.setAttribute('role','alert');fld.append(err)}
+  err.textContent=msg;
+}
+function paxClearAllErrors(){
+  document.querySelectorAll('#paxForms .fld-err').forEach(e=>e.remove());
+  document.querySelectorAll('#paxForms .is-bad').forEach(e=>e.classList.remove('is-bad'));
 }
 async function loadActivityVouchers(){
   if(!currentAct||!$('#activityBenefitArea'))return;
@@ -1149,12 +1196,29 @@ async function loadOrders(){
 }catch(e){loaderError('#activityOrders',e,'loadOrders 加载失败')}}
 async function editParticipant(regId,pid){
   const d=await api(`/api/public/registrations/${regId}/participants`),p=(d.participants||[]).find(x=>x.id===pid);if(!p)return;
-  const v=await showForm({title:'编辑报名资料',submitText:'保存',fields:[{name:'idType',label:'证件类型',value:p.id_type||'身份证'},{name:'idNumber',label:'证件号码',value:p.id_number||''},{name:'ec',label:'紧急联系人',value:p.emergency_contact_name||''},{name:'ep',label:'紧急联系人电话',value:p.emergency_contact_phone||''}]});if(!v)return;
+  /* 补资料与报名共用同一份证件清单与同一套号码校验（shared.js ID_TYPES / idNumberError）；
+     后端对补资料接口做同样校验 —— 这份资料是投保用的，乱号进了保单出险时才暴露。 */
+  const v=await showForm({title:'编辑报名资料',submitText:'保存',
+    fields:[
+      {name:'idType',label:'证件类型',type:'select',required:true,value:p.id_type||'身份证',options:ID_TYPES.map(t=>({value:t.v,label:t.label}))},
+      {name:'idNumber',label:'证件号码',required:true,value:p.id_number||''},
+      {name:'ec',label:'紧急联系人',value:p.emergency_contact_name||''},
+      {name:'ep',label:'紧急联系人电话',value:p.emergency_contact_phone||''}
+    ],
+    validate:vals=>{const e=idNumberError(vals.idType,vals.idNumber);if(e){toast(e);return false}return true}});
+  if(!v)return;
   try{await api(`/api/public/registrations/${regId}/participants/${pid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({idType:v.idType,idNumber:v.idNumber,emergencyContactName:v.ec,emergencyContactPhone:v.ep})});toast('报名资料已更新');loadOrders()}catch(e){showAlert({title:'保存失败',message:e.message})}
 }
 async function replaceParticipant(regId,pid){
-  const v=await showForm({title:'更换参加人',desc:'新参加人的保险信息需重新处理。',submitText:'确认更换',fields:[{name:'name',label:'新参加人姓名',required:true},{name:'phone',label:'新参加人手机号',required:true}]});if(!v)return;
-  try{await api(`/api/public/registrations/${regId}/participants/${pid}/replace`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v.name,phone:v.phone,relationToPayer:'同行人',reason:'用户自助转名额'})});toast('参加人已更换；保险信息需重新处理');loadOrders()}catch(e){showAlert({title:'更换失败',message:e.message})}
+  /* 转名额同样要证件：replace 走后端 normalize_for_checkout，证件必选硬闸对新参加人
+     一视同仁 —— 与其让顾客填完姓名手机号才被 409 打回，不如表单里一次问齐。 */
+  const v=await showForm({title:'更换参加人',desc:'新参加人的保险信息需重新处理；证件号码用于投保，为必填。',submitText:'确认更换',
+    fields:[{name:'name',label:'新参加人姓名',required:true},{name:'phone',label:'新参加人手机号',required:true},
+      {name:'idType',label:'证件类型',type:'select',required:true,value:'身份证',options:ID_TYPES.map(t=>({value:t.v,label:t.label}))},
+      {name:'idNumber',label:'证件号码',required:true}],
+    validate:vals=>{const e=idNumberError(vals.idType,vals.idNumber);if(e){toast(e);return false}return true}});
+  if(!v)return;
+  try{await api(`/api/public/registrations/${regId}/participants/${pid}/replace`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v.name,phone:v.phone,relationToPayer:'同行人',idType:v.idType,idNumber:v.idNumber,reason:'用户自助转名额'})});toast('参加人已更换；保险信息需重新处理');loadOrders()}catch(e){showAlert({title:'更换失败',message:e.message})}
 }
 async function requestParticipantRefund(regId,pid,amount,pct,name){
   if(!(await showConfirm({title:'确认退出参加',message:`参加人 ${name} 退出后，预计现金退款 ${money(amount)}（${Number(pct)}%）。该参加人分摊的活动积分/装备积分会在退款成功后返还；订单级福利券只有全部参加人都退出时才恢复。`,confirmText:'确认提交',danger:true})))return;

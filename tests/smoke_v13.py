@@ -27,8 +27,8 @@ oid=ok('post',f'/api/club/1/activities/{aid}/occurrences',json={'startAt':start,
 ok('post',f'/api/club/1/activities/{aid}/publish')
 
 participants=[
- {'name':'执行甲','phone':'13810000001','relationToPayer':'本人','idType':'身份证','idNumber':'510100199001010001','emergencyContactName':'甲家属','emergencyContactPhone':'13910000001'},
- {'name':'执行乙','phone':'13810000002','relationToPayer':'朋友','idType':'身份证','idNumber':'510100199001010002','emergencyContactName':'乙家属','emergencyContactPhone':'13910000002'},
+ {'name':'执行甲','phone':'13810000001','relationToPayer':'本人','idType':'身份证','idNumber':'510100199001010005','emergencyContactName':'甲家属','emergencyContactPhone':'13910000001'},
+ {'name':'执行乙','phone':'13810000002','relationToPayer':'朋友','idType':'身份证','idNumber':'510100199001010013','emergencyContactName':'乙家属','emergencyContactPhone':'13910000002'},
 ]
 co=ok('post',f'/api/public/activities/{aid}/checkout',json={'name':'执行甲','phone':'13810000001','occurrenceId':oid,'participants':participants}).json()
 paid=ok('post',f"/api/public/checkouts/{co['checkoutId']}/pay",json={'provider':'local','simulateSuccess':True}).json()['result']
