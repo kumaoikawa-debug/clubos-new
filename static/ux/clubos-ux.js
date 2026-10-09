@@ -66,6 +66,19 @@ const glyphs={pdash:'◫',clubs:'♧',pcredits:'◎',ppoints:'◈',pbenefits:'�
   const form=el.querySelector('form'),error=el.querySelector('.ux-inline-error');
   const invalid=(node,msg)=>{error.textContent=msg;error.hidden=false;node.setAttribute('aria-invalid','true');node.focus()};
   form.addEventListener('input',e=>{if(e.target instanceof HTMLElement)e.target.removeAttribute('aria-invalid');error.hidden=true});
+  /* 单行输入里的 Enter 不再直接提交表单（2026-10-09 用户反馈「这个界面填写价格时老是跳回到详情」）。
+     uxForm 用的是真实 <form>，浏览器默认行为是「任一单行 input 里按 Enter 就 submit」→ 校验通过便保存并关闭弹窗
+     （团期弹窗随后还会 openActivity() 跳回活动详情）。用户填完一格敲 Enter 本意只是「接着填下一格」，不该被提交打断。
+     这里把 Enter 改成「焦点前进到下一个字段」，提交只认显式点击「保存」按钮；textarea 的 Enter 是换行、
+     按钮上的 Enter 仍等同点击（保证键盘可达性）。 */
+  form.addEventListener('keydown',e=>{
+    if(e.key!=='Enter')return;
+    const t=e.target;if(!t)return;
+    if(t.tagName==='TEXTAREA'||t.tagName==='BUTTON'||t.type==='submit')return;
+    e.preventDefault();
+    const fs=[...el.querySelectorAll('button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled])')].filter(n=>n.offsetParent!==null);
+    const i=fs.indexOf(t);if(i>=0&&i<fs.length-1)fs[i+1].focus();
+  });
   form.onsubmit=e=>{e.preventDefault();error.hidden=true;const data={};for(const f of fields){
    if(f.type==='datetime'){const v=f._el?f._el._collect():'';if(f.required&&!v){invalid((f._el&&f._el._focus)||f._el,'请选择「'+(f.label||f.name)+'」的日期和时间');return}data[f.name]=v;continue}
    const node=form.elements.namedItem(f.name);const raw=node.value.trim();if(f.required&&!raw){invalid(node,'请填写「'+f.label+'」');return}if(f.type==='number'&&raw){const n=Number(raw);if(!Number.isFinite(n)||(f.min!==undefined&&n<Number(f.min))||(f.max!==undefined&&n>Number(f.max))||node.validity.stepMismatch){invalid(node,'「'+f.label+'」不在允许范围内或不符合数量精度');return}data[f.name]=n}else data[f.name]=raw;}
