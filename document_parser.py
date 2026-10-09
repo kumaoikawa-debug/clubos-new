@@ -191,7 +191,7 @@ def save_uploads(files, upload_dir: Path, *, max_total_bytes: int | None = None)
 
 
 def parse_sources(paths: Iterable[Path], user_text: str='', static_root: Path | None=None):
-    texts=[]; images=[]; files=[]; cost_stats={'costLines':0,'costBlocks':0}; raw_len=0
+    texts=[]; images=[]; files=[]; cost_stats={'costLines':0,'costBlocks':0}; raw_len=0; read_errors=[]
     if user_text.strip(): texts.append('[用户输入]\n'+user_text.strip())
     for p in paths:
         files.append({'name':p.name,'ext':p.suffix.lower()})
@@ -204,7 +204,15 @@ def parse_sources(paths: Iterable[Path], user_text: str='', static_root: Path | 
             m=image_meta(p,rel,source=p.name)
             if m: images.append(m)
             continue
-        t=extract_text(p)
+        try:
+            t=extract_text(p)
+        except Exception as e:
+            # 一份损坏/加密的文档不该让整批资料一起失败（老板只会看到「请求失败」，
+            # 完全不知道是哪个文件的问题）。记下文件名继续读其余资料；
+            # 若最后一个字都没读到，调用方会用 422 把这些文件名报出来。
+            read_errors.append({'name':p.name,'ext':p.suffix.lower(),
+                                'error':f'{e.__class__.__name__}: {e}'[:200]})
+            continue
         # ★ 成本闸门（2026-10-06）：喂给 AI 的文本里就不许出现成本/报价数据。
         # 一份始祖鸟高客方案的第 15 页是「14 — COST 活动费用明细」（单价/小计/合计（未含税）/
         # 人均费用/策划执行 10%），此前会被原样喂给模型、再被抓成 activity_master.fees
@@ -238,5 +246,6 @@ def parse_sources(paths: Iterable[Path], user_text: str='', static_root: Path | 
         # 这个判定必须按原文长度来，不能被清洗结果误伤（一份纯成本页的方案不该被当成空文档）。
         'costRedacted':cost_stats,
         'textLengthRaw':raw_len,
+        'readErrors':read_errors,
         'media_manifest':[{'ref':x['ref'],'name':x['name'],'url':x.get('url',''),'width':x['width'],'height':x['height'],'source':x.get('source'),'page':x.get('page'),'kind':x.get('kind','photo')} for x in images]
     }

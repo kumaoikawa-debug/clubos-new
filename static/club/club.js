@@ -95,18 +95,46 @@ function _occRange(o){
   const multi=!!(en&&en.md!==st.md);
   return {st,en,multi,full:en?`${st.md}（${st.wd}）${st.t} ～ ${en.md}（${en.wd}）${en.t}`:`${st.md}（${st.wd}）${st.t}`};
 }
-async function openActivity(id){try{LEADER_CTX='activity';if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','AI 详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="panel-title"><div><div class="eyebrow">AI EDITORIAL PREVIEW</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期</div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:'<span class="tag">已发布</span>'}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="notice" style="margin:10px 0 18px">AI 自己决定页面叙事、图片节奏和区块顺序；这里没有模板 A/B/C。</div><div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
+/* 「这份详情是按哪些资料做的」必须在页面上说清：方案 + 额外照片一起上传时，光看成品
+   根本判断不出 AI 读了哪份文件（2026-10-09 用户反馈）。数据来自后端 sourceInfo，
+   它只回文件名 / 字数 / 张数，不回资料正文（正文属俱乐部内部资料，任何前端都不下发）。 */
+function activitySourceLine(a){
+  const si=(a&&a.sourceInfo)||{};
+  if(!si.available||si.reconstructed)return '';
+  const plans=(si.planFiles||[]).filter(Boolean),photos=Number(si.photoCount||0),extras=(si.photoFiles||[]).length;
+  const bits=[];
+  bits.push(plans.length?('活动方案《'+plans.map(esc).join('》《')+'》'
+      +(si.hasPlanText?('（读到 '+Number(si.textLength||0)+' 字）'):'（未读到文字）')):'没有上传方案文件');
+  if(photos)bits.push('可用照片 '+photos+' 张');
+  if(extras)bits.push('其中单独上传 '+extras+' 张');
+  return '<div class="sub" style="margin-top:6px">本场按上传资料生成：'+bits.join(' · ')+'</div>';
+}
+async function openActivity(id){try{LEADER_CTX='activity';if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','AI 详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="panel-title"><div><div class="eyebrow">AI EDITORIAL PREVIEW</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期</div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:'<span class="tag">已发布</span>'}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="notice" style="margin:10px 0 18px">AI 自己决定页面叙事、图片节奏和区块顺序；这里没有模板 A/B/C。${activitySourceLine(a)}</div><div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
    现在每行都给出「改时间 / 价格」与「删除」；并把两种容易被当成 bug 的状态直接标出来：
    ¥0 不是出错而是「价格待定」（成本表来源的活动在俱乐部定价前会归零），
    已停止报名的团期也要一眼可见，否则老板会以为 C 端还能报。 */
 const closed=String(o.status||'open')!=='open'?' <span class="tag orange">已停止报名</span>':'';const pend=!(Number(o.price)>0)?' <span class="tag orange">价格待定</span>':'';return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(title)}${tag}${closed}${pend}</div><div class="list-row__sub">${esc(sub)}</div></div><div class="list-row__end"><button type="button" class="act-op" onclick="editOccurrence(${id},${o.id})">改时间 / 价格</button><button type="button" class="act-op act-op--danger" onclick="deleteOccurrence(${id},${o.id})">删除</button></div></div>`}).join('')||'<div class="empty">暂无团期</div>'}</div>`;/* 「这份详情到底是不是按资料生成的」必须一眼看得见。资料里一个字都没读到过
    （master.sourceSummary 为空）时，页面上全是通用兜底文案，用户只会觉得系统坏了；
    这里如实标注来源，并直接给出两个补救入口，而不是让人自己猜。 */
-if(a.activityMaster&&a.activityMaster.createdVia!=='manual'&&!String(a.activityMaster.sourceSummary||'').trim()){
+/* ★ 只有拿到「确实没读到方案文字」的实证才告警（2026-10-09 修正）。
+   旧判定看 master.sourceSummary，而那个字段只有离线引擎会写：真模型生成的活动
+   它永远是空的，于是**每一场**都被红框告知「内容是通用兜底」，明明是按方案生成的。
+   用户因此以为「方案和照片一起传，系统读错了文件」。现在以后端的 sourceInfo
+   （取自落盘的原始资料）为准：拿不到证据就不说话，宁可不说也不误报。 */
+const _si=a.sourceInfo||{};
+const _noPlan=_si.available&&!_si.reconstructed&&!_si.hasPlanText
+  &&((( _si.planFiles||[]).length>0)||Number(_si.photoCount||0)>0||Number(_si.imageCount||0)>0);
+if(a.activityMaster&&a.activityMaster.createdVia!=='manual'&&_noPlan){
+  const _plans=(_si.planFiles||[]).filter(Boolean);
   const w=document.createElement('div');w.className='notice warn';w.style.margin='0 0 16px';
-  w.innerHTML='<strong>这场活动没有读到方案文字</strong><div class="sub" style="margin-top:6px">'
-    +'当前的标题 / 日期 / 地点 / 行程是通用兜底内容，不是上传的方案（方案文字可能全做成了图片，或当时只上传了照片）。'
-    +'点「重新生成 / 换一版」重新上传带文字的方案，或直接「编辑基本信息」手工补全。</div>';
+  w.innerHTML=('<strong>'+(_plans.length?'这份方案没有读到文字内容':'这次只上传了照片，没有方案文字')+'</strong>'
+    +'<div class="sub" style="margin-top:6px">'
+    +(_plans.length
+      ?'《'+_plans.map(esc).join('》《')+'》的文字可能全部做成了图片，AI 读不到这些字。'
+      :'系统只识别到照片，没有读到任何文字资料。')
+    +'当前的标题 / 日期 / 地点 / 行程因此是通用兜底内容，不是你的方案。'
+    +'补一句活动说明（名称 / 日期 / 地点 / 人数）或换一份带文字的方案，点「重新生成 / 换一版」即可；'
+    +'也可以直接「编辑基本信息」手工补全。</div>');
   pane.prepend(w);
 }
 if(window.matchMedia&&matchMedia('(max-width:1180px)').matches)setTimeout(()=>pane.scrollIntoView({behavior:'smooth',block:'start'}),60);syncActRail()}catch(e){showAlert({title:'打开活动失败',message:e.message})}}
@@ -220,6 +248,15 @@ $('#createForm').onsubmit=async e=>{
        现在把「几份资料 / 多少字方案 / 几张图」一起报，字数为 0 时再补一条明确提示。 */
     let src=r.source||{},docs=(src.docFiles||[]).length,chars=Number(src.textLength||0),imgs=Number(src.imageCount||0);
     toast(`活动详情已完成 · ${docs} 份资料 · ${chars} 字方案 · ${imgs} 张图片`);
+    /* 被跳过的文件必须当场说清：以前不支持的格式是静默丢弃的，老板传了几张 HEIC 手机照、
+       系统只字不提，他只会以为「系统读错了文件」。 */
+    const _skip=src.skippedFiles||[],_rerr=(src.readErrors||[]).map(x=>(x&&x.name)||'文件');
+    if(_skip.length||_rerr.length){
+      showAlert({title:'有文件没能读进去',message:
+        (_rerr.length?`打不开：${_rerr.join('、')}（可能已损坏或加密）；`:'')
+        +(_skip.length?`类型不支持，已跳过：${_skip.join('、')}（支持 PPT / Word / PDF / 文字文件，图片支持 JPG / PNG / WEBP）。`:'')
+        +'其余资料已正常读取并用于生成。如果被跳过的是活动方案，请另存为 PDF 或 PPT 后重新上传。'});
+    }
     await loadDash();go('activities');await openActivity(r.activityId);
     if(!chars)showAlert({title:'注意：这次没有读到方案文字',
       message:'系统只识别到照片，没有读到任何文字资料，所以活动名称 / 日期 / 地点 / 行程用的是通用兜底内容，不是你的方案。'

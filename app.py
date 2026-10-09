@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from db import init_db, conn, row, rows, jdump, jload, setting
-from document_parser import save_uploads, parse_sources, _image_kind
+from document_parser import save_uploads, parse_sources, _image_kind, ALLOWED as ALLOWED_UPLOAD_EXTS
 from cost_guard import sanitize_for_frontend, master_has_cost_evidence
 from ai_engine import (generate_activity, generate_channel, regenerate_detail, detail_outline,
                        _fact_digest)
@@ -534,6 +534,10 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
     batch=UPLOAD/str(club_id)/uuid.uuid4().hex
     try:
         saved=save_uploads(files,batch,max_total_bytes=20*1024*1024 if IS_PROD else None)
+        # 不支持的格式过去被静默丢掉：老板传了几张 HEIC 手机照，系统只字不提，
+        # 他只会以为「系统读错文件了」。这里逐个记下来，在结果里如实告知。
+        _skipped=[str(f.filename or '') for f in files
+                  if Path(str(f.filename or '')).suffix.lower() not in ALLOWED_UPLOAD_EXTS]
         if IS_PROD:
             for item in saved:
                 if item.suffix.lower() in ('.pptx','.docx'):
@@ -558,6 +562,12 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
     _doc_files=[f for f in (source.get('files') or []) if str(f.get('ext') or '') in _doc_exts]
     if _doc_files and not (source.get('text') or '').strip():
         shutil.rmtree(batch,ignore_errors=True)
+        _errors=source.get('readErrors') or []
+        if _errors:
+            _en='、'.join(str(e.get('name') or '文件') for e in _errors[:3])
+            raise HTTPException(422,f'《{_en}》没能打开（文件可能已损坏或被加密）。'
+                                    '请用 Office 另存一份后重新上传，或直接补一句活动说明'
+                                    '（名称/日期/地点/人数）让 AI 先生成初稿。')
         _names='、'.join(str(f.get('name') or '方案') for f in _doc_files[:3])
         raise HTTPException(422,f'《{_names}》里没有可读取的文字内容：这份方案的文字可能全部做成了图片。'
                                 'AI 无法按方案生成，请补一句活动说明（名称/日期/地点/人数），'
@@ -566,7 +576,8 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
     _doc_exts={'.pptx','.docx','.pdf','.txt','.md'}
     _doc_files=[f for f in (source.get('files') or []) if str(f.get('ext') or '') in _doc_exts]
     summary={'files':source['files'],'imageCount':len(source['images']),'media':source['media_manifest'],
-             'textLength':_text_len,'docFiles':_doc_files,'noText':_text_len==0}
+             'textLength':_text_len,'docFiles':_doc_files,'noText':_text_len==0,'skippedFiles':_skipped,
+             'readErrors':source.get('readErrors') or []}
     if not live_mode:
         # mock：秒回，保持旧的同步契约，回归脚本直接拿 activityId。
         try: result,usage=await generate_activity(club_id,source)
@@ -654,6 +665,25 @@ def get_activity(club_id:int,activity_id:int):
         # 反推出一份最小原始资料，同样能换叙事/排版，所以判定必须与 _activity_source 一致。
         _src,_origin=_activity_source(a)
         has_source=_origin!='missing'
+        # 「这份详情是按哪些资料做出来的」必须如实回给俱乐部端：一次上传「方案 + 额外照片」
+        # 时，光看成品无法判断 AI 到底读了哪份文件（2026-10-09 用户反馈）。
+        # 判定依据是落盘的 source_json（原始资料本身），不是模型输出 —— 模型从不回填这些字段。
+        _srcv=jload(a.get('source_json'),None) or {}
+        _plain=str(_srcv.get('text') or '')
+        _rebuilt=('text' not in _srcv) or str(_srcv.get('note') or '').startswith('reconstructed')
+        _sfiles=[f for f in (_srcv.get('files') or []) if isinstance(f,dict)]
+        _dexts={'.pptx','.docx','.pdf','.txt','.md'}
+        a['sourceInfo']={
+            'available':bool(_srcv) and not _rebuilt,
+            'reconstructed':bool(_srcv) and _rebuilt,
+            'hasPlanText':bool(_plain.strip()),
+            'textLength':len(_plain.strip()),
+            'planFiles':[str(f.get('name') or '') for f in _sfiles if str(f.get('ext') or '') in _dexts],
+            'photoFiles':[str(f.get('name') or '') for f in _sfiles if str(f.get('ext') or '') not in _dexts],
+            'imageCount':len(_srcv.get('images') or []),
+            'photoCount':len([x for x in (_srcv.get('media_manifest') or [])
+                              if isinstance(x,dict) and str(x.get('kind') or 'photo')!='logo']),
+        }
         versions=rows(c.execute('''SELECT id,version_no,origin,direction,facts_refreshed,created_at,credits_charged,gateway_mode,gateway_model,outline
                                    FROM activity_detail_versions WHERE activity_id=? AND club_id=? AND status='ready' ORDER BY version_no DESC''',(activity_id,club_id)))
         _master=_repair_master_media(jload(a.get('activity_master_json'),{}),_src)
