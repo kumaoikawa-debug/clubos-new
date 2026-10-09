@@ -1104,38 +1104,80 @@
       c.restore();
     }
 
-    /* 品牌标识：白胶囊里放 logo —— 不管 logo 本身是深色还是浅色，都保证看得清。 */
-    function logoPillW(h) {
-      if (!logoImg) return 0;
-      var iw = logoImg.naturalWidth || logoImg.width || 1, ih = logoImg.naturalHeight || logoImg.height || 1;
-      var pad = Math.round(h * 0.19), inner = h - pad * 2;
-      return Math.max(h, Math.min(300, Math.round(inner * (iw / ih)) + pad * 2));
+    /* 品牌标识：logo 直接融入海报，不再套白胶囊（logo 图多自带白底，
+       套进浅色容器就是「圆圈里又一层白底」，2026-10-09 用户反馈）。
+       三步处理：① 白底（近白角）抠成透明；② 徽章型（彩色实底）保留原色直接融合，
+       深色字标（透明底深色线条/文字）染成白色适配深色海报（用户允许改 logo 颜色）；
+       ③ 轻投影压在海报上。 */
+    function logoStamp(img) {
+      var iw = img.naturalWidth || img.width || 1, ih = img.naturalHeight || img.height || 1;
+      if (iw < 2 || ih < 2) return null;
+      var cv = document.createElement('canvas'); cv.width = iw; cv.height = ih;
+      var x = cv.getContext('2d');
+      if (!x) return null;
+      x.drawImage(img, 0, 0);
+      var d;
+      try { d = x.getImageData(0, 0, iw, ih); } catch (e) { return null; }
+      var p = d.data, n = iw * ih;
+      /* ① 背景色取四角均值，仅当接近白才抠（彩色实底徽章绝不抠，否则徽章被掏空） */
+      var cr = 0, cg = 0, cb = 0, cs = [[0, 0], [iw - 1, 0], [0, ih - 1], [iw - 1, ih - 1]];
+      cs.forEach(function (q) { var o = (q[1] * iw + q[0]) * 4; cr += p[o]; cg += p[o + 1]; cb += p[o + 2]; });
+      cr /= 4; cg /= 4; cb /= 4;
+      var bgWhite = (cr + cg + cb) / 3 > 235;
+      var opaque = 0, sumLum = 0;
+      for (var i = 0; i < p.length; i += 4) {
+        if (bgWhite) {
+          var dr = p[i] - cr, dg = p[i + 1] - cg, db = p[i + 2] - cb;
+          var dist = Math.sqrt(dr * dr + dg * dg + db * db);
+          if (dist < 30) { p[i + 3] = 0; continue; }          /* 白背景 → 透明 */
+          if (dist < 90) { p[i + 3] = Math.round(p[i + 3] * dist / 90); }  /* 边缘抗锯齿柔和过渡 */
+        }
+        if (p[i + 3] > 40) { opaque++; sumLum += (p[i] + p[i + 1] + p[i + 2]) / 3; }
+      }
+      /* ② 类型判定：剩余不透明占比高 = 实底徽章（保原色）；
+         占比低且偏暗 = 深色字标/线条标（染白，否则压深色海报看不见） */
+      var badge = opaque / n > 0.45;
+      var darkMark = !badge && opaque > 0 && (sumLum / opaque) < 130;
+      if (darkMark) {
+        for (i = 0; i < p.length; i += 4) {
+          if (!p[i + 3]) continue;
+          p[i] = 255; p[i + 1] = 255; p[i + 2] = 255;
+        }
+      }
+      x.putImageData(d, 0, 0);
+      return cv;
     }
-    function drawLogoPill(x, y, h) {
-      var w = logoPillW(h);
-      if (!w) return null;
-      var iw = logoImg.naturalWidth || logoImg.width || 1, ih = logoImg.naturalHeight || logoImg.height || 1;
-      var pad = Math.round(h * 0.19);
+    var logoMono = logoImg ? logoStamp(logoImg) : null;
+    function logoW(h) {
+      if (!logoMono) return 0;
+      var iw = logoMono.width, ih = logoMono.height;
+      return Math.max(1, Math.round(ih ? h * (iw / ih) : h));
+    }
+    function drawLogoBlend(x, y, h) {
+      if (!logoMono) return null;
+      var w = logoW(h);
       c.save();
-      c.fillStyle = 'rgba(255,255,255,.96)';
-      rr(c, x, y, w, h, h / 2); c.fill();
-      var fit = Math.min((w - pad * 2) / iw, (h - pad * 2) / ih);
-      c.drawImage(logoImg, x + (w - iw * fit) / 2, y + (h - ih * fit) / 2, iw * fit, ih * fit);
+      c.shadowColor = 'rgba(0,0,0,.35)'; c.shadowBlur = 16; c.shadowOffsetY = 3;
+      c.drawImage(logoMono, x, y, w, h);
       c.restore();
       return { x: x, y: y, w: w, h: h };
     }
-    /* 品牌带：logo + 俱乐部名 + 口号。左对齐 / 居中两种，返回下一行的 y。 */
+    /* 品牌带：有 logo 只出 logo（不叠加俱乐部名 —— 用户 2026-10-09 定）；
+       没设 logo 才退回「俱乐部名 + 口号」纯文字带。返回下一行的 y。 */
     function brandBlock(mode, yTop, h, small) {
       var name = ctx.brandName, slo = ctx.brandSlogan;
+      if (logoMono) {
+        if (mode === 'center') { drawLogoBlend(Math.round(W / 2 - logoW(h) / 2), yTop, h); return yTop + h; }
+        drawLogoBlend(PAD, yTop, h);
+        return yTop + h;
+      }
       if (mode === 'center') {
-        var pw = logoPillW(h), x = yTop, cx = W / 2;
-        if (pw) { drawLogoPill(Math.round(cx - pw / 2), yTop, h); x = yTop + h + (small ? 14 : 20); }
+        var x = yTop, cx = W / 2;
         if (name) { c.fillStyle = '#fff'; c.font = (small ? '700 32px ' : '800 38px ') + FONT; lsText(c, name, cx, x + 30, 4, 'center'); x += 30; }
         if (slo) { c.fillStyle = 'rgba(255,255,255,.7)'; c.font = '500 19px ' + FONT; lsText(c, slo, cx, x + 30, 2.4, 'center'); x += 30; }
         return x;
       }
-      var lx = PAD, pw2 = logoPillW(h);
-      if (pw2) { drawLogoPill(PAD, yTop, h); lx = PAD + pw2 + 22; }
+      var lx = PAD;
       var ny = yTop + ((slo && name) ? 32 : h / 2 + 13);
       if (name) { c.fillStyle = '#fff'; c.font = (small ? '700 32px ' : '800 38px ') + FONT; lsText(c, name, lx, ny, 3, 'left'); }
       if (slo) { c.fillStyle = 'rgba(255,255,255,.72)'; c.font = '500 20px ' + FONT; lsText(c, slo, lx + 1, ny + 30, 2.2, 'left'); }
@@ -1198,11 +1240,13 @@
       }
       if (!strips.length) stripT = '';
 
-      var yBrand = 54, brandH = 76;
-      var yTitle = yBrand + brandH + 64;
+      /* 顶部节奏：品牌带 → 主标题 → 副标题 → 卖点条，间距放宽给足呼吸感
+         （2026-10-09 用户反馈「文案全部挤在一起」，旧值 64/52/44 太局促） */
+      var yBrand = 58, brandH = 76;
+      var yTitle = yBrand + brandH + (logoMono ? 100 : 88);
       var titleBottom = yTitle + (tL.length - 1) * TLH;
-      var ySub = titleBottom + 52, subBottom = ySub + (sL.length - 1) * 46;
-      var yStrip = subBottom + (sL.length ? 44 : 20), stripH = 62;
+      var ySub = titleBottom + 64, subBottom = ySub + (sL.length - 1) * 46;
+      var yStrip = subBottom + (sL.length ? 66 : 40), stripH = 62;
       var photoTop = Math.round(stripT ? (yStrip + stripH / 2 + 36) : (subBottom + 48));
 
       /* 主视觉在下、色带在上、交界处羽化 —— 参考图 1/2 就是照片融进色里的 */
