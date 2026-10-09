@@ -148,8 +148,11 @@ _PROMPT = """## 你要做什么
 ## 报名必用数据（系统从报名系统 / 活动方案里取出的**真实数据**，不是示例）
 __FACTS__
 
+## 活动详情页要点（完整行程 / 报名资格 / 注意事项 / 关键数字的**第一手依据**）
+__DETAIL__
+
 ## ★ 顾客下单前必须看到的信息（缺一块，这张图就不合格）
-下面 5 项，**只要上方数据里有，就必须写进成品**，且**只能照抄上面的数据**、不得改写数字或编补：
+下面几项，**只要上方数据里有，就必须写进成品**，且**只能照抄上面的数据**、不得改写数字或编补：
 1. **团期与价格** → 用 `prices` 组件逐个列出（label / 日期 / 价格 / 余位都要用真值）。
 2. **费用包含 / 不含** → 用 `fee` 组件照抄 `fees` 里的条目。
 3. **自备装备** → 用 `kit` 组件照抄 `checklist`。
@@ -157,7 +160,10 @@ __FACTS__
    写清**有几位领队、什么资质、有没有随队保障**。只写怎么带队，不写花名堂，
    也不许把内部后勤人数当成专业卖点堆给客人。
 5. **报名信息**（signup.form）→ 时间 / 地点 / 集合点 / 名额，全部取自上方数据。
-这 5 项可以分布在各自的 section 里，**不要把五项挤进同一节**，也不要堆成一张密密麻麻的大表格。
+6. **行程安排** → 详情页要点里有「完整行程时间线」就必须用 `timeline` 组件整条排出，不得压缩成两三行。
+7. **注意事项** → 详情页要点里的报名资格 / 重要提醒（如年龄限制、资格有效期）必须有个落点
+   （可放 `params`、`highlight` 式备注或 signup.form 的条目）；资料里没有的不要编。
+这 7 项可以分布在各自的 section 里，**不要把这几项挤进同一节**，也不要堆成一张密密麻麻的大表格。
 
 ## 选色规则（theme）
 - `"night"`：日照金山 / 星空 / 雪山 / 高原 / 藏地 / 唐卡 / 篝火 / 夜间 —— 与"暗调画面"相配；
@@ -235,6 +241,9 @@ __MASTER__
 ## 报名必用数据（团期价格 / 领队 / 费用 / 装备，真实数据，必须写进成品）
 __FACTS__
 
+## 活动详情页要点（完整行程 / 报名资格 / 注意事项 / 关键数字的**第一手依据**）
+__DETAIL__
+
 ## 方案事实要点表（碎片，不是成句；事实必须与它一致）
 __DIGEST__
 
@@ -243,9 +252,12 @@ __DIGEST__
 # ══════════════════════════════════════════════════════════════════════
 # 自由排版主路径（v4）：模型直出整段 HTML，按活动气质自己设计版式
 # ══════════════════════════════════════════════════════════════════════
-_FREE_SYSTEM = """你是一位资深公众号内容主编兼视觉设计师。你拿到一份活动方案和一批真实照片，
-要产出一张**能直接发布的 750px 宽宣传长图**——不是文案，是**整张图的 HTML**（版式、配色、字体节奏都由你定）。
-标准是「一本轻杂志的跨页」：干净、克制、有呼吸感，不是把资料填进表格。"""
+_FREE_SYSTEM = """你是一位作品上过知名设计杂志、专门给户外品牌做公众号长图的资深视觉设计师。
+你拿到一份活动方案和一批真实照片，要产出一张**能直接发布的 750px 宽宣传长图**——
+不是文案，是**整张图的 HTML**（版式、配色、字体节奏都由你定）。
+「自由」的意思是：**每场活动由你自选一整套成体系的设计系统**（配色、字号阶梯、组件口径），
+不是「随手排」。判断标准只有一条：把成品递到懂设计的人面前，他愿意往下翻完，
+并且承认「这张有被设计过」——不是 Word 文档，不是 PPT 大纲，更不是资料搬运。"""
 
 _FREE_PROMPT = """## 你的产出
 一个 JSON 对象，两个键：
@@ -275,6 +287,21 @@ _FREE_PROMPT = """## 你的产出
 - 眉标用小字 + 字距做杂志感；强调数字用大字号 + 重字重。
 - **绝对不要**把「费用包含 / 装备建议」做成横向多列表格，用圆点列表或浅底信息卡。
 
+## ★ 设计手法（一场至少用上其中 4 种 —— 这是「被设计过」的最低证据）
+- **满幅首屏**：首屏照片 100% 宽通栏出血，标题用白色大字压在图上（配渐变压暗或深色渐层），
+  不是「图一块、标题一块」地上下摞；
+- **眉标系统**：每个区块一条统一口径的眉标（小字 + 字距 2~4px + 编号或英文，如「01 · ROUTE」），
+  整篇同色同位，形成节奏感；
+- **数字强调**：里程 / 爬升 / 海拔 / 名额这类关键数字做成**大字号统计条**（2~4 个并排、数字 32~40px 重字重），
+  不要把它们埋在段落里；
+- **竖向时间线**：行程必须排成竖向时间线（时刻用重字重突出，事件跟在右侧，节点间用细线 / 圆点串联），
+  **不许把整天的行程缩成一小块灰底文字**；
+- **节奏交替**：通栏大图 / 浅底信息卡 / 深色色块 三种区块形态交替出现，
+  **不许连续三四节都是「标题 + 段落 + 单图」一个模子**；
+- **引言块**：资料里最有情绪的一句话，单独成块放大处理（可用衬线字体栈 `"Songti SC","STSong",serif` + 大引号）；
+- **图片成组**：两张图并排（各约 48% 宽，间距 8~12px）或「一大一小」错落排版，
+  **不许全篇每张图都单图通栏** —— 全通栏会显得像图片流水账。
+
 ## ★ 结构锚点（这两块必须有，保证成品像样）
 1. **首屏**：一张满幅大图（`<img src="{{media:xxx}}">`），标题用大字号压在图上或图下，
    带主办品牌行与一句本场专属定位；
@@ -296,10 +323,17 @@ _FREE_PROMPT = """## 你的产出
 > 绝对不许出现在成品里；成品每个具体信息都必须来自上方真实资料；
 > 尤其品牌行 / 定位语（`enRoll` 那种英文小字）每场要现写，不许套固定说法、不许写别的活动的名字。
 
-## 顾客下单前必看的 5 项（只要上方数据里有，就必须写进成品，且只能照抄真值）
-1. **团期与价格** 2. **费用包含 / 不含** 3. **自备装备** 4. **带队阵容**（几位领队 / 资质 / 随队保障）
-5. **报名信息**（时间 / 地点 / 集合 / 名额）
-这 5 项可以分散在各自区块，不要挤成一团，也不要堆成密表。
+## ★★ 成品必须涵盖的 6 大板块（结合活动详情页，缺一项这张图就不合格）
+只要下方资料里有，这些板块**必须**在成品里各有明确落点（可以分散在各自区块，不要挤成一团），
+且只能照抄真值、不得改写数字：
+1. **活动内容与亮点** —— 这场活动玩什么、最独特的是什么；
+2. **行程安排** —— 以「完整行程时间线」为准排出全天动线（集合 → 各时段 → 返程），**不得自行压缩**；
+3. **费用及费用说明** —— 费用包含 / 不含逐条写清，不要只写一个总价；
+4. **领队信息** —— 带队阵容、资质、随队保障；
+5. **注意事项** —— 报名资格 / 限制 / 重要提醒（详情页资料里的 info、highlight、资格限制等；
+   资料里没有的不要编）；
+6. **团期与价格** —— 团期、单价、名额余位（真值照抄）。
+这 6 项可以分散在各自区块，不要挤成一团，也不要堆成密表。
 
 ## 别写成 AI 腔
 - 小标题不要「XX之旅」「XX招募」或泛化情绪词；写判断句 / 信息句。
@@ -317,6 +351,9 @@ __MASTER__
 
 ## 报名必用数据（团期价格 / 领队 / 费用 / 装备，真实数据，必须写进成品）
 __FACTS__
+
+## 活动详情页要点（完整行程 / 报名资格 / 注意事项 / 关键数字的**第一手依据**）
+__DETAIL__
 
 ## 方案事实要点表（碎片，不是成句；事实必须与它一致）
 __DIGEST__
@@ -438,12 +475,21 @@ def _doc_ok(rep: dict[str, int], has_photos: bool) -> tuple[bool, str]:
     return True, 'ok'
 
 
-def _html_ok(html: str, has_photos: bool) -> tuple[bool, str]:
-    """自由排版（model-html）产出的验收：宁可保守，翻车就退回模板兜底。"""
+def _html_ok(html: str, has_photos: bool, must_have: list[tuple[str, str]] | None = None) -> tuple[bool, str]:
+    """自由排版（model-html）产出的验收：宁可保守，翻车就退回模板兜底。
+
+    must_have：按本场数据动态生成的「成品必含内容」检查项（label, 正则）。
+      数据里有的板块（费用 / 领队 / 装备 / 价格 / 时刻）成品里就必须出现对应内容，
+      否则判不合格退回模板兜底 —— 模板路径有 ensure_required_sections 代码兜底，
+      自由排版路径没有，只能在验收里卡住（2026-10-09 用户要求 6 大板块缺一不可）。
+    """
     h = str(html or '')
     # 首屏必须有图（前 1400 字符内出现 <img>）—— 没图的长图不像成品
     if not _IMG_ANY.search(h[:1400]):
         return False, 'no hero image'
+    # 自由排版必须自带 <style> 设计系统（配色 / 字号阶梯），没有就是没做设计
+    if '<style' not in h.lower():
+        return False, 'no style block'
     # 纯文本字数至少 400，否则太空
     text = re.sub(r'<[^>]+>', '', h)
     if len(text.strip()) < 400:
@@ -454,6 +500,9 @@ def _html_ok(html: str, has_photos: bool) -> tuple[bool, str]:
     # 成本句直接判死刑（长图主视觉印成本 = 事故）；整段含任意 COST_LABELS 词就拒
     if is_cost_row(text):
         return False, 'cost leaked'
+    for label, pat in (must_have or []):
+        if not re.search(pat, text):
+            return False, 'missing section: %s' % label
     return True, 'ok'
 
 
@@ -477,7 +526,28 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
         return (tpl.replace('__MEDIA__', media_lines)
                    .replace('__MASTER__', json.dumps(master, ensure_ascii=False)[:9000])
                    .replace('__DIGEST__', fact_note)
+                   .replace('__DETAIL__', d_note)
                    .replace('__FACTS__', facts_prompt(fact_pack)))
+
+    # 详情页要点：完整行程时间线 / 报名资格 / 注意事项 —— 长图必须结合详情页（2026-10-09 用户要求）
+    d_note = detail_note(detail)
+    # 按本场真实数据生成「成品必含」验收项：数据里有的板块，成品里缺了就打回
+    must_have: list[tuple[str, str]] = []
+    fee = pack.get('fees') or {}
+    if fee.get('inc') or fee.get('exc'):
+        must_have.append(('费用说明', r'费用'))
+    if pack.get('leaders'):
+        must_have.append(('领队信息', r'领队|带队|向导|教练'))
+    if pack.get('checklist'):
+        must_have.append(('自备装备', r'装备|携带|自备'))
+    occ_price = any(float(o.get('price') or 0) > 0
+                    for o in (pack.get('occurrences') or []) if isinstance(o, dict))
+    if occ_price:
+        must_have.append(('团期价格', r'¥|元\s*/|价格'))
+    if '完整行程时间线' in d_note:
+        must_have.append(('行程时刻', r'\d{1,2}:\d{2}'))
+    if '注意事项' in d_note or '报名' in d_note:
+        must_have.append(('注意事项', r'注意|资格|提醒|必读|须知|不可|仅限|限制'))
 
     allowed = _allowed_refs(caption_lines)
     has_photos = bool(allowed)
@@ -499,7 +569,7 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
     if isinstance(gw.data, dict):
         cand = str(gw.data.get('html') or gw.data.get('body') or gw.data.get('content') or '')
         cand = sanitize_html(cand)
-        if len(cand) > 400 and _html_ok(cand, has_photos)[0]:
+        if len(cand) > 400 and _html_ok(cand, has_photos, must_have)[0]:
             html, data = cand, gw.data
 
     # ── 兜底路径：结构化内容 JSON → 模板渲染（自由排版翻车时的稳定产出）──
@@ -755,6 +825,63 @@ def facts_prompt(pack: dict[str, Any] | None) -> str:
     if pack.get('gather'):
         out.append('· 交通与集合（原文）：%s' % pack['gather'])
     return '\n'.join(out) or '（这场活动暂时没有额外的结构化数据，团期 / 领队 / 费用都不要编）'
+
+
+def detail_note(detail: dict[str, Any] | None) -> str:
+    """从活动详情页（AI 详情 blocks）里提取长图要结合的结构化素材。
+
+    ★ 2026-10-09 用户要求：长图要「结合活动详情页」，把活动内容、行程、费用及费用说明、
+      领队信息、注意事项、团期价格**都**涵盖进去。此前提示词只给 master + fact_pack，
+      详情页里**最完整的行程时间线（timeline）**和**报名资格 / 注意事项（info / highlight）**
+      从来没进过提示词 —— 成品里的行程被模型随手压缩成三四行，注意事项直接消失。
+    只提取「写给客人的事实」，内部块（internalData 等）不在 detail.blocks 里，天然不会混入。
+    """
+    blocks = detail.get('blocks') if isinstance(detail, dict) else None
+    if not isinstance(blocks, list):
+        return ''
+    out: list[str] = []
+    try:
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            t = str(b.get('type') or b.get('block') or '')
+            if t == 'timeline' and isinstance(b.get('items'), list):
+                rows = []
+                for it in b['items'][:14]:
+                    if isinstance(it, dict) and (it.get('time') or it.get('text') or it.get('what')):
+                        rows.append('%s %s' % (str(it.get('time') or '').strip(),
+                                               str(it.get('text') or it.get('what') or '').strip()))
+                if rows:
+                    out.append('· 完整行程时间线（详情页原文，行程区块必须以此为准，不得再压缩）：\n    '
+                               + '\n    '.join(rows))
+            elif t == 'numbercards' and isinstance(b.get('cards'), list):
+                nums = []
+                for c0 in b['cards'][:6]:
+                    if isinstance(c0, dict) and c0.get('number'):
+                        nums.append('%s%s（%s）' % (c0.get('number'), c0.get('unit') or '',
+                                                    c0.get('label') or ''))
+                if nums:
+                    out.append('· 关键数字：' + '；'.join(nums))
+            elif t == 'cards' and isinstance(b.get('cards'), list):
+                cs = []
+                for c0 in b['cards'][:6]:
+                    if isinstance(c0, dict) and c0.get('title'):
+                        cs.append('%s：%s' % (c0.get('title'), str(c0.get('description') or '').strip()))
+                if cs:
+                    out.append('· 活动亮点（详情页归纳）：' + '；'.join(cs))
+            elif t == 'info':
+                items = [str(x).strip() for x in (b.get('items') or []) if str(x).strip()]
+                head = str(b.get('headline') or b.get('title') or '').strip()
+                if items:
+                    out.append('· %s（详情页原文，属于「注意事项 / 报名资格」，必须写进成品）：%s'
+                               % (head or '报名信息', ' ｜ '.join(items[:4])))
+            elif t == 'highlight':
+                txt = str(b.get('text') or b.get('body') or '').strip()
+                if txt:
+                    out.append('· 重要提醒（详情页原文，属于「注意事项」）：%s' % txt)
+    except Exception:
+        return ''
+    return '\n'.join(out)
 
 
 # ★★ 代码兜底（与 longpic_template 里那三处兜底同源的手法）

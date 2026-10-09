@@ -38,20 +38,27 @@
   function textOf(b) { return b.text || b.body || b.subtitle || b.summary || ''; }
 
   // 模型给 mediaRefs 的可能是 ref（img_01），也可能直接是 url
-  /*上传素材一律走公开代理，不能直接吃 /static/uploads/* ——
+  /*上传素材不能直接吃 /static/uploads/* ——
      生产环境 security_v025 把那条路径整个封 404（俱乐部端也封），
      长图里塞裸链 = 5 张图全裂，且**预览不报错**，只是白框（2026-10-07 实测）。
      库里的 url 保持裸路径不动（代理路由的白名单就是拿它比对 的），
-     改写只发生在这里。*/
+     改写只发生在这里（公开代理 / club 鉴权路由见下）。*/
   var _mediaActivityId = 0;
+  /* club 端预览恒有登录会话 → 长图/海报里的图一律走带鉴权的 club 媒体路由。
+     ★ 2026-10-09 用户截图实证的裂图根因：此前一律走公开代理，而公开代理按设计
+       「不服务未发布活动」—— 草稿活动生成完长图一预览，所有图 404 全裂（预览还不报错）。
+       club 路由对 draft / published 都放行（会话已把守），本文件只在俱乐部端加载，恒为 true。 */
+  var _mediaClubScope = true;
   function setMediaActivityId(id) { _mediaActivityId = Number(id) || 0; }
   function mediaUrl(u) {
     var s = String(u || '');
     if (!/^\/static\/uploads\//.test(s)) return s;
     if (!_mediaActivityId) return s;          // 拿不到活动 id 就原样返回，别拼出坏链
     var rel = s.replace(/^\/static\//, '');
-    return '/api/public/activities/' + _mediaActivityId + '/media/' +
-      rel.split('/').map(encodeURIComponent).join('/');
+    var tail = rel.split('/').map(encodeURIComponent).join('/');
+    if (_mediaClubScope)
+      return '/api/club/' + CLUB + '/activities/' + _mediaActivityId + '/media/' + tail;
+    return '/api/public/activities/' + _mediaActivityId + '/media/' + tail;
   }
 
   function toUrl(x, mm) {
