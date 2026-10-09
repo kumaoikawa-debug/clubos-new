@@ -1,6 +1,6 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
-window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='leaders')await loadLeaders();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='credits'){await loadCredits();await loadAIUsage()};if(v==='analytics')await loadClubBI();if(v==='payaccount')await loadPayAccount();if(v==='points')await loadPointsPolicy();if(v==='biz')await loadBizSection();if(v==='settings')await loadSettings()}
+window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='settings')await setTab(SETTINGS_TAB)}
 async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`AI Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>';loadClubAttention()}
 /* 工作台「待处理事项」：C 端产生新报名 / 新订单后，俱乐部没有主动提醒，只能自己进
    报名管理 / 商城去翻。这里把各视图里「需要人跟进」的数字汇总到工作台一张卡上，
@@ -1656,6 +1656,24 @@ async function loadAIUsage(){
    logo 上传走独立端点（POST …/settings/logo），表单文本走 PUT …/settings；
    保存成功后同步刷新后台侧栏的品牌名，前后台看到的永远同一个名字。 */
 let clubLogoUrl='';
+let SETTINGS_TAB='brand';
+/* 设置中心 tab：领队资源库/业务介绍/AI Credits/收款账户都收进了设置页，
+   每个 tab 面板沿用原 load 函数（DOM id 不变），首次切入时才拉数据。 */
+const SET_TAB_LOAD={brand:()=>loadSettings(),
+  leaders:async()=>{await loadLeaders()},
+  biz:async()=>{await loadBizSection()},
+  credits:async()=>{await loadCredits();await loadAIUsage()},
+  pay:async()=>{await loadPayAccount()}};
+window.setTab=async name=>{
+  if(!SET_TAB_LOAD[name])name='brand';
+  SETTINGS_TAB=name;
+  document.querySelectorAll('#setTabs .set-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('onclick')===`setTab('${name}')`));
+  ['brand','leaders','biz','credits','pay'].forEach(p=>{
+    const el=document.getElementById('pane-'+p);
+    if(el)el.style.display=p===name?'':'none';
+  });
+  try{await SET_TAB_LOAD[name]()}catch(e){}
+};
 async function loadSettings(){
   const box=$('#settingsBody');if(!box)return;
   box.innerHTML='<div class="empty">正在加载设置…</div>';
@@ -1664,12 +1682,12 @@ async function loadSettings(){
   catch(e){loaderError('#settingsBody',e,'设置读取失败');return}
   clubLogoUrl=s.logoUrl||'';
   box.innerHTML=`
-  <div class="form-grid">
-    <label class="w-field"><span>俱乐部名称 *</span><input id="setName" maxlength="40" value="${esc(s.name||'')}" placeholder="例如：远拓户外"></label>
-    <label class="w-field"><span>品牌口号（C 端首页品牌条）</span><input id="setSlogan" maxlength="60" value="${esc(s.slogan||'')}" placeholder="例如：把周末还给山野"></label>
-    <label class="w-field"><span>所在城市</span><input id="setCity" maxlength="30" value="${esc(s.city||'')}" placeholder="例如：成都"></label>
-    <label class="w-field"><span>联系人</span><input id="setContact" maxlength="20" value="${esc(s.contactName||'')}" placeholder="姓名"></label>
-    <label class="w-field"><span>联系电话</span><input id="setPhone" maxlength="20" value="${esc(s.contactPhone||'')}" placeholder="手机号"></label>
+  <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
+    <label style="display:block"><span class="sub">俱乐部名称 *</span><input id="setName" maxlength="40" style="width:100%;margin-top:4px" value="${esc(s.name||'')}" placeholder="例如：远拓户外"></label>
+    <label style="display:block"><span class="sub">品牌口号（C 端首页品牌条）</span><input id="setSlogan" maxlength="60" style="width:100%;margin-top:4px" value="${esc(s.slogan||'')}" placeholder="例如：把周末还给山野"></label>
+    <label style="display:block"><span class="sub">所在城市</span><input id="setCity" maxlength="30" style="width:100%;margin-top:4px" value="${esc(s.city||'')}" placeholder="例如：成都"></label>
+    <label style="display:block"><span class="sub">联系人</span><input id="setContact" maxlength="20" style="width:100%;margin-top:4px" value="${esc(s.contactName||'')}" placeholder="姓名"></label>
+    <label style="display:block"><span class="sub">联系电话</span><input id="setPhone" maxlength="20" style="width:100%;margin-top:4px" value="${esc(s.contactPhone||'')}" placeholder="手机号"></label>
   </div>
   <div style="margin-top:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
     <span id="setLogoPrev" style="width:56px;height:56px;border-radius:12px;overflow:hidden;background:var(--bg-soft,#f2f0ea);display:inline-flex;align-items:center;justify-content:center;flex:none">${clubLogoImgHtml()}</span>
@@ -1683,12 +1701,6 @@ async function loadSettings(){
   <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
     <button class="btn" type="button" onclick="saveClubSettings()">保存设置</button>
     <span class="sub" id="setSaveTip" style="align-self:center"></span>
-  </div>
-  <div class="hr" style="margin:18px 0"></div>
-  <div style="font-weight:600;margin-bottom:6px">更多俱乐部级配置</div>
-  <div style="display:flex;gap:10px;flex-wrap:wrap">
-    <button class="btn secondary" type="button" onclick="document.querySelector('.nav button[data-view=&quot;biz&quot;]')?.click()">业务介绍（C 端「户外能力」页）</button>
-    <button class="btn secondary" type="button" onclick="document.querySelector('.nav button[data-view=&quot;leaders&quot;]')?.click()">领队资源库（带队名册）</button>
   </div>`;
 }
 function clubLogoImgHtml(){

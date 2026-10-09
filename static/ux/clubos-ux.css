@@ -507,3 +507,12 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .act-pane .ed-narrative--full,.act-pane .ed-bigimage,.act-pane .ed-media--full .full-bleed{min-height:360px;padding:30px}
 .act-pane .ed-numbercards{margin:24px 0}
 .act-pane .ed-highlight{margin:24px 0}
+
+/* ── 俱乐部设置中心 tab（2026-10-09）：领队资源库/业务介绍/Credits/收款收进设置页 ── */
+.set-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 16px;padding:4px;
+  background:#f3f1ea;border-radius:10px;width:fit-content;max-width:100%}
+.set-tab{border:0;background:transparent;color:#5d6b60;font:inherit;font-size:13.5px;
+  padding:7px 14px;border-radius:8px;cursor:pointer;white-space:nowrap}
+.set-tab:hover{color:#22352a}
+.set-tab.active{background:#fff;color:#22352a;font-weight:600;box-shadow:0 1px 4px #1025171a}
+.set-pane{min-width:0}
