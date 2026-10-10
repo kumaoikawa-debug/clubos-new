@@ -75,11 +75,16 @@
 .ed-card__ic{font-size:22px;line-height:1.2;flex:0 0 auto}
 .ed-card b{display:block;font-size:15px;margin-bottom:5px}
 .ed-card p{margin:0;font-size:13.5px;line-height:1.55;color:#5b5246}
-.ed-numbercards{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#d8d0c2;margin:30px 0}
-.ed-numcard{background:#16231f;color:#fff;padding:30px 18px;text-align:center}
-.ed-numcard strong{display:block;font-size:30px;font-weight:850;line-height:1.05}
-.ed-numcard i{font-style:normal;font-size:13px;color:#9fd3bf;margin-left:3px}
-.ed-numcard span{display:block;font-size:12px;letter-spacing:1px;color:#a9bdb4;margin-top:10px}
+/* 数字卡 2.0（2026-10-10 用户反馈「这种 ui 呈现方式太丑」）：旧版 3 列 1px 缝隙拼格，
+   4 张卡时第二行空出两格、露出米色底 —— 又丑又浪费。改成真正的独立圆角卡 +
+   auto-fit 自适应列数：几张卡都铺得满，奇数张时最后一张通栏，永远没有空格。 */
+.ed-numbercards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:30px 0}
+.ed-numcard{background:#16231f;color:#fff;padding:24px 20px;border-radius:16px;text-align:left;position:relative;overflow:hidden}
+.ed-numcard::after{content:'';position:absolute;right:-22px;top:-22px;width:74px;height:74px;border-radius:50%;background:rgba(159,211,191,.12)}
+.ed-numcard strong{display:block;font-size:32px;font-weight:850;line-height:1.05;letter-spacing:.5px}
+.ed-numcard i{font-style:normal;font-size:13px;color:#9fd3bf;margin-left:4px}
+.ed-numcard span{display:block;font-size:12.5px;line-height:1.55;color:#a9bdb4;margin-top:10px}
+.ed-numcard:last-child:nth-child(odd){grid-column:1/-1}
 .ed-highlight{margin:30px 0;background:#f0e7d6;border-left:4px solid var(--brand2,#2f6b48);border-radius:12px;padding:28px 30px}
 .ed-highlight .ed-kicker{margin-bottom:10px}
 .ed-highlight p{font-family:Georgia,"Noto Serif SC",serif;font-size:21px;line-height:1.6;margin:0;color:#3a3329}
@@ -92,7 +97,7 @@
   .ed-bigimage__cap h3{font-size:27px}
   .ed-cards{padding:18px}
   .ed-cards__grid{grid-template-columns:1fr}
-  .ed-numbercards{grid-template-columns:1fr}
+  .ed-numbercards{grid-template-columns:repeat(2,1fr)}
   .ed-highlight{margin:24px 0;padding:22px 20px}
   .ed-columns{padding:30px 24px;columns:1}
 }
@@ -155,11 +160,13 @@
 /* 「这些请自己准备」改成一整张清单面板（2026-10-09 用户反馈「需要给顾客呈现出最美的页面」）：
    旧版是虚线框两列网格、一格一句散着摆，和上面「商城可以配齐」的实线商品卡完全不是一个质感，
    看着像没做完的草稿。现在用同一套语言：整块米色面板 + 图标方块 + 一行说明 + 发丝分隔线。 */
-.pack-own{background:#fbf8f1;border:1px solid #efe7d8;border-radius:14px;padding:4px 14px}
-.pack-own__item{display:grid;grid-template-columns:34px 1fr;gap:11px;align-items:center;padding:10px 0;border-bottom:1px solid #f1ead9}
-.pack-own__item:last-child{border-bottom:0}
-.pack-own__ico{width:34px;height:34px;border-radius:10px;background:#f4efe3;display:grid;place-items:center;font-size:16px;line-height:1}
-.pack-own__txt{font-size:13.5px;line-height:1.6;color:#48554d}
+/* 自备清单模块化（2026-10-10 用户反馈「太乱了…可以多行模块化，不用占这么多地方」）：
+   旧版一条通栏一行、最多拖出一屏半；改成自适应多列 chip 网格——
+   每项一张白色小圆角卡，列数随容器宽度自动增加，高度直接砍半以上。 */
+.pack-own{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:8px;background:#fbf8f1;border:1px solid #efe7d8;border-radius:14px;padding:12px}
+.pack-own__item{display:flex;align-items:center;gap:9px;padding:8px 11px;background:#fff;border:1px solid #f1ead9;border-radius:11px}
+.pack-own__ico{flex:0 0 28px;width:28px;height:28px;border-radius:9px;background:#f4efe3;display:grid;place-items:center;font-size:14px;line-height:1}
+.pack-own__txt{font-size:13px;line-height:1.5;color:#48554d}
 @media(max-width:680px){.pack-goods{grid-template-columns:1fr}}
 
 /* 「出发前知道」结构化（2026-10-09 用户反馈「一排文字密密麻麻，没有可读性」）：

@@ -336,6 +336,13 @@ function edParas(v){
 }
 function renderPromo(detail,master={},opts={}){
   const mm=mediaMap(master);let h='<article class="editorial">';
+  /* 重复合并（2026-10-10 用户反馈：服务清单下面又来一个 GOOD TO KNOW 重复讲同样内容）：
+     渲染过程中把 facts 块已呈现的文字攒起来，后面的 info 块先做过半覆盖度检查，
+     整块内容大部分已被讲过 → 整块不上屏。信息只保留一处，规则对旧数据同样生效。 */
+  let _factsSeen='';
+  const _cnGrams=s=>{const t=String(s||'').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]+/g,'');const g=new Set();for(let i=0;i<t.length-1;i++)g.add(t.slice(i,i+2));if(t.length===1)g.add(t);return g;};
+  const _covered=text=>{const a=_cnGrams(text),b=_cnGrams(_factsSeen);if(!a.size||!b.size)return 0;let hit=0;a.forEach(x=>{if(b.has(x))hit++});return hit/a.size;};
+  const _revCover=text=>{const a=_cnGrams(_factsSeen),b=_cnGrams(text);if(!a.size||!b.size)return 0;let hit=0;a.forEach(x=>{if(b.has(x))hit++});return hit/a.size;};
   // 头图兜底：block 自己没写 ref（或 ref 解析不到 url）时，用媒体清单里第一张真实存在的照片。
   // 头图必须是照片打底，而不是一块纯色——live 模式下模型常常只给 hero 文案、不给 mediaRefs。
   const fallbackPhoto=Object.keys(mm).find(r=>mm[r]&&mm[r].url)||'';
@@ -356,6 +363,8 @@ function renderPromo(detail,master={},opts={}){
          label 为空时也不再渲染一个空的 <small>。 */
       const fit=(b.items||[]).map(x=>{
         let v=(x&&typeof x==='object'&&!Array.isArray(x))?x.value:x;
+        // 攒下这条 facts 的纯文本，供后面 info 块做重复覆盖度检查
+        try{_factsSeen+=String(b.headline||b.title||'')+' '+String(v==null?'':Array.isArray(v)?v.join(' '):v)+' ';}catch(_e){}
         let shown;
         if(v==null)v=(x&&typeof x==='object')?feeValueHtml(x,1):x;
         else if(typeof v==='object')shown=feeValueHtml(v,1);
@@ -421,8 +430,12 @@ function renderPromo(detail,master={},opts={}){
     }
     else if(b.type==='numbercards'){
       // 大数字统计卡：距离 / 海拔 / 天数 / 人数用大字号突出，比 facts 条更有冲击力。
-      const items=(b.items||[]).filter(x=>x&&(x.value!=null&&x.value!==''||x.label));
-      if(items.length)h+=`<section class="ed-numbercards">${items.map(x=>{const shown=esc(String(x.value==null?'':x.value));return `<div class="ed-numcard"><strong>${shown}</strong>${x.unit?`<i>${esc(x.unit)}</i>`:''}${x.label?`<span>${esc(x.label)}</span>`:''}</div>`}).join('')}</section>`;
+      // ★ 键名双兼容（2026-10-10）：契约写 items/value，但真模型也常输出 cards/number
+      //   （act40 实测）——只认一种的话整块静默渲染为空，「关键数据」凭空消失。
+      //   没有数字的卡直接丢弃：只剩 label 的深色空卡正是用户截图骂过的那版丑卡。
+      const raw=(Array.isArray(b.items)&&b.items.length)?b.items:(b.cards||[]);
+      const items=raw.filter(x=>x&&String(x.value??x.number??'').trim()!=='');
+      if(items.length)h+=`<section class="ed-numbercards">${items.map(x=>{const shown=esc(String(x.value??x.number??'').trim());return `<div class="ed-numcard"><strong>${shown}</strong>${x.unit?`<i>${esc(x.unit)}</i>`:''}${x.label?`<span>${esc(x.label)}</span>`:''}</div>`}).join('')}</section>`;
     }
     else if(b.type==='highlight'){
       // 高亮提示框：强调一句关键承诺或须知，与 narrative 区隔。
@@ -440,15 +453,38 @@ function renderPromo(detail,master={},opts={}){
     else if(b.type==='timeline'){
       /* 模型输出的行程项形状不稳定（字符串 / {time,text} / {day,schedule:[...]}），
          过去只认 {time,text}，其他形状整段渲染成空行（用户截图实锤「行程区只有图片没有字」）。
-         统一走 itineraryRows 归一；归一后为空就整段不渲染，宁缺勿空。 */
+         统一走 itineraryRows 归一；归一后为空就整段不渲染，宁缺勿空。
+         ★ 同页只保留一个行程（2026-10-10 用户截图实锤）：下方结构化「详细行程 ITINERARY」
+           永远按 master.itinerary 完整呈现（按天折叠）。timeline 再排一份逐条时刻表，
+           就是前后两个行程板块——哪怕文字被模型改写过、infoStackSkip 的覆盖判据兜不住。
+           所以 master 有行程时，timeline 只保留「节奏说明」；没有行程时它才升级为唯一时刻表。 */
       const rows=itineraryRows(b.items||b.body||[]);
-      if(rows.length)h+=`<section class="ed-section ed-timeline"><div class="ed-section-head"><div class="ed-kicker">SCHEDULE</div><h2>${esc(b.title||b.headline||'行程')}</h2></div><div class="timeline-list">${rows.map(x=>`<div class="timeline-item"><time>${esc(x.time)}</time><p>${esc(x.text)}</p></div>`).join('')}</div></section>`;
+      const masterHasItin=itineraryRows((master||{}).itinerary||[]).length>0;
+      const noteHead=String(b.title||b.headline||'').trim();
+      /* b.body 在 timeline 里可能是 items 数组（rows 的来源），只有字符串才能当说明文字 */
+      const noteBody=String(typeof b.text==='string'?b.text:(typeof b.body==='string'?b.body:'')).trim();
+      if(rows.length&&!masterHasItin){
+        h+=`<section class="ed-section ed-timeline"><div class="ed-section-head"><div class="ed-kicker">SCHEDULE</div><h2>${esc(b.title||b.headline||'行程')}</h2></div><div class="timeline-list">${rows.map(x=>`<div class="timeline-item"><time>${esc(x.time)}</time><p>${esc(x.text)}</p></div>`).join('')}</div></section>`;
+      }else if(noteHead||noteBody){
+        h+=`<section class="ed-highlight">${noteHead?`<div class="ed-kicker">${esc(noteHead)}</div>`:''}${edParas(noteBody)}</section>`;
+      }
     }
     else if(b.type==='info'){
       /* 「出发前知道」改结构化列表（2026-10-09 用户反馈「一排文字密密麻麻，没有可读性」）：
-         旧版把每条须知整句塞进一个胶囊，两条以上的长须知就变成一堵字墙。 */
+         旧版把每条须知整句塞进一个胶囊，两条以上的长须知就变成一堵字墙。
+         ★ 重复合并（2026-10-10）：info 与前面的 facts 经常被模型写成同一批内容两副面孔
+           （服务清单 + 「关于交通与后勤」讲的都是大巴/领队/供氧），前后两堵字墙。
+           过半内容已被 facts 讲过的 info 块整块不上屏——信息保留一处就够。
+           短块（<30 字）不做检查：字太少覆盖度判据噪声大，宁可照常渲染。 */
       const notes=infoNotes(b.items);
-      h+=`<section class="ed-section ed-info"><div class="ed-section-head"><div class="ed-kicker">GOOD TO KNOW</div><h2>${esc(b.title||'出发前知道')}</h2></div>`
+      const noteAll=notes.map(n=>((n.t||'')+' '+(n.d||'')).trim()).join(' ');
+      /* 双向判据（阈值用 act40 真实数据标定：改写级重复 0.23 vs 独立信息 0.01-0.02）：
+         正向 = info 字面被 facts 讲过的比例（抓逐字级重复）；
+         反向 = facts 的内容词被 info 复述的比例（抓「换个说法再讲一遍」的改写级重复）。
+         短块（<30 字）不判：字太少判据噪声大，宁可照常渲染。 */
+      const dup=noteAll.length>=30&&(_covered(noteAll)>=0.45||(_factsSeen.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g,'').length>=40&&_revCover(noteAll)>=0.18));
+      if(dup)/* 重复内容：整块跳过，不让顾客读第二遍 */;
+      else h+=`<section class="ed-section ed-info"><div class="ed-section-head"><div class="ed-kicker">GOOD TO KNOW</div><h2>${esc(b.title||'出发前知道')}</h2></div>`
         +(notes.length?`<div class="info-list">${notes.map((n,i)=>`<div class="info-note"><span class="info-note__i">${i+1}</span><div class="info-note__b">${n.t?`<b>${esc(n.t)}</b>`:''}<p>${esc(n.d)}</p></div></div>`).join('')}</div>`:'')
         +`</section>`;
     }

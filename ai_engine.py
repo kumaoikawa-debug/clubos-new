@@ -1338,6 +1338,9 @@ _PHOTO_MATCH_RULES = """
   森林花海配「森林与植被」。
 - gallery / media 图片组是「某一段文字的多张实拍」，必须紧跟它所说明的那段内容，组内主题一致。
   不要把餐食图摆到住宿段落下面当氛围图。
+- ★ 证书 / 证件 / 资格证 / 文件 / 截图 / 二维码类照片**不是活动照片**，禁止给任何区块配图。
+  文字里讲老师、领队、教练、资质，也**不许**配「某人的证书」——顾客看到陌生人的证件照只会
+  觉得场合错了；资质用文字陈述即可，一张都不要配。
 - 一张图全篇只出现一次：同一个 ref 不许出现在两个区块里（gallery 之间也不行）。
 - **找不到对得上的图就别给这个区块配图**。整块只有文字，也比配错图好：顾客看到
   「讲酒店配火锅」，只会认为这家俱乐部不专业。
@@ -1358,10 +1361,18 @@ _LAYOUT_CONTRACT = """
 4. **gallery 不少于 2 组**：至少做 2 个 gallery 区块，每组 3~6 张**同主题**实拍，分别挂在不同的行程 / 体验 /
    住宿段落下面（gallery 是消耗照片最快、最像画报的手法）。
 5. **numbercards 至少 1 组**：用大数字突出 距离 / 海拔 / 天数 / 人数 / 累计爬升 等硬指标，做成 numbercards。
+   每张卡**必须有真实数字**（value/number 字段），不许只给一句 label 没有数字；数字取自资料，不许编造。
 6. **主题维度覆盖**：资料里出现的维度（目的地风貌 / 行程 / 住宿 / 体验活动 / 后勤须知 / 报名方式）都要有对应
    区块，不要只写行程和费用两块就结束。
 7. **节奏交替**：禁止连续超过 3 个纯文字 block 不配图；图文穿插，每 2~3 个文字块就插一个视觉块或 gallery。
-以上 7 条是下限，达成后鼓励更丰富。若可用照片不足 N*0.6 张，就以「全部可用照片」为下限（绝不要求超过实际拥有）。"""
+8. **信息只讲一遍**（2026-10-10 用户反馈：服务清单下面又来一个「关于交通与后勤」重复讲同样的内容）：
+   服务承诺 / 费用包含 / 交通接送 / 住宿安排 / 高原须知 / 证件要求，每个主题全篇只允许出现在**一个**区块里。
+   facts 与 info（出发前知道）严禁重复同一主题——写 info 前先检查前面 blocks 已经讲过什么，只补充还没讲过的信息。
+9. **timeline 只写节奏，不抄行程**：timeline 块的 value 是「行程节奏 / 高原适应策略」的说明文字
+   （headline + text），**不要**在 timeline.items 里逐条复制行程时刻——逐条行程由页面结构化的
+   「详细行程 ITINERARY」区完整呈现，正文再排一份就是同页两个行程板块。仅当原始资料里根本没有
+   逐日行程时，才允许 timeline 携带 items 充当唯一时刻表。
+以上 9 条是下限，达成后鼓励更丰富。若可用照片不足 N*0.6 张，就以「全部可用照片」为下限（绝不要求超过实际拥有）。"""
 
 # 主题词表：只用于「判断图文是不是在讲两件事」。同类词命中即视为同一主题。
 # ★ 只用**具体名词 + 不会出现在视觉描述里的散文动词**：视觉模型给的标签里就有「住宿」，
@@ -1391,6 +1402,15 @@ _TOPIC_WORDS=(
 # 只加分、不扣分：绝不让风光图被冤枉撤掉（判据不足时宁可不动）。
 _CONCRETE_TOPICS={'住宿','餐食','唐卡与绘画','人像与藏装','手作与体验','建筑与寺院'}
 
+# ── 文档类照片黑名单（2026-10-10 用户反馈：唐卡段落配了一张教练证书）─────────────
+# 证书 / 证件 / 文件截图不是活动照片。模型会做字面联想——「在非遗老师指导下」配一张
+# 「教练证书」，顾客看到的是陌生人的证件照，直接判不专业。这类图**无论打标是否成功、
+# 无论模型怎么选**，一律不得进入详情页配图（三道闸：打标计入 unusable、匹配分 -1000、
+# 出口对题硬删），与打标成败解耦——打标失败的回退路径也曾把证书图放进来（实测踩过）。
+_DOC_PHOTO_RE=re.compile(
+    r'证书|证件|身份证|护照|扫描件|扫描|打印件|合同|票据|收据|名片|营业执照|许可证'
+    r'|资格证|资质证|教练证|导游证|文件|表格|表单|二维码|条形码|截图|日程表|行程表')
+
 def _block_text(b:dict[str,Any])->str:
     return ' '.join(str(b.get(k) or '') for k in ('headline','body','text','title','caption','pull'))
 
@@ -1416,6 +1436,10 @@ def _match_score(text_topics:set[str],text_bg:set[str],img:dict[str,Any])->int|N
     info=_img_text(img)
     if not info:
         return None
+    # ★ 文档类照片（证书/证件/文件截图）永远不是候选：-1000 让它在任何段落都是
+    #   「明显错配」，既不会被换进来，也会被出口对题撤掉（2026-10-10 教练证书实锤）。
+    if _DOC_PHOTO_RE.search(info):
+        return -1000
     it=_topic_set(info)
     bg=_bigrams(info)
     score=2*len(bg&text_bg)
@@ -1441,6 +1465,14 @@ def _align_block_media(blocks:list[dict[str,Any]],catalog:list[dict[str,Any]],
     by_ref={str(m.get('ref')):m for m in (catalog or []) if isinstance(m,dict) and m.get('ref')}
     allow=set(allowed or [])
     def ok_ref(r):return (not allow) or (r in allow)
+    # ★ 文档类照片硬删（2026-10-10）：打标说不可用（usable=False）或画面描述像证书/证件/
+    #   文件截图的图，无论 allowed 怎么给、模型怎么选，一律不进成品。这是与打标成败
+    #   解耦的最后一道闸——打标失败的回退路径曾把教练证书放进唐卡段落（用户截图实锤）。
+    def bad_ref(r):
+        m=by_ref.get(r)
+        if not m:return False
+        if m.get('usable') is False:return True
+        return bool(_DOC_PHOTO_RE.search(str(m.get('desc') or '')))
     # ① 去重：同一 ref 全篇只保留第一次出现的位置
     used:set[str]=set()
     for b in blocks:
@@ -1450,7 +1482,7 @@ def _align_block_media(blocks:list[dict[str,Any]],catalog:list[dict[str,Any]],
         keep=[]
         for r in refs:
             r=str(r)
-            if ok_ref(r) and r not in used:
+            if ok_ref(r) and r not in used and not bad_ref(r):
                 used.add(r);keep.append(r)
         b['mediaRefs']=keep
     # ② 对题：文字区块按自身主题，纯图片区块按「紧邻的上一段文字」的主题（读者就是这么理解的）
@@ -1543,7 +1575,8 @@ async def _prepare_photo_picker(club_id:int,source:dict[str,Any],catalog:list[di
     lines=caption_lines({'media':catalog},caps)
     if len(lines)<max(3,len(photo_refs)//2):     # 打标基本失败：退回旧行为，别让整页缺图
         return {'lines':[],'allowed':set(photo_refs),'ok':False}
-    unusable={r for r,c in caps.items() if not c.get('usable')}
+    unusable={r for r,c in caps.items()
+              if not c.get('usable') or _DOC_PHOTO_RE.search(str(c.get('desc') or ''))}
     return {'lines':lines,'allowed':set(photo_refs)-unusable,'ok':True}
 
 def _photo_block(pick:dict[str,Any],media_json:str)->str:
