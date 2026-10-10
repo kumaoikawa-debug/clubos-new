@@ -4,6 +4,19 @@
  /* 内容中心的 loadContent 与 genChannel 已由 static/club/club.js 统一实现（旧版把接口 JSON 塞进 <pre>，
     老板拿到的是代码而不是成品）。这里不再重复定义，避免后加载覆盖新版：成品渲染见 static/channel-render.js。 */
  window.publishActivity=id=>uxTask(async()=>{const a=await api('/api/club/'+CLUB+'/activities/'+id);const issues=a.activityMaster?.blocking_conflicts||[];if(issues.length){toast('活动有 '+issues.length+' 处事实冲突，请先处理');await openActivity(id);return}if(!(a.occurrences||[]).length){toast('请先添加至少一个可报名团期');return}if(!await uxConfirm({title:'发布活动到 C 端',message:a.title+' · '+a.occurrences.length+' 个团期。请确认行程、时间、价格、名额、费用、积分和退款规则。发布后用户可以看到并报名。',confirmText:'确认发布'}))return;await post('/api/club/'+CLUB+'/activities/'+id+'/publish');toast('活动已发布到 C 端');await openActivity(id);await loadActivities()});
+ /* 重新发布 / 同步到 C 端（2026-10-10 用户反馈「重新生成一版之后 C 端还是旧版本，
+    后台需要增加个重新换版之后再次发布的功能」）。C 端活动详情本来就是实时读库，换版即生效；
+    这一步不改任何内容，只做两件事：确保 status=published、刷新 updated_at 作为版本戳
+    （C 端拿它判断「有新版」，已打开的顾客页面会出现刷新提示）。有回执，不静默。 */
+ window.republishActivity=id=>uxTask(async()=>{
+   const a=await api('/api/club/'+CLUB+'/activities/'+id);
+   const ver=(a.detailVersion&&a.detailVersion.versionNo)||'—';
+   if(!await uxConfirm({title:'重新发布到 C 端',message:'当前这一版：第 '+ver+' 版。重新发布后，顾客打开活动详情看到的就是这一版；已经打开着的页面会收到「有新版」提示。本操作只刷新发布状态与版本戳，不改写文案与排版。',confirmText:'确认重新发布'}))return;
+   const r=await post('/api/club/'+CLUB+'/activities/'+id+'/republish');
+   window.__clubSyncPending=null;
+   toast(r.versionNo?('已重新发布到 C 端：第 '+r.versionNo+' 版'):'已重新发布到 C 端');
+   await openActivity(id);await loadActivities()
+ });
  window.batchInsurance=oid=>uxTask(async()=>{const d=await uxForm({title:'批量提交保险',subtitle:'对本团期需要保险且资料完整的参加人创建保险提交记录；不能代替真实渠道承保结果。',fields:[{name:'provider',label:'保险渠道/保险公司',required:true,full:true,placeholder:'填写实际保险渠道'}],submitText:'批量提交保险记录'});if(!d)return;if(!await uxConfirm({title:'核对批量保险提交',message:'请确认本团期参加人身份资料符合保险渠道要求。',confirmText:'确认提交'}))return;const r=await post('/api/club/'+CLUB+'/occurrences/'+oid+'/insurance/batch-submit',d);toast('已更新 '+(r.updated||0)+' 人的保险记录');openExecution(oid)});
  window.sendExecutionNotice=(oid,nid)=>uxTask(async()=>{if(!await uxConfirm({title:'确认发送活动通知',message:'请确认内容、接收人及渠道。本操作只代表当前已接入通知能力的处理状态，不保证外部渠道实际送达。',confirmText:'确认发送记录'}))return;await post('/api/club/'+CLUB+'/occurrences/'+oid+'/notices/'+nid+'/send');toast('通知发送记录已更新');openExecution(oid)});
  window.advanceExecution=oid=>uxTask(async()=>{const d=await api('/api/club/'+CLUB+'/occurrences/'+oid+'/execution'),seq=['preparing','departed','in_progress','completed'],cur=d.occurrence?.execution_status||'preparing',next=seq[Math.min(seq.indexOf(cur)+1,3)],names={preparing:'准备中',departed:'已出发',in_progress:'进行中',completed:'已完成'};if(cur===next){toast('本团期已经完成');return}if(!await uxConfirm({title:'变更团期执行状态',message:'团期将从「'+names[cur]+'」进入「'+names[next]+'」。请先核对参加人、签到、领队和应急信息。',confirmText:'确认进入'+names[next]}))return;await post('/api/club/'+CLUB+'/occurrences/'+oid+'/execution/status',{status:next});toast('团期执行状态已更新');openExecution(oid)});

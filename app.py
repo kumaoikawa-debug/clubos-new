@@ -59,12 +59,17 @@ async def security_boundary(request:Request,call_next):
         except Exception:
             # If the audit sink fails for a successful write, do not claim success to the caller.
             response=JSONResponse({'detail':'audit persistence unavailable; the operation may already have committed; reconcile with X-Request-ID before retry'},status_code=503)
-        response.headers['Cache-Control']='no-store' if request.url.path.startswith('/api/') else 'private, no-store'
         response.headers['X-Content-Type-Options']='nosniff'
         response.headers['Referrer-Policy']='no-referrer'
         response.headers['X-Frame-Options']='DENY'
         response.headers['Content-Security-Policy']="frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
         response.headers['Strict-Transport-Security']='max-age=31536000; includeSubDomains'
+    # ★ 动态 JSON 一律禁缓存，且**不再只写在 IS_PROD 分支里**（2026-10-10 用户反馈
+    #   「后台重新生成一版之后 C 端还是旧版」）：线上跑的是 demo/内测模式，原先的
+    #   /api/ no-store 只在 IS_PROD 生效 —— 于是活动详情 JSON 响应**一个缓存头都不带**，
+    #   浏览器与前置网关就可能按启发式策略留一份旧 JSON，后台换版后顾客刷新拿到的还是上一版。
+    #   这条必须放在 IS_PROD 之外、且放在可能重建 response 的审计分支之后。
+    response.headers['Cache-Control']='no-store' if request.url.path.startswith('/api/') else 'private, no-store'
     response.headers['X-Request-ID']=request_id
     return response
 
@@ -1026,6 +1031,43 @@ def publish_activity(club_id:int,activity_id:int):
         if master.get('blocking_conflicts'): raise HTTPException(409,'存在必须解决的事实冲突，暂不能发布')
         c.execute('UPDATE activities SET status="published",updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',(activity_id,club_id))
     return {'ok':True}
+
+@app.post('/api/club/{club_id}/activities/{activity_id}/republish')
+def republish_activity(club_id:int,activity_id:int):
+    """重新发布 / 同步到 C 端：把「当前这一版详情」正式对顾客生效。
+
+    为什么要有这个动作（2026-10-10 用户反馈「后台重新生成一版之后，C 端还是旧版，
+    需要增加重新换版之后再次发布的功能」）：
+      · 事实层面 C 端本来就是实时读库（public_activity 直接读 activities.detail_json），
+        换版后两端数据一致 —— 实测俱乐部端与 C 端返回的 detail 逐字节相同；
+      · 但老板**在界面上看不出「到底同步了没有」**：C 端页面已经开在手机上/另一个标签页里，
+        它不会自己变；顾客手里的旧页面更是如此。
+    所以这里把「发布」做成一等公民：一个显式、可点、有回执的动作。
+      · 保证 activities.status='published'（草稿活动点它＝发布当前这一版）；
+      · 刷新 updated_at —— C 端详情接口会把它当版本戳回给页面，页面据此提示「有新版，点我刷新」；
+      · 回执带上当前版本号与带版本参数的 C 端地址，前端直接展示「已同步到第 N 版」。
+    只动 status / updated_at，绝不改写内容 —— 文案与排版归 detail-regenerate 管。
+    """
+    with conn() as c:
+        a=row(c.execute('SELECT id,status,detail_json,activity_master_json,detail_version_id FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+        if not a: raise HTTPException(404,'活动不存在')
+        master=jload(a['activity_master_json'],{}) or {}
+        if master.get('blocking_conflicts'): raise HTTPException(409,'存在必须解决的事实冲突，暂不能发布')
+        detail=jload(a['detail_json'],{}) or {}
+        blocks=[b for b in detail.get('blocks') or [] if isinstance(b,dict) and b.get('type')]
+        if not blocks:
+            raise HTTPException(409,'这一版还没有可用的详情内容，先点「重新生成 / 换一版」再同步。')
+        c.execute('UPDATE activities SET status="published",updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',(activity_id,club_id))
+        ver=row(c.execute("SELECT version_no FROM activity_detail_versions WHERE id=? AND activity_id=? AND club_id=? AND status='ready'",
+                          (a['detail_version_id'],activity_id,club_id)))
+        stamp=row(c.execute('SELECT updated_at FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+    _vid=int(a['detail_version_id'] or 0)
+    return {'ok':True,'status':'published','detailVersionId':_vid,
+            'versionNo':(ver or {}).get('version_no'),'blockCount':len(blocks),
+            'alreadyPublished':(a['status']=='published'),
+            'updatedAt':(stamp or {}).get('updated_at'),
+            # v= 只是缓存破冰参数（C 端不按它选版本，内容永远是库里的最新版）
+            'publicUrl':'/web?club_id=%d&activity=%d&v=%d'%(club_id,activity_id,_vid)}
 
 # ---------------------------------------------------------------------------
 # 活动基本信息的编辑 / 删除
@@ -2105,9 +2147,14 @@ def public_activity(activity_id:int):
     if isinstance(_m,dict) and isinstance(_m.get('media'),list):
         _m['media']=[m for m in _m['media']
                      if isinstance(m,dict) and str(m.get('kind','')).lower() not in ('logo',)]
+    # ★ 版本戳（2026-10-10 用户反馈「后台重新生成一版，C 端还是旧版」）：C 端页面常在手里开着，
+    #   靠这两个字段就能自查「后台已经换了新的一版」，不用逼顾客懂什么叫强刷。
+    #   detailVersionId 随每次「重新生成 / 换一版」变；updatedAt 换版与重新发布都会变。
+    a['detailVersionId']=int(a.get('detail_version_id') or 0)
+    a['updatedAt']=a.get('updated_at')
     if IS_PROD:
         # Public activity is not a dump of private activity_master_json (internalData).
-        a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy','gearRecommendations','leaders')}
+        a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy','gearRecommendations','leaders','detailVersionId','updatedAt')}
         # 领队只放行展示必需的六样：手机号一类内部联络信息即便将来被写进这张表，也出不去。
         # leaders 已经是活动级的扁平数组（见 _public_leaders），逐项过白名单即可。
         a['leaders']=[{k:v for k,v in x.items()

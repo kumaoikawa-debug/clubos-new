@@ -361,17 +361,31 @@ function renderPromo(detail,master={},opts={}){
       /* facts 现在也常被模型用来写「这场活动只做三件事」这类引导语（headline）+
          几条具体说明（items，label 常为空）。引导语以前会被丢掉，整块只剩几行孤立的字；
          label 为空时也不再渲染一个空的 <small>。 */
+      /* ★ 2026-10-10 用户截图实锤「活动详情里冒出一张空白乱码表格」：真模型写的 items 形状是
+         {label, text}（不是契约里的 {label, value}）。这一支里 `if(v==null)` 把归一结果赋给了
+         v 而**不是 shown** —— 于是 4 条 item 全部渲染成 `<small>标签</small><strong></strong>`：
+         标签在、值是空的；再叠上 .ed-facts 的「灰底 + 1px 缝隙」网格，就正好画出一张
+         一行都没字的表格（线上实测：4 个 strong 全是空文本）。
+         两处一起收口：
+           ① 取值按 value → text → body → desc 兼容，对象/数组仍走 feeValueHtml 展开，
+              绝不再把 JSON 文本或空 <strong> 印给顾客；
+           ② 真的取不到内容的条目直接丢弃，全块都空就整块不上屏（宁缺勿空）。 */
       const fit=(b.items||[]).map(x=>{
-        let v=(x&&typeof x==='object'&&!Array.isArray(x))?x.value:x;
+        const isObj=!!x&&typeof x==='object'&&!Array.isArray(x);
+        const raw=isObj?(x.value??x.text??x.body??x.desc):x;
         // 攒下这条 facts 的纯文本，供后面 info 块做重复覆盖度检查
-        try{_factsSeen+=String(b.headline||b.title||'')+' '+String(v==null?'':Array.isArray(v)?v.join(' '):v)+' ';}catch(_e){}
+        try{_factsSeen+=String(b.headline||b.title||'')+' '+edPlain(raw)+' ';}catch(_e){}
         let shown;
-        if(v==null)v=(x&&typeof x==='object')?feeValueHtml(x,1):x;
-        else if(typeof v==='object')shown=feeValueHtml(v,1);
-        else shown=esc(String(v));
-        const lab=(x&&x.label)?`<small>${esc(x.label)}</small>`:'';
-        return `<div>${lab}<strong>${shown==null?'':shown}</strong></div>`;
-      }).join('');
+        if(raw==null)shown='';
+        else if(typeof raw==='object')shown=feeValueHtml(raw,1);
+        else shown=esc(String(raw));
+        const lab=(isObj&&x.label)?`<small>${esc(x.label)}</small>`:'';
+        if(!lab&&!String(shown||'').trim())return '';   // 模型留下的空壳条目：不上屏
+        /* 长文案（费用包含那种一句话列出七八项的）走 .is-long：22px 大字号配长句会变成
+           一墙大字，短数字（5km / 300m）才该用大字号——同一个组件两种读数场景。 */
+        const plainLen=String(shown||'').replace(/<[^>]*>/g,'').trim().length;
+        return `<div${plainLen>16?' class="is-long"':''}>${lab}<strong>${shown||''}</strong></div>`;
+      }).filter(Boolean).join('');
       // 空块不上屏：宁可不渲染，也不要页面中间出现一块空白
       if(fit)h+=`<section class="ed-facts">${(b.headline||b.title)?`<p class="ed-facts__lead">${esc(b.headline||b.title)}</p>`:''}${fit}</section>`;
     }
@@ -483,9 +497,9 @@ function renderPromo(detail,master={},opts={}){
          反向 = facts 的内容词被 info 复述的比例（抓「换个说法再讲一遍」的改写级重复）。
          短块（<30 字）不判：字太少判据噪声大，宁可照常渲染。 */
       const dup=noteAll.length>=30&&(_covered(noteAll)>=0.45||(_factsSeen.replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g,'').length>=40&&_revCover(noteAll)>=0.18));
-      if(dup)/* 重复内容：整块跳过，不让顾客读第二遍 */;
+      if(dup||!notes.length)/* 重复内容 / 一条都没解析出来：整块跳过，不让顾客读第二遍，也不留一个只有标题的空壳 */;
       else h+=`<section class="ed-section ed-info"><div class="ed-section-head"><div class="ed-kicker">GOOD TO KNOW</div><h2>${esc(b.title||'出发前知道')}</h2></div>`
-        +(notes.length?`<div class="info-list">${notes.map((n,i)=>`<div class="info-note"><span class="info-note__i">${i+1}</span><div class="info-note__b">${n.t?`<b>${esc(n.t)}</b>`:''}<p>${esc(n.d)}</p></div></div>`).join('')}</div>`:'')
+        +`<div class="info-list">${notes.map((n,i)=>`<div class="info-note"><span class="info-note__i">${i+1}</span><div class="info-note__b">${n.t?`<b>${esc(n.t)}</b>`:''}<p>${esc(n.d)}</p></div></div>`).join('')}</div>`
         +`</section>`;
     }
     else if(b.type==='quote')h+=`<section class="ed-quote">“${esc(b.text||'')}”</section>`;

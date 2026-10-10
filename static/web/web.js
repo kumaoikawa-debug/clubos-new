@@ -667,7 +667,9 @@ function wv(id,b){
 }
 async function openAct(id){/* 不先切视图的话，详情会被渲染进一个 display:none 的 section ——
    从首页 hero / 本月精选点进来时，页面看起来毫无反应。 */wviewShow('wactivities');
-let a=await api(`/api/public/activities/${id}`);currentAct=a;
+/* cache:'no-store'（2026-10-10）：活动详情必须每次真回源。后台换一版之后 C 端仍显示旧版，
+   最常见的原因就是这一层被浏览器/网关留了旧 JSON。后端也已给 /api/ 统一加 Cache-Control: no-store。 */
+let a=await api(`/api/public/activities/${id}`,{cache:'no-store'});currentAct=a;_actRevWatch(a);
 /* 默认团期必须是**第一个还有余位**的：早前固定取 occurrences[0]，售罄的第一个团期会被默认选中，
    顾客直接点报名就被后端拒，还看不出为什么。全满时留 null，由 signupNow 给出明确提示。 */
 /* 默认选中也要跳过已出发的团期：否则一进详情页按钮就是「立即报名 ¥xxx」，
@@ -688,6 +690,38 @@ function showActivityList(){
   history.replaceState({},'',location.pathname);
 }
 function backList(){showActivityList()}
+/* ★ 版本戳看门（2026-10-10 用户反馈「后台重新生成一版，C 端还是旧版本」）：
+   活动详情是实时读库的，后台一换版这里就能拿到新版；**但已经打开着的页面不会自己变** ——
+   老板在自己手机上、顾客在报名页上看到的都还是旧的那一屏，于是「后台换了版、C 端没动」
+   就成了必然的误会。做法：打开时记住这一版的戳（detailVersionId + updatedAt），页面重新
+   可见时悄悄核对一次，变了就在底部浮一条「有新版」的提示条，点一下重新渲染。
+   刻意**不自动重渲染**：顾客可能正在填参加人证件，静默刷新会把他填到一半的表单抹掉。 */
+let _actRevStamp='';
+function _actRevOf(a){return a?(String(a.detailVersionId||0)+'|'+String(a.updatedAt||'')):''}
+function _actRevWatch(a){_actRevStamp=_actRevOf(a);_actRevBar(false)}
+function _actRevBar(show,onClick){
+  let el=document.getElementById('actRevBar');
+  if(!show){if(el)el.remove();return}
+  if(!el){
+    el=document.createElement('div');el.id='actRevBar';
+    /* 底部固定条：C 端底有一条 tab bar，bottom 留出它的高度，否则会把「订单」入口盖住。 */
+    el.style.cssText='position:fixed;left:12px;right:12px;bottom:78px;z-index:80;display:flex;align-items:center;gap:10px;padding:10px 14px;border-radius:14px;background:#1f4b3f;color:#fff;font-size:13px;line-height:1.5;box-shadow:0 10px 26px rgba(0,0,0,.24)';
+    document.body.appendChild(el);
+  }
+  el.innerHTML='<span style="flex:1">这场活动已更新到新的一版</span><button type="button" style="border:0;border-radius:10px;padding:7px 13px;font-weight:800;background:#fff;color:#1f4b3f">刷新看新版</button>';
+  el.querySelector('button').onclick=()=>{el.remove();try{onClick()}catch(_e){}};
+}
+/* 单独抽成一个可复用函数（而不是只写在 visibilitychange 里）：这样「版本变了→提示刷新」
+   这一段可以被真机探针直接调用验证，不必靠模拟标签页可见性去间接测。 */
+async function _actRevCheck(){
+  if(!_actRevStamp||!currentAct||!currentAct.id)return false;
+  try{
+    const d=await api(`/api/public/activities/${currentAct.id}`,{cache:'no-store'});
+    if(_actRevOf(d)!==_actRevStamp){_actRevBar(true,()=>openAct(currentAct.id));return true}
+  }catch(_e){/* 静默：这只是个提示，不该反过来打扰顾客 */}
+  return false;
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)_actRevCheck()});
 /* 带队领队：后端已算好「这场活动由哪些领队带队」（public_activity.leaders，活动级扁平数组、
    已去重、只含已指派的人，见 app.py::_public_leaders）。前端只负责展示，不按团期再分组 ——
    顾客在报名页挑的是「这场活动谁带」，团期只是同一场的不同日期，按团期拆开会变成名字堆。
