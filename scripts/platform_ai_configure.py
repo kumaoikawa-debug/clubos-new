@@ -3,7 +3,7 @@
 用法：
   BASE=http://127.0.0.1:8000 \
   PLATFORM_USER=platform_admin PLATFORM_PW='...' \
-  AI_KEY='sk-...' AI_PRESET=qwen AI_MODEL=qwen-plus AI_VISION_MODEL=qwen-vl-max \
+  AI_KEY='sk-...' AI_PRESET=qwen AI_MODEL=qwen-plus AI_VISION_MODEL=qwen3-vl-plus \
   AI_MODE=live \
   python scripts/platform_ai_configure.py
 
@@ -22,7 +22,7 @@ PW = os.getenv("PLATFORM_PW") or os.getenv("STAGING_PASSWORD", "Staging-2026-Clu
 KEY = os.getenv("AI_KEY", "").strip()
 PRESET = os.getenv("AI_PRESET", "qwen").strip()
 MODEL = os.getenv("AI_MODEL", "qwen-plus").strip()
-VISION = os.getenv("AI_VISION_MODEL", "qwen-vl-max").strip()
+VISION = os.getenv("AI_VISION_MODEL", "qwen3-vl-plus").strip()
 MODE = os.getenv("AI_MODE", "live").strip()
 
 if not KEY:

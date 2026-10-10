@@ -45,7 +45,7 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         'region': 'cn',
         'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
         'default_model': 'qwen-plus',
-        'vision_model': 'qwen-vl-max',
+        'vision_model': 'qwen3-vl-plus',   # qwen-vl-max 已被阿里下线（404 model_not_found），勿再回用
         'supports_vision': True,
         'doc': 'https://help.aliyun.com/zh/model-studio/',
     },
@@ -304,7 +304,7 @@ def _candidates(*, has_images: bool) -> list[ProviderConfig]:
         vision = [p for p in providers if p.supports_vision and (p.vision_model or p.default_model)]
         if not vision:
             raise AIGatewayError(
-                '本次生成包含图片理解，但当前平台模型都不具备视觉能力；请在总平台启用通义千问（qwen-vl-max）。'
+                '本次生成包含图片理解，但当前平台模型都不具备视觉能力；请在总平台启用通义千问视觉模型（当前 qwen3-vl-plus）。'
             )
         providers = vision
     if not _allow_failover():
@@ -552,7 +552,7 @@ async def generate_json(*, club_id: int, task_type: str, system_prompt: str, use
 
     策略（与产品文档一致）：
       - 模型只由平台接入，俱乐部只消耗 Credits；
-      - 带图任务必须走具备视觉能力的 Provider（默认通义千问 qwen-vl-max）；
+      - 带图任务必须走具备视觉能力的 Provider（默认通义千问 qwen3-vl-plus）；
       - 绝不根据 Credits 余额裁剪资料、减少图片、降低模型或套固定模板。
     """
     if effective_gateway_mode()[0] == 'mock':

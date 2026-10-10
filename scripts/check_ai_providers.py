@@ -62,7 +62,7 @@ check('备用为通义千问', len(providers) > 1 and providers[1].preset == 'qw
 text_model = ai_gateway._model_for_task(providers[0], 'detail')
 vision_model = ai_gateway._model_for_task(providers[1], 'detail', has_images=True)
 check('文本任务走 deepseek-chat', text_model == 'deepseek-chat', text_model)
-check('图片任务走 qwen-vl-max', vision_model == 'qwen-vl-max', vision_model)
+check('图片任务走 qwen3-vl-plus', vision_model == 'qwen3-vl-plus', vision_model)
 
 vision_candidates = ai_gateway._candidates(has_images=True)
 check('带图时仅选择视觉 Provider', all(p.supports_vision for p in vision_candidates) and vision_candidates,
@@ -99,7 +99,7 @@ check('平台接口返回接入策略说明', '总平台' in str(body.get('note'
 
 r = client.patch('/api/platform/ai/providers', json={
     'primary': {'preset': 'deepseek', 'model': 'deepseek-reasoner', 'apiKey': 'sk-platform-secret-abcdef'},
-    'secondary': {'preset': 'qwen', 'model': 'qwen-max', 'visionModel': 'qwen-vl-max'},
+    'secondary': {'preset': 'qwen', 'model': 'qwen-max', 'visionModel': 'qwen3-vl-plus'},
     'allowFailover': True,
 })
 check('PATCH 保存模型配置 200', r.status_code == 200, f'status={r.status_code} body={r.text[:160]}')
