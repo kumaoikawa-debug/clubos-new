@@ -1510,6 +1510,9 @@ function renderPoolPane(){
   const roster=POOL_ROSTER||[];
   const sum=$('#lpSummary');
   if(sum)sum.innerHTML=`领队资源库 <b>${roster.length}</b> 人 · 在岗 <b>${roster.filter(x=>x.status==='active').length}</b> 人 · 累计带队 <b>${roster.reduce((s,x)=>s+Number(x.assignedCount||0),0)}</b> 次`;
+  // 右上角入口按钮的文字跟着表单状态走：表单展开时变「收起表单」，与活动详情卡里的行为一致。
+  const addBtn=$('#lpAddBtn');
+  if(addBtn)addBtn.textContent=(LEADER_FORM&&LEADER_FORM.mode==='add')?'收起表单':'＋ 新增领队';
   const rowsEl=$('#lpRoster');
   if(rowsEl)rowsEl.innerHTML=poolRosterRows(roster);
   const fEl=$('#lpForm');
@@ -1519,7 +1522,9 @@ function renderPoolPane(){
   mountLeaderCrop();
 }
 
-function lpToggleForm(){toggleLeaderForm('add',0)}
+function lpToggleForm(){toggleLeaderForm('add',0);
+  // 设置页里表单长在名册下方：展开后滚到位，避免名册长时用户以为点了没反应。
+  if(LEADER_FORM&&LEADER_FORM.mode==='add'){const f=$('#lpForm');if(f&&f.offsetParent!==null)f.scrollIntoView({behavior:'smooth',block:'nearest'})}}
 function lpEditLeader(id){toggleLeaderForm('edit',0,id)}
 function lpRemoveLeader(id){removeLeader(id,0)}
 
