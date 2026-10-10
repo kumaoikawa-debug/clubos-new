@@ -63,6 +63,11 @@ class ActivityRefundPolicyService:
             data = json.loads(raw) if isinstance(raw, str) else dict(raw)
         except Exception:
             data = {}
+        # 库里可能存进字面量 'null'（如跨库迁移时 JSON null 被写成字符串）：
+        # json.loads('null') 返回 None，下面 data.get 会直接 AttributeError 把整个
+        # 活动 GET / 公开详情 / 退款报价全部打成 500。非 dict 一律按「未配置」处理。
+        if not isinstance(data, dict):
+            data = {}
         rules = []
         for x in data.get('rules') or []:
             try:
