@@ -1122,6 +1122,105 @@ def _sanitize_blocks(blocks:list[dict[str,Any]],allowed_refs:set[str]|None=None)
     return out
 
 
+# ── info 块错位内容闸门（2026-10-11 用户截图实锤：出发前知道里排了整页行程）────────────
+# 与「装备建议重复」同一套思路，但这里是**语义错位**：模型把逐日行程/费用写进 info 块，
+# 前端按 info 模板渲染 → 「GOOD TO KNOW / 出发前知道」下面出现一栏文不对题的内容，
+# 而同一份行程在下方结构化「详细行程 ITINERARY」区又完整呈现了一遍。用户原话：
+# 「这种出发前知道，但是又列出来这种不相关的内容，后续系统要学习避免」。
+# 提示词已把 info 语义写死（_INFO_CONTRACT），这里再兜一道**确定性**闸门：
+#   ① 标题写明是「详细行程 / 日程表 / 时刻表」→ 整块剔除；
+#   ② 逐条与 master.itinerary（并入 timeline items）比对：整条就是行程原句，或字面高度重合 → 判为行程；
+#   ③ 过半条目是行程、或过滤后一条不剩 → 整块剔除（「出发前知道」这一栏本来就可以没有）。
+# ★ 只用数据判据，不猜语义：判不出行程的 info 一律原样保留，绝不误删真须知
+#   （act39「安心出行保障」/ act40「关于高原适应」/ act41「报名资格与领取规则」都必须活下来）。
+_INFO_ITIN_TITLE_RE=re.compile(r'itinerary|schedule|详细行程|行程安排|日程表|时刻表|行程表|行程一览',re.I)
+_INFO_FEE_TITLE_RE=re.compile(r'费用|包含|不含|自理|自费|报价')
+
+def _info_title_only_about(ttl:str,pat:re.Pattern)->bool:
+    """标题「基本就等于这个区块的名字」才判错位：去掉命中词后剩下的实质字数 ≤4。
+
+    为什么不用简单的 search：标题里**带上**「费用」二字不等于它在讲费用 ——
+    「费用以外的注意事项」是正当须知，一刀切会把它连同唯一的内容一起删掉。
+    只有「费用说明」「详细行程 ITINERARY」这种「标题≈区块名」的才判为错位重复。
+    空标题（model 没写 title）一律返回 False：没标题的 info 可能正是唯一的真须知，
+    误删代价远大于放过（前端会用默认标题「出发前知道」渲染它）。
+    """
+    t=str(ttl or '')
+    bare=re.sub(r'[\s:：,，.。、!！?？\-—/｜|]+','',t)
+    core=re.sub(r'[\s:：,，.。、!！?？\-—/｜|]+','',pat.sub('',t))
+    return len(core)<=4 and len(core)<len(bare)
+
+def _has_fee_content(master:dict[str,Any]|None)->bool:
+    """master.fees 里确实有内容（含/不含至少一项）时，info 再写一份「费用说明」才是重复。
+    fees 为空时前端也不会渲染 PRICE 区，这时绝不能把 info 里的费用信息删掉。"""
+    f=(master or {}).get('fees')
+    if isinstance(f,dict): return any(bool(v) for v in f.values())
+    if isinstance(f,list): return bool(f)
+    return bool(f)
+
+def _info_note_key(item:Any)->str:
+    """info 条目归一成可比对的纯文本（取值顺序与 static/shared.js 的 infoNotes 一致）。"""
+    if isinstance(item,dict):
+        t=str(item.get('title') or item.get('label') or item.get('k') or item.get('name') or '')
+        d=str(item.get('text') or item.get('desc') or item.get('content') or item.get('detail')
+              or item.get('description') or item.get('value') or '')
+        raw=(t+' '+d).strip()
+    else:
+        raw=str(item or '')
+    return re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]','',raw)
+
+def _itinerary_flat(master:dict[str,Any]|None,blocks:list[dict[str,Any]]|None=None)->str:
+    """master.itinerary + 页面上 timeline 块的行程条目拼成一串，用于「这一条是不是行程」比对。"""
+    parts:list[str]=[]
+    def take(rows:Any)->None:
+        for r in (rows if isinstance(rows,list) else []):
+            if isinstance(r,dict):
+                parts.append(str(r.get('time') or r.get('period') or ''))
+                parts.append(str(r.get('text') or r.get('content') or r.get('desc') or r.get('detail') or ''))
+            else:
+                parts.append(str(r or ''))
+    take((master or {}).get('itinerary'))
+    for b in (blocks or []):
+        if isinstance(b,dict) and b.get('type')=='timeline':
+            take(b.get('items'))
+    return re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]','',''.join(parts))
+
+def _is_itinerary_note(key:str,flat:str,grams:set[str])->bool:
+    """这条 info 文字是不是行程？整条命中行程原句最硬；否则按二字词重合度判「改写级重复」。"""
+    if len(key)<2: return False
+    if flat and key in flat: return True      # 整条就是行程原句（「午餐」「酒店晚宴」也算）
+    if len(key)<8: return False               # 太短：判据噪声大，不判
+    g=_bigrams(key)
+    if not g: return False
+    hit=sum(1 for x in g if x in grams)
+    return hit/len(g)>=0.7                    # 同一趟行程换个说法写
+
+def _drop_misplaced_info(blocks:list[dict[str,Any]],master:dict[str,Any]|None=None)->list[dict[str,Any]]:
+    """把误写进 info（出发前知道）的行程整块/逐条剔除。判不出来的一律保留。"""
+    flat=_itinerary_flat(master,blocks)
+    grams=_bigrams(flat)
+    out=[]
+    for b in blocks or []:
+        if not isinstance(b,dict) or b.get('type')!='info':
+            out.append(b); continue
+        ttl=str(b.get('title') or b.get('headline') or '')
+        if _info_title_only_about(ttl,_INFO_ITIN_TITLE_RE):
+            continue                                   # ① 标题≈「详细行程」→ 整块去掉
+        if _info_title_only_about(ttl,_INFO_FEE_TITLE_RE) and _has_fee_content(master):
+            continue                                   # ① 标题≈「费用说明」且 PRICE 区有内容 → 整块去掉
+        items=b.get('items') if isinstance(b.get('items'),list) else None
+        if not items:
+            out.append(b); continue
+        marks=[_is_itinerary_note(_info_note_key(it),flat,grams) for it in items]
+        hits=sum(1 for m in marks if m)
+        if hits*2>=len(marks): continue                # ③ 过半是行程 → 整块去掉
+        if not hits:
+            out.append(b); continue                    # 没有行程条目 → 原样保留
+        nb=dict(b); nb['items']=[it for it,m in zip(items,marks) if not m]
+        if nb['items']: out.append(nb)                 # ③ 过滤后还有真须知才上屏
+    return out
+
+
 def _mock_activity(source:dict[str,Any]):
     """Offline demo only. It demonstrates editorial judgement, not template families.
 
@@ -1375,6 +1474,27 @@ _LAYOUT_CONTRACT = """
    「详细行程 ITINERARY」区完整呈现，正文再排一份就是同页两个行程板块。仅当原始资料里根本没有
    逐日行程时，才允许 timeline 携带 items 充当唯一时刻表。
 以上 9 条是下限，达成后鼓励更丰富。若可用照片不足 N*0.6 张，就以「全部可用照片」为下限（绝不要求超过实际拥有）。"""
+
+# info（出发前知道）的语义契约（2026-10-11 用户截图实锤：模型把逐日行程原样写进了 info 块，
+# 标题还写着「详细行程 ITINERARY」，前端按 info 模板渲染 → 顾客在「GOOD TO KNOW / 出发前知道」
+# 下面读到「成都集合出发 → 午餐 → 前往大二普 → 返回酒店办理入住」一整页流水账，
+# 与下方结构化「详细行程 ITINERARY」区完全重复，属于「乱排不相关内容」）。
+# 修法与装备清单同一套：提示词把语义写死 + 出口确定性闸门（_drop_misplaced_info）。
+_INFO_CONTRACT = """
+★★ info 块（前端渲染为「出发前知道 GOOD TO KNOW」）的语义铁律（2026-10-11 用户反馈）：
+- info 只放「**出发前须知**」——顾客走之前要知道的事：装备与着装建议、高原/天气/身体准备、
+  证件与集合须知、报名与退改规则、通信与安全提示、当地习俗与禁忌。
+- 严禁把下列内容写进 info 块：它们在页面上各有**专门区块**，再排一遍就是文不对题 + 重复：
+  · 逐日行程 / 每天几点去哪 / 集合出发与返程时刻 → 结构化「详细行程 ITINERARY」区完整呈现；
+  · 「费用包含 / 费用不含 / 价格 / 自理项」→「费用说明 PRICE」区呈现；
+  · 「装备清单 / 出行清单 / 携带物品」→「出行清单 PACKING」区呈现（平台会配商城与会员价）。
+- info 的标题必须写它**真正讲的事**（如「高原与天气」「证件与集合」「关于高原适应」），
+  **不要**写「详细行程 ITINERARY」「费用说明」这类属于别的区块的标题 —— 标题一错，
+  前端就把它排在「出发前知道」下面，顾客读到的是一栏名不副实的内容。
+- ★ 资料里没有真正的「出发前须知」类信息时，**整块省略 info**。宁可不排，也不要为了
+  凑结构把行程或费用搬进来：**「出发前知道」这一栏完全可以整块不存在**。
+- info 与 facts / timeline 严禁重复同一主题：写之前先看前面 blocks 已经讲过什么。
+"""
 
 # 主题词表：只用于「判断图文是不是在讲两件事」。同类词命中即视为同一主题。
 # ★ 只用**具体名词 + 不会出现在视觉描述里的散文动词**：视觉模型给的标签里就有「住宿」，
@@ -1670,6 +1790,8 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
   资料里只有成本明细页时，price 留 0，由俱乐部自己定价 —— 绝不要把成本均价当对外售价填进去。
 - 成本、供应商报价、门店 SOP、话术禁区、内部沟通等内容属于内部资料，一律不得进入 C 端成品。
 
+{_INFO_CONTRACT}
+
 {_WRITING_CONTRACT}
 
 返回 JSON：
@@ -1690,7 +1812,7 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
 }}
 
 block 语义（全部可自由省略 / 重复 / 排序，不要机械凑章节）：
-hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言；narrative=图文叙事（layout 可为 text-top/image-left/image-right/full）；statement=强观点短句；media=单图/双图/拼图/整版大图（layout: single/pair/mosaic/grid/full）；gallery=图片组；facts=关键事实条；timeline=时间线；info=必要决策信息；quote=引用；divider=节奏分隔；bigimage=整版铺满大图 + 可选叠字标题/图注（最适合做画报式跨页图）；imagetext=杂志左右图文（layout: left/right）；cards=图标+标题+要点 的卡片网格（把「为什么值得/包含什么」做成视觉块）；numbercards=大数字统计卡（距离/海拔/天数/人数用大字号突出）；highlight=高亮提示框（强调一句关键承诺或须知）；columns=双栏长文（无图时的多段排版）。
+hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言；narrative=图文叙事（layout 可为 text-top/image-left/image-right/full）；statement=强观点短句；media=单图/双图/拼图/整版大图（layout: single/pair/mosaic/grid/full）；gallery=图片组；facts=关键事实条；timeline=时间线；info=出发前须知（装备与着装建议/注意事项/证件与集合/退改规则，**严禁写行程、费用、出行清单**）；quote=引用；divider=节奏分隔；bigimage=整版铺满大图 + 可选叠字标题/图注（最适合做画报式跨页图）；imagetext=杂志左右图文（layout: left/right）；cards=图标+标题+要点 的卡片网格（把「为什么值得/包含什么」做成视觉块）；numbercards=大数字统计卡（距离/海拔/天数/人数用大字号突出）；highlight=高亮提示框（强调一句关键承诺或须知）；columns=双栏长文（无图时的多段排版）。
 ★★ 排版自由铁律（2026-10-08 用户要求：第一段要像公众号长图文一样美观、每版都不同）：
    C 端招募详情是一场活动的主视觉宣传，按「公众号长图文」的标准做 —— 多变的版式、大图铺陈、
    图文穿插、卡片化要点。主动组合 bigimage / imagetext / numbercards / cards 这类视觉组件，
@@ -1715,6 +1837,8 @@ hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言�
             data['detail']['blocks']=_sanitize_blocks(data['detail'].get('blocks') or [],allowed_refs=photos)
             # 出口对题检查：去重 + 明显错配就换图/撤图（提示词之外的最后一道保证）
             data['detail']['blocks']=_align_block_media(data['detail']['blocks'],catalog,photos)
+            # info 错位闸门（2026-10-11 用户反馈）：把误写进「出发前知道」的行程/费用整块剔除
+            data['detail']['blocks']=_drop_misplaced_info(data['detail']['blocks'],master)
         # 事实回检：品牌名音译还原 + 编造地名告警（模型包装文案时会顺手改专名）
         apply_fact_guard(data,str(source.get('text') or ''))
         # 照抄闸门（2026-10-09 用户反馈「这些文案不要照搬方案原文」）：详情此前从没有这一道，
@@ -1724,6 +1848,7 @@ hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言�
         return data,gw
     data=_mock_activity(source)
     data['detail']['blocks']=_sanitize_blocks(_rotate_layout(data['detail'].get('blocks') or [],max(0,version_no-1)),allowed_refs=photos)
+    data['detail']['blocks']=_drop_misplaced_info(data['detail']['blocks'],data.get('activity_master') or {})
     return data,record_mock_usage(club_id,'detail',prompt,data)
 
 
@@ -1768,6 +1893,8 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
   平台会在详情页下方单独渲染「出行清单」，重复出块会让同一份清单出现两遍。
 {_PHOTO_MATCH_RULES}
 
+{_INFO_CONTRACT}
+
 {_WRITING_CONTRACT}
 - 方案里的 [Slide N] / [Page N] 只是解析用的页码骨架，绝不能出现在任何 C 端字段里。
 
@@ -1784,7 +1911,7 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
 }}
 
 block 语义：
-hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=必要决策信息；quote=引用；divider=节奏。
+hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=出发前须知（装备与着装建议/注意事项/证件与集合/退改规则，**严禁写行程、费用、出行清单**）；quote=引用；divider=节奏。
 任何 block 都可省略、重复、自由排序。不要为了「结构完整」机械凑章节。
 {_LAYOUT_CONTRACT}
 （密度下限优先于「照片少时不要硬凑」：只要资料里有可用照片就按下限铺满，只有真的没有可用照片时才用文字撑。）"""
@@ -1797,6 +1924,7 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
         if isinstance(detail,dict):
             detail['blocks']=_sanitize_blocks(detail.get('blocks') or [],allowed_refs=photos)
             detail['blocks']=_align_block_media(detail['blocks'],catalog,photos)
+            detail['blocks']=_drop_misplaced_info(detail['blocks'],master)
         # 事实回检（换一版同样会改写专名，不能只在首次生成时守）
         apply_fact_guard({'activity_master':master if isinstance(master,dict) else {},'detail':detail},
                          str(source.get('text') or ''))
@@ -1806,6 +1934,7 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
     data=_mock_activity(source)
     detail=data['detail']
     detail['blocks']=_sanitize_blocks(_rotate_layout(detail.get('blocks') or [],max(0,version_no-1)),allowed_refs=photos)
+    detail['blocks']=_drop_misplaced_info(detail['blocks'],master)
     if direction.strip(): detail['directionNote']=direction.strip()
     return {'activity_master':master,'detail':detail},record_mock_usage(club_id,'detail',prompt,data)
 

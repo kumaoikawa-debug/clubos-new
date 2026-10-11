@@ -498,7 +498,56 @@ function renderPromo(detail,master={},opts={}){
            （服务清单 + 「关于交通与后勤」讲的都是大巴/领队/供氧），前后两堵字墙。
            过半内容已被 facts 讲过的 info 块整块不上屏——信息保留一处就够。
            短块（<30 字）不做检查：字太少覆盖度判据噪声大，宁可照常渲染。 */
-      const notes=infoNotes(b.items);
+      /* ★ 错位内容过滤（2026-10-11 用户截图实锤「出发前知道里列了一堆不相关的行程」）：
+         模型把**逐日行程**原样写成 info 块（实测标题都写着「详细行程 ITINERARY」），
+         前端按 info 模板渲染 → 顾客在「GOOD TO KNOW」下面读到「成都集合出发 → 午餐 →
+         前往大二普 → 返回酒店办理入住」这一整页流水账。info 的语义是「出发前须知」
+         （装备与着装建议、注意事项、证件与集合须知、退改规则），**不是行程**；
+         而行程 / 费用 / 出行清单在页面下方都有各自的结构化区块（ITINERARY / PRICE /
+         PACKING，都从 master 渲染），再排一遍就是文不对题的重复。
+         三道过滤：
+           ① 标题就写明是行程 → 整块跳过；标题写费用 / 清单，且结构化区确实有内容
+              （没有内容就不能删，否则顾客彻底看不到费用）→ 整块跳过；
+           ② 逐条与 master.itinerary（并入 timeline）比对：整条就是行程原句，
+              或字面高度重合（改写级）→ 判为行程条目；
+           ③ 过半条目是行程、或过滤后一条不剩 → 整块不上屏
+              ——「出发前知道」这一栏本来就可以整块没有。 */
+      const _ttl=String(b.title||b.headline||'');
+      const _rows=itineraryRows((master||{}).itinerary||[])
+        .concat(((detail&&detail.blocks)||[]).filter(x=>x&&x.type==='timeline')
+          .reduce((acc,x)=>acc.concat(itineraryRows(x.items||x.body||[])),[]));
+      const _flat=_rows.map(r=>((r.time||'')+(r.text||''))).join('').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g,'');
+      const _grams=_cnGrams(_flat);
+      const _isItin=n=>{
+        const key=((n.t?n.t+' ':'')+(n.d||'')).replace(/[^\u4e00-\u9fa5a-zA-Z0-9]/g,'');
+        if(key.length<2)return false;
+        if(_flat&&_flat.includes(key))return true;   // 整条就是行程原句（「午餐」「酒店晚宴」也算）
+        if(key.length<8)return false;                // 太短：判据噪声大，不判
+        const g=_cnGrams(key);if(!g.size)return false;
+        let hit=0;g.forEach(x=>{if(_grams.has(x))hit++});
+        return hit/g.size>=0.7;                      // 改写级重复（同一趟行程换个说法）
+      };
+      const _feeDup=!!(master&&String(feeListHtml(master.fees)||'').replace(/<[^>]*>/g,'').trim());
+      const _gearDup=!!(master&&(master.checklist||[]).length);
+      /* 标题判定用「去掉关键词后还剩多少实质内容」：标题里带上「费用」二字不等于它在讲费用
+         （「费用以外的注意事项」是正当须知），一刀切会把它连同唯一内容一起删掉。
+         只有「费用说明」「详细行程 ITINERARY」这种**标题≈区块名**的才判错位重复；
+         空标题一律不判（没标题的 info 可能正是唯一真须知，误删代价远大于放过）。 */
+      const _titleOnly=re=>{
+        const raw=String(_ttl||'').replace(/[\s:：,，.。、!！?？\-—/｜|]+/g,'');
+        const core=raw.replace(re,'');
+        return core.length<=4&&core.length<raw.length;
+      };
+      const _misplaced=(_titleOnly(/itinerary|schedule|详细行程|行程安排|日程表|时刻表|行程表/g)
+          ||(_feeDup&&_titleOnly(/费用|包含|不含|自理|自费|报价/g))
+          ||(_gearDup&&_titleOnly(/装备建议|装备清单|出行清单|携带清单|携带物品|着装建议|行李清单|必备清单|自备物品/g)));
+      let notes=infoNotes(b.items);
+      if(_misplaced)notes=[];
+      else{
+        const _marks=notes.map(_isItin);
+        if(_marks.length&&_marks.filter(Boolean).length*2>=_marks.length)notes=[];
+        else notes=notes.filter((n,i)=>!_marks[i]);
+      }
       const noteAll=notes.map(n=>((n.t||'')+' '+(n.d||'')).trim()).join(' ');
       /* 双向判据（阈值用 act40 真实数据标定：改写级重复 0.23 vs 独立信息 0.01-0.02）：
          正向 = info 字面被 facts 讲过的比例（抓逐字级重复）；
