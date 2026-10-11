@@ -219,6 +219,25 @@
           out.push({ kind: 'facts', items: b.items.map(function (x) { return [x.label || '', x.value || x]; }) });
         }
         paras(tx).forEach(function (x) { out.push({ kind: 'p', text: x }); });
+      } else if (t === 'include') {
+        /* 费用包含：模块化分组卡（2026-10-11 用户反馈：整段流水句是文字墙）。
+           新形状 groups=[{name,items[]}]；旧形状 items=[{label,value}] 兜底成一组一条。 */
+        if (h) out.push({ kind: 'h2', text: h });
+        var gs = (b.groups || []).map(function (g) {
+          var name = g.name || g.title || g.label || '';
+          var items = (g.items || g.points || []).map(function (x) {
+            return typeof x === 'string' ? x : (x.text || x.value || x.label || '');
+          }).filter(function (s) { return s; });
+          return { name: name, items: items };
+        }).filter(function (g) { return g.name && g.items.length; });
+        if (!gs.length && b.items && b.items.length) {
+          gs = b.items.map(function (x) {
+            var name = (typeof x === 'object' && x) ? (x.label || '') : '';
+            var v = typeof x === 'string' ? x : (x.value || x.text || '');
+            return { name: name, items: v ? [v] : [] };
+          }).filter(function (g) { return g.name && g.items.length; });
+        }
+        if (gs.length) out.push({ kind: 'include', groups: gs });
       } else if (t === 'info') {
         if (h) out.push({ kind: 'h2', text: h });
         paras(tx).forEach(function (x) { out.push({ kind: 'p', text: x }); });
@@ -273,6 +292,10 @@
       else if (b.kind === 'img') h += '<figure class="ch-wx-img"><img src="' + esc(abs(b.src)) + '" alt="" loading="lazy"></figure>';
       else if (b.kind === 'grid') h += '<div class="ch-wx-grid">' + b.srcs.map(function (s) { return '<img src="' + esc(abs(s)) + '" alt="" loading="lazy">'; }).join('') + '</div>';
       else if (b.kind === 'facts') h += '<div class="ch-wx-facts">' + b.items.map(function (x) { return '<div><small>' + esc(x[0]) + '</small><strong>' + esc(String(x[1])) + '</strong></div>'; }).join('') + '</div>';
+      else if (b.kind === 'include') h += '<div class="ch-wx-include">' + b.groups.map(function (g) {
+        return '<div class="ch-wx-inc-card"><h4>' + esc(g.name) + '</h4><ul>' +
+          g.items.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></div>';
+      }).join('') + '</div>';
       else if (b.kind === 'statement') h += '<p class="ch-wx-statement">' + esc(b.text) + '</p>';
       else if (b.kind === 'quote') h += '<blockquote class="ch-wx-quote">' + esc(b.text) + '</blockquote>';
       else if (b.kind === 'timeline') h += '<div class="ch-wx-timeline">' + b.items.map(function (x) { return '<div><time>' + esc(x[0]) + '</time><p>' + esc(x[1]) + '</p></div>'; }).join('') + '</div>';
@@ -318,6 +341,18 @@
         return '<p style="font-size:15px;line-height:1.8;color:#3f3f3f;margin:0;padding:11px 0;border-bottom:1px solid #eae5da;letter-spacing:.4px">' +
           '<span style="display:inline-block;min-width:76px;color:#9a9a9a">' + esc(x[0]) + '</span><b>' + esc(String(x[1])) + '</b></p>';
       }).join('') + '</section>';
+      else if (b.kind === 'include') h += '<section style="font-size:0;margin:0 0 6px">' + b.groups.map(function (g, i) {
+        /* 公众号编辑器不认 class，全部内联样式；多组时双列卡片，单组整行 */
+        var two = b.groups.length > 1;
+        var box = 'display:inline-block;vertical-align:top;width:' + (two ? '48.5%' : '100%') + ';' +
+          'margin:' + (two && i % 2 === 0 ? '0 3% 10px 0' : '0 0 10px 0') + ';' +
+          'border:1px solid #e3ddd0;border-radius:8px;padding:13px 15px;background:#fbfaf7';
+        return '<section style="' + box + '">' +
+          '<p style="font-size:14.5px;font-weight:700;color:#245743;margin:0 0 8px;letter-spacing:.4px">' + esc(g.name) + '</p>' +
+          g.items.map(function (x) {
+            return '<p style="font-size:13.5px;line-height:1.75;color:#4a4a4a;margin:0 0 4px;letter-spacing:.3px">· ' + esc(x) + '</p>';
+          }).join('') + '</section>';
+      }).join('') + '</section>';
       else if (b.kind === 'statement') h += '<p style="' + S.statement + '">' + esc(b.text) + '</p>';
       else if (b.kind === 'quote') h += '<blockquote style="' + S.quote + '">' + esc(b.text) + '</blockquote>';
       else if (b.kind === 'timeline') h += '<section style="margin:0 0 22px">' + b.items.map(function (x) {
@@ -348,6 +383,7 @@
       else if (b.kind === 'statement') out.push(b.text, '');
       else if (b.kind === 'quote') out.push('「' + b.text + '」', '');
       else if (b.kind === 'facts') b.items.forEach(function (x) { out.push(x[0] + '：' + x[1]); });
+      else if (b.kind === 'include') b.groups.forEach(function (g) { out.push(g.name + '：' + g.items.join('、'), ''); });
       else if (b.kind === 'timeline') b.items.forEach(function (x) { out.push(x[0] + '  ' + x[1]); });
       else if (b.kind === 'cta') out.push(b.headline, b.text || '');
       else if (b.kind === 'hr') out.push('———');

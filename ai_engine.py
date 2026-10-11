@@ -1834,7 +1834,7 @@ def normalize_channel_blocks(data:dict[str,Any])->dict[str,Any]:
             for k in ('eyebrow','headline','title','subtitle','body','text','pull','summary'):
                 v=src.get(k)
                 if isinstance(v,str) and v.strip(): b[k]=v.strip()
-            for k in ('mediaRefs','items'):
+            for k in ('mediaRefs','items','groups'):
                 v=src.get(k)
                 if isinstance(v,list) and v: b[k]=v
             if not any(k in b for k in ('headline','title','body','text','items')): return
@@ -1847,6 +1847,7 @@ def normalize_channel_blocks(data:dict[str,Any])->dict[str,Any]:
     add('statement',data.get('statement') or data.get('statements'))
     add('gallery',data.get('gallery') or data.get('images'))
     add('facts',data.get('facts') or data.get('info'))
+    add('include',data.get('include') or data.get('includes') or data.get('feeInclude'))
     add('quote',data.get('quote'))
     for key in ('timeline',):
         add('timeline',data.get(key))
@@ -1955,7 +1956,13 @@ async def generate_channel(club_id:int,activity_master:dict[str,Any],detail:dict
   lead（2~3 句，用一个**具体时刻**开场：几点、在哪里、看到什么；不抒情、不喊口号）→
   4~6 节 narrative（headline 是一句判断或建议，尽量含数字或专名；body 两段：
   第一段写现场发生的事，第二段写**为什么这个安排值得**）→
-  一节 facts（时间 / 交通 / 住宿 / 费用包含）→ 一节 cta（报名收尾）。
+  一节 facts（日期 / 集合地点 / 价格，值 ≤10 字）→
+  一节 include（费用包含，模块化分组）→ 一节 cta（报名收尾）。
+- ★ include（费用包含）**禁止写成一段话**：把资料里「费用包含」整段**自动归类**成 2~5 个语义组
+  （如 专业装备 / 交通接送 / 餐饮补给 / 服务与保障 / 天气应对——组名从资料实际内容里来，
+  有几类写几类，不凑数、不硬造）。每组 items 是 ≤14 字的名词短语（如「icebreaker 美利奴上衣 1 件（颜色可选）」），
+  禁止出现「、」串起来的流水长句与任何口水话；资料里没提的组直接不写。
+  天气预案（如下雨提供雨衣）归入对应组（如 天气应对），不单独成段、不写「如果下雨……」整句。
 - **每一节都必须回答「所以呢」**：少走回头路 / 高反更轻 / 这件东西能带回家 / 不用自己操心。
   只描述、不判断的章节，直接删掉不要写。
 - 图片：mediaRefs 只引真实照片（kind='photo' 的 ref），贴在对应叙述之后，一节 0~2 张，
@@ -1983,13 +1990,13 @@ cta、preferredMediaRefs[]（真实照片 ref）。""",
     # 成品退化成「活动标题 + 一行灰字 + 一个大白二维码」（老板截图投诉「一点设计感都没有」）。
     # 海报要的是它自己那套字段，别再让模型猜。
     structures={
-        'wechat':'{"title":"","summary":"","blocks":[{"type":"lead|narrative|statement|media|gallery|facts|timeline|quote|cta","headline":"","body":"","mediaRefs":[],"items":[{"label":"","value":""}]}]}',
-        'recap':'{"title":"","summary":"","blocks":[{"type":"lead|narrative|statement|media|gallery|facts|timeline|quote|cta","headline":"","body":"","mediaRefs":[],"items":[{"label":"","value":""}]}]}',
+        'wechat':'{"title":"","summary":"","blocks":[{"type":"lead|narrative|statement|media|gallery|facts|include|timeline|quote|cta","headline":"","body":"","mediaRefs":[],"items":[{"label":"","value":""}],"groups":[{"name":"","items":[""]}]}]}',
+        'recap':'{"title":"","summary":"","blocks":[{"type":"lead|narrative|statement|media|gallery|facts|include|timeline|quote|cta","headline":"","body":"","mediaRefs":[],"items":[{"label":"","value":""}],"groups":[{"name":"","items":[""]}]}]}',
         'xhs':'{"titleOptions":["","",""],"hook":"","body":"","tags":[],"imageSequence":[]}',
         'poster':'{"headline":"","subheadline":"","facts":[],"sellingPoints":[],"cta":"","preferredMediaRefs":[]}',
     }
     structure_notes={
-        'wechat':'正文**必须全部放进 blocks 数组**。不要自作主张换成 lead / narrative / facts / closing 这类顶层键——前端只读 blocks，形状一变，整篇内容就会渲染成空白页。',
+        'wechat':'正文**必须全部放进 blocks 数组**。不要自作主张换成 lead / narrative / facts / closing 这类顶层键——前端只读 blocks，形状一变，整篇内容就会渲染成空白页。include 块必须带 groups 数组（每组 {"name":组名,"items":["短条目",...]}），绝不把费用包含写成一段 value 长文。',
         'recap':'正文**必须全部放进 blocks 数组**，形状与公众号一致。',
         'xhs':'**不要返回 blocks**，只按上面的字段名输出。',
         'poster':('facts 只写真实值（时间 / 地点 / 价格 / 人数），每条 ≤ 10 字；'
