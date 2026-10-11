@@ -1158,6 +1158,61 @@ def _has_fee_content(master:dict[str,Any]|None)->bool:
     if isinstance(f,list): return bool(f)
     return bool(f)
 
+def _block_flat_text(blk:dict[str,Any])->str:
+    """把一个块（info / facts）的文字归一成可比对的纯文本。"""
+    parts:list[str]=[]
+    def push(v:Any)->None:
+        if isinstance(v,list):
+            for x in v: push(x)
+        elif isinstance(v,dict):
+            for x in v.values(): push(x)
+        elif v is not None and v!='':
+            parts.append(str(v))
+    for k in ('title','headline','items','text','body','cards','value','label','caption'):
+        push(blk.get(k))
+    return re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]','',''.join(parts))
+
+def _fee_flat_text(master:dict[str,Any]|None)->str:
+    """master.fees 的全部条目拼成纯文本（含键名，用于「这块是不是在复述费用清单」比对）。"""
+    parts:list[str]=[]
+    def push(v:Any)->None:
+        if isinstance(v,list):
+            for x in v: push(x)
+        elif isinstance(v,dict):
+            for k,x in v.items():
+                parts.append(str(k)); push(x)
+        elif v is not None and v!='':
+            parts.append(str(v))
+    push((master or {}).get('fees'))
+    return re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]','',''.join(parts))
+
+def _restates_fee(blk:dict[str,Any],master:dict[str,Any]|None)->bool:
+    """这个块是不是在复述「费用说明 PRICE」区？
+
+    2026-10-11 用户截图实锤（act44）：模型另开一个 **facts** 块，标题写「费用包含与不含
+    范围」，用一整段话把十几项费用揉着讲一遍；下方「费用说明 PRICE」区已经用 ✓/✗ 逐项
+    列全 —— 同一批费用顾客读两遍，而且那段长文更难读。
+    判据只用数据，且 PRICE 区**确实有内容**才判（fees 为空时前端不渲染 PRICE 区，
+    这时块里的费用信息是顾客唯一能看到的一份，绝不能删）：
+      ① 标题≈「费用/包含/不含/自理/自费/报价」→ 判复述；
+      ② 否则看文字与 fees 清单的二字词重合度 ≥0.7 → 判复述。
+    标题判定沿用 _info_title_only_about：标题里带上「费用」二字不等于它在讲费用。
+    """
+    if not isinstance(blk,dict) or not _has_fee_content(master):
+        return False
+    ttl=str(blk.get('title') or blk.get('headline') or '')
+    if _info_title_only_about(ttl,_INFO_FEE_TITLE_RE):
+        return True
+    fees=_fee_flat_text(master); txt=_block_flat_text(blk)
+    if len(fees)<20 or len(txt)<20:
+        return False
+    g=_bigrams(fees)
+    if not g: return False
+    h=_bigrams(txt)
+    if not h: return False
+    hit=sum(1 for x in g if x in h)
+    return hit/len(g)>=0.7
+
 def _info_note_key(item:Any)->str:
     """info 条目归一成可比对的纯文本（取值顺序与 static/shared.js 的 infoNotes 一致）。"""
     if isinstance(item,dict):
@@ -1196,12 +1251,26 @@ def _is_itinerary_note(key:str,flat:str,grams:set[str])->bool:
     return hit/len(g)>=0.7                    # 同一趟行程换个说法写
 
 def _drop_misplaced_info(blocks:list[dict[str,Any]],master:dict[str,Any]|None=None)->list[dict[str,Any]]:
-    """把误写进 info（出发前知道）的行程整块/逐条剔除。判不出来的一律保留。"""
+    """把误写进 info（出发前知道）/ facts 的**错位内容**整块剔除。判不出来的一律保留。
+
+    2026-10-11 两轮用户截图实锤：
+      · 第一轮：行程被写进 info，页面「出发前知道」下面排了一整页流水账；
+      · 第二轮：费用被写进 **facts**（标题「费用包含与不含范围」+ 一整段长文），
+        与下方结构化「费用说明 PRICE」区完全重复。
+    两类都收在这里：费用复述（info/facts 通吃）→ 整块去掉；
+    info 里的行程条目 → 按条剔除、过半则整块去掉。
+    """
     flat=_itinerary_flat(master,blocks)
     grams=_bigrams(flat)
     out=[]
     for b in blocks or []:
-        if not isinstance(b,dict) or b.get('type')!='info':
+        if not isinstance(b,dict):
+            out.append(b); continue
+        if b.get('type') not in ('info','facts'):
+            out.append(b); continue
+        if _restates_fee(b,master):
+            continue                                   # ① 费用由 PRICE 区呈现 → 整块去掉
+        if b.get('type')!='info':
             out.append(b); continue
         ttl=str(b.get('title') or b.get('headline') or '')
         if _info_title_only_about(ttl,_INFO_ITIN_TITLE_RE):
@@ -1494,6 +1563,11 @@ _INFO_CONTRACT = """
 - ★ 资料里没有真正的「出发前须知」类信息时，**整块省略 info**。宁可不排，也不要为了
   凑结构把行程或费用搬进来：**「出发前知道」这一栏完全可以整块不存在**。
 - info 与 facts / timeline 严禁重复同一主题：写之前先看前面 blocks 已经讲过什么。
+- ★ 同理**严禁另开 facts / narrative / highlight 块复述费用清单**（2026-10-11 用户截图：
+  模型开了一个 facts 块「费用包含与不含范围」，用一整段话把十几项费用揉着讲了一遍，
+  下面紧跟着结构化「费用说明 PRICE」区又用 ✓/✗ 逐项列全 —— 同一批费用读两遍，且长文更难读）。
+  费用只由结构化 PRICE 区呈现，正文一个字都不要重复列举；想说费用，就说**它意味着什么**
+  （如「费用一次性含全，落地不用再掏钱」），绝不逐项罗列。
 """
 
 # 薄资料契约（2026-10-11 用户对照反馈：「同一份资料，长图很丰富、详情很基础」）。

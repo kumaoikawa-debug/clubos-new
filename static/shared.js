@@ -343,6 +343,31 @@ function renderPromo(detail,master={},opts={}){
   const _cnGrams=s=>{const t=String(s||'').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]+/g,'');const g=new Set();for(let i=0;i<t.length-1;i++)g.add(t.slice(i,i+2));if(t.length===1)g.add(t);return g;};
   const _covered=text=>{const a=_cnGrams(text),b=_cnGrams(_factsSeen);if(!a.size||!b.size)return 0;let hit=0;a.forEach(x=>{if(b.has(x))hit++});return hit/a.size;};
   const _revCover=text=>{const a=_cnGrams(_factsSeen),b=_cnGrams(text);if(!a.size||!b.size)return 0;let hit=0;a.forEach(x=>{if(b.has(x))hit++});return hit/a.size;};
+  /* ★ 结构化区块的「重复源」工具（2026-10-11 用户截图：facts 块用一整段话复述了下方
+     「费用说明 PRICE」区，同一批费用先说一遍再列一遍）。费用 / 装备清单 / 行程在页面下方
+     各有结构化区块，都由 master 渲染；AI 再另开 facts / info 块讲一遍就是读两遍。
+     判据只用数据，且**结构化区确实有内容**才允许判重复——没有内容就不能删，
+     否则顾客彻底看不到费用。 */
+  const _feeHasContent=!!(master&&String(feeListHtml(master.fees)||'').replace(/<[^>]*>/g,'').trim());
+  const _feeGrams=(()=>{const parts=[];const push=v=>{if(Array.isArray(v))v.forEach(push);
+    else if(v&&typeof v==='object')Object.keys(v).forEach(k=>{parts.push(k);push(v[k])});
+    else if(v!=null&&v!=='')parts.push(String(v));};
+    push(master&&master.fees);return _cnGrams(parts.join(' '));})();
+  /* 标题判定用「去掉关键词后还剩多少实质内容」：标题里带上「费用」二字不等于它在讲费用
+     （「费用以外的注意事项」是正当须知），一刀切会删掉唯一的内容。
+     空标题一律不判（没标题的块可能正是唯一真须知，误删代价远大于放过）。 */
+  const _titleOnlyAbout=(ttl,re)=>{
+    const raw=String(ttl||'').replace(/[\s:：,，.。、!！?？\-—/｜|]+/g,'');
+    const core=raw.replace(re,'');
+    return core.length<=4&&core.length<raw.length;
+  };
+  const _feeRestatedBy=text=>{           // 这段文字是不是在复述结构化费用清单
+    if(!_feeHasContent)return false;
+    const g=_cnGrams(text);
+    if(!_feeGrams.size||!g.size)return false;
+    let hit=0;_feeGrams.forEach(x=>{if(g.has(x))hit++});
+    return hit/_feeGrams.size>=0.7;
+  };
   // 头图兜底：block 自己没写 ref（或 ref 解析不到 url）时，用媒体清单里第一张真实存在的照片。
   // 头图必须是照片打底，而不是一块纯色——live 模式下模型常常只给 hero 文案、不给 mediaRefs。
   const fallbackPhoto=Object.keys(mm).find(r=>mm[r]&&mm[r].url)||'';
@@ -370,6 +395,18 @@ function renderPromo(detail,master={},opts={}){
            ① 取值按 value → text → body → desc 兼容，对象/数组仍走 feeValueHtml 展开，
               绝不再把 JSON 文本或空 <strong> 印给顾客；
            ② 真的取不到内容的条目直接丢弃，全块都空就整块不上屏（宁缺勿空）。 */
+      /* ★ 费用复述闸门（2026-10-11 用户截图实锤）：模型另开一个 facts 块，标题写
+         「费用包含与不含范围」，用**一整段话**把十几项费用揉着讲一遍——下方「费用说明
+         PRICE」区已经用 ✓/✗ 逐项列全，这里既重复又难读。判据：标题≈费用，或文字与
+         fees 清单高度重合（≥0.7），且 PRICE 区确实有内容 → 整块不上屏。 */
+      const _fTxt=(b.items||[]).map(x=>{
+        const isObj=!!x&&typeof x==='object'&&!Array.isArray(x);
+        const raw=isObj?(x.value??x.text??x.body??x.desc):x;
+        return isObj?String(x.label||'')+' '+edPlain(raw):edPlain(raw);
+      }).join(' ');
+      const _feeRestate=_feeHasContent&&(_titleOnlyAbout(b.title||b.headline,/费用|包含|不含|自理|自费|报价|价格/g)||_feeRestatedBy(_fTxt));
+      if(_feeRestate){/* 整块跳过：费用由下方 PRICE 区完整呈现 */}
+      else{
       const fit=(b.items||[]).map(x=>{
         const isObj=!!x&&typeof x==='object'&&!Array.isArray(x);
         const raw=isObj?(x.value??x.text??x.body??x.desc):x;
@@ -388,6 +425,7 @@ function renderPromo(detail,master={},opts={}){
       }).filter(Boolean).join('');
       // 空块不上屏：宁可不渲染，也不要页面中间出现一块空白
       if(fit)h+=`<section class="ed-facts">${(b.headline||b.title)?`<p class="ed-facts__lead">${esc(b.headline||b.title)}</p>`:''}${fit}</section>`;
+      }
     }
     else if(b.type==='narrative'){
       const ok=resolvedRefs(refs,mm);
@@ -454,10 +492,16 @@ function renderPromo(detail,master={},opts={}){
       // 统一走 <i> 小字，保证任何模型行为下都不出现两个单位。）
       const splitUnit=(x)=>{let v=String(x.value??x.number??'').trim();let u=String(x.unit||'').trim();
         if(u&&v.toLowerCase().endsWith(u.toLowerCase())){v=v.slice(0,-u.length).trim();return[v,u]}
-        // value 尾部带了个「数字+单位」但 unit 为空：常见 m/km/人/分钟 等短单位也剥出来
-        if(!u){const m=v.match(/^([\d.,．]+)\s*(m|km|cm|米|公里|千米|人|天|日|晚|小时|分钟|分钟|%|°|℃)$/);if(m)return[m[1],m[2]]}
+        /* value 尾部带了个「数字+单位」但 unit 为空：短单位一并剥出来，统一走小字。
+           2026-10-11 用户截图补：正则加 i 标志，大写 M / KM / CM 也要认得
+           （act44 的 4200M / 450KM 原样保留、而 20人 被拆 —— 同一排卡片字号不统一更难看）。 */
+        if(!u){const m=v.match(/^([\d.,．]+)\s*(m|km|cm|mm|米|公里|千米|人|位|名|天|日|夜|晚|小时|分钟|分|秒|座|间|个|项|次|kg|g|l|ml|%|°|℃)$/i);if(m)return[m[1],m[2]]}
         return[v,u]};
-      if(items.length)h+=`<section class="ed-numbercards">${items.map(x=>{const[v,u]=splitUnit(x);return `<div class="ed-numcard"><strong>${esc(v)}</strong>${u?`<i>${esc(u)}</i>`:''}${x.label?`<span>${esc(x.label)}</span>`:''}</div>`}).join('')}</section>`;
+      /* ★ 数字与单位必须同行（2026-10-11 用户截图实锤：「20人」拆开后「人」被挤到 20 下面
+         单独一行，还挨着标签，看着像排错版）。根因是 CSS 里 .ed-numcard strong{display:block}
+         —— 大数字独占一行，单位 <i> 只能另起一行。修法：数字与单位包进一个 baseline 对齐的
+         flex 容器，数字多大、单位多小都并肩站；标签仍单独一行。 */
+      if(items.length)h+=`<section class="ed-numbercards">${items.map(x=>{const[v,u]=splitUnit(x);return `<div class="ed-numcard"><div class="ed-numcard__num"><strong>${esc(v)}</strong>${u?`<i>${esc(u)}</i>`:''}</div>${x.label?`<span>${esc(x.label)}</span>`:''}</div>`}).join('')}</section>`;
     }
     else if(b.type==='highlight'){
       // 高亮提示框：强调一句关键承诺或须知，与 narrative 区隔。
@@ -527,20 +571,10 @@ function renderPromo(detail,master={},opts={}){
         let hit=0;g.forEach(x=>{if(_grams.has(x))hit++});
         return hit/g.size>=0.7;                      // 改写级重复（同一趟行程换个说法）
       };
-      const _feeDup=!!(master&&String(feeListHtml(master.fees)||'').replace(/<[^>]*>/g,'').trim());
       const _gearDup=!!(master&&(master.checklist||[]).length);
-      /* 标题判定用「去掉关键词后还剩多少实质内容」：标题里带上「费用」二字不等于它在讲费用
-         （「费用以外的注意事项」是正当须知），一刀切会把它连同唯一内容一起删掉。
-         只有「费用说明」「详细行程 ITINERARY」这种**标题≈区块名**的才判错位重复；
-         空标题一律不判（没标题的 info 可能正是唯一真须知，误删代价远大于放过）。 */
-      const _titleOnly=re=>{
-        const raw=String(_ttl||'').replace(/[\s:：,，.。、!！?？\-—/｜|]+/g,'');
-        const core=raw.replace(re,'');
-        return core.length<=4&&core.length<raw.length;
-      };
-      const _misplaced=(_titleOnly(/itinerary|schedule|详细行程|行程安排|日程表|时刻表|行程表/g)
-          ||(_feeDup&&_titleOnly(/费用|包含|不含|自理|自费|报价/g))
-          ||(_gearDup&&_titleOnly(/装备建议|装备清单|出行清单|携带清单|携带物品|着装建议|行李清单|必备清单|自备物品/g)));
+      const _misplaced=(_titleOnlyAbout(_ttl,/itinerary|schedule|详细行程|行程安排|日程表|时刻表|行程表/g)
+          ||(_feeHasContent&&_titleOnlyAbout(_ttl,/费用|包含|不含|自理|自费|报价/g))
+          ||(_gearDup&&_titleOnlyAbout(_ttl,/装备建议|装备清单|出行清单|携带清单|携带物品|着装建议|行李清单|必备清单|自备物品/g)));
       let notes=infoNotes(b.items);
       if(_misplaced)notes=[];
       else{

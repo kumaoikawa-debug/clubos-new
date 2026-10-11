@@ -81,6 +81,9 @@
 .ed-numbercards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin:30px 0}
 .ed-numcard{background:#16231f;color:#fff;padding:24px 20px;border-radius:16px;text-align:left;position:relative;overflow:hidden}
 .ed-numcard::after{content:'';position:absolute;right:-22px;top:-22px;width:74px;height:74px;border-radius:50%;background:rgba(159,211,191,.12)}
+/* 数字行容器（2026-10-11 用户截图：「20人」的单位被 display:block 的 strong 挤到下一行）：
+   数字与单位在同一个 baseline 对齐的 flex 行里并肩站，标签仍单独一行。 */
+.ed-numcard__num{display:flex;align-items:baseline;gap:1px}
 .ed-numcard strong{display:block;font-size:32px;font-weight:850;line-height:1.05;letter-spacing:.5px}
 .ed-numcard i{font-style:normal;font-size:13px;color:#9fd3bf;margin-left:4px}
 .ed-numcard span{display:block;font-size:12.5px;line-height:1.55;color:#a9bdb4;margin-top:10px}
