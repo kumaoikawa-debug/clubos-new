@@ -585,7 +585,13 @@ async def generate_json(*, club_id: int, task_type: str, system_prompt: str, use
                 ],
                 'temperature': float(os.getenv('AI_TEMPERATURE', '0.8')),
             }
-            async with _httpx_client(float(os.getenv('AI_TIMEOUT_SECONDS', '240'))) as client:
+            # qwen3 系新旗舰（qwen3.8-max 等）默认开思考模式：非流式调用下思考期不吐任何字节，
+            # 大输入任务轻松超过读超时（症状：ReadTimeout）。营销文案类任务不需要思考，
+            # qwen preset 显式关闭；其余 preset 不加该参数，避免不兼容报错。
+            # 需要思考质量时设 AI_QWEN_ENABLE_THINKING=1（并自行调大 AI_TIMEOUT_SECONDS）。
+            if provider.preset == 'qwen':
+                payload['enable_thinking'] = _truthy(os.getenv('AI_QWEN_ENABLE_THINKING', '0'), False)
+            async with _httpx_client(float(os.getenv('AI_TIMEOUT_SECONDS', '420'))) as client:
                 r = await client.post(
                     provider.base_url,
                     headers={'Authorization': f'Bearer {provider.api_key}', 'Content-Type': 'application/json'},
