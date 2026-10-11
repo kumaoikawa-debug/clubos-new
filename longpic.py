@@ -74,6 +74,11 @@ _PROMPT = """## 你要做什么
 6. **首屏 hero 与结尾 signup 必填**；`sections` 至少 5 节。
 7. 数字（里程/爬升/时长/价格/人数）**照资料原样写**，不要估算、不要换算。
 8. 图片清单里有可用照片时，全篇**至少用 4 张不同的**。
+9. **时刻必须真实（2026-10-11 act43 事故）**：只有资料里出现**确切的 HH:MM** 才允许写钟点
+   （排时间线、写集合时刻都算）。资料没有确切时刻，就**一个钟点都不许出现**——
+   不写「08:30 集合」、不写任何 `HH:MM`，把时间线改成**不带数字的节奏节点**
+   （如「上午进林区 · 午后集中清理 · 傍晚下撤」），集合信息只写资料里有的日期与地点。
+   编一个时刻，顾客就会按那个时刻去集合。
 > ‼️ **本说明里出现的一切具体文字（品牌名、社群名、地名、日期、金额、菜品、人名等）都只是「格式示意」，绝对不许出现在成品里。**
 > 成品里每一个具体信息都必须来自上方真实资料；凡你自己不知道该填什么，就用本场资料里的说法，**不要搬示例**。
 > 尤其 `hero.chip` / `signup.enRoll` 这类"定位语"，每场活动都要现写一套，不许套用任何固定说法。
@@ -129,7 +134,8 @@ _PROMPT = """## 你要做什么
   照片。给 **1 张** 则整幅（`size`: `full` 中幅 / `tall` 竖幅 / `wide` 横幅）；
   给 **2 张** 则并排；给 **3 张** 则 1 大 2 小。同一个 items 里最多 3 张。
 - `{"type":"timeline","items":[{"time":"08:30","what":"仁和新城集合出发","note":"大巴包车"}]}`
-  **资料有明确时刻就用它**（替代「小标题+段落」平铺）。1 节最多 12 条。
+  **资料有明确时刻就用它**（替代「小标题+段落」平铺）；**资料没有确切时刻时 time 一律留空字符串**，
+  改用 steps / params 讲节奏，绝不编钟点（见硬规则 9）。1 节最多 12 条。
 - `{"type":"steps","items":[{"no":"01","title":"森林徒步","desc":"石笋寺—兴福寺 5 公里","tag":"5KM · 380M 爬升"}]}`
   圆形序号卡，用于「一天里的几种体验」「几件要准备的事」。1 节最多 6 个。
 - `{"type":"team","items":[{"name":"野人","role":"中登协中级户外指导员","media":"img_09"}]}`
@@ -219,6 +225,12 @@ _FALLBACK_PROMPT = """## 你的产出
 6. 只输出一个 JSON 对象，两个键：title 与 html。html 里不要 `<html>/<head>/<body>`。
 7. **首屏**必须是一张满幅大图压标题；**结尾**必须是一块深色报名信息区。
 8. 按 750px 宽设计（正文 17px / 行高 1.9）。
+9. **时刻必须真实（2026-10-11 act43 事故）**：只有资料里出现**确切的 HH:MM** 才允许写钟点
+   （排时间线、写集合时刻都算）。资料没有确切时刻，就**一个钟点都不许出现**——
+   不写「08:30 集合」、不写任何 `HH:MM`，把时间线改成**不带数字的节奏节点**
+   （如「上午进林区 · 午后集中清理 · 傍晚下撤」），集合信息只写资料里有的日期与地点。
+   编一个时刻，顾客就会按那个时刻去集合。
+
 
 ## 版式要求（照这套数值走）
 - 画布 750px，左右边距 40px，底色纯白。
@@ -300,7 +312,8 @@ _FREE_PROMPT = """## 你的产出
   整篇同色同位，形成节奏感；
 - **数字强调**：里程 / 爬升 / 海拔 / 车程这类关键数字做成**大字号统计条**（2~4 个并排、数字 32~40px 重字重），
   不要把它们埋在段落里；**价格与名额不属于统计条**（它们只出现在结尾报名区，见信息唯一性）；
-- **竖向时间线**：行程排成竖向时间线（时刻用重字重突出，事件跟在右侧，节点间用细线 / 圆点串联），
+- **竖向时间线**：行程排成竖向时间线（**资料里有确切时刻才写钟点**并把它们用重字重突出；
+  资料没有时刻就一个钟点都不许出现，节点只写事件，见硬规则 9。事件跟在右侧，节点间用细线 / 圆点串联），
   但**全篇节点不超过 6 个**（多日活动每天 ≤4）：把相邻的小时段合并成一个节点、
   办理入住 / 短驳 / 整队这类 30 分钟内的碎动作并进相邻节点；**行程区块总高不得超过全图的 1/4**；
   （不许把整天的行程缩成一小块灰底文字——凝练 ≠ 缩成一段灰字）；
@@ -327,6 +340,11 @@ _FREE_PROMPT = """## 你的产出
 6. 所有文案是**纯文本**（可含换行）；不要写 `<br>` 之外的怪标签。
 7. **首屏 hero 与结尾 signup 必填**；整篇至少 8 个区块；可用照片时至少用 4 张不同的。
 8. 数字（里程 / 爬升 / 时长 / 价格 / 人数）**照资料原样写**，不要估算、不要换算。
+9. **时刻必须真实（2026-10-11 act43 事故）**：只有资料里出现**确切的 HH:MM** 才允许写钟点
+   （排时间线、写集合时刻都算）。资料没有确切时刻，就**一个钟点都不许出现**——
+   不写「08:30 集合」、不写任何 `HH:MM`，把时间线改成**不带数字的节奏节点**
+   （如「上午进林区 · 午后集中清理 · 傍晚下撤」），集合信息只写资料里有的日期与地点。
+   编一个时刻，顾客就会按那个时刻去集合。
 
 > ‼️ 本说明里出现的一切具体文字（品牌名、地名、日期、金额、社群名…）都只是「格式示意」，
 > 绝对不许出现在成品里；成品每个具体信息都必须来自上方真实资料；
@@ -497,13 +515,62 @@ def _doc_ok(rep: dict[str, int], has_photos: bool) -> tuple[bool, str]:
     return True, 'ok'
 
 
-def _html_ok(html: str, has_photos: bool, must_have: list[tuple[str, str]] | None = None) -> tuple[bool, str]:
+KNOWN_TIME_RE = re.compile(r'\d{1,2}[:：]\d{2}')
+
+
+def _known_times(*pools: Any) -> set[str]:
+    """把资料各处**真实存在**的 HH:MM 时刻收成一个集合（全角冒号归一成半角）。
+
+    2026-10-11 实锤（act43 昆明进耳山）：长图有一条『成品必须出现 HH:MM 时刻』的硬验收
+    （must_have 行程时刻），而那份资料的行程根本没有时刻（详情原文还写着『具体时段安排由
+    领队根据当天林间状况现场引导』）——模型为了过验收，编了 08:30/09:30/12:00/15:00 一张
+    假时刻表，还顺带编了『分发 LNT 学习卡片』『持证领队一对一纠正』和集合点。顾客会照着
+    假时刻去集合，这是客诉级事故。修法：先搞清楚『资料里到底有哪些时刻』，再决定——
+    有就要求出现，没有就**禁止出现**。
+    """
+    out: set[str] = set()
+    for pool in pools:
+        for t in KNOWN_TIME_RE.findall(str(pool or '')):
+            out.add(t.replace('：', ':'))
+    return out
+
+
+def _scrub_invented_times(node: Any, known_times: set[str] | None, dropped: list[str]) -> Any:
+    """递归把『资料里不存在』的 HH:MM 从成品里剜掉（known_times=None 时不启用）。
+
+    用于模板兜底路径的渲染前最后一道：quality_report 已经把编造时刻列为 issue 交回模型
+    改写过，这里防的是回炉也改不好的漏网——宁可句子里少一个钟点，也绝不把假时刻印给顾客。
+    """
+    if known_times is None:
+        return node
+    if isinstance(node, dict):
+        return {k: _scrub_invented_times(v, known_times, dropped) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_scrub_invented_times(x, known_times, dropped) for x in node]
+    if isinstance(node, str):
+        out = node
+        for t in KNOWN_TIME_RE.findall(out):
+            if t.replace('：', ':') not in known_times:
+                out = out.replace(t, '')
+                dropped.append(t)
+        if out != node:
+            out = re.sub(r'[ \t]{2,}', ' ', out).replace(' ：', '：').replace('：：', '：')
+            out = re.sub(r'([，。；、])\s*：', '\1', out).strip(' ：,，')
+        return out
+    return node
+
+
+def _html_ok(html: str, has_photos: bool, must_have: list[tuple[str, str]] | None = None,
+             known_times: set[str] | None = None) -> tuple[bool, str]:
     """自由排版（model-html）产出的验收：宁可保守，翻车就退回模板兜底。
 
     must_have：按本场数据动态生成的「成品必含内容」检查项（label, 正则）。
       数据里有的板块（费用 / 领队 / 装备 / 价格 / 时刻）成品里就必须出现对应内容，
       否则判不合格退回模板兜底 —— 模板路径有 ensure_required_sections 代码兜底，
       自由排版路径没有，只能在验收里卡住（2026-10-09 用户要求 6 大板块缺一不可）。
+    known_times：资料里真实存在的时刻集合（None=不检查）。**反向验收**：
+      资料没有的时刻出现在成品里＝编造（act43 实锤：模型为凑「行程时刻」硬指标
+      编了一整张假时刻表），直接判不合格打回，绝不把假集合时间印给顾客。
     """
     h = str(html or '')
     # 首屏必须有图（前 1400 字符内出现 <img>）—— 没图的长图不像成品
@@ -532,6 +599,13 @@ def _html_ok(html: str, has_photos: bool, must_have: list[tuple[str, str]] | Non
     #   阈值取 3：单标题 + 双栏（含/不含）天然出现 2 次不算重复，避免误杀好成品逼退模板兜底。
     if text.count('费用包含') > 2:
         return False, 'duplicated fee section'
+    # ★ 编造时刻（2026-10-11 act43 实锤）：资料里没有的 HH:MM 一个都不许出现在成品上。
+    #   放在 must_have 之后：must_have 的「行程时刻」已按资料有无时刻条件化（见主流程），
+    #   这里负责反向——资料没有却写了，就是编造。
+    if known_times is not None:
+        for t in sorted({x.replace('：', ':') for x in KNOWN_TIME_RE.findall(text)}):
+            if t not in known_times:
+                return False, 'invented time %s (not in source)' % t
     return True, 'ok'
 
 
@@ -573,7 +647,14 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
                     for o in (pack.get('occurrences') or []) if isinstance(o, dict))
     if occ_price:
         must_have.append(('团期价格', r'¥|元\s*/|价格'))
-    if '完整行程时间线' in d_note:
+    # ★ 行程时刻改为条件验收（2026-10-11 act43 实锤）：原实现只要详情里有 timeline 就要求
+    #   成品出现 HH:MM——act43 的行程本来就没有时刻（详情原文写明「具体时段由领队现场引导」），
+    #   模型为了过这道验收编了一整张 08:30/09:30/12:00/15:00 假时刻表。
+    #   现在：资料里真有时刻才要求出现；同时把真实时刻集交给 _html_ok 做反向检查（编造打回）。
+    known_times = _known_times(d_note, fact_note,
+                               json.dumps(master, ensure_ascii=False),
+                               json.dumps(pack, ensure_ascii=False))
+    if '完整行程时间线' in d_note and known_times:
         must_have.append(('行程时刻', r'\d{1,2}:\d{2}'))
     if '注意事项' in d_note or '报名' in d_note:
         # 放宽到高原 / 海拔 / 携带等真实覆盖词，避免模型用同义表述被误判退回模板兜底
@@ -600,7 +681,7 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
         if isinstance(gw.data, dict):
             cand = str(gw.data.get('html') or gw.data.get('body') or gw.data.get('content') or '')
             cand = sanitize_html(cand)
-            if len(cand) > 400 and _html_ok(cand, has_photos, must_have)[0]:
+            if len(cand) > 400 and _html_ok(cand, has_photos, must_have, known_times)[0]:
                 html, data = cand, gw.data
                 break
     if not gw:
@@ -622,13 +703,17 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
             # ① 先用真实数据补齐「顾客必看」的内容，再做结构验收
             #    （顺序不能反：补齐本身会加 sections，先判断可能被误判成"太单薄"）
             doc, _added = ensure_required_sections(doc, pack, photo_order)
+            _dropped_times: list[str] = []
+            doc = _scrub_invented_times(doc, known_times, _dropped_times)
+            if _dropped_times:
+                print('[longpic] stripped invented times:', sorted(set(_dropped_times)))
             rep = _doc_quality(doc, allowed)
             ok, why = _doc_ok(rep, has_photos)
             if ok:
                 # ② 文案质检：挑出 AI 腔 / 照抄 / 占位符，带问题清单让模型改一次。
                 #    只改一次（重试是有成本的，且改坏了还不如原稿 —— 见下面的采用条件）。
                 doc_before_fix = doc
-                issues = quality_report(doc, str(source_text or ''))
+                issues = quality_report(doc, str(source_text or ''), known_times)
                 if issues:
                     gwf = await generate_json(
                         club_id=club_id, task_type='longpic', system_prompt=_SYSTEM,
@@ -639,7 +724,7 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
                     if fixed:
                         fixed, _ = ensure_required_sections(fixed, pack, photo_order)
                         # 只有"确实改好了"才采用（以问题变少为准；否则保留原稿）
-                        if len(quality_report(fixed, str(source_text or ''))) < len(issues):
+                        if len(quality_report(fixed, str(source_text or ''), known_times)) < len(issues):
                             doc = fixed
                 # ★ 渲染失败**不能静默吞掉**（2026-10-08 教训：吞了之后只知道"成品是空的"，
                 #   查了半天不知道是渲染炸了）。做法：打印堆栈给人看，并依次退回到
@@ -1067,14 +1152,22 @@ __ISSUES__
 ## 原 JSON
 __DOC__"""
 
-def quality_report(doc: dict[str, Any], source_text: str = '') -> list[str]:
+def quality_report(doc: dict[str, Any], source_text: str = '',
+                   known_times: set[str] | None = None) -> list[str]:
     """给成品挑毛病，返回问题清单（空＝合格）。
 
-    三件事：**说清楚、不像 AI、没照抄**。
+    三件事：**说清楚、不像 AI、没照抄**；外加一道事实关：编造时刻（2026-10-11）。
     """
     issues: list[str] = []
     if not isinstance(doc, dict):
         return ['doc 不是对象']
+    if known_times is not None:
+        _blob = json.dumps(doc, ensure_ascii=False)
+        for t in sorted({x.replace('：', ':') for x in KNOWN_TIME_RE.findall(_blob)}):
+            if t not in known_times:
+                issues.append('成品里的时刻 %s 在资料中不存在，属于编造——资料没有确切时刻，'
+                              '就把时间线改成不带钟点的节奏描述（如「上午进林区」），'
+                              '集合信息只写资料里有的日期与地点' % t)
     secs = [s for s in (doc.get('sections') or []) if isinstance(s, dict)]
     texts: list[str] = []
     for i, s in enumerate(secs, 1):
