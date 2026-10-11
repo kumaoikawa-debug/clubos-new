@@ -449,7 +449,15 @@ function renderPromo(detail,master={},opts={}){
       //   没有数字的卡直接丢弃：只剩 label 的深色空卡正是用户截图骂过的那版丑卡。
       const raw=(Array.isArray(b.items)&&b.items.length)?b.items:(b.cards||[]);
       const items=raw.filter(x=>x&&String(x.value??x.number??'').trim()!=='');
-      if(items.length)h+=`<section class="ed-numbercards">${items.map(x=>{const shown=esc(String(x.value??x.number??'').trim());return `<div class="ed-numcard"><strong>${shown}</strong>${x.unit?`<i>${esc(x.unit)}</i>`:''}${x.label?`<span>${esc(x.label)}</span>`:''}</div>`}).join('')}</section>`;
+      // 单位去重（2026-10-11 用户截图：模型有时把单位既写进 value 尾部又单独给 unit 字段，
+      // 渲染成「3837 m」下面再来一行小「m」。策略：value 尾部已含 unit 时，从 value 剥离、
+      // 统一走 <i> 小字，保证任何模型行为下都不出现两个单位。）
+      const splitUnit=(x)=>{let v=String(x.value??x.number??'').trim();let u=String(x.unit||'').trim();
+        if(u&&v.toLowerCase().endsWith(u.toLowerCase())){v=v.slice(0,-u.length).trim();return[v,u]}
+        // value 尾部带了个「数字+单位」但 unit 为空：常见 m/km/人/分钟 等短单位也剥出来
+        if(!u){const m=v.match(/^([\d.,．]+)\s*(m|km|cm|米|公里|千米|人|天|日|晚|小时|分钟|分钟|%|°|℃)$/);if(m)return[m[1],m[2]]}
+        return[v,u]};
+      if(items.length)h+=`<section class="ed-numbercards">${items.map(x=>{const[v,u]=splitUnit(x);return `<div class="ed-numcard"><strong>${esc(v)}</strong>${u?`<i>${esc(u)}</i>`:''}${x.label?`<span>${esc(x.label)}</span>`:''}</div>`}).join('')}</section>`;
     }
     else if(b.type==='highlight'){
       // 高亮提示框：强调一句关键承诺或须知，与 narrative 区隔。

@@ -591,6 +591,10 @@ async def generate_json(*, club_id: int, task_type: str, system_prompt: str, use
             # 需要思考质量时设 AI_QWEN_ENABLE_THINKING=1（并自行调大 AI_TIMEOUT_SECONDS）。
             if provider.preset == 'qwen':
                 payload['enable_thinking'] = _truthy(os.getenv('AI_QWEN_ENABLE_THINKING', '0'), False)
+                # 强制 JSON 输出（DashScope 兼容端点实测支持）：长图等大 JSON 任务在
+                # qwen3.8-max 下偶发返回不合法 JSON（截断/夹带说明文字），解析层救不回。
+                # 服务端硬约束比提示词恳求可靠；其余 preset 不加，避免不兼容。
+                payload['response_format'] = {'type': 'json_object'}
             async with _httpx_client(float(os.getenv('AI_TIMEOUT_SECONDS', '420'))) as client:
                 r = await client.post(
                     provider.base_url,

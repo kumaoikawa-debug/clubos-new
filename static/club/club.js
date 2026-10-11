@@ -578,6 +578,30 @@ async function genChannel(ch,id){
     if(window.uxConfirm&&!await uxConfirm({title:'生成'+channelLabel(ch)+'内容',
       message:msg,confirmText:'开始生成'}))return;
     const d=await api(`/api/club/${CLUB}/activities/${id}/channel/${ch}`,{method:'POST'});
+    if(ch==='longpic'&&d&&d.pending){
+      // 长图异步化（2026-10-11）：生成要 1~4 分钟，同步等必被网关 504。立即返回，
+      // 前端轮询 status，完成后自动打开成品；期间页面可正常使用。
+      toast('长图已开始生成，约需 1-3 分钟，完成后自动打开，可先做别的');
+      const started=Date.now();
+      while(Date.now()-started<8*60*1000){
+        await new Promise(r=>setTimeout(r,8000));
+        let st;
+        try{st=await api(`/api/club/${CLUB}/activities/${id}/channel/longpic/status`)}
+        catch(_e){continue}
+        if(st.status==='done'){
+          toast('长图生成完成');
+          const full=await api(`/api/club/${CLUB}/content/${st.assetId}`);
+          await openChannelOutput('longpic',full.content||{},{activityId:Number(id)});
+          await loadContent();
+          if(window.loadCredits)await loadCredits();
+          return;
+        }
+        if(st.status==='error'){showAlert({title:'生成失败',message:st.error||'请重试'});return}
+      }
+      showAlert({title:'仍在生成中',message:'这次生成时间较长，后台不会中断；稍后到「AI 内容中心 → 已生成内容」里查看成品。'});
+      await loadContent();
+      return;
+    }
     toast('内容已生成，正在渲染成品…');
     await openChannelOutput(ch,d,{activityId:Number(id)});
     await loadContent();

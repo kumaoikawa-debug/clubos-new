@@ -1,5 +1,5 @@
 from __future__ import annotations
-import uuid, os, io, csv, re, zipfile, shutil
+import uuid, os, io, csv, re, zipfile, shutil, asyncio
 from sqlite3 import IntegrityError
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1240,6 +1240,46 @@ def club_activity_cover(club_id:int, activity_id:int):
     if not fp or not fp.is_file(): raise HTTPException(404,'not found')
     return FileResponse(fp)
 
+# ══ AI 宣传长图：异步作业表 ══
+# 长图管线（视觉打标 + 要点表 + 排版生成）整体要跑 1~4 分钟，同步 HTTP 必被托管网关
+# 55 秒掐断（浏览器收 504，用户以为失败——2026-10-11 用户再次反馈后根治）。
+# 现在点击后立即返回 {pending:true}，后台 asyncio 任务跑完落库，前端轮询 status 端点。
+# 进程内存表即可：重启丢失作业 = 状态回 idle，前端超时兜底提示去内容列表看，无脏数据。
+_LONGPIC_JOBS: dict[tuple[int, int], dict] = {}
+
+async def _longpic_job(club_id:int,activity_id:int,master:dict,detail:dict,
+                       source_text:str,cover_url:str|None,seed:int):
+    job=_LONGPIC_JOBS.setdefault((club_id,activity_id),{'status':'running'})
+    try:
+        caps=await caption_media(club_id,master)
+        digest=await _fact_digest(club_id,source_text) if source_text else ''
+        fact_pack=build_fact_pack(club_id,activity_id,master)
+        try:
+            content,usage=await generate_longpic(club_id,master,detail,cover_url=cover_url,
+                                                 source_text=source_text,
+                                                 caption_lines=caption_lines(master,caps),
+                                                 digest=digest,
+                                                 fact_pack=fact_pack,seed=seed)
+        except AIGatewayError as e:
+            job.update(status='error',error=str(e)); return
+        if not content.get('html'):
+            job.update(status='error',error='模型没有返回可用的排版内容，请再试一次。'); return
+        persist_captions(master,caps)
+        with conn() as c:
+            c.execute('UPDATE activities SET activity_master_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
+                      (jdump(master),activity_id,club_id))
+            cur=c.execute('INSERT INTO content_assets(club_id,activity_id,channel,title,body_json) VALUES(?,?,?,?,?)',(
+                club_id,activity_id,'longpic',content.get('title'),jdump(content)))
+            asset_id=cur.lastrowid
+        charge_credits(club_id,'longpic',usage.usage_id)
+        job.update(status='done',assetId=asset_id,title=content.get('title'))
+    except Exception as e:  # 兜底：任何未预期异常都要让前端退出轮询，不能永远转圈
+        job.update(status='error',error=f'生成过程出现异常：{e}')
+
+@app.get('/api/club/{club_id}/activities/{activity_id}/channel/longpic/status')
+def longpic_status(club_id:int,activity_id:int):
+    return _LONGPIC_JOBS.get((club_id,activity_id)) or {'status':'idle'}
+
 @app.post('/api/club/{club_id}/activities/{activity_id}/channel/{channel}')
 async def channel_generate(club_id:int,activity_id:int,channel:str):
     if channel not in {'wechat','xhs','poster','recap','longpic'}: raise HTTPException(400,'unsupported channel')
@@ -1263,41 +1303,19 @@ async def channel_generate(club_id:int,activity_id:int,channel:str):
     #   （早期"模型直出整段 HTML"的实现作为**回退路径**保留在 longpic.py，模型结构化失败时用。）
     if channel=='longpic':
         master=_repair_master_media(master or {},_activity_source(a)[0])
-        # ① 先让视觉模型给每张照片写描述并判断能不能用 —— 否则模型是「盲选图」，
-        #    实测它会把路线地图截图选成首屏大图，还会选一张别的活动的雪山攀登照。
-        caps=await caption_media(club_id,master)
-        # ② 要点表只给碎片不给整句：上一轮实测把原文整段喂给写作模型时，
-        #    成品 8 字片段 14.5% 能在原文里逐字命中（最长连续 31 字），读起来像 PPT 译文。
-        digest=await _fact_digest(club_id,source_text) if source_text else ''
-        # ③ 「顾客下单前要看的东西」往往都不在 detail 里，而在库里各班各组：
-        #    团期价格 → activity_occurrences，领队 → occurrence_leaders，
-        #    费用边界 / 自备装备 / 人员配置 → master.fees / checklist / publicFacts。
-        #    ★ 这些字段此前**从来没进过长图提示词**，所以长图上既没有领队也没有价格
-        #      （2026-10-08 老板反馈后要做的第一处接线）。
-        fact_pack=build_fact_pack(club_id,activity_id,master)
-        # ④ 版式种子：同一场活动每重新生成一次换一套版式；单次生成内预览与导出同源。
+        # 已有作业在跑：直接回当前状态，绝不并发重跑（防止双倍 Credits + 双份成品）。
+        prev=_LONGPIC_JOBS.get((club_id,activity_id))
+        if prev and prev.get('status')=='running':
+            return {'pending':True,'channel':'longpic','activityId':activity_id,
+                    'status':'running','note':'该活动的长图正在生成中，请等待完成。'}
         with conn() as _c:
             _prev=_c.execute('SELECT COUNT(*) FROM content_assets WHERE club_id=? AND activity_id=? '
                              "AND channel='longpic'",(club_id,activity_id)).fetchone()[0]
         seed=activity_id*997+int(_prev or 0)
-        try:
-            content,usage=await generate_longpic(club_id,master,detail,cover_url=cover_url,
-                                                 source_text=source_text,
-                                                 caption_lines=caption_lines(master,caps),
-                                                 digest=digest,
-                                                 fact_pack=fact_pack,seed=seed)
-        except AIGatewayError as e: raise HTTPException(502,str(e))
-        if not content.get('html'):
-            raise HTTPException(502,'模型没有返回可用的排版内容，请再试一次。')
-        # ③ 描述写回 master：下次生成同一场活动不再重复跑视觉模型
-        persist_captions(master,caps)
-        with conn() as c:
-            c.execute('UPDATE activities SET activity_master_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
-                      (jdump(master),activity_id,club_id))
-            c.execute('INSERT INTO content_assets(club_id,activity_id,channel,title,body_json) VALUES(?,?,?,?,?)',(
-                club_id,activity_id,channel,content.get('title'),jdump(content)))
-        charge_credits(club_id,channel,usage.usage_id)
-        return content
+        _LONGPIC_JOBS[(club_id,activity_id)]={'status':'running','started':datetime.utcnow().isoformat()}
+        asyncio.create_task(_longpic_job(club_id,activity_id,master,detail,
+                                         source_text,cover_url,seed))
+        return {'pending':True,'channel':'longpic','activityId':activity_id,'status':'running'}
 
     try: content,usage=await generate_channel(club_id,master,detail,channel,cover_url=cover_url,source_text=source_text)
     except AIGatewayError as e: raise HTTPException(502,str(e))
