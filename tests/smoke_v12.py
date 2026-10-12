@@ -1,3 +1,7 @@
+# 报名/结算强制校验参加人证件（idType + idNumber）；本脚本写于该规则之前，
+# 由 tests/_identity_patch.py 统一补齐 participants（仅补缺失项，不改写已有断言）。
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'tests'))
+import _identity_patch  # noqa: F401
 from pathlib import Path
 from datetime import datetime, timedelta
 import os, sys, uuid
@@ -38,10 +42,11 @@ start=(datetime.now()+timedelta(days=5)).replace(microsecond=0).isoformat(sep=' 
 oid=ok('post',f'/api/club/1/activities/{aid}/occurrences',json={'startAt':start,'price':200,'capacity':5,'label':'v0.12多人报名团'}).json()['id']
 ok('post',f'/api/club/1/activities/{aid}/publish')
 
+# 报名强制校验参加人证件（idType + idNumber，见 clubos_domain/participants.py）。
 participants=[
-    {'name':'林野','phone':'13800000001','relationToPayer':'本人'},
-    {'name':'小林','phone':'13800000002','relationToPayer':'家人'},
-    {'name':'朋友A','phone':'13800000003','relationToPayer':'朋友'},
+    {'name':'林野','phone':'13800000001','relationToPayer':'本人','idType':'护照','idNumber':'E12345671'},
+    {'name':'小林','phone':'13800000002','relationToPayer':'家人','idType':'护照','idNumber':'E12345672'},
+    {'name':'朋友A','phone':'13800000003','relationToPayer':'朋友','idType':'护照','idNumber':'E12345673'},
 ]
 # Quote is now per participant, not per payer/order.
 quote=ok('get',f'/api/public/activities/{aid}/price-quote?occurrence_id={oid}&user_id=1&participant_count=3').json()
@@ -80,7 +85,8 @@ assert upd['form_status']=='complete'
 bad=c.patch(f'/api/public/registrations/{rid}/participants/{pid}',json={'name':'偷偷改名'})
 assert bad.status_code==400
 repl=ok('post',f'/api/public/registrations/{rid}/participants/{pid}/replace',json={
-    'name':'朋友B','phone':'13800000004','relationToPayer':'朋友','reason':'原同行人临时有事'
+    'name':'朋友B','phone':'13800000004','relationToPayer':'朋友','reason':'原同行人临时有事',
+    'idType':'护照','idNumber':'E12345674'
 }).json()
 assert repl['name']=='朋友B' and int(repl['replacement_count'])==1 and repl['insurance_status']=='pending'
 

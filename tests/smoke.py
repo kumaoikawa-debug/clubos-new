@@ -1,3 +1,7 @@
+# 报名/结算强制校验参加人证件（idType + idNumber）；本脚本写于该规则之前，
+# 由 tests/_identity_patch.py 统一补齐 participants（仅补缺失项，不改写已有断言）。
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'tests'))
+import _identity_patch  # noqa: F401
 from fastapi.testclient import TestClient
 from pathlib import Path
 import os,sys,uuid
@@ -10,6 +14,11 @@ c=TestClient(app.app)
 def ok(method,url,**kw):
     r=getattr(c,method)(url,**kw);assert r.status_code<400,(url,r.status_code,r.text);return r
 
+# 报名/结算现在强制校验参加人证件（IDENTITY_FIELDS：idType + idNumber，见
+# clubos_domain/participants.py）。证件类型取值为中文（与 static/shared.js 的 ID_TYPES 同步）。
+def pax(name,phone):
+    return {'participants':[{'name':name,'phone':phone,'idType':'护照','idNumber':'E12345678'}]}
+
 ok('get','/api/health')
 d=ok('get','/api/club/1/dashboard').json();assert d['activityCount']>=1
 acts=ok('get','/api/club/1/activities').json();aid=acts[0]['id']
@@ -20,7 +29,7 @@ r=ok('post','/api/club/1/activities/ai-generate',data={'prompt':'2026年11月2�
 ok('post',f'/api/club/1/activities/{new_id}/publish')
 new=ok('get',f'/api/public/activities/{new_id}').json();assert new['occurrences']
 ok('post',f'/api/club/1/activities/{new_id}/channel/wechat')
-sg=ok('post',f'/api/public/activities/{new_id}/signup',json={'name':'测试用户','phone':'13900000099','occurrenceId':new['occurrences'][0]['id'],'clubPoints':0,'gearPoints':0}).json();assert sg['clubPointsEarned']>=0
+sg=ok('post',f'/api/public/activities/{new_id}/signup',json={'name':'测试用户','phone':'13900000099','occurrenceId':new['occurrences'][0]['id'],'clubPoints':0,'gearPoints':0,**pax('测试用户','13900000099')}).json();assert sg['clubPointsEarned']>=0
 od=ok('post','/api/public/clubs/1/gear-orders',json={'userId':1,'items':[{'productId':2,'quantity':1}]}).json();assert od['gearPointsEarned']>0
 ok('get','/api/platform/orders');ok('get','/api/platform/commissions');ok('get','/api/platform/ai/status')
 u=ok('get','/api/club/1/ai/usage').json();assert len(u)>=1
@@ -30,7 +39,7 @@ cs=ok('get','/api/commerce/status').json();assert cs['provider'] in ('local','me
 # cancellation must restore redeemed points / release occurrence seat
 act=ok('get',f'/api/public/activities/{aid}').json(); occ=act['occurrences'][0]
 wb=ok('get','/api/public/users/1/wallet?club_id=1').json()
-sg2=ok('post',f'/api/public/activities/{aid}/signup',json={'name':'林野','phone':'13800000001','occurrenceId':occ['id'],'clubPoints':min(100,wb['clubPoints']),'gearPoints':min(100,wb['gearPoints'])}).json()
+sg2=ok('post',f'/api/public/activities/{aid}/signup',json={'name':'林野','phone':'13800000001','occurrenceId':occ['id'],'clubPoints':min(100,wb['clubPoints']),'gearPoints':min(100,wb['gearPoints']),**pax('林野','13800000001')}).json()
 ok('post',f"/api/public/registrations/{sg2['registrationId']}/cancel")
 print('SMOKE OK · COMMERCE ADAPTER / POINT REVERSAL')
 # v0.6 checkout-intent lifecycle: hold -> cancel / hold -> paid -> idempotent callback
@@ -38,7 +47,8 @@ base=ok('get','/api/public/users/1/wallet?club_id=1').json()
 act=ok('get',f'/api/public/activities/{aid}').json(); occ=act['occurrences'][0]
 co=ok('post',f'/api/public/activities/{aid}/checkout',json={
     'name':'林野','phone':'13800000001','occurrenceId':occ['id'],
-    'clubPoints':min(100,base['clubPoints']),'gearPoints':min(100,base['gearPoints'])
+    'clubPoints':min(100,base['clubPoints']),'gearPoints':min(100,base['gearPoints']),
+    **pax('林野','13800000001')
 }).json()
 held=ok('get',f"/api/public/checkouts/{co['checkoutId']}").json(); assert held['status']=='pending_payment'
 after_hold=ok('get','/api/public/users/1/wallet?club_id=1').json()
@@ -48,7 +58,8 @@ after_release=ok('get','/api/public/users/1/wallet?club_id=1').json()
 assert after_release['clubPoints']==base['clubPoints'] and after_release['gearPoints']==base['gearPoints']
 
 co2=ok('post',f'/api/public/activities/{aid}/checkout',json={
-    'name':'林野','phone':'13800000001','occurrenceId':occ['id'],'clubPoints':0,'gearPoints':0
+    'name':'林野','phone':'13800000001','occurrenceId':occ['id'],'clubPoints':0,'gearPoints':0,
+    **pax('林野','13800000001')
 }).json()
 ev={'eventKey':'smoke-'+uuid.uuid4().hex,'provider':'local','checkoutId':co2['checkoutId'],'orderId':'ord_smoke_activity_'+uuid.uuid4().hex[:8]}
 paid=ok('post','/api/commerce/events/order-paid',json=ev).json(); assert paid['result']['kind']=='activity'
@@ -72,7 +83,8 @@ assert q['platformPointSubsidy'] <= 3.001
 
 # The checkout snapshots policy. Later edits cannot rewrite an already-created bill.
 co3=ok('post',f'/api/public/activities/{aid}/checkout',json={
-    'name':'林野','phone':'13800000001','occurrenceId':occ['id'],'clubPoints':999999,'gearPoints':999999
+    'name':'林野','phone':'13800000001','occurrenceId':occ['id'],'clubPoints':999999,'gearPoints':999999,
+    **pax('林野','13800000001')
 }).json()
 held3=ok('get',f"/api/public/checkouts/{co3['checkoutId']}").json()
 assert held3['points_policy_snapshot_json'] or held3.get('pointsPolicy') is not None
@@ -88,7 +100,8 @@ act2=ok('get',f'/api/public/activities/{aid}').json(); occ2=act2['occurrences'][
 q2=ok('get',f"/api/public/activities/{aid}/price-quote?occurrence_id={occ2['id']}&user_id=1&club_points=999999&gear_points=999999").json()
 assert q2['clubPointsUsed']==0 and q2['gearPointsUsed']==0
 co4=ok('post',f'/api/public/activities/{aid}/checkout',json={
-    'name':'林野','phone':'13800000001','occurrenceId':occ2['id'],'clubPoints':999999,'gearPoints':999999
+    'name':'林野','phone':'13800000001','occurrenceId':occ2['id'],'clubPoints':999999,'gearPoints':999999,
+    **pax('林野','13800000001')
 }).json()
 paid4=ok('post',f"/api/public/checkouts/{co4['checkoutId']}/confirm",json={'commerceOrderId':'ord_policy_off'}).json()
 assert paid4['clubPointsEarned']==0

@@ -1,3 +1,7 @@
+# 报名/结算强制校验参加人证件（idType + idNumber）；本脚本写于该规则之前，
+# 由 tests/_identity_patch.py 统一补齐 participants（仅补缺失项，不改写已有断言）。
+import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'tests'))
+import _identity_patch  # noqa: F401
 """v0.25 negative-security tests: separate roles, ownership, CSRF and demo-bypass gates.
 No external providers are mocked as real runtime; this exercises the ClubOS HTTP boundary.
 """

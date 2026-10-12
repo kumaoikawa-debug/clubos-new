@@ -146,6 +146,9 @@ m4 = q4['maxRedeemable']
 r = client.post(f'/api/public/activities/{ACT}/checkout', json={
     'name': payer['name'], 'phone': payer['phone'], 'occurrenceId': OCC,
     'clubPoints': m4['club']['points'], 'gearPoints': m4['gear']['points'],
+    # 报名强制校验参加人证件（idType + idNumber，见 clubos_domain/participants.py）
+    'participants': [{'name': payer['name'], 'phone': payer['phone'],
+                      'idType': '护照', 'idNumber': 'E12345678'}],
 })
 check('下单成功', r.status_code == 200, r.status_code if r.status_code != 200 else '')
 if r.status_code == 200:

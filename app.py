@@ -2708,7 +2708,6 @@ def signup(activity_id:int,payload:dict=Body(...)):
     return {'ok':True,'registrationId':rid,'userId':uid,**q.as_dict(),'clubPointsEarned':earned,'pointsPolicy':policy_snapshot,'commerceOrderId':commerce_order_id,'bookingRef':booking_ref,'participantCount':len(participants),'participantIds':participant_ids}
 
 
-@app.get('/api/public/registrations/{registration_id}/participants')
 def _attach_checkin_status(c,participants):
     """给参加人补上签到状态（就地改字典，返回同一批对象）。
 
@@ -2736,6 +2735,10 @@ def _attach_checkin_status(c,participants):
         p['checkinType']=(rec or {}).get('checkin_type')
     return participants
 
+# 该装饰器曾误贴在下面的 _attach_checkin_status(c, participants) 上，导致这个接口
+# 实际注册成了「需要 query 参数 c + participants」的辅助函数，C 端「我的参加人」
+# 恒返回 422。装饰器归位到真正的路由函数。
+@app.get('/api/public/registrations/{registration_id}/participants')
 def public_registration_participants(registration_id:int):
     with conn() as c:
         reg=row(c.execute('SELECT * FROM registrations WHERE id=?',(registration_id,)))
