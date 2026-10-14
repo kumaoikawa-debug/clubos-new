@@ -2195,7 +2195,7 @@ def public_activity(activity_id:int):
             a['activityMaster']=master
         detail=a.get('detail') or {}
         if isinstance(detail,dict):
-            a['detail']=sanitize_public_document({k:v for k,v in detail.items() if k in ('blocks','title','summary','subtitle')})
+            a['detail']=sanitize_public_document({k:v for k,v in detail.items() if k in ('blocks','title','summary','subtitle','promoHtml')})
         safe_occ_keys={'id','activity_id','club_id','start_at','end_at','price','capacity','sold','remaining','status','label'}
         a['occurrences']=[{k:v for k,v in occurrence.items() if k in safe_occ_keys} for occurrence in a['occurrences']]
     return a

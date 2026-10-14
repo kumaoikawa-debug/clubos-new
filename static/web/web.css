@@ -795,68 +795,24 @@
 .w-help__item b{display:block;font-size:12.5px;font-weight:700;color:var(--w-ink)}
 .w-help__item p{margin:5px 0 0;font-size:11.5px;line-height:1.7;color:var(--w-muted)}
 
-/* ══ 详情页正文手机化 ═════════════════════════════════════════════════════
-   renderPromo 产出的 `renderPromo()` 是**公众号长图**模板：920px 宽、米黄底、
-   Georgia 58px 大标题、72px 留白。塞进 390px 手机上，实测详情页总高 9968px，
-   其中有两个各 560px 的头图（`.w-detailhero` 已经画过一次同一张封面）。
-   这里只改 C 端呈现，不动 shared.js —— 那是四端共用的。
-   ═══════════════════════════════════════════════════════════════════════════ */
-.web-shell #publicDetail .public-editorial{margin-left:0;margin-right:0}
-/* 头图重复：同一张封面在详情页顶部已经出现一次（`.w-detailhero` + 标题），
-   ed-hero 是第二次。手机竖屏下两块 560px 头图加起来比正文还长，去掉第二块。 */
-.web-shell .ed-hero{display:none}
-/* 照片按固定比例裁：`renderPromo` 出来的多是竖幅（库里实测 560×841 一类），
-   按原始比例一张就要 530px 高，一页十几张会把详情页顶到 8000px 以上，且高度参差。
-   统一裁成 4:3（单图 3:2），且这是**裁切**不是拉伸 —— 内部 img 是 object-fit:cover。 */
-.web-shell .editorial-media,
-.web-shell .ed-gallery .editorial-media,
-.web-shell .ed-media .editorial-media,
-.web-shell .ed-narrative-media .editorial-media{aspect-ratio:4/3}
-.web-shell .ed-media.single .editorial-media{aspect-ratio:3/2}
-.web-shell .ed-lead,.web-shell .ed-narrative,.web-shell .ed-section,
-.web-shell .ed-quote,.web-shell .ed-cta,.web-shell .ed-gallery,.web-shell .ed-media,
-.web-shell .ed-statement{padding-left:18px;padding-right:18px}
-.web-shell .ed-lead{padding-top:22px;padding-bottom:16px}
-.web-shell .ed-lead p{font-size:16.5px;line-height:1.85;color:var(--w-ink2);font-family:inherit;max-width:none}
-.web-shell .ed-statement{padding-top:26px;padding-bottom:26px}
-.web-shell .ed-statement span{font-family:inherit;font-size:19px;font-weight:600;line-height:1.6;max-width:none}
-.web-shell .ed-quote{padding-top:24px;padding-bottom:24px;font-family:inherit;font-size:17px;line-height:1.7}
-.web-shell .ed-narrative{padding-top:20px;padding-bottom:20px;gap:14px}
-.web-shell .ed-narrative.has-media{grid-template-columns:1fr}
-.web-shell .ed-copy h2,.web-shell .ed-section h2{font-family:inherit;font-size:19px;line-height:1.35;margin:6px 0 9px}
-.web-shell .ed-copy p{font-size:14px;line-height:1.85;color:var(--w-ink2)}
-.web-shell .ed-facts{margin:20px 18px;grid-template-columns:1fr}
-.web-shell .ed-facts>div{background:#fafbf9;padding:13px 14px}
-.web-shell .ed-facts small{font-size:11px;letter-spacing:.04em;color:var(--w-muted)}
-.web-shell .ed-facts strong{font-size:16px}
-.web-shell .ed-gallery,.web-shell .ed-media{padding-top:16px;padding-bottom:16px;gap:8px}
-.web-shell .ed-gallery .editorial-media,
-.web-shell .ed-gallery.count-3 .editorial-media,
-.web-shell .ed-gallery.count-3 .editorial-media:first-child,
-.web-shell .ed-media.single .editorial-media,
-.web-shell .ed-media.pair .editorial-media,
-.web-shell .ed-media.grid .editorial-media,
-.web-shell .ed-media.mosaic .editorial-media,
-.web-shell .ed-narrative-media .editorial-media{min-height:210px}
-.web-shell .ed-media.mosaic .editorial-media:first-child{grid-row:auto}
-.web-shell .ed-divider{margin:0 18px}
-.web-shell .ed-section{padding-top:20px;padding-bottom:20px}
-.web-shell .ed-section-head{margin-bottom:12px}
-.web-shell .ed-timeline{background:#fafbf9}
-.web-shell .timeline-item{grid-template-columns:1fr;gap:5px;padding:13px 0}
-.web-shell .ed-info{background:#fafbf9}
-.web-shell .info-chips{grid-template-columns:1fr}
-/* 结尾 CTA 区块：与下方报名卡重复，收成一张浅色提示卡，不做深色大色块 */
-.web-shell .ed-cta{background:#f3f7f4;color:var(--w-ink);padding-top:22px;padding-bottom:22px}
-.web-shell .ed-kicker{font-size:11px;letter-spacing:1.4px}
-.web-shell .ed-cta .ed-kicker{color:var(--w-brand)}
-.web-shell .ed-cta h2{font-family:inherit;font-size:18px;line-height:1.4;margin:6px 0 7px}
-.web-shell .ed-cta p{font-size:13px;color:var(--w-muted);max-width:none}
+/* ══ 详情页图文宣传：C 端只保留**必要的差异化**（2026-10-14 重写）═══════════
+   正文的排版标准已全部收进 shared.css 的 Editorial 设计系统 v2（见那边的注释）。
+   这里刻意不再出现任何「改字号 / 改间距 / 改底色」的补丁 —— 上一版详情页
+   「没有美感」的根因正是：920px 长图模板 + 三十多条 .web-shell 覆盖互相打架，
+   字号 58 → 19 → 21 → 17.5 改了四轮、间距逐个调，最后既不是长图也不是手机排版。
+   设计系统里所有尺寸都是 clamp() 响应式，并用**容器查询**按容器宽度切版式，
+   所以 C 端 560px 容器即使在桌面上打开的也仍然是手机版式，无需在这里重复覆盖。 */
 
-/* 出行清单 × 装备推荐：`shared.css` 里 `.pack-need` 是米黄底 `#ede7db`，
-   那是俱乐部后台的暖色体系；C 端整页是冷白灰，一块米黄夹在中间像另一个页面。
-   只换底色与描边，不动结构（结构与文案来自 gear_recommend 的真实计算结果）。 */
-.web-shell .pack-need{background:#f4f7f4;border:1px solid var(--w-line);border-radius:12px;color:var(--w-ink2);font-size:12.5px}
+/* 图文区在 C 端通栏：.web-content 有 14px 内边距，这里抵消掉 */
+.web-shell #publicDetail .public-editorial{margin-left:0;margin-right:0}
+/* 详情页顶部已经画过一次封面 hero（.w-detailhero + 标题 + 价格），ed-hero 是第二块
+   重复头图；手机竖屏下两块 520px 头图加起来比正文还长，隐藏。后台预览不受影响。 */
+.web-shell .ed-hero{display:none}
+/* cta 块 renderPromo 已不再渲染（页面底部本就有常驻报名入口）。这里只留兜底，
+   防止旧数据里的 cta 块在 C 端变成一块突兀的深色大色块。 */
+.web-shell .ed-cta{background:#f3f7f4;color:var(--w-ink)}
+.web-shell .ed-cta .ed-kicker{color:var(--w-brand)}
+
 .web-shell .pack-plan{gap:16px}
 .web-shell .gear-summary{color:var(--w-muted)}
 .web-shell .gear-row{background:#fff;border:1px solid var(--w-line);border-radius:12px}
@@ -875,59 +831,11 @@
 .web-shell .info-stack summary span{font-size:11px}
 .web-shell .detail-list>div{grid-template-columns:1fr;gap:3px;padding:12px 0}
 .web-shell .detail-list p{font-size:12.5px}
-
-/* ── `.editorial` 本体并入 C 端冷白体系 ─────────────────────────────────────
-   `renderPromo()` 是四端共用的公众号长图渲染器，它的底色与分隔线是后台那套暖米黄
-   （#f4f0e8 / #d8d0c2 / #ede7db）。C 端整页是冷白灰，长图往上一铺，正文中间就出现
-   一条暖色带，读起来像从别的页面裁一块贴过来的。
-   这里**只换颜色，不动结构** —— 分块与文案仍是 renderPromo 的真实计算结果。
-   全部带 .web-shell 前缀提权，不依赖 shared.css / web.css 的加载顺序。 */
-.web-shell .editorial{background:#fff;border-color:transparent}
-.web-shell .editorial-media{background:#eef0ed}
-/* 引用块沿用 C 端唯一的深色语法（和底部提交按钮同一个 --w-ink），不另造深绿 */
-.web-shell .ed-statement{background:var(--w-ink)}
-.web-shell .ed-caption{color:var(--w-muted)}
-/* 缺图占位：ref 名直接压在 #ddd 上，在冷白页面里第一眼会被读成「图没加载出来」。
-   改成虚线占位 + 弱化小字，表达「这里本来该有图，素材没上传」，不做成错误态。 */
-.web-shell .editorial-media.missing{background:#fafbf9;border:1px dashed #dde3dc}
-.web-shell .editorial-media.missing span{color:#a7b0a9;font-size:11px}
-/* 这些 1px 间隙/分隔线是容器底色透出来的（shared.css 拿暖色 background 画的），
-   换成 C 端线色，否则米黄会顺着缝隙继续漏出来。 */
-.web-shell .ed-facts{background:var(--w-line)}
-.web-shell .info-chips>div{background:#fafbf9;border:1px solid var(--w-line)}
-.web-shell .ed-divider{background:var(--w-line)}
-.web-shell .timeline-list{border-top-color:var(--w-line)}
-.web-shell .timeline-item{border-bottom-color:var(--w-line)}
-
-/* ── 2026-09-28 编辑排版升级 ──────────────────────────────────────────────────
-   用户反馈：①出行清单是一排通栏灰盒，「太丑」；②图片好看但文字平铺「没有吸引力」。
-   下面三组改动只动 C 端观感（全部 .web-shell 前缀），不动数据结构。 */
-
-/* 1) 清单 chips：通栏灰盒 → 轻量圆 pills，可配到的项带品牌色 ✓。
-      视线动线：先扫清单（✓=能一键配齐），再往下看装备行。 */
-.web-shell .info-chips{display:flex;flex-wrap:wrap;gap:8px}
-.web-shell .info-chips>div{background:#f7f9f7;border:1px solid var(--w-line);border-radius:999px;
-  padding:7px 13px;font-size:12.5px;line-height:1.4;color:var(--w-ink2);min-height:0}
-.web-shell .info-chips>div.ok{background:#eef5f0;border-color:#cfdfd5;color:#274a38;font-weight:600}
-.web-shell .info-chips>div.ok::before{content:'✓';color:var(--w-brand);font-weight:800;margin-right:6px;font-size:11.5px}
-/* 2) 装备区的「清单项」标题：去掉独立灰盒，收成带 ✓ 的小节标题，
-      清单本身已在 pills 里出现过，这里只承担分组职责。 */
+/* 装备区的「清单项」标题：收成带 ✓ 的轻量小节标题（清单本身已经在上面那排
+   pills 里出现过，这里只承担分组职责，不再多画一层灰盒）。 */
 .web-shell .pack-need{background:transparent;border:0;border-radius:0;padding:2px 0 0;
   color:var(--w-ink);font-size:13px;font-weight:700;display:flex;align-items:center;gap:7px;line-height:1.4}
 .web-shell .pack-need::before{content:'✓';color:var(--w-brand);font-size:12px;font-weight:800}
-/* 3) 正文排版：标题更大更有对比，段落支持多段与金句（ed-pull），呼吸感来自行高与段距。 */
-.web-shell .ed-copy h2,.web-shell .ed-section h2{font-size:21px;font-weight:750;line-height:1.3;
-  letter-spacing:.01em;margin:4px 0 10px;color:var(--w-ink)}
-.web-shell .ed-copy p{font-size:14.5px;line-height:1.95;color:var(--w-ink2)}
-.web-shell .ed-copy p+p{margin-top:9px}
-.web-shell .ed-lead p{font-size:17.5px;line-height:1.9;color:var(--w-ink);font-weight:550}
-.web-shell .ed-pull{margin:12px 0 2px;padding:2px 0 2px 12px;border-left:3px solid var(--w-brand);
-  color:var(--w-brand);font-size:16px;font-weight:700;line-height:1.55;letter-spacing:.02em}
-.web-shell .ed-narrative .ed-kicker{color:var(--w-brand);font-weight:650}
-/* 金句/大字观点：字号再抬一档（移动端 560px 容器里 19px 不够「大字」的感觉） */
-.web-shell .ed-statement span{font-size:21px;font-weight:700;letter-spacing:.02em}
-.web-shell .ed-quote{font-size:18px;font-weight:600;color:var(--w-ink)}
-
 /* ── 装备详情页 ───────────────────────────────────────────────────────────────
    底部购买栏是 sticky 而不是 fixed：fixed 要自己算安全区、还要防住和 .web-nav 重叠，
    sticky 停在视口底即可，用 --w-navh 把它抬到导航上方。 */

@@ -334,8 +334,70 @@ function edParas(v){
   const arr=String(raw||'').split(/\n+/).map(s=>s.trim().replace(clockRe,'')).filter(Boolean);
   return arr.map(s=>`<p>${esc(s)}</p>`).join('');
 }
+/* ── 阶段二（2026-10-14）：详情宣传区「模型直出 HTML」的渲染 ──────────────────
+   与长图同源：模型产出自包含 HTML，服务端已 sanitize 过（script、on*、javascript: 伪协议全剥），
+   这里再剥一层同源白名单 + 走 sandbox iframe（无 allow-scripts → 即便漏网脚本也无法执行）。
+   高度由 document 级 capture 监听在 iframe load 后量取。 */
+function resolveMediaRefsHtml(html,mm){
+  var t=String(html||'');
+  t=t.replace(/(<img\b[^>]*?src=["'])\s*\{\{\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}\}\s*(["'])/gi,
+    function(_,pre,ref,post){var u=mm&&mm[ref]&&mm[ref].url;return u?pre+esc(u)+post:'';});
+  t=t.replace(/<img\b[^>]*src=["']\s*["'][^>]*>/gi,'');          /* 漏网空 src 的 img */
+  t=t.replace(/\{\{\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}\}/g,function(){return '';}); /* 裸占位符 */
+  /* 被 hardenPromoHtml 剥掉外部 src 的 <img> 此时已无 src，整标签删，不留裂图 */
+  t=t.replace(/<img\b[^>]*>/gi,function(tag){return /src="/i.test(tag)?tag:'';});
+  return t;
+}
+function hardenPromoHtml(html){
+  return String(html||'').replace(/(src|href)\s*=\s*(["'])([^"']*)\2/gi,function(whole,attr,q,val){
+    var v=String(val||'');
+    if(/^(https?:)?\/\//i.test(v)){try{if(new URL(v,location.href).origin===location.origin)return whole;}catch(e){return '';}}
+    if(/^data:image\//i.test(v))return whole;
+    return '';
+  });
+}
+function promoHtmlDoc(html){
+  var body=hardenPromoHtml(html);
+  /* hardenPromoHtml 会把外链 / javascript: 的 src 剥成空，留下无 src 的 <img> → 当作裂图整标签删 */
+  body=body.replace(/<img\b[^>]*>/gi,function(tag){return /\bsrc=["']/i.test(tag)?tag:'';});
+  return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
+    +'<meta name="viewport" content="width=device-width,initial-scale=1">'
+    +'<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent}'
+    +'body{width:100%;overflow-x:hidden;font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}'
+    +'img{max-width:100%;height:auto;display:block}section{display:block}a{color:inherit}</style></head><body>'
+    +body+'</body></html>';
+}
+function escAttr(s){return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');}
+function mountPromoHtml(html,mm){
+  var doc=promoHtmlDoc(resolveMediaRefsHtml(html,mm));
+  return '<div class="ed-promo-html"><iframe sandbox="allow-same-origin" referrerpolicy="no-referrer" '
+    +'style="width:100%;border:0;display:block;background:transparent" '
+    +'srcdoc="'+escAttr(doc)+'"></iframe></div>';
+}
+/* 阶段二：iframe 载入后量取内部高度，避免内容被裁切；图片晚到再补量一次 */
+if(typeof document!=='undefined'){
+  document.addEventListener('load',function(e){
+    var t=e&&e.target;
+    if(t&&t.nodeType===1&&t.tagName==='IFRAME'){
+      var host=t.closest?t.closest('.ed-promo-html'):null;
+      if(host){try{var d=t.contentDocument;if(d&&d.body){t.style.height=(d.body.scrollHeight+16)+'px';
+        setTimeout(function(){try{t.style.height=(d.body.scrollHeight+24)+'px';}catch(_){}},800);}}catch(_){}}
+    }
+  },true);
+}
+
 function renderPromo(detail,master={},opts={}){
-  const mm=mediaMap(master);let h='<article class="editorial">';
+  const mm=mediaMap(master);
+  /* 阶段二（2026-10-14）：模型直出 HTML 优先；缺失 / 不达标时回退下方 blocks */
+  if(detail&&detail.promoHtml&&typeof detail.promoHtml==='string'&&detail.promoHtml.trim()){
+    return mountPromoHtml(detail.promoHtml,mm);
+  }
+  let h='<article class="editorial">';
+  /* 章节编号（2026-10-14）：杂志感的一半来自「整篇一致的眉标口径」——眉标前面那个
+     01/02/03 就是长图里 `01 — VENUE` 的那套编号。只在块自带 eyebrow（模型写的场景眉题）
+     时打号，没有眉标的块不参与编号，所以整篇的号是连续且只落在真正的章节上。 */
+  let _secNo=0;
+  const _kicker=t=>t?`<div class="ed-kicker"><i>${String(++_secNo).padStart(2,'0')}</i><span>${esc(t)}</span></div>`:'';
   /* 重复合并（2026-10-10 用户反馈：服务清单下面又来一个 GOOD TO KNOW 重复讲同样内容）：
      渲染过程中把 facts 块已呈现的文字攒起来，后面的 info 块先做过半覆盖度检查，
      整块内容大部分已被讲过 → 整块不上屏。信息只保留一处，规则对旧数据同样生效。 */
@@ -375,7 +437,9 @@ function renderPromo(detail,master={},opts={}){
     if(b.type==='hero'){
       const heroRef=resolvedRefs(refs,mm)[0]||fallbackPhoto;
       const url=heroRef&&mm[heroRef]?mm[heroRef].url:'';
-      const bg=url?` style="background-image:linear-gradient(180deg,rgba(7,17,14,.12),rgba(7,17,14,.74)),url('${esc(url)}')"`:'';
+      /* 压暗渐变统一由 CSS 的 .ed-hero::after 画（2026-10-14）：渐变是设计系统的一部分，
+         写在这里会让「同一层压暗」在 hero / bigimage / full 三处各写一遍、值还各不相同。 */
+      const bg=url?` style="background-image:url('${esc(url)}')"`:'';
       h+=`<section class="ed-hero${url?' has-photo':''}"${bg}><div class="ed-hero-copy"><div class="ed-kicker">${esc(b.kicker||master.location||'OUTDOOR EXPERIENCE')}</div><h1>${esc(b.headline||master.title||'活动')}</h1><p>${esc(b.subtitle||'')}</p></div></section>`;
     }    else if(b.type==='lead')h+=`<section class="ed-lead">${edParas(b.text||b.body||'')}</section>`;
     else if(b.type==='statement')h+=`<section class="ed-statement"><span>${esc(b.text||'')}</span></section>`;
@@ -435,13 +499,13 @@ function renderPromo(detail,master={},opts={}){
          layout 变体（2026-10-08）：image-left / image-right 让图文左右错落，full 让首图整版铺满 +
          文字叠在图上 —— 给模型更多"画报感"的拼法，避免每版都长一个样。 */
       const pull=b.pull?`<p class="ed-pull">${esc(b.pull)}</p>`:'';
-      const copy=`<div class="ed-copy">${b.eyebrow?`<div class="ed-kicker">${esc(b.eyebrow)}</div>`:''}<h2>${esc(b.headline||'')}</h2>${edParas(b.body||b.text||'')}${pull}</div>`;
+      const copy=`<div class="ed-copy">${_kicker(b.eyebrow)}<h2>${esc(b.headline||'')}</h2>${edParas(b.body||b.text||'')}${pull}</div>`;
       const layout=b.layout||'text-top';
       if((layout==='image-left'||layout==='image-right')&&ok.length){
         h+=`<section class="ed-narrative ed-narrative--split ${layout==='image-right'?'img-right':'img-left'} has-media">${layout==='image-right'?copy+media:media+copy}</section>`;
       }else if(layout==='full'&&ok.length){
         const url=mm[ok[0]]?.url||'';
-        h+=`<section class="ed-narrative ed-narrative--full${url?' has-photo':''}"${url?` style="background-image:linear-gradient(180deg,rgba(7,17,14,.06),rgba(7,17,14,.74)),url('${esc(url)}')"`:''}><div class="ed-narrative__fullcopy">${copy}</div></section>`;
+        h+=`<section class="ed-narrative ed-narrative--full${url?' has-photo':''}"${url?` style="background-image:url('${esc(url)}')"`:''}><div class="ed-narrative__fullcopy">${copy}</div></section>`;
       }else{
         h+=`<section class="ed-narrative ${ok.length?'has-media':''}${pull?' has-pull':''}">${copy}${media}</section>`;
       }
@@ -464,7 +528,7 @@ function renderPromo(detail,master={},opts={}){
       if(ok.length){
         const url=mm[ok[0]]?.url||'';
         const cap=(b.title||b.text||b.caption)?`<div class="ed-bigimage__cap">${b.title?`<h3>${esc(b.title)}</h3>`:''}${b.text?`<p>${esc(b.text)}</p>`:''}${b.caption?`<span class="ed-caption">${esc(b.caption)}</span>`:''}</div>`:'';
-        h+=`<section class="ed-bigimage${url?' has-photo':''}"${url?` style="background-image:linear-gradient(180deg,rgba(7,17,14,.12),rgba(7,17,14,.62)),url('${esc(url)}')"`:''}>${cap}</section>`;
+        h+=`<section class="ed-bigimage${url?' has-photo':''}"${url?` style="background-image:url('${esc(url)}')"`:''}>${cap}</section>`;
       }
     }
     else if(b.type==='imagetext'){
@@ -472,7 +536,7 @@ function renderPromo(detail,master={},opts={}){
       const ok=resolvedRefs(refs,mm);
       const right=(b.layout||'')==='right';
       const media=ok.length?`<div class="ed-imagetext__media${ok.length>1?' two':''}">${ok.map(r=>mediaHtml(r,mm)).join('')}</div>`:'';
-      const copy=`<div class="ed-imagetext__copy">${b.eyebrow?`<div class="ed-kicker">${esc(b.eyebrow)}</div>`:''}<h2>${esc(b.headline||'')}</h2>${edParas(b.body||b.text||'')}</div>`;
+      const copy=`<div class="ed-imagetext__copy">${_kicker(b.eyebrow)}<h2>${esc(b.headline||'')}</h2>${edParas(b.body||b.text||'')}</div>`;
       h+=media?`<section class="ed-imagetext ${right?'img-right':'img-left'}">${right?copy+media:media+copy}</section>`:`<section class="ed-narrative">${copy}</section>`;
     }
     else if(b.type==='cards'){

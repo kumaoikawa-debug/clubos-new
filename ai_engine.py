@@ -1807,6 +1807,45 @@ def _photo_block(pick:dict[str,Any],media_json:str)->str:
             +'\n'.join(pick['lines'])
             +'\n\n清单里没有出现的 ref 是品牌 logo / 空白底图 / 地图截图 / 不属于本次活动的照片，一律不得引用。')
 
+# ── 阶段二（2026-10-14）：详情「图文宣传」区允许模型直出 HTML（与长图同源）─────────
+# 模型在生成 blocks 的同时额外产出 promoHtml；服务端清洗后存进 detail.promoHtml；
+# 前端优先用 sandbox iframe 渲染它，缺失 / 不达标时回退到 blocks（renderPromo 既有逻辑）。
+import re as _re
+_PROMO_BAD_TAGS=_re.compile(r'<\s*/?\s*(script|link|iframe|object|embed|form|input|button|video|audio|base|meta)\b[^>]*>',_re.I)
+_PROMO_EVENT=_re.compile(r'\son[a-z]+\s*=\s*"[^"]*"|\son[a-z]+\s*=\s*\'[^\']*\'|\son[a-z]+\s*=\s*[^\s>]+',_re.I)
+_PROMO_JS=_re.compile(r'(?:href|src)\s*=\s*"\s*(?:javascript|data|vbscript):[^"]*"\s*',_re.I)
+_PROMO_PH=_re.compile(r'\{\{\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}\}',_re.I)
+_PROMO_IMG_EMPTY=_re.compile(r'<img\b[^>]*src=["\']\s*["\'][^>]*>')
+def _sanitize_promo_html(html:str)->str:
+    t=str(html or '')
+    t=_PROMO_BAD_TAGS.sub('',t); t=_PROMO_EVENT.sub('',t); t=_PROMO_JS.sub('',t)
+    return t.strip()
+def _drop_unknown_promo_refs(html:str,allowed:set[str])->tuple[str,list[str]]:
+    dropped:list[str]=[]
+    def repl(m:_re.Match)->str:
+        r=m.group(1)
+        if r in allowed: return m.group(0)
+        dropped.append(r); return ''
+    html=_PROMO_PH.sub(repl,html)
+    html=_PROMO_IMG_EMPTY.sub('',html)   # 漏网空 src 的 <img> 整标签删，不留裂图
+    return html,dropped
+def _promo_html_ok(html:str)->bool:
+    """闸门：只有模型真正「设计了」的 HTML 才采用，否则回退 blocks。"""
+    if not html or len(html)<600: return False
+    if '<style' not in html: return False          # 没上设计系统多半是敷衍输出
+    if not _PROMO_PH.search(html) and '<img' not in html: return False  # 一张图都没有
+    return True
+def _finalize_promo_html(detail:dict,allowed:set[str])->None:
+    """取出 detail.promoHtml，清洗 + 闸门；就地写回（不达标则清空回退 blocks）。"""
+    if not isinstance(detail,dict): return
+    raw=detail.get('promoHtml')
+    if not isinstance(raw,str) or not raw.strip():
+        detail['promoHtml']=''; return
+    clean=_sanitize_promo_html(raw)
+    clean,_=_drop_unknown_promo_refs(clean,allowed)
+    detail['promoHtml']=clean if _promo_html_ok(clean) else ''
+
+
 async def generate_activity(club_id:int,source:dict[str,Any],*,direction:str='',
                             previous_detail:dict[str,Any]|None=None,
                             version_no:int=1)->tuple[dict[str,Any],GatewayResponse]:
@@ -1908,6 +1947,7 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
     "blocks":[
       {{"type":"{BLOCK_TYPES}","eyebrow":"narrative 用场景眉题","headline":"可选","body":"可选，可用 \\n 分段","pull":"可选金句(≤14字)","text":"可选","mediaRefs":["img_01"]}}
     ]
+    ,"promoHtml":""
   }}
 }}
 
@@ -1918,6 +1958,23 @@ hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言�
    图文穿插、卡片化要点。主动组合 bigimage / imagetext / numbercards / cards 这类视觉组件，
    避免从头到尾都是同一套「标题 + 正文 + 图」。照片多时优先做视觉编排，照片少时用文字与卡片把吸引力撑起来。
 {_LAYOUT_CONTRACT}
+
+★★ 宣传区 HTML（promoHtml，与长图同源的更高标准，可选）：
+除了上方的 blocks，请**额外**为「图文宣传区」直出一段**自包含 HTML**（promoHtml）。这段会被嵌进详情页
+（在封面大图与下方报名区之间），因此：
+- **不要**做独立首屏 hero（页面顶部已有封面大图）、**不要**做结尾报名区（页面下方已有报名入口）；
+  只做「宣传正文流」：内容亮点 / 行程时间线 / 费用包含不含 / 领队保障 / 注意事项 / 关键数字。
+- 自己设计一整套视觉系统（配色、字号阶梯、组件口径），**每场都不一样**，但整篇统一；
+  底色建议浅色中性、与页面协调，深色仅作重音块 —— **不许套固定模板**。
+- 只允许这些标签：section div p h1 h2 h3 h4 strong em img figure figcaption ul ol li blockquote hr span small；
+  可以有且只有一个 <style> 放最前面定义 CSS 变量（--ink/--accent/--bg/--card）；字体只用系统字体栈；
+  不要 @import、不要 CSS url() 引外图；图片一律写 <img src="{{media:ref}}">。
+- 排版纪律：统一字号阶梯；区块间 36~52px 呼吸；眉标系统（小字 + 字距 + 编号）；关键数字做成大字号统计条；
+  竖向时间线（≤6 节点）；通栏大图 / 浅底卡 / 深色块交替；图片成组（并排 / 一大一小，不许全通栏）；引言块。
+- 事实保真铁律同样适用：不编地名 / 数字 / 资质；时刻必须真实（资料有确切 HH:MM 才写，否则一个钟点都不写）；
+  成本 / 毛利 / 内部信息一律不进。
+- 若你判断 blocks 已足够好、或资料太薄做不出好 HTML，promoHtml 留空字符串 "" —— 前端自动回退到 blocks。
+
 如果没有真正事实冲突，blocking_conflicts 必须为空，直接完成成品。"""
     # 打标成功时不再把几十张原图塞进请求：清单里已经有「画面里是什么」，
     # 模型按文字选图更准、更快、更省 —— 38 张原图 base64 进去只会稀释注意力。
@@ -1939,6 +1996,8 @@ hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言�
             data['detail']['blocks']=_align_block_media(data['detail']['blocks'],catalog,photos)
             # info 错位闸门（2026-10-11 用户反馈）：把误写进「出发前知道」的行程/费用整块剔除
             data['detail']['blocks']=_drop_misplaced_info(data['detail']['blocks'],master)
+            # 阶段二：模型直出宣传区 HTML，清洗 + 闸门；不达标清空回退 blocks
+            _finalize_promo_html(data['detail'], photos)
         # 事实回检：品牌名音译还原 + 编造地名告警（模型包装文案时会顺手改专名）
         apply_fact_guard(data,str(source.get('text') or ''))
         # 照抄闸门（2026-10-09 用户反馈「这些文案不要照搬方案原文」）：详情此前从没有这一道，
@@ -2009,6 +2068,7 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
     "blocks":[
       {{"type":"{BLOCK_TYPES}","eyebrow":"narrative 用场景眉题","headline":"可选","body":"可选，可用 \\n 分段","pull":"可选金句(≤14字)","text":"可选","mediaRefs":["img_01"]}}
     ]
+    ,"promoHtml":""
   }}
 }}
 
@@ -2016,6 +2076,23 @@ block 语义：
 hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=出发前须知（装备与着装建议/注意事项/证件与集合/退改规则，**严禁写行程、费用、出行清单**）；quote=引用；divider=节奏。
 任何 block 都可省略、重复、自由排序。不要为了「结构完整」机械凑章节。
 {_LAYOUT_CONTRACT}
+
+★★ 宣传区 HTML（promoHtml，与长图同源的更高标准，可选）：
+除了上方的 blocks，请**额外**为「图文宣传区」直出一段**自包含 HTML**（promoHtml）。这段会被嵌进详情页
+（在封面大图与下方报名区之间），因此：
+- **不要**做独立首屏 hero（页面顶部已有封面大图）、**不要**做结尾报名区（页面下方已有报名入口）；
+  只做「宣传正文流」：内容亮点 / 行程时间线 / 费用包含不含 / 领队保障 / 注意事项 / 关键数字。
+- 自己设计一整套视觉系统（配色、字号阶梯、组件口径），**每场都不一样**，但整篇统一；
+  底色建议浅色中性、与页面协调，深色仅作重音块 —— **不许套固定模板**。
+- 只允许这些标签：section div p h1 h2 h3 h4 strong em img figure figcaption ul ol li blockquote hr span small；
+  可以有且只有一个 <style> 放最前面定义 CSS 变量（--ink/--accent/--bg/--card）；字体只用系统字体栈；
+  不要 @import、不要 CSS url() 引外图；图片一律写 <img src="{{media:ref}}">。
+- 排版纪律：统一字号阶梯；区块间 36~52px 呼吸；眉标系统（小字 + 字距 + 编号）；关键数字做成大字号统计条；
+  竖向时间线（≤6 节点）；通栏大图 / 浅底卡 / 深色块交替；图片成组（并排 / 一大一小，不许全通栏）；引言块。
+- 事实保真铁律同样适用：不编地名 / 数字 / 资质；时刻必须真实（资料有确切 HH:MM 才写，否则一个钟点都不写）；
+  成本 / 毛利 / 内部信息一律不进。
+- 若你判断 blocks 已足够好、或资料太薄做不出好 HTML，promoHtml 留空字符串 "" —— 前端自动回退到 blocks。
+
 （密度下限优先于「照片少时不要硬凑」：只要资料里有可用照片就按下限铺满，只有真的没有可用照片时才用文字撑。）"""
     gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,
                            images=None if pick['ok'] else source.get('images'))
@@ -2027,6 +2104,8 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
             detail['blocks']=_sanitize_blocks(detail.get('blocks') or [],allowed_refs=photos)
             detail['blocks']=_align_block_media(detail['blocks'],catalog,photos)
             detail['blocks']=_drop_misplaced_info(detail['blocks'],master)
+            # 阶段二：模型直出宣传区 HTML，清洗 + 闸门；不达标清空回退 blocks
+            _finalize_promo_html(detail, photos)
         # 事实回检（换一版同样会改写专名，不能只在首次生成时守）
         apply_fact_guard({'activity_master':master if isinstance(master,dict) else {},'detail':detail},
                          str(source.get('text') or ''))
