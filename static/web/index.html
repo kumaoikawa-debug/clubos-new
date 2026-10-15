@@ -2,7 +2,7 @@
 <!-- 内联 SVG 图标：省掉 /favicon.ico 的 404（浏览器默认会去请求它）。
      用山形描边，和底部导航的图标同一套笔画。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121714'/%3E%3Cpath d='M3.5 23.5 12 11l4.6 7.6 3-4.8 8.9 9.7z' fill='none' stroke='%237fd0a4' stroke-width='2.1' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/shared.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261014a"><link rel="stylesheet" href="/static/web/web.css?v=20261015a"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
+<link rel="stylesheet" href="/static/shared.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261014a"><link rel="stylesheet" href="/static/web/web.css?v=20261016a"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
 
 <!-- C 端骨架：5 视图（首页 / 活动 / 装备 / 户外能力 / 我的）。
      结构类 .web-shell / .web-top / .web-content / .wview / .web-nav 全部保留 ——
@@ -44,20 +44,32 @@
       <div id="publicDetail"></div>
     </section>
 
-    <!-- ── 装备：左侧分类 + 右侧双列网格 ───────────────────────────────
-         #publicProducts 带 .w-grid：experience-consumer.js 是按 `#publicProducts .web-card`
-         数商品张数的，卡片类名必须保留 .web-card（额外挂 .w-product 做外观重置）。 -->
+    <!-- ── 装备：左侧分类导轨 + 右侧主视觉/双列网格（对齐 PEAKTRACE 小程序商城版式）
+         版式：搜索整宽 → 左导轨（中文 + 件数两行，选中项只在左侧出一条黑条）+ 右内容
+         （主视觉横幅 → 区块头 → 双列商品网格）。整页只有一个搜索框。
+         ★ 结构不能动的部分：容器类 .w-shop（web.js 的 showProductPane / showMallList 用
+           `#wmall .w-shop` 切显隐）；#publicProducts 必须带 .w-grid 且子节点是 .web-card
+           （experience-consumer.js 按 `#publicProducts .web-card` 数商品张数）；
+           #gearSearch / #mallCats / #mallTabs / #mallHero / #mallTitle / #mallSub / #mallNote
+           都是 web.js 里 renderMall* 的写入目标。 -->
     <section id="wmall" class="wview" style="display:none">
       <div class="w-shop">
-        <aside class="w-shop__side" id="mallCats"></aside>
-        <div class="w-shop__main">
-          <!-- 装备搜索框：web.js 的 renderMall() 一直在读 #gearSearch 做过滤，
-               之前 HTML 里没有这个节点，搜索是死代码（页面上根本没有输入框）。 -->
+        <div class="w-shop__top">
           <label class="w-field w-field--shop"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.4"/><path d="m16 16 4.2 4.2"/></svg><input id="gearSearch" type="search" placeholder="搜索装备名称或分类" aria-label="搜索装备"></label>
-          <div class="w-shop__tabs" id="mallTabs"></div>
-          <div class="w-grid" id="publicProducts"></div>
-          <!-- id 由 renderMall() 按筛选结果改写：「共 N 件在售」/「筛选出 N 件」 -->
-          <div class="w-shop__note" id="mallNote">平台统一商品、库存、发货与售后；会员等级折扣在结算时自动生效。</div>
+        </div>
+        <div class="w-shop__body">
+          <aside class="w-shop__side" id="mallCats"></aside>
+          <div class="w-shop__main">
+            <!-- 主视觉：内容由 renderMallHero() 写；没有真实封面时走品牌渐变兜底，不画假图 -->
+            <div class="w-shop__hero" id="mallHero"></div>
+            <div class="w-shop__head">
+              <h2 class="w-shop__title" id="mallTitle">全部装备</h2>
+              <div class="w-shop__sub" id="mallSub">正在读取在售装备…</div>
+            </div>
+            <div class="w-shop__tabs" id="mallTabs"></div>
+            <div class="w-grid" id="publicProducts"></div>
+            <div class="w-shop__note" id="mallNote">平台统一商品、库存、发货与售后；会员等级折扣在结算时自动生效。</div>
+          </div>
         </div>
       </div>
       <!-- 装备详情页：与活动详情页同一个套路 —— 列表区留在 DOM 里靠 display 切换，
@@ -146,12 +158,12 @@
 </div>
 
 <script src="/static/shared.js?v=20261014a"></script>
-<script src="/static/web/web.js?v=20261015a"></script>
+<script src="/static/web/web.js?v=20261016a"></script>
 <script src="/static/web/web-biz.js?v=20261014a"></script>
 <script src="/static/ux/clubos-ux.js?v=20261014a"></script>
 <script src="/static/ux/workflows-web.js?v=20261014a"></script>
 <script src="/static/ux/qr-local.js?v=20261014a"></script>
 <script src="/static/ux/experience-core.js?v=20261014a"></script>
 <script src="/static/ux/payment-experience.js?v=20261014a"></script>
-<script src="/static/ux/experience-consumer.js?v=20261014a"></script>
+<script src="/static/ux/experience-consumer.js?v=20261016a"></script>
 </body></html>

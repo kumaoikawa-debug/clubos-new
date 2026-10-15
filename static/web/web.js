@@ -246,21 +246,88 @@ function renderMallCats(){
   const cats=mallCats();
   if(!cats.includes(MALL_CAT))MALL_CAT='全部';
   const cnt=c=>c==='全部'?MALL_ALL.length:MALL_ALL.filter(x=>x.category===c).length;
-  box.innerHTML=cats.map(c=>`<button class="${c===MALL_CAT?'on':''}" type="button" data-c="${esc(c)}">${esc(c)}<i>${cnt(c)}</i></button>`).join('');
+  /* 参考图的导轨是「中文大字 + 小字副标」两行，选中项不填充色块、只在左边缘出黑条。
+     副标用真实的在售件数 —— 库里没有英文别名，就不编一个英文出来凑版式。 */
+  box.innerHTML=cats.map(c=>`<button class="${c===MALL_CAT?'on':''}" type="button" data-c="${esc(c)}"${c===MALL_CAT?' aria-current="true"':''}><span class="w-shop__cat">${esc(c)}</span><span class="w-shop__cnt">${cnt(c)} 件</span></button>`).join('');
 }
 function renderMallTabs(){
   const box=$('#mallTabs');if(!box)return;
   box.innerHTML=MALL_SORTS.map(s=>`<button class="${s.k===MALL_SORT?'on':''}" type="button" data-s="${s.k}">${s.label}</button>`).join('');
 }
+/* ── 主视觉横幅 ───────────────────────────────────────────────────────────
+   参考图顶部那张是最上层的一张山野照片 —— 不是商品图，是品牌影像。所以这里用俱乐部的
+   **真实活动封面**，而不是拿占位图冒充照片：一张封面都没有时走品牌渐变兜底，文案照旧。
+   最多 3 张，再多也不轮播 —— 装备页的主视觉是背景板，不是给顾客刷的陈列位。 */
+const MALL_HERO_MAX=3;
+/* 主视觉用的活动封面。**不能读 ACT_ALL** —— C 端首页真正的渲染在 web-biz.js，
+   web.js 里的 loadHome 是死代码，所以「从首页点进装备页」时 ACT_ALL 还是空的（实测
+   heroSlides=1 且无图）。这里自己按需拉一次公开活动列表；拉不到就保持品牌渐变兜底，
+   不打断商城主体。用独立变量存，避免污染活动列表页的缓存。 */
+let MALL_HERO_ACTS=[],_heroActTried=false;
+async function ensureHeroCovers(){
+  if(_heroActTried)return;
+  _heroActTried=true;
+  try{
+    const acts=await api(`/api/public/clubs/${CLUB}/activities`);
+    MALL_HERO_ACTS=Array.isArray(acts)?acts:[];
+    renderMallHero();
+  }catch(e){/* 拉失败就维持渐变兜底 */}
+}
+function mallHeroSlides(){
+  const out=[];
+  MALL_HERO_ACTS.forEach(a=>{
+    const u=a&&a.cover;if(!u||out.length>=MALL_HERO_MAX)return;
+    if(out.some(x=>x.url===u))return;   /* 同一张封面被多场活动引用时只画一次 */
+    out.push({url:u,title:a.title||''});
+  });
+  return out;
+}
+let _mallHeroSig='';
+function renderMallHero(){
+  const box=$('#mallHero');if(!box)return;
+  ensureHeroCovers();
+  const slides=mallHeroSlides(),sig=slides.map(x=>x.url).join('|')+'#'+MALL_ALL.length;
+  /* 搜索每敲一个字都会重跑 renderMall，主视觉不该跟着重建（会把轮播拨回第一张）。 */
+  if(sig===_mallHeroSig&&box.children.length)return;
+  _mallHeroSig=sig;
+  const badge=`<span class="w-shop__hbadge">在售 ${MALL_ALL.length} 件</span>`;
+  const copy='<div class="w-shop__hcopy"><div class="w-shop__heyebrow">REMOTE OUTDOOR · GEAR</div>'
+    +'<h2>山系装备</h2>'
+    +`<p>共 ${MALL_ALL.length} 件在售 · 会员等级折扣结算自动生效</p></div>`;
+  if(!slides.length){
+    box.innerHTML=`<div class="w-shop__htrack"><div class="w-shop__hslide">${badge}${copy}</div></div>`;
+    return;
+  }
+  box.innerHTML=`<div class="w-shop__htrack" id="mallHeroTrack">`
+    +slides.map((x,i)=>`<div class="w-shop__hslide"><img src="${esc(x.url)}" alt="${esc(x.title)}"${i?' loading="lazy"':''}>${badge}${copy}</div>`).join('')
+    +'</div>'
+    +(slides.length>1?`<div class="w-shop__hdots">${slides.map((_,i)=>`<i${i===0?' class="on"':''}></i>`).join('')}</div>`:'');
+  if(slides.length>1)bindMallHero();
+}
+function bindMallHero(){
+  const track=$('#mallHeroTrack');if(!track)return;
+  const dots=[...document.querySelectorAll('#mallHero .w-shop__hdots i')];
+  const n=track.children.length;let wt=0;
+  const sync=()=>{
+    const i=Math.max(0,Math.min(n-1,Math.round(track.scrollLeft/Math.max(1,track.clientWidth))));
+    dots.forEach((d,k)=>d.classList.toggle('on',k===i));
+  };
+  /* 和首页 hero 同一个做法：滚动停下 60ms 再量，惯性滚动期间每帧读 scrollLeft 会让指示点乱跳。 */
+  track.addEventListener('scroll',()=>{clearTimeout(wt);wt=setTimeout(sync,60)},{passive:true});
+  sync();
+}
+
 function renderMall(){
   const box=$('#publicProducts');if(!box)return;
   /* 和 renderActivityList 同一个坑：MALL_ALL 可能已由首页 loadHome 填好，
      wv() 走快路径直接进这里，左侧分类栏 / 排序 tab 就不会渲染。
      分类与 tab 只依赖 MALL_ALL，放在这里等价于「每次重渲染前先校正一次」。 */
-  renderMallCats();renderMallTabs();
+  renderMallCats();renderMallTabs();renderMallHero();
   /* 收掉 experience-consumer.js 注入的 #uxGearFilter：它自带一个装备搜索框，
      而本页已有自己的搜索框，两个框同时出现是明显的功能重复。
-     它给卡片加的 ux-gear-card 类名不受影响。 */
+     它给卡片加的 ux-gear-card 类名不受影响。
+     ★ 只靠这一行删不干净：loadMall 的包装层是在 renderMall **跑完之后**才注入的，
+     所以注入方自己也加了同一判断（见 experience-consumer.js），这里算双保险。 */
   document.getElementById('uxGearFilter')?.remove();
   let list=MALL_ALL.slice();
   if(MALL_CAT!=='全部')list=list.filter(x=>x.category===MALL_CAT);
@@ -270,23 +337,31 @@ function renderMall(){
   if(s&&s.cmp)list=list.sort(s.cmp);
   box.innerHTML=list.length?list.map(productCard).join('')
     :`<div class="w-empty" style="grid-column:1/-1">${WI.empty}<div>${q?'没有匹配的装备':'这个分类暂时没有在售装备'}</div>${q?'<div style="margin-top:6px">换个关键词，或清空搜索。</div>':''}</div>`;
-  /* 结果计数写回页脚说明位：搜索/切分类后顾客需要知道「筛完还剩几件」。 */
-  const note=$('#mallNote');
-  if(note)note.textContent=list.length!==MALL_ALL.length
-    ? `当前筛选出 ${list.length} 件（共 ${MALL_ALL.length} 件在售）。平台统一商品、库存、发货与售后。`
-    : `共 ${MALL_ALL.length} 件在售。平台统一商品、库存、发货与售后；会员等级折扣在结算时自动生效。`;
+  /* 区块头：标题跟当前分类走（参考图里标题就是当前分类），副标说清「还剩几件」。
+     #mallNote 不再改写 —— 它固定放平台口径的说明，件数统一由副标承担，
+     同一屏里不会出现两处「共 N 件」互相打架的说法。 */
+  const ttl=$('#mallTitle'),sub=$('#mallSub');
+  if(ttl)ttl.textContent=MALL_CAT==='全部'?'全部装备':MALL_CAT;
+  if(sub)sub.textContent=q
+    ? `「${q}」匹配 ${list.length} 件 · 共 ${MALL_ALL.length} 件在售`
+    : (MALL_CAT==='全部'
+        ? `远拓户外 · 共 ${MALL_ALL.length} 件在售`
+        : `${MALL_CAT} · 共 ${list.length} 件在售`);
 }
 /* 商品卡必须带 .web-card 类：experience-consumer.js 是按 `#publicProducts .web-card` 数商品张数的，
    卡片换类名它就会判定「0 件在售」并把整个容器换成空态文案。外观由 .w-product 覆盖。 */
 function productCard(x){
-  const out=Number(x.stock||0)<=0;
-  return `<div class="web-card w-product${out?' is-out':''}" role="button" tabindex="0" onclick="openProduct(${x.id})">
-    <div class="w-product__media">${x.image_url?`<img src="${esc(x.image_url)}" alt="" loading="lazy">`:WI.bag}</div>
+  const out=Number(x.stock||0)<=0,cat=x.category||'装备';
+  /* 参考图的卡片没有按钮，整张卡就是入口。去掉按钮后必须补 aria-label ——
+     读屏用户看不到图，只剩名字和价格能说明这是一件什么商品。
+     键盘通路（Enter/空格）由 bindWebEvents 的 keydown 委托补齐（on 属性只绑 click）。 */
+  return `<div class="web-card w-product${out?' is-out':''}" role="button" tabindex="0"
+    aria-label="${esc(x.name)}，${money(x.price)}${out?'，暂时缺货':''}" onclick="openProduct(${x.id})">
+    <div class="w-product__media">${x.image_url?`<img src="${esc(x.image_url)}" alt="" loading="lazy">`:WI.bag}${out?'<span class="w-product__flag">缺货</span>':''}</div>
     <div class="w-product__inner">
       <div class="w-product__name">${esc(x.name)}</div>
       <div class="w-product__price">${money(x.price)}</div>
-      <div class="w-product__meta">${esc(x.category||'装备')} · ${out?'暂时缺货':`库存 ${x.stock}`}</div>
-      <button class="w-product__buy" type="button" onclick="openProduct(${x.id})">${out?'暂时缺货':'查看详情'}</button>
+      <div class="w-product__meta">${esc(cat)} · ${out?'暂时缺货':`库存 ${x.stock}`}</div>
     </div>
   </div>`;
 }
@@ -596,6 +671,12 @@ function bindWebEvents(){
   $('#publicActivities')?.addEventListener('keydown',e=>{
     if(e.key!=='Enter'&&e.key!==' ')return;
     const c=e.target.closest('.w-reel__card');if(!c)return;
+    e.preventDefault();c.click();
+  });
+  /* 商品卡同理：去掉「查看详情」按钮后整张卡是唯一入口，没有这条委托键盘就完全进不去。 */
+  $('#publicProducts')?.addEventListener('keydown',e=>{
+    if(e.key!=='Enter'&&e.key!==' ')return;
+    const c=e.target.closest('.w-product');if(!c)return;
     e.preventDefault();c.click();
   });
   /* 人数步进器与「移除参加人」。

@@ -289,52 +289,112 @@
 .w-field input::placeholder{color:#a3ada7}
 .w-field input::-webkit-search-cancel-button{-webkit-appearance:none}
 
-/* ── 装备商城：左分类 + 右网格（可隆） ───────────────────────────────── */
-.w-shop{display:grid;grid-template-columns:94px 1fr;margin:0;min-height:64vh}
-.w-shop__side{background:#eaede8;padding:6px 0 40px}
-.w-shop__side button{
-  display:block;width:100%;padding:16px 6px;border:0;background:none;cursor:pointer;
-  font-size:12.5px;font-weight:600;line-height:1.35;color:var(--w-ink2);
-  transition:background .2s,color .2s;
+/* ── 装备商城：左分类导轨 + 右主视觉/双列网格（对齐 PEAKTRACE 小程序商城版式） ──
+   版式来自参考图：搜索整宽 → 左导轨（中文 + 副标两行，选中项**不填充色块**，只在
+   左边缘出一条黑条）+ 右内容（主视觉横幅 → 区块头 → 双列网格）。
+   一列里始终只有「当前项」在说话，所以选中态只用字重/字色/黑条，不用背景块。 */
+.w-shop{min-height:64vh}
+.w-shop__top{padding:12px 14px 10px}
+.w-shop__body{display:grid;grid-template-columns:92px minmax(0,1fr);align-items:start}
+
+/* 左导轨：浅暖灰底 + 右侧细分隔线。sticky 让长列表滚动时分类始终在手边；
+   top 取顶栏实测高度（12px padding ×2 + 36px 按钮 + 1px 描边），与 .web-top 对齐。
+   注意 `align-self:start` 不能省 —— 默认 stretch 会把侧栏拉满整行，sticky 就失效了。 */
+.w-shop__side{
+  align-self:start;position:sticky;top:61px;
+  background:#f7f8f5;border-right:1px solid var(--w-line);
+  padding:8px 0 32px;
 }
-.w-shop__side button.on{background:var(--w-ink);color:#fff}
+.w-shop__side button{
+  position:relative;display:block;width:100%;padding:11px 8px 11px 14px;border:0;background:none;
+  text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:color .18s;
+}
+.w-shop__cat{display:block;font-size:13px;font-weight:500;line-height:1.3;color:#9aa39d;word-break:keep-all}
+.w-shop__cnt{display:block;margin-top:3px;font-size:10px;font-weight:600;letter-spacing:.06em;color:#b4bcb6;font-variant-numeric:tabular-nums}
+.w-shop__side button.on .w-shop__cat{color:var(--w-ink);font-weight:700}
+.w-shop__side button.on .w-shop__cnt{color:var(--w-ink2)}
+.w-shop__side button.on:before{
+  content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);
+  width:3px;height:22px;background:var(--w-ink);border-radius:0 2px 2px 0;
+}
+.w-shop__side button:focus-visible{outline:2px solid var(--w-brand);outline-offset:-2px}
+
 .w-shop__main{padding:0 14px 26px;min-width:0}
-.w-shop__tabs{display:flex;gap:20px;border-bottom:1px solid var(--w-line);margin:0 0 16px;overflow-x:auto}
+
+/* 主视觉：用俱乐部的**真实活动封面**（参考图顶部那张也是最上层的一张山野照片，
+   不是商品图）。没有任何封面时走品牌渐变兜底 —— 不拿占位图冒充照片。 */
+.w-shop__hero{margin:0 0 18px}
+.w-shop__hero:empty{display:none}
+.w-shop__htrack{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;border-radius:16px}
+.w-shop__htrack::-webkit-scrollbar{display:none}
+.w-shop__hslide{
+  position:relative;flex:0 0 100%;scroll-snap-align:start;aspect-ratio:16/10;
+  border-radius:16px;overflow:hidden;background:linear-gradient(152deg,#1f4d3a,#121714);
+}
+.w-shop__hslide img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.w-shop__hslide:after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(12,18,15,.05) 38%,rgba(12,18,15,.74))}
+.w-shop__hcopy{position:absolute;left:16px;right:16px;bottom:14px;z-index:2;color:#fff}
+.w-shop__heyebrow{font-size:9.5px;font-weight:700;letter-spacing:.2em;opacity:.85}
+.w-shop__hcopy h2{margin:6px 0 0;font-size:20px;font-weight:700;letter-spacing:-.01em;color:#fff}
+.w-shop__hcopy p{margin:5px 0 0;font-size:11.5px;line-height:1.5;opacity:.88}
+.w-shop__hbadge{
+  position:absolute;right:12px;top:12px;z-index:2;padding:5px 10px;border-radius:999px;
+  border:1px solid rgba(255,255,255,.55);background:rgba(0,0,0,.18);
+  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
+  color:#fff;font-size:10px;font-weight:600;letter-spacing:.04em;
+}
+.w-shop__hdots{display:flex;justify-content:center;gap:6px;margin-top:9px}
+.w-shop__hdots i{width:5px;height:5px;border-radius:50%;background:#c8cec9;transition:all .2s}
+.w-shop__hdots i.on{width:14px;border-radius:3px;background:var(--w-ink)}
+
+/* 区块头：标题跟当前分类走（参考图里标题就是当前分类），副标说清「共几件在售」 */
+.w-shop__head{margin:0}
+.w-shop__title{margin:0;font-size:17px;font-weight:700;letter-spacing:-.01em;color:var(--w-ink)}
+.w-shop__sub{margin:5px 0 0;font-size:11.5px;color:var(--w-muted);line-height:1.55}
+/* 排序：保留功能但压到最轻 —— 一行灰字，选中项变黑加粗（和导轨同一个表达法）。
+   min-height 38px 保证点击区够大（本项目约定点击目标 ≥38px）。 */
+.w-shop__tabs{display:flex;gap:16px;margin:12px 0 14px;overflow-x:auto;scrollbar-width:none}
 .w-shop__tabs::-webkit-scrollbar{display:none}
 .w-shop__tabs button{
-  position:relative;flex:0 0 auto;padding:13px 1px 12px;border:0;background:none;cursor:pointer;
-  font-size:13.5px;font-weight:600;color:var(--w-muted);
+  flex:0 0 auto;min-height:38px;padding:0;border:0;background:none;cursor:pointer;
+  font-size:12px;font-weight:600;color:#a3ada7;transition:color .18s;
 }
-.w-shop__tabs button.on{color:var(--w-ink)}
-.w-shop__tabs button.on:after{content:'';position:absolute;left:0;right:0;bottom:-1px;height:2px;background:var(--w-ink)}
-.w-shop__note{padding:11px 14px 0;font-size:11.5px;color:var(--w-muted);line-height:1.6}
+.w-shop__tabs button.on{color:var(--w-ink);font-weight:700}
+.w-shop__tabs button:focus-visible{outline:2px solid var(--w-brand);outline-offset:2px;border-radius:4px}
+.w-shop__note{padding:14px 0 0;font-size:11.5px;color:var(--w-muted);line-height:1.6}
 
 /* 商品卡：**必须保留 .web-card 类** —— experience-consumer.js 是靠 `#publicProducts .web-card`
-   数商品张数的，卡片换个类名它就会认为「0 件在售」并把容器内容整个换成空态。 */
+   数商品张数的，卡片换个类名它就会认为「0 件在售」并把容器内容整个换成空态。
+   参考图里卡片没有按钮，整张卡就是入口（键盘通路由 bindWebEvents 的 keydown 委托补齐）。 */
 .web-shell .web-card.w-product{
   background:none;border:0;border-radius:0;padding:0;margin:0;box-shadow:none;
-  display:flex;flex-direction:column;
+  display:flex;flex-direction:column;cursor:pointer;-webkit-tap-highlight-color:transparent;
 }
 .w-product__media{
-  position:relative;aspect-ratio:1/1;border-radius:13px;overflow:hidden;background:#f0f1ee;
-  display:grid;place-items:center;transition:transform .35s;
+  position:relative;aspect-ratio:1/1;border-radius:14px;overflow:hidden;
+  background:linear-gradient(160deg,#f3f4f1,#e7eae5);
+  display:grid;place-items:center;transition:transform .35s,filter .35s;
 }
-.w-product__media svg{width:46px;height:46px;stroke:#b5bfb7;fill:none;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+.w-product__media svg{width:44px;height:44px;stroke:#b5bfb7;fill:none;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
 .w-product__media img{width:100%;height:100%;object-fit:cover}
-.w-product__inner{display:flex;flex-direction:column;flex:1}
-.w-product__name{margin:10px 0 0;font-size:12.5px;font-weight:500;line-height:1.45;color:var(--w-ink)}
-.w-product__price{margin:6px 0 0;font-size:13.5px;font-weight:700;color:var(--w-accent)}
-.w-product__meta{margin:4px 0 0;font-size:11px;color:var(--w-muted)}
-.w-product__buy{
-  margin:10px 0 0;width:100%;min-height:38px;padding:10px;border-radius:9px;border:1px solid var(--w-ink);
-  background:var(--w-ink);color:#fff;font-size:12px;font-weight:600;cursor:pointer;transition:.2s;
+.web-card.w-product:active .w-product__media{transform:scale(.985)}
+.web-card.w-product.is-out .w-product__media{filter:grayscale(.55)}
+.w-product__flag{
+  position:absolute;left:9px;top:9px;padding:3px 8px;border-radius:999px;
+  background:rgba(255,255,255,.94);color:var(--w-ink);font-size:10px;font-weight:700;
 }
-.w-product__buy:active{transform:scale(.98)}
-.w-product__stock{font-size:11px;color:var(--w-muted)}
+.w-product__inner{display:flex;flex-direction:column;flex:1}
+.w-product__name{
+  margin:10px 0 0;font-size:12.5px;font-weight:600;line-height:1.45;color:var(--w-ink);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  word-break:keep-all;overflow-wrap:break-word;
+}
+.w-product__price{margin:6px 0 0;font-size:14px;font-weight:750;color:var(--w-accent);font-variant-numeric:tabular-nums}
+.w-product__meta{margin:3px 0 0;font-size:11px;color:var(--w-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* 参考图是「左分类 + 右双列」。这个网格必须显式声明 —— `.w-grid` 这个类名在本项目
    其它任何地方都没有定义，不写就是裸 div、商品卡会单列一列堆到底（实测就是这样）。 */
-.w-shop__main .w-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px 12px;align-content:start}
+.w-shop__main .w-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 12px;align-content:start}
 
 /* ── 我的：深色照片底 + 毛玻璃卡（可隆会员中心） ─────────────────────── */
 .w-me__stage{position:relative;padding:20px 16px 30px;overflow:hidden;background:var(--w-ink)}
@@ -582,8 +642,8 @@
 .w-sk-row{display:grid;gap:8px;padding:14px 0}
 @media (prefers-reduced-motion:reduce){.w-sk-card{animation:none}}
 
-/* ── 装备页搜索框 ──────────────────────────────────────────────────────── */
-.w-field--shop{margin:0 0 12px}
+/* ── 装备页搜索框：外边距归零，留白交给 .w-shop__top 统一管 ─────────────── */
+.w-field--shop{margin:0}
 
 /* ── 报名区 ────────────────────────────────────────────────────────────── */
 .web-shell .booking-card{
@@ -887,7 +947,7 @@
 .w-pd__buy:disabled{background:#c3c8c4;box-shadow:none;cursor:not-allowed}
 
 @media (max-width:380px){
-  .w-shop{grid-template-columns:80px 1fr}
+  .w-shop__body{grid-template-columns:80px minmax(0,1fr)}
   .w-reel__card{flex:0 0 82%}
   .w-hero h1{font-size:26px}
   .w-me__grid{grid-template-columns:repeat(4,1fr)}
