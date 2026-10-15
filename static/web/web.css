@@ -1183,6 +1183,97 @@
 .web-shell .w-me__uphead>span:first-child{flex:0 0 auto;white-space:nowrap}
 .web-shell .w-me__uphead>span:last-child{text-align:right;min-width:0}
 .w-me__svc .w-sec__head h2{font-size:15px;color:#16241c}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   我的页 · 简约版（2026-10-15）
+   ---------------------------------------------------------------------------
+   参考图：浅暖白底 + 沙色会员卡（右下角山形线条）+ 白底暖棕数字格
+          + 黑色实心入口块 + 细分割线的服务行。
+   与旧版（深色照片底 + 毛玻璃浮层卡）的差别**只有视觉**：
+   DOM 结构与全部 id（#meBg/#meAvatar/#meName/#meTier/#memberLevel/#meUpTip/
+   #meUpBar/#memberTierPerks/#clubPts/#gearPts/#couponCnt/#meGrid/#meService/
+   #worders/#wmember）一个没动，web.js / web-biz.js 的写入点全部照旧。
+
+   放在这里（所有 @media 之后）而不是改上面的原规则：.web-shell 前缀比
+   @media(max-width:380px) 里的裸 `.w-me__grid{repeat(4,1fr)}` 高一级，
+   窄屏不会把 2 列黑块还原成 4 列小格。
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 底：去掉深色照片底与毛玻璃，回到浅暖白 ─────────────────────────── */
+.web-shell .w-me__stage{background:#f4f3f0;padding:16px 16px 26px}
+.web-shell .w-me__bg,
+.web-shell .w-me__bgtint{display:none}
+
+/* ── 会员卡：沙色实心卡 + 右下角山形线条 ─────────────────────────────── */
+.web-shell .w-me__card{
+  border-radius:16px;padding:18px 17px 16px;color:var(--w-ink);
+  border:1px solid rgba(18,23,20,.07);box-shadow:0 1px 3px rgba(18,23,20,.05);
+  -webkit-backdrop-filter:none;backdrop-filter:none;
+  background:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 120' fill='none' stroke='%239c8360' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round' opacity='.85'%3E%3Cpath d='M0 98 52 52l30 26 40-52 44 56 34-26 44 42 56-38'/%3E%3Cpath d='M0 119 64 89l44 20 52-34 48 30 92-40' opacity='.65'/%3E%3C/svg%3E") no-repeat right -10px top 4px/58% auto,
+    linear-gradient(157deg,#e8e0d1,#cec2a7);
+}
+.web-shell .w-me__avatar{background:var(--w-ink);color:#fff;box-shadow:none;font-size:19px}
+.web-shell .w-me__name{color:var(--w-ink);font-size:16.5px}
+.web-shell .w-me__sub{color:#636f68}
+.web-shell .w-me__qr{color:rgba(18,23,20,.7)}
+.web-shell .w-me__center{
+  background:rgba(255,255,255,.72);color:var(--w-ink);
+  border:1px solid rgba(18,23,20,.1);border-radius:999px;
+}
+.web-shell .w-me__up{border-top-color:rgba(18,23,20,.1)}
+.web-shell .w-me__uphead{color:#4f5b54}
+.web-shell .w-me__bar{background:rgba(18,23,20,.1)}
+.web-shell .w-me__bar i{background:var(--w-ink)}
+.web-shell .w-me__stage .w-me__legacy{color:#5d6a63}
+.web-shell .w-me__stage .w-me__legacy strong{color:var(--w-ink)}
+
+/* ── 数字三格：白底 + 暖棕数字 ───────────────────────────────────────── */
+.web-shell .w-me__pts{gap:9px;margin-top:14px}
+.web-shell .w-me__pts>div{
+  background:#fff;color:var(--w-ink);border-radius:12px;padding:11px 8px;
+  border:1px solid rgba(18,23,20,.05);
+}
+.web-shell .w-me__pts b{color:#a8712a;font-size:20px;font-weight:700}
+.web-shell .w-me__pts span{color:#7e8a84;opacity:1}
+
+/* ── 入口宫格：黑色实心块（参考图最有辨识度的一处）──────────────────── */
+.web-shell .w-me__grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:13px}
+.web-shell .w-me__grid .w-me__cell{
+  background:var(--w-ink);color:#fff;border-radius:4px;padding:13px 6px;
+  font-size:11.5px;letter-spacing:.02em;
+}
+.web-shell .w-me__grid .w-me__cell svg{stroke:#fff}
+.web-shell .w-me__grid .w-me__cell:active{background:#2b342e}
+/* 5 个入口排 2 列会落单一个，让最后一个通栏收尾，不留半格空洞 */
+.web-shell #meGrid .w-me__cell:last-child{grid-column:1/-1}
+
+/* ── 「我的服务」：单列 + 细分隔线 ───────────────────────────────────────
+   #meService 也带 .w-me__grid 类，必须显式写回 1 列（(0,3,0) 稳压上面的 (0,2,0)）。 */
+.web-shell .w-me__svc{margin-top:14px;padding-top:13px;border-top-color:rgba(18,23,20,.1)}
+.web-shell .w-me__svc .w-me__grid{grid-template-columns:1fr;gap:0;margin-top:2px}
+.web-shell .w-me__svctitle{color:#7e8a84;font-size:11.5px;letter-spacing:.08em}
+.web-shell .w-me__row{
+  color:var(--w-ink);border-radius:4px;padding:10px 6px;gap:11px;
+}
+.web-shell .w-me__row+.w-me__row{box-shadow:inset 0 1px 0 rgba(18,23,20,.07)}
+.web-shell .w-me__rowic{background:rgba(18,23,20,.06);color:var(--w-ink)}
+.web-shell .w-me__rowmain b{color:var(--w-ink)}
+.web-shell .w-me__rowmain em{color:#7e8a84}
+.web-shell .w-me__rowgo{color:#b6bdb7}
+.web-shell .w-me__more{color:#8a6a3c}
+
+/* ── 下方订单/福利区：白卡去阴影、改细边框 ─────────────────────────── */
+.web-shell .w-me__body{padding:14px 16px 0}
+.web-shell .w-me__body .web-card{
+  box-shadow:none;border:1px solid rgba(18,23,20,.07);border-radius:14px;padding:15px;
+}
+/* 空态在「我的」页是连排三张（活动订单 / 待支付 / 装备订单），
+   沿用全局 44px 上下留白会拉出近千像素空白；只在本区域压到 24px。
+   .w-empty 全局定义在 web.css:443（裸选择器），这里靠 .web-shell 前缀提权。 */
+.web-shell .w-me__body .w-empty{padding:24px 20px}
+.web-shell .w-me__body .w-empty svg{width:30px;height:30px;margin-bottom:9px}
+
 /* 2026-10-08 画报式组件：C 端 560px 容器下的覆盖（窄屏以堆叠为主，整版图收一点高度） */
 .web-shell .ed-imagetext{grid-template-columns:1fr;gap:16px;padding:24px 18px}
 .web-shell .ed-imagetext.img-right .ed-imagetext__copy{order:0}

@@ -506,8 +506,11 @@ function renderMemberCard(w,d){
   if(tierEl){
     const nm=String(w.memberLevel||'普通会员');tierEl.textContent=nm;
     const gold=/金/.test(nm),silver=/银/.test(nm);
-    tierEl.style.background=gold?'linear-gradient(96deg,#e8c46a,#d8a63e)':(silver?'linear-gradient(96deg,#e2e7e9,#b6c0c5)':'rgba(255,255,255,.22)');
-    tierEl.style.color=gold?'#4a3406':(silver?'#2c3639':'#fff');
+    /* 徽章配色必须跟着会员卡底色走：简约版（2026-10-15）会员卡是浅沙色，
+       「普通会员」若还沿用旧的 `rgba(255,255,255,.22)` + 白字，在浅卡上等于隐形。
+       金 / 银两档本来就是浅底深字，不受影响。 */
+    tierEl.style.background=gold?'linear-gradient(96deg,#e8c46a,#d8a63e)':(silver?'linear-gradient(96deg,#e2e7e9,#b6c0c5)':'rgba(18,23,20,.11)');
+    tierEl.style.color=gold?'#4a3406':(silver?'#2c3639':'#3c4740');
   }
   const tip=$('#meUpTip'),bar=$('#meUpBar');
   if(tip&&bar){
@@ -1116,7 +1119,9 @@ async function loadMemberCenter(){
   if(rbox&&!rbox.children.length)rbox.innerHTML=wSkRows(1);
   let d=await api(`/api/public/clubs/${CLUB}/member-center?user_id=${USER}`),w=d.wallet||{};
   if($('#clubPts'))$('#clubPts').textContent=w.clubPoints??0;if($('#gearPts'))$('#gearPts').textContent=w.gearPoints??0;
-  if($('#memberLevel'))$('#memberLevel').innerHTML=`<strong>${esc(w.memberLevel||'普通会员')}</strong> · 已参加 ${w.activityCount||0} 场活动 · 累计活动消费 ${money(w.lifetimeActivitySpend||0)}`;
+  /* 等级名不再重复一遍：它已经以徽章形式挂在名字旁边（#meTier）。
+     旧文案「普通会员 · 已参加…」在 420px 宽下会被挤成两行、且「¥0」单独落一行。 */
+  if($('#memberLevel'))$('#memberLevel').innerHTML=`已参加 ${w.activityCount||0} 场活动 · 累计活动消费 ${money(w.lifetimeActivitySpend||0)}`;
   renderMemberCard(w,d);
   /* 会员等级权益：装备折扣是「加入会员更便宜」的唯一凭证，只在后台配置、C 端看不到
      就等于没做。这里把当前折扣与「再消费能降到几折」讲清楚。 */
