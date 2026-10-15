@@ -235,6 +235,23 @@ async function regenerateDetail(id,direction,refreshFacts){
   _regenDetailBusy=true;
   try{
     const r=await api(`/api/club/${CLUB}/activities/${id}/detail-regenerate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({direction:direction||'',refreshFacts:!!refreshFacts})});
+    /* live 模式改为异步任务：提交秒回 {jobId,versionNo}，真模型换版要跑几分钟，同步等待
+       会被网关空闲超时掐断（2026-10-15 线上实测：95s 处 504 且任务随断连被取消）。
+       mock 模式仍直接返回完整结果。两条路在此汇合。 */
+    if(r.jobId){
+      const started=Date.now();let done=false,misses=0;
+      while(!done){
+        await new Promise(res=>setTimeout(res,3000));
+        let j=null;
+        try{ j=await api(`/api/club/${CLUB}/activities/ai-generate/${r.jobId}`); misses=0; }
+        catch(pe){ if(++misses>6)throw new Error('进度查询连续失败，请稍后刷新页面在活动详情查看结果（任务仍在后台运行）。'); continue; }
+        const sec=Math.round((Date.now()-started)/1000);
+        toast(`AI 正在换版（已等 ${sec} 秒，约 1~5 分钟）…`);
+        if(j.status==='done'){done=true;}
+        else if(j.status==='failed'){throw new Error(j.error||'后台换版失败，已保留上一版（未扣 Credits）。');}
+        else if(Date.now()-started>10*60*1000){throw new Error('等待超时（10 分钟）。任务可能仍在后台运行，稍后刷新活动详情即可看到结果。');}
+      }
+    }
     /* 标记「刚换版」：openActivity 据此在页头挂一条提示 + 「同步到 C 端」按钮。
        换版本身就写了库，所以这不是「数据没同步」，而是「把发布这件事显式做一次」。 */
     window.__clubSyncPending={id:Number(id),versionNo:r.versionNo};

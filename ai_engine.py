@@ -1989,6 +1989,7 @@ hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言�
         catalog=media_catalog(source,master)
         if catalog or not isinstance(master.get('media'),list):master['media']=catalog
         data['activity_master']=master
+        _lift_detail_payload(data)
         if isinstance(data.get('detail'),dict):
             # 提示词已要求只用照片，这里再兜一层：模型若引用了品牌 logo / 空白图 / 地图截图，直接剔除
             data['detail']['blocks']=_sanitize_blocks(data['detail'].get('blocks') or [],allowed_refs=photos)
@@ -2099,7 +2100,8 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
     photos=pick['allowed'] or set(_photo_refs(source))
     if gw:
         payload=gw.data or {}
-        detail=payload.get('detail') if isinstance(payload.get('detail'),dict) else payload
+        # 模型偶发把 blocks/promoHtml 放顶层（2026-10-15 实测），归位进 detail 再清洗
+        detail=_lift_detail_payload(payload) if isinstance(payload,dict) else {}
         if isinstance(detail,dict):
             detail['blocks']=_sanitize_blocks(detail.get('blocks') or [],allowed_refs=photos)
             detail['blocks']=_align_block_media(detail['blocks'],catalog,photos)
@@ -2118,6 +2120,32 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
     detail['blocks']=_drop_misplaced_info(detail['blocks'],master)
     if direction.strip(): detail['directionNote']=direction.strip()
     return {'activity_master':master,'detail':detail},record_mock_usage(club_id,'detail',prompt,data)
+
+
+def _lift_detail_payload(payload:dict[str,Any])->dict[str,Any]:
+    """把模型返回的 detail 载荷归一到 {'detail':{...含 blocks/promoHtml...}}。
+
+    实测 qwen3.8-max 偶发自作主张把 blocks / promoHtml 放到**顶层**、detail 里只剩三个元字段
+    （2026-10-15 换一版实测：顶层 keys=['detail','blocks','promoHtml']），按旧读法全部被无视、
+    误判成「没有可用内容」。这里在清洗前归位：顶层有就用顶层补进 detail，detail 自己有则不动。
+    """
+    det=payload.get('detail')
+    if not isinstance(det,dict):
+        det={}; payload['detail']=det
+    if not (isinstance(det.get('blocks'),list) and det['blocks']) \
+       and isinstance(payload.get('blocks'),list) and payload['blocks']:
+        det['blocks']=payload['blocks']
+    if not (isinstance(det.get('promoHtml'),str) and det['promoHtml'].strip()) \
+       and isinstance(payload.get('promoHtml'),str) and payload['promoHtml'].strip():
+        det['promoHtml']=payload['promoHtml']
+    # 元字段同样兜一层：模型偶发把 activityUnderstanding 等也放顶层
+    for k in ('activityUnderstanding','coreSellingIdea'):
+        if not str(det.get(k) or '').strip() and isinstance(payload.get(k),str) and payload[k].strip():
+            det[k]=payload[k]
+    ei=payload.get('editorialIntent')
+    if not isinstance(det.get('editorialIntent'),dict) and isinstance(ei,dict):
+        det['editorialIntent']=ei
+    return det
 
 
 def normalize_channel_blocks(data:dict[str,Any])->dict[str,Any]:

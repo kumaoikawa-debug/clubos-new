@@ -763,29 +763,112 @@ def activity_detail_versions(club_id:int,activity_id:int):
             'nextVersionNo':(vs[0]['version_no']+1 if vs else 1)}
 
 
+def _persist_regen_detail(*,club_id:int,activity_id:int,version_id:int,source:dict,old_master:dict,old_row:dict,
+                          detail:dict,result:dict,refresh:bool,usage)->tuple[int,dict]:
+    """「换一版」生成成功后的统一落库（同步 mock 路径与 live 后台任务共用）：
+    校验 blocks → 扣费 → 按 refresh 分支写回 master → 写 detail_json → finalize 版本。
+    返回 (实扣 Credits, 生效后的 master)。失败时撤版本占位再抛（没扣费就没落库，C 端保持上一版）。"""
+    blocks=[b for b in detail.get('blocks') or [] if isinstance(b,dict) and b.get('type')]
+    if not blocks:
+        with conn() as c: _release_detail_version(c,version_id)
+        # 没扣费、没落库：宁可保留上一版，也不要让 C 端详情页变空。
+        raise RuntimeError('AI 这一版没有返回可用的内容结构，已保留上一版；换个方向再试一次。')
+    detail['blocks']=blocks
+    new_master=result.get('activity_master') if refresh else old_master
+    new_master=new_master if isinstance(new_master,dict) and new_master else old_master
+    try:
+        cost=charge_credits(club_id,'detail',usage.usage_id)
+    except Exception:
+        with conn() as c: _release_detail_version(c,version_id)
+        raise
+    with conn() as c:
+        if refresh:
+            c.execute('UPDATE activities SET activity_master_json=?,title=?,event_date=?,location=?,price=?,capacity=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(
+                jdump(new_master),new_master.get('title') or old_row['title'],new_master.get('date') or old_row['event_date'],
+                new_master.get('location') or old_row['location'],float(new_master.get('price') or 0),int(new_master.get('capacity') or 0),activity_id))
+        else:
+            # ★ 「换一版」也会给照片补上视觉打标（画面描述 + 主题标签）。不写回去，下一版又要
+            #   重新调一遍视觉模型、重新花一次钱（每张图一次调用，几十张就是几十次）。
+            #   只在「确实新打上了标」时才写，且事实字段一个都不碰。
+            _oldref={str(x.get('ref')):x for x in old_master.get('media') or [] if isinstance(x,dict)}
+            _gained=any(isinstance(x,dict) and x.get('desc')
+                        and not (_oldref.get(str(x.get('ref'))) or {}).get('desc')
+                        for x in new_master.get('media') or [])
+            if _gained:
+                c.execute('UPDATE activities SET activity_master_json=?,source_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',
+                          (jdump(new_master),jdump(_source_for_storage(source)),activity_id))
+        c.execute('UPDATE activities SET detail_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(jdump(detail),activity_id))
+        _finalize_detail_version(c,version_id=version_id,activity_id=activity_id,detail=detail,master=new_master,
+                                 credits=cost,gateway=usage.provider,model=usage.model)
+    return cost,new_master
+
+
+async def _run_detail_regen_job(*,club_id:int,job_id:int,activity_id:int,version_id:int,version_no:int,
+                                source:dict,master:dict,previous:dict,old_row:dict,direction:str,refresh:bool):
+    """后台执行真模型「换一版」（live 模式）。版本占位由请求方提前保留；任何异常都落 job.error，
+    绝不能静默丢任务。与 _run_generate_job 同一纪律。"""
+    try:
+        with conn() as c:
+            c.execute('UPDATE ai_generate_jobs SET status="running",stage="generating",started_at=CURRENT_TIMESTAMP WHERE id=?',(job_id,))
+        try:
+            result,usage=await regenerate_detail(club_id,source,master,direction=direction,
+                                                 previous_detail=previous,version_no=version_no,refresh_facts=refresh)
+        except Exception:
+            with conn() as c: _release_detail_version(c,version_id)
+            raise
+        with conn() as c:
+            c.execute('UPDATE ai_generate_jobs SET stage="saving" WHERE id=?',(job_id,))
+        detail=result.get('detail') or {}
+        cost,_new_master=_persist_regen_detail(club_id=club_id,activity_id=activity_id,version_id=version_id,source=source,
+                                   old_master=master,old_row=old_row,detail=detail,result=result,
+                                   refresh=refresh,usage=usage)
+        with conn() as c:
+            c.execute('UPDATE ai_generate_jobs SET status="done",activity_id=?,summary_json=?,finished_at=CURRENT_TIMESTAMP WHERE id=?',(
+                activity_id,jdump({'kind':'detail-regen','activityId':activity_id,'versionNo':version_no,'creditsCharged':cost}),job_id))
+    except Exception as e:
+        with conn() as c:
+            c.execute('UPDATE ai_generate_jobs SET status="failed",error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?',(str(e)[:800] or e.__class__.__name__,job_id))
+
+
 @app.post('/api/club/{club_id}/activities/{activity_id}/detail-regenerate')
-async def activity_detail_regenerate(club_id:int,activity_id:int,payload:dict=Body(default={})):
+async def activity_detail_regenerate(club_id:int,activity_id:int,background_tasks:BackgroundTasks,payload:dict=Body(default={})):
     """重新生成活动详情（老板对第一版不满意时的「换一版」）。
 
     与 AI 宣发同一套计费：先校验额度，生成成功才扣 Credits（失败一律不扣）。
     默认只重做叙事与排版——事实冻结，因此团期、价格政策、报名数据都不会被 AI 改写；
     refreshFacts=true 时才允许用同一份原始资料复核标题/日期/地点/价格/人数。
+
+    live 模式下真模型要跑几分钟，同步响应会被网关空闲超时掐断（与 ai-generate 同一教训；
+    2026-10-15 线上实测：95s 处 504、uvicorn 随断连取消任务、版本占位永远 pending）。
+    所以 live 一律改后台任务：先占位版本（保留 409 防重闸门）、挂 BackgroundTasks、
+    秒回 {jobId,versionNo} 由前端轮询 ai-generate/{jobId}；mock 秒回，保持同步不破坏回归脚本。
     """
     club_or_404(club_id); ensure_credits(club_id,'detail')
     direction=str(payload.get('direction') or '')[:800]
     refresh=bool(payload.get('refreshFacts'))
+    live=effective_gateway_mode()[0]=='live'
     with conn() as c:
         a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
         if not a: raise HTTPException(404,'活动不存在')
+        source,origin=_activity_source(a)
+        if not source:
+            raise HTTPException(409,'这场活动没有留下可复用的原始资料，无法重新生成；请用「AI 发活动」重新上传资料。')
+        master=_repair_master_media(jload(a['activity_master_json'],{}) or {},source)
+        previous=jload(a['detail_json'],{}) or {}
         # 先占位：并发的第二条请求会在这里被挡下，而不是各调一次 AI、各扣一次 Credits。
         version_id,version_no=_reserve_detail_version(c,club_id=club_id,activity_id=activity_id,
                                                       origin='ai-regenerate',direction=direction,facts_refreshed=refresh)
-    source,origin=_activity_source(a)
-    if not source:
-        with conn() as c: _release_detail_version(c,version_id)
-        raise HTTPException(409,'这场活动没有留下可复用的原始资料，无法重新生成；请用「AI 发活动」重新上传资料。')
-    master=_repair_master_media(jload(a['activity_master_json'],{}) or {},source)
-    previous=jload(a['detail_json'],{}) or {}
+    old_row={'title':a['title'],'event_date':a['event_date'],'location':a['location'],
+             'price':a['price'],'capacity':a['capacity']}
+    if live:
+        with conn() as c:
+            c.execute('INSERT INTO ai_generate_jobs(club_id,status,stage,summary_json) VALUES(?,?,?,?)',(
+                club_id,'queued','queued',jdump({'kind':'detail-regen','activityId':activity_id,'versionNo':version_no})))
+            job_id=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        background_tasks.add_task(_run_detail_regen_job,club_id=club_id,job_id=job_id,activity_id=activity_id,
+                                  version_id=version_id,version_no=version_no,source=source,master=master,
+                                  previous=previous,old_row=old_row,direction=direction,refresh=refresh)
+        return {'activityId':activity_id,'versionId':version_id,'versionNo':version_no,'jobId':job_id,'async':True}
     try:
         result,usage=await regenerate_detail(club_id,source,master,direction=direction,
                                              previous_detail=previous,version_no=version_no,refresh_facts=refresh)
@@ -796,39 +879,12 @@ async def activity_detail_regenerate(club_id:int,activity_id:int,payload:dict=Bo
         with conn() as c: _release_detail_version(c,version_id)
         raise
     detail=result.get('detail') or {}
-    blocks=[b for b in detail.get('blocks') or [] if isinstance(b,dict) and b.get('type')]
-    if not blocks:
-        # 没扣费、没落库：宁可保留上一版，也不要让 C 端详情页变空。
-        with conn() as c: _release_detail_version(c,version_id)
-        raise HTTPException(502,'AI 这一版没有返回可用的内容结构，已保留上一版；换个方向再试一次。')
-    detail['blocks']=blocks
-    new_master=result.get('activity_master') if refresh else master
-    new_master=new_master if isinstance(new_master,dict) and new_master else master
     try:
-        cost=charge_credits(club_id,'detail',usage.usage_id)
-    except Exception:
-        with conn() as c: _release_detail_version(c,version_id)
-        raise
-    with conn() as c:
-        if refresh:
-            c.execute('UPDATE activities SET activity_master_json=?,title=?,event_date=?,location=?,price=?,capacity=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(
-                jdump(new_master),new_master.get('title') or a['title'],new_master.get('date') or a['event_date'],
-                new_master.get('location') or a['location'],float(new_master.get('price') or 0),int(new_master.get('capacity') or 0),activity_id))
-        else:
-            # ★ 「换一版」也会给照片补上视觉打标（画面描述 + 主题标签）。不写回去，下一版又要
-            #   重新调一遍视觉模型、重新花一次钱（每张图一次调用，几十张就是几十次）。
-            #   只在「确实新打上了标」时才写，且事实字段一个都不碰。
-            _old=jload(a['activity_master_json'],{}) or {}
-            _oldref={str(x.get('ref')):x for x in _old.get('media') or [] if isinstance(x,dict)}
-            _gained=any(isinstance(x,dict) and x.get('desc')
-                        and not (_oldref.get(str(x.get('ref'))) or {}).get('desc')
-                        for x in new_master.get('media') or [])
-            if _gained:
-                c.execute('UPDATE activities SET activity_master_json=?,source_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',
-                          (jdump(new_master),jdump(_source_for_storage(source)),activity_id))
-        c.execute('UPDATE activities SET detail_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(jdump(detail),activity_id))
-        _finalize_detail_version(c,version_id=version_id,activity_id=activity_id,detail=detail,master=new_master,
-                                 credits=cost,gateway=usage.provider,model=usage.model)
+        cost,new_master=_persist_regen_detail(club_id=club_id,activity_id=activity_id,version_id=version_id,source=source,
+                                   old_master=master,old_row=old_row,detail=detail,result=result,
+                                   refresh=refresh,usage=usage)
+    except RuntimeError as e:
+        raise HTTPException(502,str(e))
     return {'activityId':activity_id,'versionId':version_id,'versionNo':version_no,'activityMaster':new_master,'detail':detail,
             'source':origin,'factsRefreshed':refresh,
             'ai':{'mode':effective_gateway_mode()[0],'provider':usage.provider,'model':usage.model},
