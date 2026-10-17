@@ -2085,6 +2085,50 @@ def public_club_biz_media(club_id:int,asset_path:str):
     response.headers['Cache-Control']='public, max-age=300'
     return response
 
+@app.post('/api/club/{club_id}/biz-section/image')
+async def upload_club_biz_image(club_id:int,file:UploadFile=File(...)):
+    """上传业务介绍配图（C 端「户外能力」图文卡的图）。
+
+    - 落 `uploads/{club}/biz/{uuid}{ext}`，**原样存盘不重编码**：这一屏的图就是拿来当
+      正文看的，用户明确要传长图（海报/价目表），重压缩会改尺寸、掉画质。
+    - 返回两个地址：`url` 是落库形状（`/static/uploads/...`，club_biz._image 只认它），
+      `preview` 是俱乐部域代理（生产环境 /static/uploads/* 被 security_v025 直接 404，
+      编辑弹窗里拿裸链预览等于一张破图 —— 与领队头像代理同一个理由）。
+    """
+    club_or_404(club_id)
+    real=Path(file.filename or '').suffix.lower()
+    if real not in _PUBLIC_IMAGE_EXT: raise HTTPException(400,'仅支持图片文件：png/jpg/jpeg/webp/gif')
+    data=await file.read()
+    if len(data) > 10*1024*1024: raise HTTPException(413,'图片过大（上限 10MB）')
+    # 内容校验：PIL 打不开的一律当坏文件拒掉，别把垃圾写进 uploads 再让 C 端破图。
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.verify()
+    except Exception:
+        raise HTTPException(400,'图片文件损坏或格式不受支持')
+    dest=UPLOAD/str(club_id)/'biz'
+    dest.mkdir(parents=True, exist_ok=True)
+    name=uuid.uuid4().hex+real
+    (dest/name).write_bytes(data)
+    url=f'/static/uploads/{club_id}/biz/{name}'
+    preview=f'/api/club/{club_id}/biz-media/uploads/{club_id}/biz/{name}'
+    return {'url':url,'preview':preview,'bytes':len(data)}
+
+@app.get('/api/club/{club_id}/biz-media/{asset_path:path}')
+def club_biz_media(club_id:int,asset_path:str):
+    """俱乐部域业务配图代理：编辑弹窗里即时预览刚上传的图（带登录态）。
+
+    作用域只有 `uploads/{club}/biz/` 一个目录（里面只会有本接口上传的业务配图），
+    加上 _safe_media_path 的 `..` 拦截，双重收口 —— 不是 uploads 通配代理。
+    """
+    club_or_404(club_id)
+    rel=unquote(asset_path)
+    if not rel.startswith(f'uploads/{club_id}/biz/'):
+        raise HTTPException(404,'not found')
+    file_path=_safe_media_path('/static/'+rel)
+    if not file_path or not file_path.is_file():raise HTTPException(404,'not found')
+    return FileResponse(file_path)
+
 @app.get('/api/public/clubs/{club_id}/activities')
 def public_activities(club_id:int):
     if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')

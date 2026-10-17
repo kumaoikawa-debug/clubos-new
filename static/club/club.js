@@ -1899,11 +1899,13 @@ function renderBiz(){
   list.innerHTML=(c.items||[]).map((it,i)=>'<div class="list-row">'
     +'<div class="list-row__main"><div class="list-row__title">'+esc(it.title||'')+'</div>'
     +'<div class="list-row__sub">'+esc(it.desc||'（无说明）')+(it.image?' · 有图':'')+'</div></div>'
-    +'<div class="list-row__end"><button class="btn ghost" type="button" onclick="editBizItem('+i+')">编辑</button> '
+    +'<div class="list-row__end">'
+    +(it.image?'<img src="'+esc(bizPreviewUrl(it.image))+'" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:8px;flex:0 0 auto;background:#eef0ea" onerror="this.remove()">':'')
+    +'<button class="btn ghost" type="button" onclick="editBizItem('+i+')">编辑</button> '
     +'<button class="btn ghost" type="button" onclick="deleteBizItem('+i+')">删除</button></div></div>').join('')
     ||'<div class="empty">还没有条目。加一条「企业团建」试试。</div>';
 }
-function bizToggle(on){if(!bizCfg)return;bizCfg.enabled=!!on;renderBiz();persistBiz()}
+function bizToggle(on){if(!bizCfg)return;bizCfg.enabled=!!on;renderBiz();persistBiz().catch(()=>{})}
 /* 只把这一屏的四个字段发上去：后端 normalize 对缺失键回退当前值，
    所以这里逐字段提交不会顺手覆盖掉别的东西。 */
 async function persistBiz(){
@@ -1917,28 +1919,100 @@ async function persistBiz(){
     if(!Array.isArray(bizCfg.items))bizCfg.items=[];
     renderBiz();
     toast(bizCfg.enabled?'已保存 · C 端可见':'已保存 · C 端不显示');
-  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'});throw e}
 }
-async function saveBizSection(){await persistBiz()}
+async function saveBizSection(){try{await persistBiz()}catch(e){}}
+/* 配图预览地址：落库的是 /static/uploads/...（club_biz._image 只认这个形状），
+   而后台预览必须走俱乐部域代理 —— 生产环境 /static/uploads/* 被 security_v025
+   直接 404，编辑器和列表里拿裸链等于一张破图（与领队头像代理同一个理由）。 */
+function bizPreviewUrl(u){
+  const s=String(u||'');
+  const m=/^\/static\/uploads\/(\d+)\/biz\//.exec(s);
+  if(!m)return s;
+  return `/api/club/${m[1]}/biz-media${s.slice('/static'.length)}`;
+}
+/* 业务条目编辑器。uxForm 只有 textarea/select/input 三种字段、没有文件上传，
+   所以配图这一栏用 uxDialog 自定义 body：上传按钮 + 即时预览 + 链接输入兜底。
+   上传是独立动作（不随提交发）；提交时「链接输入有值就用链接，否则用上传结果」。
+   长图不重编码、不设尺寸上限（10MB 封顶），C 端按原图比例完整展示。 */
+let BIZ_DLG=null;
+function bizItemDialog(mode,i){
+  const it=(mode==='edit'&&bizCfg)?((bizCfg.items||[])[Number(i)]||{}):{};
+  const state={image:String(it.image||''),uploading:false};
+  const ov=uxDialog({
+    title:mode==='edit'?'编辑业务':'添加业务',
+    desc:'名称与说明展示在 C 端「户外能力」页；配图支持长图，会按原图比例完整展示、不裁不压。',
+    body:'<div class="ux-field"><label for="bizDlgTitle">业务名称 <em>*</em></label>'
+      +'<input id="bizDlgTitle" type="text" maxlength="40" value="'+esc(it.title||'')+'" placeholder="企业团建"></div>'
+      +'<div class="ux-field"><label for="bizDlgDesc">一句话说明</label>'
+      +'<textarea id="bizDlgDesc" rows="2" maxlength="200" placeholder="10–50 人的团队定制，含场地、教练与装备">'+esc(it.desc||'')+'</textarea></div>'
+      +'<div class="ux-field"><label>配图（可空）</label>'
+      +'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+      +'<button class="btn ghost" type="button" id="bizDlgPick">上传图片</button>'
+      +'<input type="file" id="bizDlgFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden>'
+      +'<span class="sub" id="bizDlgState">'+(it.image?'已有一张配图，可更换':'还没有配图 · 支持 png / jpg / webp / gif，长图原样展示')+'</span></div>'
+      +'<div id="bizDlgPrev" style="margin-top:8px">'
+      +(it.image?'<img src="'+esc(bizPreviewUrl(it.image))+'" alt="" style="max-width:100%;max-height:160px;border-radius:8px;display:block;background:#eef0ea" onerror="this.remove()">':'')
+      +'</div>'
+      +'<input id="bizDlgUrl" type="text" style="margin-top:8px;width:100%" value="'+(/^https?:/.test(String(it.image||''))?esc(it.image):'')+'" placeholder="或粘贴图片链接（https://…）">'
+      +'</div>',
+    foot:'<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>'+(mode==='edit'?'保存':'添加')+'</button>',
+    wide:true,
+    onClose:()=>{BIZ_DLG=null}
+  });
+  BIZ_DLG={ov,state,mode,i};
+  const q=s=>ov.querySelector(s);
+  const paint=url=>{const box=q('#bizDlgPrev');if(box)box.innerHTML=url?'<img src="'+esc(url)+'" alt="" style="max-width:100%;max-height:160px;border-radius:8px;display:block;background:#eef0ea" onerror="this.remove()">':''};
+  q('#bizDlgPick').onclick=()=>q('#bizDlgFile').click();
+  q('#bizDlgFile').onchange=async e=>{
+    const f=e.target.files&&e.target.files[0];e.target.value='';
+    if(!f)return;
+    if(!/^image\//.test(f.type)){showAlert({title:'只能选图片',message:'请选择 png / jpg / webp / gif 格式的图片。'});return}
+    if(f.size>10*1024*1024){showAlert({title:'图片太大',message:'单张上限 10MB。长图可以先压缩一下再传。'});return}
+    const st=q('#bizDlgState');
+    // 先用本地 blob 顶着，上传完成再换成代理地址；失败停回上传前那张
+    const local=URL.createObjectURL(f);
+    paint(local);
+    if(st)st.textContent='上传中…';
+    state.uploading=true;
+    try{
+      const fd=new FormData();fd.append('file',f);
+      const r=await api(`/api/club/${CLUB}/biz-section/image`,{method:'POST',body:fd})||{};
+      URL.revokeObjectURL(local);
+      state.image=String(r.url||'');
+      q('#bizDlgUrl').value='';   // 上传成功就清掉链接输入，别让旧链接把上传结果盖掉
+      paint(bizPreviewUrl(state.image));
+      if(st)st.textContent='上传成功';
+    }catch(err){
+      URL.revokeObjectURL(local);
+      paint(bizPreviewUrl(state.image));
+      if(st)st.textContent='上传失败，可重试';
+      showAlert({title:'上传失败',message:err.message||'请重试'});
+    }finally{state.uploading=false}
+  };
+  q('[data-ok]').onclick=async()=>{
+    if(state.uploading){toast('图片还在上传，等它传完再保存');return}
+    const title=(q('#bizDlgTitle').value||'').trim();
+    if(!title){toast('业务名称不能为空');q('#bizDlgTitle').focus();return}
+    const desc=(q('#bizDlgDesc').value||'').trim();
+    const url=(q('#bizDlgUrl').value||'').trim();
+    const item={title:title,desc:desc,image:url||state.image};
+    bizCfg.items=bizCfg.items||[];
+    if(mode==='edit')bizCfg.items[Number(i)]=item;else bizCfg.items.push(item);
+    const btn=q('[data-ok]');btn.disabled=true;btn.textContent='保存中…';
+    try{await persistBiz()}catch(e){btn.disabled=false;btn.textContent=mode==='edit'?'保存':'添加';return}
+    ov.uxClose();
+  };
+  q('[data-cancel]').onclick=()=>ov.uxClose();
+}
 async function addBizItem(){
-  if((bizCfg?.items||[]).length>=8)return showAlert({title:'最多 8 条',message:'条目太多会让 C 端这一屏变成广告墙，建议合并同类业务。'});
-  const f=await uxForm({title:'添加业务',subtitle:'比如企业团建、亲子研学、装备租赁',fields:[
-    {name:'title',label:'业务名称',required:true,placeholder:'企业团建'},
-    {name:'desc',label:'一句话说明',type:'textarea',placeholder:'10–50 人的团队定制，含场地、教练与装备'},
-    {name:'image',label:'配图地址（可空）',placeholder:'/static/uploads/xxx.jpg 或 https://…'}],submitText:'添加'});
-  if(!f)return;
-  bizCfg.items=bizCfg.items||[];bizCfg.items.push({title:f.title||'',desc:f.desc||'',image:f.image||''});
-  await persistBiz();
+  if(!bizCfg)return;
+  if((bizCfg.items||[]).length>=8)return showAlert({title:'最多 8 条',message:'条目太多会让 C 端这一屏变成广告墙，建议合并同类业务。'});
+  bizItemDialog('add');
 }
 async function editBizItem(i){
-  const it=(bizCfg?.items||[])[Number(i)];if(!it)return;
-  const f=await uxForm({title:'编辑业务',fields:[
-    {name:'title',label:'业务名称',required:true,value:it.title||''},
-    {name:'desc',label:'一句话说明',type:'textarea',value:it.desc||''},
-    {name:'image',label:'配图地址（可空）',value:it.image||''}],submitText:'保存'});
-  if(!f)return;
-  bizCfg.items[Number(i)]={title:f.title||'',desc:f.desc||'',image:f.image||''};
-  await persistBiz();
+  if(!bizCfg)return;
+  bizItemDialog('edit',i);
 }
 async function deleteBizItem(i){
   const it=(bizCfg?.items||[])[Number(i)];if(!it)return;

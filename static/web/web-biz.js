@@ -154,7 +154,10 @@ window.loadActivities=async function(){
    整个函数提前 return，业务区永远不渲染、开关点了也没反应。
    老板没配时连导航入口一起收起来：点进去看一块空白，比没有入口还糟。 */
 function bizCard(x){
-  return `<div class="w-biz__item">
+  /* 有配图 = 上图下文的图文卡（图片全宽、按原图比例自然高度 —— 老板传长图
+     海报/价目表时要能完整看完，object-fit:cover 会拦腰裁断，正是要避免的）；
+     没配图 = 紧凑文字行。两种形态共用一张卡，混排时不跳版。 */
+  return `<div class="w-biz__item${x.image?' has-img':''}">
     ${x.image?`<img src="${esc(x.image)}" alt="" loading="lazy" onerror="this.remove()">`:''}
     <div class="w-biz__copy"><b>${esc(x.title||'')}</b>${x.desc?`<span>${esc(x.desc)}</span>`:''}</div>
   </div>`;

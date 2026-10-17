@@ -1268,6 +1268,12 @@
 .w-biz__item img{width:52px;height:52px;border-radius:10px;object-fit:cover;flex:0 0 auto}
 .w-biz__copy b{display:block;font-size:13.5px;color:#16241c}
 .w-biz__copy span{display:block;margin-top:3px;font-size:12px;color:#6b7a70;line-height:1.5}
+/* 有配图的条目 = 上图下文的图文卡。图片全宽 + height:auto：长图（海报/价目表）
+   按原图比例完整展示，不裁不压；无配图的条目保持左侧 52px 行的紧凑形态。
+   特异性 (0,2,1) 压过上面的 .w-biz__item img (0,1,1)，不用 !important。 */
+.w-biz__item.has-img{flex-direction:column;gap:0;padding:0;overflow:hidden}
+.w-biz__item.has-img img{width:100%;height:auto;flex:none;border-radius:0;background:#eef0ea}
+.w-biz__item.has-img .w-biz__copy{padding:12px}
 /* 我的页 · 会员中心化：积分三格 + 宫格入口（活动积分/装备积分/优惠券 + 三类订单 + 积分商城） */
 .w-me__pts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px}
 .w-me__pts>div{background:rgba(255,255,255,.1);border-radius:12px;padding:10px 8px;text-align:center;color:#fff}

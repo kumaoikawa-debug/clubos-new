@@ -14,6 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ['MOCK_AI'] = '1'
 os.environ['COMMERCE_PROVIDER'] = 'local'
+# /api/club/* 的写接口在 demo 模式也要求登录态（TEST_OPEN 除外）。本测重点是
+# 业务介绍区的数据形状与代理白名单，鉴权链由 smoke_v25.py 在 production 模式覆盖，
+# 这里按线上当前运行形态（CLUBOS_TEST_OPEN=1 内测开放）显式声明，避免裸跑 401。
+os.environ['CLUBOS_TEST_OPEN'] = '1'
 os.environ['CLUBOS_DB_PATH'] = str(ROOT / 'clubos_biz_test.db')
 try:
     Path(os.environ['CLUBOS_DB_PATH']).unlink()
