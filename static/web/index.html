@@ -2,7 +2,7 @@
 <!-- 内联 SVG 图标：省掉 /favicon.ico 的 404（浏览器默认会去请求它）。
      用山形描边，和底部导航的图标同一套笔画。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121714'/%3E%3Cpath d='M3.5 23.5 12 11l4.6 7.6 3-4.8 8.9 9.7z' fill='none' stroke='%237fd0a4' stroke-width='2.1' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/shared.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261014a"><link rel="stylesheet" href="/static/web/web.css?v=20261017g"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
+<link rel="stylesheet" href="/static/shared.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261014a"><link rel="stylesheet" href="/static/web/web.css?v=20261018a"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
 
 <!-- C 端骨架：5 视图（首页 / 活动 / 装备 / 户外能力 / 我的）。
      结构类 .web-shell / .web-top / .web-content / .wview / .web-nav 全部保留 ——
@@ -111,60 +111,50 @@
       <div class="w-biz" id="bizIntro"></div>
     </section>
 
-    <!-- ── 我的：深色照片底 + 毛玻璃会员卡，下滑接订单与福利 ──────────────
-         #clubPts / #gearPts / #memberLevel / #memberTierPerks 必须保留原 id：
-         loadMemberCenter() 与 loadWallet() 是直接按 id 写这两个积分与等级文案的。
-         #worders 与 #wmember 同样保留（loadOrders / loadMemberCenter 的写入目标），
-         顺序按上轮确认的「订单在前、会员福利在后」。 -->
+    <!-- ── 我的：参考 PEAKTRACE 小程序「我的」版式（深色会员卡 + 积分 + 四宫格 + 商城订单五态 + 服务列表）
+         所有 2 级子页面由 static/web/me.js 的 pushMe() 栈渲染到 #meStack（JS 注入到 .web-shell）。
+         写入点：mePaintHome 直接写下列 id（meClubPts/meGearPts/meName/meTier/meCardNo/meGrow/meUp/meQuad/meOrders）。
+         已删旧 #clubPts/#gearPts/#worders/#wmember 那套；购物车 / 旅行记录无后端支撑一并移除（按「把没用的去掉」）。 -->
     <section id="wme" class="wview" style="display:none">
-      <div class="w-me__stage">
-        <div class="w-me__bg" id="meBg"></div>
-        <div class="w-me__bgtint"></div>
-        <div class="w-me__card">
-          <div class="w-me__id">
-            <div class="w-me__avatar" id="meAvatar">远</div>
-          <div class="w-me__who">
-            <div class="w-me__name"><span id="meName">户外会员</span><span class="w-me__tier" id="meTier">普通会员</span></div>
-            <div class="w-me__sub w-me__legacy" id="memberLevel">正在读取会员信息…</div>
-            <button class="w-me__center" type="button" onclick="openMemberCard()">会员中心<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></button>
+      <div class="wme-hero">
+        <div class="wme-hero__bg"></div>
+        <button class="wme-card" type="button" onclick="pushMe('membercard')" aria-label="查看会员信息">
+          <div class="wme-card__top">
+            <div class="wme-card__id">
+              <div class="wme-ava" id="meAva">远</div>
+              <div class="wme-card__who">
+                <div class="wme-card__name"><span id="meName">远拓会员</span><i class="wme-tier" id="meTier">普通会员</i></div>
+                <div class="wme-card__no" id="meCardNo">NO. —</div>
+              </div>
+            </div>
+            <canvas class="wme-card__qr" id="meQr" width="88" height="88"></canvas>
           </div>
-            <!-- 图标是「卡」不是二维码：点开是真实的会员信息，没有可被扫码核销的签名码，
-                 竖一个扫不动的码比不放更伤信任。 -->
-            <button class="w-me__qr" type="button" onclick="openMemberCard()" aria-label="查看会员信息"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.8" y="5" width="18.4" height="14" rx="2.6"/><path d="M2.8 9.6h18.4"/><path d="M6.4 14.6h4"/></svg></button>
+          <div class="wme-card__bot">
+            <div class="wme-card__grow"><b id="meGrow">0</b><span>成长值（元）</span></div>
+            <div class="wme-card__up" id="meUp">—</div>
           </div>
-          <div class="w-me__up">
-            <div class="w-me__uphead"><span>升级条件</span><span id="meUpTip">—</span></div>
-            <div class="w-me__bar"><i id="meUpBar" style="width:0%"></i></div>
-            <div class="w-me__legacy" id="memberTierPerks" style="margin-top:9px"></div>
-          </div>
-          <!-- 积分三格（对齐会员中心 JPG）：活动积分 / 装备积分 / 可用券。
-               #clubPts/#gearPts 保留原 id —— loadWallet() 按 id 写这两个数；
-               #couponCnt 由 web-biz.js 从福利接口带出，没有券时显示 0，不造假数据。 -->
-          <div class="w-me__pts">
-            <div><b id="clubPts">—</b><span>活动积分</span></div>
-            <div><b id="gearPts">—</b><span>装备积分</span></div>
-            <div><b id="couponCnt">0</b><span>可用券</span></div>
-          </div>
-          <div class="w-me__grid" id="meGrid"></div>
-          <div class="w-me__svc">
-            <div class="w-me__svctitle">我的服务</div>
-            <div class="w-me__grid" id="meService"></div>
-          </div>
-          <button class="w-me__more" type="button" onclick="document.getElementById('memberBenefits')?.scrollIntoView({behavior:'smooth',block:'center'})">查看更多权益</button>
-        </div>
+        </button>
       </div>
-      <div class="w-me__body">
-        <div id="worders">
-          <div class="w-sec__head"><div><h2>我的订单</h2><p>活动报名与装备订单都在这里，退款与售后分开处理</p></div></div>
-          <div class="web-card"><h3>活动订单</h3><div id="activityOrders"></div></div>
-          <div class="web-card"><h3>待支付</h3><div id="pendingOrders"></div></div>
-          <div class="web-card"><h3>装备订单</h3><div id="gearOrders"></div></div>
-        </div>
-        <div id="wmember">
-          <div class="web-card"><h3>可兑换福利</h3><div id="memberBenefits"></div></div>
-          <div class="web-card"><h3>我的兑换</h3><div id="memberRedemptions"></div></div>
-        </div>
+
+      <div class="wme-points">
+        <div class="wme-point"><b id="meClubPts">0</b><span>可用积分</span></div>
+        <div class="wme-point"><b id="meGearPts">0</b><span>装备积分</span></div>
       </div>
+
+      <div class="wme-quad" id="meQuad"></div>
+
+      <div class="wme-sec">
+        <div class="wme-sec__hd"><span>商城订单</span><button class="wme-sec__all" type="button" onclick="pushMe('orders','all')">查看全部 ›</button></div>
+        <div class="wme-orders" id="meOrders"></div>
+      </div>
+
+      <div class="wme-list" id="meList">
+        <button class="wme-li" type="button" onclick="pushMe('aftersale')"><span>售后 / 退款</span><i>›</i></button>
+        <button class="wme-li" type="button" onclick="pushMe('service')"><span>联系我们</span><i>›</i></button>
+        <button class="wme-li" type="button" onclick="pushMe('about')"><span>关于远拓户外</span><i>›</i></button>
+        <button class="wme-li wme-li--out" type="button" onclick="meLogout()"><span>退出登录</span><i>›</i></button>
+      </div>
+      <div class="wme-foot">远拓户外 · MEMBER</div>
     </section>
 
   </div>
@@ -184,6 +174,7 @@
 <script src="/static/shared.js?v=20261014a"></script>
 <script src="/static/web/web.js?v=20261017g"></script>
 <script src="/static/web/web-biz.js?v=20261017g"></script>
+<script src="/static/web/me.js?v=20261018b"></script>
 <script src="/static/ux/clubos-ux.js?v=20261014a"></script>
 <script src="/static/ux/workflows-web.js?v=20261014a"></script>
 <script src="/static/ux/qr-local.js?v=20261014a"></script>
