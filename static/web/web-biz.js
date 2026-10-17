@@ -2,7 +2,9 @@
    C 端改版覆盖层（web.js 之后加载，同名 window.X 赢 —— 项目「后加载覆盖优先」
    约定；函数声明在同一文件内赢，跨文件后加载的 window.X 赋值也赢，均不报错。）
    四块：① 首页满屏 hero（一屏一张大图 + 底部文案 + 描边按钮），下滑是活动瀑布流
-        ② 活动页主题卡 peek 轮播（中间一张竖版大卡、左右露出相邻卡片边）+ 瀑布流
+        ② 活动页主题卡 peek 轮播（中间一张竖版大卡、左右露出相邻卡片边）；
+           分类磁贴 / 地区 chips / 瀑布流的渲染与筛选在 web.js（renderActivityList），
+           这里只负责轮播与数据加载
         ③ 业务介绍区（后台开关）
         ④ 我的页会员中心化（活动积分/装备积分/优惠券 + 三类订单 + 积分商城）
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -15,19 +17,9 @@ const CLUB=window.CLUB||1,money=window.money||(v=>'¥'+(Number(v||0)%1?Number(v)
 const _oldMemberCenter=window.loadMemberCenter,_oldWallet=window.loadWallet;
 const day=x=>window.wDay?wDay(x.event_date):'';
 
-/* ── 瀑布流卡片（首页 / 活动页共用）：双列，封面 + 日期角标 + 标题 + 地点·价格。
-   没封面走渐变兜底，不造灰假图块（顾客会把灰块当成「图挂了」）。 */
-function feedCard(x){
-  const cov=x.cover||'',d=day(x);
-  return `<button class="w-fd" type="button" onclick="openAct(${Number(x.id)})" aria-label="${esc(x.title)} 详情">
-    <div class="w-fd__media${cov?'':' is-fallback'}">${cov?`<img src="${esc(cov)}" alt="" loading="lazy">`:''}</div>
-    ${d?`<span class="w-fd__date">${esc(d)}</span>`:''}
-    <div class="w-fd__copy">
-      <h3>${esc(x.title)}</h3>
-      <div class="w-fd__meta"><span>${esc(x.location||'户外')}</span><b>${priceHtml(x.price,{unit:'/人',pending:x.priceFrom==='pending'})}</b></div>
-    </div>
-  </button>`;
-}
+/* 瀑布流卡片 feedCard 已移到 web.js（基础层）：首页与活动页共用一份，
+   且活动页的 renderActivityList（web.js）也要调它 —— 放在覆盖层里，
+   基础层就取不到了。 */
 
 /* ── ① 首页满屏 hero ─────────────────────────────────────────────────────
    参考图（始祖鸟首页）：一张照片占满首屏，文案压在底部 —— 小字标签 / 大标题 /
@@ -98,7 +90,10 @@ window.loadHome=async function(){
   if(feed&&!feed.children.length)feed.innerHTML='<div class="w-sk-row"></div><div class="w-sk-row"></div>';
   try{
     const acts=await api(`/api/public/clubs/${CLUB}/activities`);
-    window.ACT_ALL=acts;
+    /* 必须**裸赋值**：web.js 里是 `let ACT_ALL`（全局词法绑定），`window.ACT_ALL=`
+       只会新建一个 window 属性、读 `ACT_ALL` 时仍然拿到旧的空数组 —— 于是活动页
+       「已有数据 → 直接渲染」的快路径永远不生效，每次切 tab 都整页重拉。 */
+    ACT_ALL=acts;
     const list=(acts||[]).slice().sort((a,b)=>Number(b.id||0)-Number(a.id||0));
     if(hero)hero.innerHTML=list.length
       ?'<div class="w-hero__track">'+list.slice(0,5).map(homeSlide).join('')+'</div>'
@@ -124,7 +119,9 @@ window.loadActivities=async function(){
   if(box&&!box.children.length)box.innerHTML='<div class="w-sk-row"></div><div class="w-sk-row"></div>';
   try{
     const acts=await api(`/api/public/clubs/${CLUB}/activities`);
-    window.ACT_ALL=acts;
+    /* 裸赋值，理由同 loadHome：window.ACT_ALL= 更新的是 window 属性，
+       读不到 web.js 的 `let ACT_ALL` 绑定。 */
+    ACT_ALL=acts;
     const list=(acts||[]).slice().sort((a,b)=>Number(b.id||0)-Number(a.id||0));
     if(car){
       /* 有封面的优先做主题卡；**一张都没封面时也要把板块摆出来**（走兜底视觉）。
@@ -143,8 +140,10 @@ window.loadActivities=async function(){
       const t=car.querySelector('.w-theme__track');
       if(t&&f.length>1)bindCaro(t,car.querySelector('.w-theme__meter i'));
     }
-    if(box)box.innerHTML=list.length?list.map(feedCard).join(''):'';
-    if(emp)emp.innerHTML=list.length?'':'<div class="w-empty">暂时没有可报名的活动<br>换个时间再来看看</div>';
+    /* 磁贴 / chips / 瀑布流统一交给 web.js 的 renderActivityList 画：分类与地区
+       筛选的逻辑在基础层（和状态放在一起），覆盖层只管轮播。空态、「清除筛选」
+       也都在那里，不在这里重复一份。 */
+    renderActivityList();
   }catch(e){ if(box)box.innerHTML='<div class="w-empty">活动加载失败，请稍后重试<button class="w-retry" type="button" onclick="loadActivities()">重新加载</button></div>'; if(emp)emp.innerHTML=''; }
 };
 

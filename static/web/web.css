@@ -194,63 +194,8 @@
 .w-mini--gear{flex:0 0 42%;max-width:160px}
 .w-mini--gear .w-mini__media{aspect-ratio:1/1.08;border-radius:var(--w-r)}
 
-/* ── 活动 reel：竖向长卡横滑（松赞） ─────────────────────────────────────
-   不要用「50% - 卡宽一半」做居中 padding：flex-basis 的百分比基准是**容器的内容盒**，
-   而 padding 的百分比基准是**容器的宽度**。两者一旦同用，卡宽会被 padding 二次削掉
-   （实测卡宽只有视口的 61%、整条列表歪在左边、右侧空一大片）。
-   左对齐 + 右侧露一张半张是更稳的形态：基准统一、只有一张卡时也不会悬空。 */
-/* 2026-09-29 重做：卡片必须「左右留白 · 旁边露一张」。
-   以前只有一场活动时 `:only-child{flex:1 1 auto}` 会把独苗撑满整屏（用户反馈「铺满不像那样」），
-   现在无论几张都固定宽度，单张居中、多张右露下一张边缘。 */
-.w-reel{
-  display:flex;gap:13px;overflow-x:auto;scroll-snap-type:x mandatory;
-  padding:8px var(--w-lg) 24px;margin:0;-webkit-overflow-scrolling:touch;
-  scroll-padding-left:var(--w-lg);
-}
-.w-reel__card:only-child{margin-left:auto;margin-right:auto}
-.w-reel::-webkit-scrollbar{display:none}
-.w-reel__card{
-  position:relative;flex:0 0 84%;max-width:330px;aspect-ratio:3/4.15;min-height:400px;
-  border-radius:18px;overflow:hidden;scroll-snap-align:center;background:var(--w-ink);
-  cursor:pointer;box-shadow:0 18px 44px rgba(16,32,22,.18);
-  transition:transform .4s cubic-bezier(.3,.8,.3,1);
-}
-.w-reel__card:active{transform:scale(.985)}
-/* 无封面兜底：黄昏光 → 天空 → 森林的竖直渐变，叠上山脊 SVG（见文件末尾的兜底层），
-   读起来像一张风景照；原来只有深绿一片，在手机上就是「图片没加载出来」。 */
-.w-reel__card.is-fallback{background-image:
-  radial-gradient(70% 38% at 76% 12%,rgba(255,205,146,.44),transparent 68%),
-  linear-gradient(180deg,#8fb0c8 0%,#bed0da 20%,#e2e5dc 32%,#7d9a80 48%,#3a5a46 70%,#1b3126 100%)}
-.w-reel__media{position:absolute;inset:0;background-size:cover;background-position:center;transition:transform .6s}
-.w-reel__card:hover .w-reel__media{transform:scale(1.045)}
-.w-reel__scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(8,12,10,.46),rgba(8,12,10,.06) 30%,rgba(8,12,10,.16) 46%,rgba(8,12,10,.68) 78%,rgba(8,12,10,.9))}
-.w-reel__badges{position:absolute;left:0;right:0;top:15px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 15px;z-index:2}
-.w-reel__date{
-  padding:5px 11px;border-radius:99px;background:rgba(255,255,255,.94);color:var(--w-ink);
-  font-size:11px;font-weight:750;letter-spacing:.02em;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
-}
-.w-reel__price{
-  padding:5px 12px;border-radius:99px;background:rgba(14,20,17,.42);border:1px solid rgba(255,255,255,.24);
-  color:#fff;font-size:12px;font-weight:700;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
-}
-.w-reel__price em{font-style:normal;font-weight:500;font-size:10.5px;opacity:.78}
-.w-reel__copy{
-  position:absolute;left:0;right:0;top:33%;transform:translateY(-33%);
-  padding:0 22px;text-align:center;color:#fff;
-}
-.w-reel__copy h3{
-  margin:0;font-size:22px;font-weight:600;line-height:1.34;letter-spacing:-.01em;
-  text-shadow:0 2px 16px rgba(0,0,0,.45);
-}
-.w-reel__meta{margin-top:10px;font-size:12px;letter-spacing:.1em;color:rgba(255,255,255,.82)}
-.w-reel__cta{
-  display:inline-block;margin-top:18px;padding:9px 22px;border:1px solid rgba(255,255,255,.5);
-  border-radius:2px;background:rgba(255,255,255,.06);color:#fff;font-size:11.5px;letter-spacing:.12em;
-}
-.w-reel__brand{
-  position:absolute;left:0;right:0;bottom:18px;text-align:center;
-  font-size:10px;letter-spacing:.3em;text-transform:uppercase;color:rgba(255,255,255,.6);
-}
+/* 活动 reel（竖向长卡横滑）已于 2026-10-17 移除：活动页改成「主题卡轮播 +
+   分类磁贴 + 瀑布流」，.w-reel__* 全部作废，此处不再保留其样式。 */
 .w-dots{display:flex;justify-content:center;gap:6px;padding:2px 0 4px}
 .w-dots i{width:5px;height:5px;border-radius:99px;background:#ccd4ce;transition:width .3s,background .3s}
 .w-dots i.on{width:16px;background:var(--w-ink)}
@@ -702,7 +647,6 @@
    break-word 兜住没有可断点的超长标题；balance 再在剩余断点里挑行宽最接近的。
    **只给标题用**：正文段落套 keep-all 会让断点变稀疏、每行宽窄不齐，反而更难看。 */
 .web-shell .w-hero h1,
-.web-shell .w-reel__copy h3,
 .web-shell .w-detailhero__cap h2,
 .web-shell .w-mini__title,
 .web-shell .w-me__name,
@@ -725,7 +669,7 @@
    手机上看就是「图片没加载出来」。叠一层低对比度的山脊剪影，至少读得出是户外场景。
    用内联 SVG data-URI：不新增网络请求，也不受 /static/uploads 的生产限制影响。 */
 .w-hero__media::after,
-.w-reel__card.is-fallback::before,
+.w-fd__media.is-fallback::after,
 .w-detailhero.is-fallback::before{
   content:'';position:absolute;left:0;right:0;bottom:0;height:64%;
   background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 200' preserveAspectRatio='none'%3E%3Cpath d='M0 200 52 112 92 150 148 56 205 134 258 92 320 166 400 104 400 200z' fill='%233f6350'/%3E%3Cpath d='M0 200 44 158 96 184 156 128 214 178 268 146 330 194 400 158 400 200z' fill='%2320332a'/%3E%3C/svg%3E") bottom/100% 100% no-repeat;
@@ -733,7 +677,7 @@
 }
 /* 有封面时不要这层 */
 .w-hero__slide:not(.is-fallback) .w-hero__media::after,
-.w-reel__card:not(.is-fallback)::before,
+.w-fd__media:not(.is-fallback)::after,
 .w-detailhero:not(.is-fallback)::before{content:none}
 
 /* ── 顶栏滚动态 ──────────────────────────────────────────────────────────
@@ -1190,7 +1134,6 @@
 
 @media (max-width:380px){
   .w-shop__body{grid-template-columns:80px minmax(0,1fr)}
-  .w-reel__card{flex:0 0 82%}
   .w-hero h1{font-size:26px}
   .w-me__grid{grid-template-columns:repeat(4,1fr)}
   .w-pax__grid{grid-template-columns:1fr}
@@ -1228,22 +1171,23 @@
 .w-waterfall{columns:2;column-gap:10px;padding:0 12px 16px}
 .w-waterfall>.w-fd{break-inside:avoid;margin:0 0 10px;width:100%}
 .w-fd{display:block;position:relative;border:0;padding:0;background:none;text-align:left;cursor:pointer;border-radius:14px;overflow:hidden}
-.w-fd__media{aspect-ratio:3/4;background:#e8ece9 center/cover no-repeat;border-radius:14px}
+.w-fd__media{position:relative;aspect-ratio:3/4;background:#e8ece9 center/cover no-repeat;border-radius:14px;overflow:hidden}
 .w-fd__media img{width:100%;height:100%;object-fit:cover;display:block}
 /* 没封面的活动：与首页 hero / 活动页主题卡**同一套光**（深绿底 + 左上冷光 + 右下暖光），
    不留灰块、也不是一块死绿。三处兜底用同一条公式，顾客才会读成「品牌版式」，
    而不是「这几张图挂了」。 */
 .w-fd__media.is-fallback{
   background-image:
-    radial-gradient(120% 78% at 16% 4%,rgba(31,107,74,.52),transparent 60%),
-    radial-gradient(96% 70% at 88% 98%,rgba(196,85,43,.36),transparent 62%),
-    linear-gradient(158deg,#1d2b24,#26332b 54%,#121b16);
+    radial-gradient(126% 82% at 14% 2%,rgba(52,150,104,.78),transparent 62%),
+    radial-gradient(104% 76% at 90% 100%,rgba(216,110,58,.5),transparent 64%),
+    linear-gradient(158deg,#26382e,#31443a 52%,#182319);
 }
 .w-fd__date{position:absolute;top:10px;left:10px;background:rgba(255,255,255,.92);color:#1c2b22;font-size:11px;font-weight:600;padding:3px 8px;border-radius:999px}
 .w-fd__copy{padding:9px 2px 0}
 .w-fd__copy h3{font-size:13.5px;line-height:1.4;margin:0;color:#16241c;overflow-wrap:anywhere}
-.w-fd__meta{display:flex;justify-content:space-between;align-items:baseline;margin-top:5px;font-size:11px;color:#6b7a70}
-.w-fd__meta b{font-size:14px;color:#16241c}.w-fd__meta b em{font-style:normal;font-size:10px;color:#8a978e}
+.w-fd__meta{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:5px;font-size:11px;color:#6b7a70}
+.w-fd__meta>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.w-fd__meta b{flex:0 0 auto;white-space:nowrap;font-size:14px;color:#16241c}.w-fd__meta b em{font-style:normal;font-size:10px;color:#8a978e}
 /* 主推轮播：横向 scroll-snap，指示器只有真有多于一场时才渲染（JS 控制） */
 .w-carousel,.w-caro-wrap{position:relative}
 .w-caro__track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;-webkit-overflow-scrolling:touch}
@@ -1389,8 +1333,65 @@
 /* 指示器：短横线，深灰绿填充。用品牌绿实心太跳，抢主题卡的视线。 */
 .web-shell .w-theme__meter{width:54px;height:3px;margin:10px auto 2px;border-radius:99px;background:rgba(22,36,28,.14);overflow:hidden}
 .web-shell .w-theme__meter i{display:block;height:100%;width:0;border-radius:99px;background:#2c5a45;transition:width .22s}
-/* 主题卡与瀑布流之间留一口气 —— 直接贴上去会被读成"轮播的第二屏" */
-.web-shell #actFeatured + .w-waterfall{padding-top:12px}
+/* 主题卡与下面的分类区之间留一口气 —— 直接贴上去会被读成"轮播的第二屏" */
+.web-shell #actFeatured + .w-sec{padding-top:20px}
+
+/* ── 活动页：分类磁贴 + 地区 chips（2026-10-17）─────────────────────────────
+   参考图（松赞「在地探索」）：分类是一行带图磁贴，下面一行筛选 chips。
+   磁贴图 = 该主题下第一场活动的**真实封面**（JS 控制，没有就走渐变兜底）；
+   「全部」用品牌绿实心、不带图，与主题磁贴一眼区分，也是清除主题筛选的入口。
+   五个磁贴等宽（flex:1 1 0）不横滑：一屏放得下，横滑反而让人以为还有更多。 */
+.web-shell .w-cats{display:flex;gap:8px;padding:2px 0 2px}
+.web-shell .w-cat{
+  position:relative;flex:1 1 0;min-width:0;aspect-ratio:1/1.12;
+  border:0;padding:0;border-radius:14px;overflow:hidden;cursor:pointer;
+  background:#e8ece9;text-align:left;scroll-snap-align:start;
+  box-shadow:0 6px 16px rgba(18,23,20,.1);
+  transition:transform .22s cubic-bezier(.3,.8,.3,1),box-shadow .22s;
+}
+.web-shell .w-cat:active{transform:scale(.97)}
+.web-shell .w-cat__img{position:absolute;inset:0;background:#1d2a24 center/cover no-repeat}
+/* 没封面的主题磁贴：与 hero / 瀑布流**同一套光**（深绿底 + 左上冷光 + 右下暖光），
+   不留灰块 —— 三处兜底同一条公式，顾客才会读成「品牌版式」而不是「图挂了」。 */
+.web-shell .w-cat.is-fallback .w-cat__img{
+  background-image:
+    radial-gradient(126% 82% at 14% 2%,rgba(52,150,104,.78),transparent 62%),
+    radial-gradient(104% 76% at 90% 100%,rgba(216,110,58,.5),transparent 64%),
+    linear-gradient(158deg,#26382e,#31443a 52%,#182319);
+}
+/* 「全部」磁贴：品牌绿实心（参考图里第一个磁贴就是实色），不带图 */
+.web-shell .w-cat--all .w-cat__img{background-image:linear-gradient(150deg,#1a7a52,#0f4f33 62%,#0c3d28)}
+/* 真实封面层：用 <img> 而不是只有 background-image —— 图挂了（文件被删 / 迁移漏文件）
+   onerror 会把它摘掉并补上 is-fallback，露出下面那层品牌渐变；只靠 background-image
+   的话 404 会留下一块纯色，顾客只会读成「这家的图全挂了」。 */
+.web-shell .w-cat__pic{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.web-shell .w-cat__scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(8,12,10,.04) 42%,rgba(8,12,10,.64))}
+.web-shell .w-cat__label{position:absolute;left:8px;right:8px;bottom:8px;z-index:2;color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.35)}
+.web-shell .w-cat__label b{
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+  font-size:12px;font-weight:700;line-height:1.25;letter-spacing:.01em;
+}
+.web-shell .w-cat__label i{display:block;margin-top:2px;font-size:10px;font-style:normal;font-weight:500;opacity:.78}
+/* 选中：照片磁带上唯一看得出来的状态是白色内环；品牌绿磁贴也用同一条，不搞两套。
+   禁用（0 场）压暗 + 禁光标，但**不缩尺寸** —— 少一个主题时整行等宽重排会跳版。 */
+.web-shell .w-cat.on{box-shadow:0 6px 16px rgba(18,23,20,.2)}
+/* 选中白环必须画在子元素之上：inset box-shadow 属于背景层，会被 inset:0 的
+   .w-cat__pic / .w-cat__scrim 完全盖住（实测「选中了但看不出来」）。 */
+.web-shell .w-cat.on::after{
+  content:'';position:absolute;inset:0;border-radius:inherit;z-index:3;pointer-events:none;
+  box-shadow:inset 0 0 0 2px #fff;
+}
+/* 禁用（0 场）**不降整块透明度**：opacity 会与白底合成，磁贴变成浅灰绿，和旁边
+   深色磁贴完全是两种材质，看着像「图没加载出来」。改成压暗图片 + 减淡文字，
+   材质保持一致，只表达「这个暂时去不了」。 */
+.web-shell .w-cat.is-off{cursor:not-allowed}
+.web-shell .w-cat.is-off .w-cat__img{filter:grayscale(.92) brightness(.86)}
+.web-shell .w-cat.is-off .w-cat__label{opacity:.42}
+/* 地区 chips：复用 .w-chip 的底色/选中态，只补计数与它自己那一行的间距 */
+.web-shell .w-chips--acts{padding:12px 0 2px;margin:0}
+.web-shell .w-chips--acts .w-chip i{font-style:normal;margin-left:4px;font-size:11px;opacity:.62}
+/* 列表区块头：左右 12px，与瀑布流卡片的边距对齐（.w-pad 是 16px，会差 4px） */
+.web-shell .w-sec--list{padding:22px 12px 0}
 
 /* ── ③ 底部导航：格数自适应 ────────────────────────────────────────────────
    导航写死了 grid-template-columns:repeat(5,1fr)。业务介绍没配时「户外能力」被
@@ -1484,6 +1485,12 @@
   .web-shell .w-theme__meta{font-size:11.5px}
   .web-shell .w-waterfall{padding-left:10px;padding-right:10px;column-gap:8px}
   .web-shell .w-fd__copy h3{font-size:12.5px}
+  /* 分类磁贴：5 个等宽挤在 320 上，每个只剩约 51px —— 缩字号 + 收 gap，
+     否则「徒步穿越」四个字会被行尾截断成「徒步穿…」。 */
+  .web-shell .w-cats{gap:6px}
+  .web-shell .w-cat__label{left:6px;right:6px;bottom:6px}
+  .web-shell .w-cat__label b{font-size:11px}
+  .web-shell .w-cat__label i{font-size:9px}
 }
 /* 「升级条件」标签在 320~390 上都被右侧文案挤成「升级条/件」两行 ——
    标签不换行，让文案自己折。与屏宽无关，放全局。 */

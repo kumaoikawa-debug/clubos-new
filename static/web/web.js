@@ -1,4 +1,4 @@
-let CLUB=Number(new URLSearchParams(location.search).get('club_id')||1),USER=1,PAYER_NAME='林野',PAYER_PHONE='13800000001';let currentAct=null,currentOcc=null,activityVouchers=[],bookingParticipants=[];let ACT_ALL=[],ACT_GROUP='all',MALL_ALL=[],MALL_CAT='全部',MALL_SORT='rec';
+let CLUB=Number(new URLSearchParams(location.search).get('club_id')||1),USER=1,PAYER_NAME='林野',PAYER_PHONE='13800000001';let currentAct=null,currentOcc=null,activityVouchers=[],bookingParticipants=[];let ACT_ALL=[],ACT_CAT='all',ACT_REGION='all',MALL_ALL=[],MALL_CAT='全部',MALL_SORT='rec';
 /* ══════════════════════════════════════════════════════════════════════════
    C 端视觉层（配合 static/web/web.css）
    ══════════════════════════════════════════════════════════════════════════ */
@@ -74,7 +74,6 @@ function badge(text,tone){return text?`<span class="w-bdg w-bdg--${tone||'mute'}
 /* ── 骨架屏 ───────────────────────────────────────────────────────────────── */
 function wSkBars(n,w){let o='';for(let i=0;i<n;i++)o+=`<div class="w-sk__bar${w?' style="width:'+w+'"':''}"></div>`;return o}
 function wSkMini(n){let o='';for(let i=0;i<n;i++)o+=`<div class="w-sk-card" style="aspect-ratio:4/3.1"></div>`;return o}
-function wSkReel(n){let o='';for(let i=0;i<n;i++)o+=`<div class="w-sk-card" style="flex:0 0 84%;max-width:330px;aspect-ratio:3/4.15"></div>`;return o}
 function wSkRows(n){let o='';for(let i=0;i<n;i++)o+=`<div class="w-sk-row">${wSkBars(2,'62%')}</div>`;return o}
 
 /* ── 首页 ─────────────────────────────────────────────────────────────────── */
@@ -156,74 +155,119 @@ function miniGear(x){
   </button>`;
 }
 
-/* ── 活动列表 ─────────────────────────────────────────────────────────────── */
-async function loadActivities(){
-  skel('#publicActivities',4);try{const box=$('#publicActivities');
-  if(box&&!box.children.length)box.innerHTML=wSkReel(2);
-  ACT_ALL=await api(`/api/public/clubs/${CLUB}/activities`);
-  renderActivityChips();renderActivityList();
-}catch(e){loaderError('#publicActivities',e,'loadActivities 加载失败')}}
-/* 筛选项按「本月 / 下月 / 更远」分：活动是有关键时间窗的，顾客真正在问的是「最近哪场能去」，
-   不是按品类浏览。没有活动的档位直接禁用 —— 不做点进去空一片的入口。 */
-function activityGroups(){
-  const now=new Date(),cy=now.getFullYear(),cm=now.getMonth()+1;
-  const nx=cm===12?{y:cy+1,m:1}:{y:cy,m:cm+1};
-  const thisKey=cy*100+cm,nextKey=nx.y*100+nx.m;
-  return [
-    {k:'all',label:'全部',test:()=>true},
-    {k:'now',label:'本月',test:x=>{const d=wDate(x.event_date);return d&&d.key===thisKey}},
-    {k:'next',label:'下月',test:x=>{const d=wDate(x.event_date);return d&&d.key===nextKey}},
-    {k:'later',label:'更远',test:x=>{const d=wDate(x.event_date);return d&&d.key>nextKey}}
-  ];
+/* ── 活动列表 ───────────────────────────────────────────────────────────────
+   2026-10-17 改版（参考图：松赞「在地探索」）：活动页 = 主题卡轮播 + 分类磁贴
+   + 地区 chips + 瀑布流。活动表没有「类型」字段，两个筛选维度都从**真实字段**
+   推导，不改后端、不让老板多维护一个字段：
+     主题 ← 标题关键词。一场可以命中多个主题（「兴福寺徒步 × 森林颂钵疗愈」
+           既是徒步也是疗愈），所以主题计数不去重、只按「能描述它」归类。
+     地区 ← 地点串里的真实地名（川西高原 / 成都周边 / 其它地区）。
+   没有活动的选项直接禁用（本项目惯例：不做点进去空一片的入口）；
+   「其它地区」只在真有这类活动时才出现，不给永远点不动的入口。 */
+const ACT_THEMES=[
+  {k:'hike',  label:'徒步穿越', re:/徒步|登山|穿越|爬山|古道|山径|速降|攀冰|越野/},
+  {k:'photo', label:'风光摄影', re:/摄影|金山|日照|风光|观景|星空|云海|日出|日落|雪山|航拍/},
+  {k:'heal',  label:'疗愈静心', re:/疗愈|颂钵|冥想|禅修|森林|瑜伽|正念|温泉/},
+  {k:'family',label:'亲子研学', re:/亲子|儿童|研学|夏令营|成长营|自然教育/}
+];
+const ACT_REGIONS=[
+  {k:'chuanxi', label:'川西高原', re:/川西|阿坝|甘孜|康定|理县|黑水|新都桥|鱼子西|四姑娘|丹巴|稻城|亚丁|色达|九寨|黄龙|毕棚沟|达古|蜀山/},
+  {k:'chengdu', label:'成都周边', re:/成都|邛崃|都江堰|彭州|崇州|大邑|蒲江|温江|双流|新津|龙泉|眉山|雅安|乐山/}
+];
+/* 主题可多选命中：返回该活动命中的全部主题 key（磁贴计数与筛选共用）。 */
+function actThemesOf(x){return ACT_THEMES.filter(t=>t.re.test(String(x.title||''))).map(t=>t.k)}
+/* 地区取第一个命中的规则；地点为空 → ''（这类活动只出现在「全部」里）。 */
+function actRegionOf(x){
+  const s=String(x.location||'');
+  if(!s.trim())return '';
+  for(const r of ACT_REGIONS)if(r.re.test(s))return r.k;
+  return 'other';
 }
-function renderActivityChips(){
-  const box=$('#activityChips');if(!box)return;
-  box.innerHTML=activityGroups().map(g=>{
-    const n=ACT_ALL.filter(g.test).length,off=g.k!=='all'&&n===0;
-    return `<button class="w-chip${g.k===ACT_GROUP?' on':''}" type="button" data-g="${g.k}"${off?' disabled':''}>${g.label}${!off&&g.k!=='all'?' '+n:''}</button>`;
+function actThemeLabel(k){const t=ACT_THEMES.find(x=>x.k===k);return t?t.label:'全部'}
+function actRegionLabel(k){if(k==='all')return '全部';const r=ACT_REGIONS.find(x=>x.k===k);return r?r.label:'其它地区'}
+/* 瀑布流卡片（首页 / 活动页共用）：双列，封面 + 日期角标 + 标题 + 地点·价格。
+   没封面走渐变兜底，不造灰假图块（顾客会把灰块当成「图挂了」）。
+   定义在 web.js（基础层）：web-biz.js 的首页瀑布流与活动页列表都调它。 */
+function feedCard(x){
+  const cov=x.cover||'',d=wDay(x.event_date);
+  return `<button class="w-fd" type="button" onclick="openAct(${Number(x.id)})" aria-label="${esc(x.title)} 详情">
+    <div class="w-fd__media${cov?'':' is-fallback'}">${cov?`<img src="${esc(cov)}" alt="" loading="lazy">`:''}</div>
+    ${d?`<span class="w-fd__date">${esc(d)}</span>`:''}
+    <div class="w-fd__copy">
+      <h3>${esc(x.title)}</h3>
+      <div class="w-fd__meta"><span>${esc(x.location||'户外')}</span><b>${priceHtml(x.price,{unit:'/人',pending:x.priceFrom==='pending'})}</b></div>
+    </div>
+  </button>`;
+}
+/* 数据加载兜底：**生效实现在 web-biz.js（后加载覆盖优先）**——那一版还负责主题卡
+   轮播。这里留一份等价兜底：web-biz.js 万一没加载完，活动页仍能列出活动
+   （只是没有轮播），不会整个列表页空白。 */
+async function loadActivities(){
+  const car=$('#actFeatured');
+  if(car){car.innerHTML='';car.style.display='none'}
+  skel('#publicActivities',4);
+  try{
+    ACT_ALL=await api(`/api/public/clubs/${CLUB}/activities`);
+    renderActivityList();
+  }catch(e){loaderError('#publicActivities',e,'loadActivities 加载失败')}
+}
+/* 分类磁贴：一行带图选项（参考图「在地探索」那一行）。磁贴图 = 该主题下第一场
+   活动的**真实封面**，没有就走品牌渐变兜底、不画假图；「全部」是品牌绿实心磁贴，
+   与主题磁贴一眼区分，也是「清除主题筛选」的固定入口。 */
+function renderActivityCats(){
+  const box=$('#actCats');if(!box)return;
+  const tiles=[{k:'all',label:'全部'}].concat(ACT_THEMES);
+  box.innerHTML=tiles.map(t=>{
+    const isAll=t.k==='all';
+    const n=isAll?ACT_ALL.length:ACT_ALL.filter(x=>actThemesOf(x).includes(t.k)).length;
+    const off=!isAll&&n===0;
+    const first=isAll?null:ACT_ALL.find(x=>actThemesOf(x).includes(t.k)&&x.cover);
+    const cov=first?first.cover:'';
+    return `<button class="w-cat${t.k===ACT_CAT?' on':''}${isAll?' w-cat--all':''}${!isAll&&!cov?' is-fallback':''}${off?' is-off':''}" type="button" data-c="${t.k}"${off?' disabled':''} aria-pressed="${t.k===ACT_CAT}">
+      <span class="w-cat__img"${cov?` style="background-image:url('${esc(cov)}')"`:''}></span>
+      ${cov?`<img class="w-cat__pic" src="${esc(cov)}" alt="" loading="lazy" onerror="if(this.parentNode){this.closest('.w-cat').classList.add('is-fallback')}this.remove()">`:''}
+      <span class="w-cat__scrim"></span>
+      <span class="w-cat__label"><b>${t.label}</b><i>${n} 场</i></span>
+    </button>`;
   }).join('');
 }
+/* 地区 chips：第二道筛选。计数为 0 的地区禁用；「其它地区」只在真有这类活动时
+   才出现（不占位、不点空）。 */
+function renderActivityRegions(){
+  const box=$('#activityChips');if(!box)return;
+  const regs=[{k:'all',label:'全部'}].concat(ACT_REGIONS).concat([{k:'other',label:'其它地区'}]);
+  let html='';
+  for(const r of regs){
+    const n=r.k==='all'?ACT_ALL.length:ACT_ALL.filter(x=>actRegionOf(x)===r.k).length;
+    if(r.k==='other'&&n===0)continue;
+    const off=r.k!=='all'&&n===0;
+    html+=`<button class="w-chip${r.k===ACT_REGION?' on':''}" type="button" data-r="${r.k}"${off?' disabled':''}>${r.label}<i>${n}</i></button>`;
+  }
+  box.innerHTML=html;
+}
+function resetActFilters(){ACT_CAT='all';ACT_REGION='all';renderActivityList()}
 function renderActivityList(){
   const box=$('#publicActivities');if(!box)return;
-  /* 档位 chip 必须在这里渲染：从首页进活动页时 ACT_ALL 已经由 loadHome 填好，
-     wv() 会走「已有数据 → 直接渲染」的快路径、根本不会经过 loadActivities()，
-     挂在 loadActivities 里的 renderActivityChips 就被整个跳过，chip 永远是空的。 */
-  renderActivityChips();
-  const q=(($('#actSearch')&&$('#actSearch').value)||'').trim().toLowerCase();
-  const g=activityGroups().find(x=>x.k===ACT_GROUP);
-  let list=g?ACT_ALL.filter(g.test):ACT_ALL.slice();
-  if(q)list=list.filter(x=>((x.title||'')+' '+(x.location||'')).toLowerCase().includes(q));
-  // 最近出发的排最前：列表是「翻卡片挑一场走」，按 id 倒序会把 11 月排在 10 月前面。
-  // 日期解析不出来的（老数据/「待发布」）沉到最后，不参与比较。
-  list=list.slice().sort((a,b)=>{
-    const ka=wDate(a.event_date),kb=wDate(b.event_date);
-    const va=ka?ka.y*10000+ka.m*100+ka.d:99999999,vb=kb?kb.y*10000+kb.m*100+kb.d:99999999;
-    return va-vb;
-  });
-  box.innerHTML=list.map(reelCard).join('');
+  /* 磁贴 / chips / 列表都必须在这里渲染：从首页进活动页时 ACT_ALL 已经由
+     loadHome 填好，wv() 会走「已有数据 → 直接渲染」的快路径、根本不经过
+     loadActivities()，挂在 loadActivities 里的东西会被整个跳过。
+     （2026-09-29 同一个模式连踩三次：活动 chips、装备 cats/tabs、消费端 toolbar。） */
+  renderActivityCats();renderActivityRegions();
+  let list=ACT_ALL.slice();
+  if(ACT_CAT!=='all')list=list.filter(x=>actThemesOf(x).includes(ACT_CAT));
+  if(ACT_REGION!=='all')list=list.filter(x=>actRegionOf(x)===ACT_REGION);
+  /* 最新上架的排最前（id 倒序 = 上架顺序），与首页瀑布流同一口径。 */
+  list.sort((a,b)=>Number(b.id||0)-Number(a.id||0));
+  box.innerHTML=list.map(feedCard).join('');
   const cnt=$('#actCount');
-  if(cnt)cnt.textContent=ACT_ALL.length?`共 ${list.length} 场可报名${q?` · 关键词「${q}」`:''}`:'暂时没有已发布的活动';
+  if(cnt){
+    const flt=[ACT_CAT!=='all'?actThemeLabel(ACT_CAT):'',ACT_REGION!=='all'?actRegionLabel(ACT_REGION):''].filter(Boolean);
+    cnt.textContent=ACT_ALL.length
+      ?(flt.length?flt.join(' · ')+' · 共 '+list.length+' 场':'共 '+list.length+' 场可报名')
+      :'暂时没有已发布的活动';
+  }
   const emp=$('#activityEmpty');
-  if(emp)emp.innerHTML=list.length?'':`<div class="w-empty">${WI.empty}<div>没有符合条件的活动</div><div style="margin-top:6px">换个时间档位，或清空搜索词再看看。</div></div>`;
-}
-/* 卡片是「一张翻阅杂志」：日期 + 价格压在图片顶部两端，标题居中落在图上三分之一处，
-   下面是地点/名额、查看详情。整卡只有图片和白字，不再叠灰底信息条。 */
-function reelCard(x){
-  const cov=x.cover||'',d=wDate(x.event_date);
-  return `<article class="w-reel__card${cov?'':' is-fallback'}" onclick="openAct(${x.id})" tabindex="0" role="button" aria-label="${esc(x.title)} 详情">
-    ${cov?`<div class="w-reel__media" style="background-image:url('${esc(cov)}')"></div>`:''}
-    <div class="w-reel__scrim"></div>
-    <div class="w-reel__badges">
-      ${d?`<span class="w-reel__date">${wDay(x.event_date)}</span>`:'<span class="w-reel__date">即将出发</span>'}
-      <span class="w-reel__price">${priceHtml(x.price,{unit:' / 人起',pending:x.priceFrom==='pending'})}</span>
-    </div>
-    <div class="w-reel__copy">
-      <h3>${esc(x.title)}</h3>
-      <div class="w-reel__meta">${esc(x.location||'户外')}${x.capacity?' · 限 '+x.capacity+' 人':''}</div>
-      <span class="w-reel__cta">查看详情</span>
-    </div>
-    <div class="w-reel__brand">REMOTE OUTDOOR CLUB</div>
-  </article>`;
+  if(emp)emp.innerHTML=list.length?'':`<div class="w-empty">${WI.empty}<div>没有符合条件的活动</div><div style="margin-top:6px">换个分类或地区试试。</div><button class="w-retry" type="button" onclick="resetActFilters()">清除筛选</button></div>`;
 }
 
 /* ── 装备商城 ─────────────────────────────────────────────────────────────── */
@@ -1351,19 +1395,16 @@ function openHelp(){
 /* 列表页的筛选/搜索接线。容器的委托只绑一次（这些容器是静态 HTML，不会被 innerHTML 换掉；
    被换掉的是它们的内容），所以不会像逐次渲染那样反复叠加监听。 */
 function bindWebEvents(){
-  $('#actSearch')?.addEventListener('input',()=>renderActivityList());
-  $('#activityChips')?.addEventListener('click',e=>{const b=e.target.closest('[data-g]');if(!b||b.disabled)return;ACT_GROUP=b.dataset.g;renderActivityChips();renderActivityList()});
+  /* 活动页两道筛选：分类磁贴（主题，data-c）与地区 chips（data-r）。
+     点击后只重画「选项自身 + 列表」，不重新拉数据（ACT_ALL 已在内存里）。 */
+  $('#actCats')?.addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b||b.disabled)return;ACT_CAT=b.dataset.c;renderActivityCats();renderActivityList()});
+  $('#activityChips')?.addEventListener('click',e=>{const b=e.target.closest('[data-r]');if(!b||b.disabled)return;ACT_REGION=b.dataset.r;renderActivityRegions();renderActivityList()});
   $('#mallCats')?.addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b)return;MALL_CAT=b.dataset.c;renderMallCats();renderMall()});
   $('#mallTabs')?.addEventListener('click',e=>{const b=e.target.closest('[data-s]');if(!b)return;MALL_SORT=b.dataset.s;renderMallTabs();renderMall()});
   $('#gearSearch')?.addEventListener('input',()=>renderMall());
-  /* 活动卡是 `<div onclick tabindex="0">` —— on 属性只绑 click，键盘按 Enter/空格不会触发，
-     少了这段读屏和键盘用户就完全点不进详情页。用委托绑在容器上，重渲染也不用重新绑。 */
-  $('#publicActivities')?.addEventListener('keydown',e=>{
-    if(e.key!=='Enter'&&e.key!==' ')return;
-    const c=e.target.closest('.w-reel__card');if(!c)return;
-    e.preventDefault();c.click();
-  });
-  /* 商品卡同理：去掉「查看详情」按钮后整张卡是唯一入口，没有这条委托键盘就完全进不去。 */
+  /* 商品卡是 `<div onclick tabindex="0">` —— on 属性只绑 click，键盘按 Enter/空格不会触发，
+     少了这段读屏和键盘用户就完全点不进详情页。用委托绑在容器上，重渲染也不用重新绑。
+     （活动卡是 `<button class="w-fd">`，Enter/空格由浏览器原生处理，不需要这段。） */
   $('#publicProducts')?.addEventListener('keydown',e=>{
     if(e.key!=='Enter'&&e.key!==' ')return;
     const c=e.target.closest('.w-product');if(!c)return;
