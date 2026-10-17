@@ -31,3 +31,7 @@ python tests/public_leaders_smoke.py
 # 否则详情被写进一个 display:none 的 section，用户看到的是「点了没反应」。
 # 纯静态断言（只读 static/web/*），不建库不碰真库。
 python tests/web_act_view_guard.py
+# AI 生成的活动必须自带封面：cover 字段此前只有「上传封面」接口会写，AI 生成从不碰它，
+# 于是素材里几十张照片、列表却挂「未设封面」。落版补空 + 手动接口 + 绝不覆盖人工封面。
+# 自带临时库隔离，不需要 CLUBOS_DB_PATH。
+python tests/auto_cover_smoke.py

@@ -13,7 +13,7 @@ from db import init_db, conn, row, rows, jdump, jload, setting
 from document_parser import save_uploads, parse_sources, _image_kind, ALLOWED as ALLOWED_UPLOAD_EXTS
 from cost_guard import sanitize_for_frontend, master_has_cost_evidence
 from ai_engine import (generate_activity, generate_channel, regenerate_detail, detail_outline,
-                       _fact_digest)
+                       _fact_digest, pick_cover_media)
 from longpic import generate_longpic, build_fact_pack
 from image_caption import caption_media, caption_lines, persist_captions
 from ai_billing import ensure_credits, charge_credits, credit_cost
@@ -474,6 +474,24 @@ def _reserve_detail_version(c,*,club_id:int,activity_id:int,origin:str,direction
     return int(c.execute('SELECT last_insert_rowid()').fetchone()[0]),version_no
 
 
+def _auto_cover_if_empty(c,*,activity_id:int,master:dict,detail:dict|None=None)->str|None:
+    """活动还没有封面时，从它**自己的素材**里挑一张补上；已有封面一律不动。
+
+    为什么需要这一步：`activities.cover` 是独立字段，全项目只有「上传封面」接口会写它，
+    AI 生成流程从头到尾不碰 —— 于是素材里明明躺着一整个 PPT 抽出来的几十张照片，
+    活动列表却挂着「未设封面」，C 端卡片只能显示品牌渐变兜底（用户 2026-10-17 截图实证）。
+    这里只做「别让新活动光着上架」的兜底：**绝不覆盖人手动上传或手动选过的那张**，
+    用户的决定永远优先于启发式打分。
+    """
+    r=c.execute('SELECT cover FROM activities WHERE id=?',(activity_id,)).fetchone()
+    if r and str(r['cover'] or ''):return None
+    m=pick_cover_media(master,detail)
+    url=str((m or {}).get('url') or '')
+    if not url:return None
+    c.execute('UPDATE activities SET cover=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(url,activity_id))
+    return url
+
+
 def _finalize_detail_version(c,*,version_id:int,activity_id:int,detail:dict,master:dict,credits:int=0,
                              gateway:str|None=None,model:str|None=None)->None:
     c.execute('''UPDATE activity_detail_versions SET narrative=?,outline=?,detail_json=?,master_json=?,credits_charged=?,
@@ -481,6 +499,9 @@ def _finalize_detail_version(c,*,version_id:int,activity_id:int,detail:dict,mast
         str(detail.get('coreSellingIdea') or ''),detail_outline(detail),jdump(detail),jdump(master),credits,
         gateway,model,version_id))
     c.execute('UPDATE activities SET detail_version_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(version_id,activity_id))
+    # 封面不是详情的一部分，但「AI 明明生成了整篇图文、列表里却没有一张图」是老板第一眼
+    # 就会看到的问题。落版时顺手补一次（已有封面则跳过），新生成的活动从此自带封面。
+    _auto_cover_if_empty(c,activity_id=activity_id,master=master,detail=detail)
 
 
 def _release_detail_version(c,version_id:int)->None:
@@ -1220,6 +1241,8 @@ def update_activity(club_id:int,activity_id:int,payload:dict=Body(...)):
         sets=','.join([f'{k}=?' for k in fields]+['activity_master_json=?','detail_json=?','updated_at=CURRENT_TIMESTAMP'])
         c.execute(f'UPDATE activities SET {sets} WHERE id=? AND club_id=?',
                   (*fields.values(),jdump(master),jdump(detail),activity_id,club_id))
+        # 手工建的活动（没有走 AI 生成）也可能带着素材却一直没有封面，编辑保存时补一次。
+        _auto_cover_if_empty(c,activity_id=activity_id,master=master,detail=detail)
     return {'ok':True,'updated':sorted(list(fields.keys())+(['checklist'] if checklist is not None else []))}
 
 
@@ -1284,6 +1307,29 @@ async def upload_activity_cover(club_id:int, activity_id:int, file:UploadFile=Fi
     with conn() as c:
         c.execute('UPDATE activities SET cover=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',(url,activity_id,club_id))
     return {'cover':url}
+
+@app.post('/api/club/{club_id}/activities/{activity_id}/cover/auto')
+def auto_activity_cover(club_id:int,activity_id:int):
+    """从活动自己的素材里挑一张当封面（老板主动点的，允许覆盖已有封面）。
+
+    与落版时的自动兜底是同一个挑选函数（pick_cover_media）：优先沿用详情首图，
+    否则按「风景主题加分 / 餐食人像手作减分 / 大图优先」打分。素材里只有 logo、
+    图表或尺寸过小的图时**宁可返回 422 让人手动上传，也不推一张劣质图当门面**。
+    """
+    club_or_404(club_id)
+    with conn() as c:
+        a=row(c.execute('SELECT id,activity_master_json,detail_json FROM activities WHERE id=? AND club_id=?',
+                        (activity_id,club_id)))
+        if not a:raise HTTPException(404,'活动不存在')
+        master=jload(a.get('activity_master_json'),{}) or {}
+        detail=jload(a.get('detail_json'),{}) or {}
+        m=pick_cover_media(master,detail)
+        url=str((m or {}).get('url') or '')
+        if not url:
+            raise HTTPException(422,'这份资料里没有可用作封面的照片（只有 logo/图表，或图片尺寸太小）。请手动上传一张。')
+        c.execute('UPDATE activities SET cover=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',(url,activity_id,club_id))
+    return {'cover':url,'ref':m.get('ref'),'desc':str(m.get('desc') or '')[:100]}
+
 
 @app.get('/api/club/{club_id}/activities/{activity_id}/cover')
 def club_activity_cover(club_id:int, activity_id:int):

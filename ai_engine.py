@@ -1646,6 +1646,59 @@ def _img_text(m:dict[str,Any])->str:
     tags=m.get('tags') if isinstance(m.get('tags'),list) else []
     return (str(m.get('desc') or '')+' '+' '.join(str(x) for x in tags)).strip()
 
+# ── 活动封面自动挑选（2026-10-17 用户反馈：「AI 生成活动，怎么没有图片呢」）────────
+# 根因：`activities.cover` 是一个独立字段，只有「上传封面」接口会写它；AI 生成流程从头到尾
+# 不碰这个字段。于是素材里明明躺着一整个 PPT 抽出来的三十多张照片，活动列表却挂着「未设封面」，
+# C 端卡片只能走品牌渐变兜底 —— 顾客看到的是「这活动连张图都没有」。
+#
+# 这里选一张最像「活动封面」的：优先复用详情首图（hero）——那是模型自己挑的开场图，
+# 封面与详情首屏同一张，点进去视觉是连贯的；没有 hero 时按主题 + 构图 + 分辨率打分。
+# 门槛（kind/尺寸/文档类黑名单）与详情配图完全一致，绝不把 logo、证书、图表推成封面。
+_COVER_PREFER_TOPICS={'山景与天象','森林与植被','徒步与队伍','营地与帐篷','动物'}
+_COVER_AVOID_TOPICS={'餐食','唐卡与绘画','人像与藏装','手作与体验','住宿','交通','建筑与寺院'}
+_COVER_BAD_KIND={'logo','icon','chart','diagram','text','qr','screenshot','map','table'}
+# 小图不能当封面：C 端卡片要铺满 16:9，61×35 的 PPT 装饰图放上去就是一团马赛克。
+_COVER_MIN_W,_COVER_MIN_H=600,400
+
+def _cover_ok(m:dict[str,Any])->bool:
+    """一张图有没有资格当封面（与详情配图的硬闸同源）。"""
+    if not isinstance(m,dict) or not str(m.get('url') or ''):return False
+    if str(m.get('usable')).lower() in ('false','0','no'):return False
+    if str(m.get('kind') or '').lower() in _COVER_BAD_KIND:return False
+    if _DOC_PHOTO_RE.search(str(m.get('desc') or '') or str(m.get('name') or '')):return False
+    try:w,h=int(m.get('width') or 0),int(m.get('height') or 0)
+    except (TypeError,ValueError):return False
+    return w>=_COVER_MIN_W and h>=_COVER_MIN_H
+
+def pick_cover_media(master:dict[str,Any]|None,detail:dict[str,Any]|None=None)->dict[str,Any]|None:
+    """从 master.media 里挑一张最适合当活动封面的图；没有合格候选返回 None。
+
+    调用方**只能在封面为空时自动写入**：用户手动上传/手动选过的封面永远优先，
+    自动挑选只是「别让新活动光着上架」的兜底，不能覆盖人的决定。
+    """
+    media=[m for m in ((master or {}).get('media') or []) if isinstance(m,dict)]
+    if not media:return None
+    # ① 详情首图优先：模型生成详情时已经把「最能开口的那张」挑出来了，
+    #    封面沿用它，列表卡片和详情首屏就是同一张照片，读者不会觉得是两场活动。
+    by_ref={str(m.get('ref')):m for m in media if m.get('ref')}
+    for b in (detail or {}).get('blocks') or []:
+        if not isinstance(b,dict) or b.get('type')!='hero':continue
+        for r in b.get('mediaRefs') or []:
+            m=by_ref.get(str(r))
+            if m and _cover_ok(m):return m
+    # ② 打分挑选：风景主题加分、具体体验（餐食/人像/手作/住宿）减分、横图更适合 16:9 卡片。
+    best,best_score=None,-10**9
+    for m in media:
+        if not _cover_ok(m):continue
+        topics=_topic_set(_img_text(m))
+        try:w,h=int(m.get('width') or 0),int(m.get('height') or 0)
+        except (TypeError,ValueError):continue
+        score=3.0*len(topics&_COVER_PREFER_TOPICS)-2.5*len(topics&_COVER_AVOID_TOPICS)
+        if w>=h:score+=1.5
+        score+=min((w*h)/2_000_000.0,3.0)          # 大图优先，但别让分辨率一家独大
+        if score>best_score:best,best_score=m,score
+    return best
+
 def _match_score(text_topics:set[str],text_bg:set[str],img:dict[str,Any])->int|None:
     """图与这段文字的匹配分：主题同类最重，字面重合次之，主题互斥直接扣分。
 
