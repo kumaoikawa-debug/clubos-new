@@ -477,16 +477,21 @@
   // 模型可能把占位符写成裸文本而不是 <img src="...">，两种都要能救回来
   function resolveLongpic(html, mm) {
     var t = String(html || '');
-    // ① img 标签里的占位符
-    t = t.replace(/(<img\b[^>]*?src=["'])\s*\{\{\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}\}\s*(["'])/gi,
-      function (_, pre, ref, post) {
+    // ① img 标签里的占位符：模型可能写 {{media:ref}} 或 {media:ref}，src 双/单引号均可
+    //    ★ 2026-10-18 实坑：真模型偶尔直出单花括号 {media:ref}，旧正则只认 {{media:ref}}，
+    //      导致整张长图预览与导出全白（占位符原样进 SVG，外链被 sanitize 成空白）。
+    t = t.replace(/(<img\b[^>]*?src=(["']))\s*\{\{?\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}?\}\s*\2/gi,
+      function (_, pre, q, ref) {
         var u = toUrl(ref, mm);
-        return u ? pre + esc(u) + post : '';
+        return u ? pre + esc(u) + q : '';
       });
-    // ② 没有任何 src 的 img（模型只写了 {{media:xx}}）→ 丢掉，防止留下 <img src="">
-    t = t.replace(/<img\b[^>]*src=["']\s*["'][^>]*>/gi, '');
-    // ③ 裸占位符：不在 img 里的（实测 qwen3-max 会这么写）→ 保留原样，不当成 URL
-    t = t.replace(/\s*\{\{\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}\}/g,
+    // ② 没有任何 src 的 img（解析失败 / 模型只写了占位符）→ 丢掉，防止留下 <img src="">
+    t = t.replace(/<img\b[^>]*>/gi, function (tag) {
+      if (/\{\{?\s*media\s*:/.test(tag)) return '';
+      return /\bsrc=("|')/i.test(tag) ? tag : '';
+    });
+    // ③ 裸占位符：不在 img 里的（实测 qwen3-max 会这么写）→ 去掉占位符本身（保留前后文字）
+    t = t.replace(/\{\{?\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}?\}/g,
       function (whole, ref) { return toUrl(ref, mm) ? '' : whole; });
     return t;
   }

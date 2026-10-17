@@ -340,12 +340,20 @@ function edParas(v){
    高度由 document 级 capture 监听在 iframe load 后量取。 */
 function resolveMediaRefsHtml(html,mm){
   var t=String(html||'');
-  t=t.replace(/(<img\b[^>]*?src=["'])\s*\{\{\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}\}\s*(["'])/gi,
-    function(_,pre,ref,post){var u=mm&&mm[ref]&&mm[ref].url;return u?pre+esc(u)+post:'';});
-  t=t.replace(/<img\b[^>]*src=["']\s*["'][^>]*>/gi,'');          /* 漏网空 src 的 img */
-  t=t.replace(/\{\{\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}\}/g,function(){return '';}); /* 裸占位符 */
-  /* 被 hardenPromoHtml 剥掉外部 src 的 <img> 此时已无 src，整标签删，不留裂图 */
-  t=t.replace(/<img\b[^>]*>/gi,function(tag){return /src="/i.test(tag)?tag:'';});
+  /* 模型可能写双花括号 {{media:ref}} 或单花括号 {media:ref}；src 双引号 / 单引号均可。
+     两种都要能救回成真实图片地址；ref 不在媒体清单里就整段删掉，不留裂图。
+     ★ 2026-10-18 实坑：真模型直出的详情 HTML 用单花括号 + 单引号（src='{media:img_07}'），
+     旧正则只认 {{media:ref}} + 双引号 src，于是这些 img 连「删占位符」都匹配不上、
+     又因为 src 是单引号逃过末尾的 /src="/ 保留判定 → 整批图片被静默删光，详情页一片空白。 */
+  t=t.replace(/\bsrc=(["'])\s*\{\{?\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}?\}\s*\1/gi,
+    function(_,q,ref){var u=mm&&mm[ref]&&mm[ref].url;return u?('src="'+esc(u)+'"'):'';});
+  /* 解析失败仍带占位符 / 没有 src 的 img → 整标签删，不留裂图与空白框 */
+  t=t.replace(/<img\b[^>]*>/gi,function(tag){
+    if(/\{\{?\s*media\s*:/.test(tag))return '';
+    return /\bsrc=("|')/i.test(tag)?tag:'';
+  });
+  /* 不在 img 里的裸占位符（{media:ref} / {{media:ref}}）→ 直接删，不当成 URL */
+  t=t.replace(/\{\{?\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}?\}/g,function(){return '';});
   return t;
 }
 function hardenPromoHtml(html){
