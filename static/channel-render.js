@@ -581,11 +581,51 @@
      白白拖慢导出；JPEG 在这种照片内容上肉眼无损，体积只有零头。 */
   var _INLINE_MIME = 'image/jpeg';
   var _INLINE_Q = 0.92;
-  function _inlineOne(im) {
+  /* 内联一张图：先走 canvas 重编码（体积最小，保持既有行为），
+     canvas 被判「污染」或内存不足（getContext/drawImage 直接抛）时，
+     退回「直接取原始字节转 data URI」。
+     ★ 2026-10-16 用户实测「下载后图片全白」后加的第二条路：
+       原来只有 canvas 一条路，抛异常就保留外链 src，
+       而 foreignObject 光栅化时外链图片不加载 → 那个位置就是一块背景色。
+       两条路都走不通才算失败。 */
+  function _canvasDataUri(im) {
     var cv2 = document.createElement('canvas');
     cv2.width = im.naturalWidth; cv2.height = im.naturalHeight;
     cv2.getContext('2d').drawImage(im, 0, 0);
-    im.setAttribute('src', cv2.toDataURL(_INLINE_MIME, _INLINE_Q));
+    return cv2.toDataURL(_INLINE_MIME, _INLINE_Q);
+  }
+  function _fetchDataUri(url) {
+    return fetch(url, { credentials: 'same-origin' }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.blob();
+    }).then(function (b) {
+      return new Promise(function (res, rej) {
+        var fr = new FileReader();
+        fr.onload = function () { res(String(fr.result || '')); };
+        fr.onerror = function () { rej(new Error('图片读取失败')); };
+        fr.readAsDataURL(b);
+      });
+    });
+  }
+  var _BLANK_PX = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+
+  /* 「这张图本身有没有内容」：纯色底图（白底 logo、纯色分割条）不该参与
+     「到底画上去了没有」的自检，否则会把正常成品判成失败、白白重画一次。
+     缩到 24×24 看灰度方差，有明暗变化的才算照片。 */
+  function _hasContent(im) {
+    try {
+      if (!(im.naturalWidth > 0)) return false;
+      var s = 24, cv = document.createElement('canvas');
+      cv.width = s; cv.height = s;
+      var ctx2 = cv.getContext('2d');
+      ctx2.drawImage(im, 0, 0, s, s);
+      var d = ctx2.getImageData(0, 0, s, s).data;
+      var n = 0, mean = 0, i, v = 0;
+      for (i = 0; i < d.length; i += 4) { mean += d[i]; n++; }
+      mean /= (n || 1);
+      for (i = 0; i < d.length; i += 4) { v += (d[i] - mean) * (d[i] - mean); }
+      return (v / (n || 1)) > 24;
+    } catch (e) { return false; }
   }
 
   async function inlineImages(doc) {
@@ -595,9 +635,14 @@
       if (!im.getAttribute('src')) return null;
       if (/^data:/i.test(im.getAttribute('src'))) return null;   // 已经是内联的跳过
       return new Promise(function (res) {
-        var finish = function () {
+        var done = false;
+        var finish = async function () {
+          if (done) return; done = true;
           if (im.complete && im.naturalWidth > 0) {
-            try { _inlineOne(im); } catch (e) { failed++; /* canvas 被污染：留原 src */ }
+            var raw = im.getAttribute('src'), uri = '';
+            try { uri = _canvasDataUri(im); } catch (e) { uri = ''; }
+            if (!uri) { try { uri = await _fetchDataUri(raw); } catch (e2) { uri = ''; } }
+            if (uri) im.setAttribute('src', uri); else failed++;
           } else {
             failed++;                    // 压根没加载出来的图，也要如实计数，不许静默留白
           }
@@ -606,14 +651,20 @@
         im.addEventListener('load', finish, { once: true });
         im.addEventListener('error', function () {
           // 裂图换成 1×1 透明像素，别让 foreignObject 为一张挂掉的图整块失败
-          im.setAttribute('src', 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7');
-          failed++;
-          res(1);
+          if (!done) { done = true; im.setAttribute('src', _BLANK_PX); failed++; res(1); }
         }, { once: true });
         if (im.complete) finish();          // 已加载完的不会触发 load，得主动处理
       });
     }));
-    return { total: imgs.length, failed: failed };
+    /* 记下每张图在长图里的位置 + 「本身有没有内容」，导出后要用它检查
+       「这张图到底画上去了没有」—— 模型放的照片整块纯色是不可能的。 */
+    var shots = Array.prototype.slice.call(doc.images || []).map(function (im) {
+      var r = im.getBoundingClientRect();
+      var sx = doc.documentElement.scrollLeft || 0, sy = doc.documentElement.scrollTop || 0;
+      return { x: Math.max(0, r.left + sx), y: Math.max(0, r.top + sy),
+               w: Math.round(r.width), h: Math.round(r.height), hasContent: _hasContent(im) };
+    });
+    return { total: imgs.length, failed: failed, shots: shots };
   }
 
   async function exportLongpicPng(paint, ctx, fileBase) {
@@ -666,18 +717,23 @@
        原因是浏览器给 blob: 的 SVG 标了不透明来源，画进 canvas 就污染了。
        （先前误以为 data URI 会因长度失败而改用 Blob URL，正好踩中这个坑；
          内联图换成 JPEG 后 SVG 只有 ~1.5MB，data URI 完全够用。） */
-    var img = await new Promise(function (res, rej) {
-      var im = new Image();
-      im.onload = function () { res(im); };
-      im.onerror = function () { rej(new Error('浏览器无法把排版结果转成图片')); };
-      im.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-    });
-
     var cv = document.createElement('canvas');
     cv.width = W * 2; cv.height = H * 2;             // 2 倍图：公众号里缩排也不发虚
     var c = cv.getContext('2d');
-    c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height);
-    c.drawImage(img, 0, 0, W * 2, H * 2);
+    var shots = (inlineStat && inlineStat.shots) || [];
+    var blanks = 0;
+    /* ★★ 画完自检 + 自动重画一次（2026-10-16 用户实测「下载后图片全白」）：
+       drawImage 对「还没解码完的图片」不报错、也不画 —— 于是成品里那几张照片位置
+       就是一块背景色，而 failed 计数是 0，用户拿不到任何提示。
+       模型放照片的地方整块纯色是不可能的，所以直接按位置采样：纯色 = 没画上 = 重画。 */
+    for (var attempt = 0; attempt < 2; attempt++) {
+      var img = await _svgToImage(svg);
+      c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height);
+      c.drawImage(img, 0, 0, W * 2, H * 2);
+      blanks = _blankShots(c, cv, shots);
+      if (!blanks) break;
+      await new Promise(function (r) { setTimeout(r, 600); });   // 给内嵌图片解码留时间，再来一次
+    }
 
     /* ★★ 2026-10-08 兜底：**从底部自动裁掉纯白**。
        用户第二次截图仍显示「下面一大片白」。两种可能：
@@ -716,7 +772,60 @@
     var blob = await new Promise(function (res) { cv.toBlob(res, 'image/jpeg', 0.92); });
     if (!blob) throw new Error('浏览器拒绝生成图片');
     downloadBlob(blob, fileBase + '_长图_' + W + 'x' + finalH + '_2x.jpg');
-    return inlineStat;      // 交给调用方如实告知「有几张图没能载入」
+    // 交给调用方如实告知「有几张图没能载入」：内联失败 + 画完自检仍空白的
+    return { total: (inlineStat && inlineStat.total) || 0,
+             failed: ((inlineStat && inlineStat.failed) || 0) + blanks };
+  }
+
+  /* SVG → 可绘制的 Image。
+     ★ 关键：onload 只代表 SVG 文档本身加载完，foreignObject 里那些内联图片
+       **可能还在解码**；页面不可见（用户切走标签页等下载）时这个窗口会明显拉长。
+       以前 onload 后直接 drawImage，等于把「还没解码完的图」画进画布 → 静默全白。
+       decode() 会等到图片真正可绘制，再补两帧让合成器跟上。 */
+  function _svgToImage(svg) {
+    return new Promise(function (res, rej) {
+      var im = new Image();
+      var settled = false;
+      im.onload = function () {
+        if (settled) return; settled = true;
+        var go = function () {
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () { res(im); });
+          });
+        };
+        if (im.decode) im.decode().then(go, go); else go();
+      };
+      im.onerror = function () {
+        if (!settled) { settled = true; rej(new Error('浏览器无法把排版结果转成图片')); }
+      };
+      im.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    });
+  }
+
+  /* 在成品画布上按「照片原本的位置」取 5 个小块，灰度极差 ≤4 就是整块纯色 = 那张图没画上。 */
+  function _blankShots(c, cv, shots) {
+    var pts = [[0.25, 0.25], [0.75, 0.25], [0.5, 0.5], [0.25, 0.75], [0.75, 0.75]];
+    var out = 0;
+    (shots || []).forEach(function (s) {
+      if (!s.hasContent || s.w < 30 || s.h < 30) return;
+      var x0 = s.x + s.w * 0.18, x1 = s.x + s.w * 0.82;
+      var y0 = s.y + s.h * 0.18, y1 = s.y + s.h * 0.82;
+      var min = 255, max = 0, got = 0;
+      for (var p = 0; p < pts.length; p++) {
+        var px = Math.round((x0 + (x1 - x0) * pts[p][0]) * 2) - 4;   // ×2：成品是 2 倍图
+        var py = Math.round((y0 + (y1 - y0) * pts[p][1]) * 2) - 4;
+        if (px < 0 || py < 0 || px + 8 > cv.width || py + 8 > cv.height) continue;
+        var d = null;
+        try { d = c.getImageData(px, py, 8, 8).data; } catch (e) { return; }
+        for (var i = 0; i < d.length; i += 4) {
+          if (d[i] < min) min = d[i];
+          if (d[i] > max) max = d[i];
+          got++;
+        }
+      }
+      if (got && (max - min) <= 4) out++;
+    });
+    return out;
   }
 
   function downloadBlob(blob, name) {
