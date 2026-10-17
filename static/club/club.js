@@ -1702,7 +1702,7 @@ async function openClubOrder(id){
     +`<div class="list-row__sub">单价 ${money(i.unit_price)} · 数量 ${i.quantity}${i.unit_cost_snapshot?` · 成本快照 ${money(i.unit_cost_snapshot)}`:''}</div>`
     +`<div class="list-row__end"><strong>${money(Number(i.unit_price||0)*Number(i.quantity||0))}</strong></div></div></div>`).join('')
     ||'<div class="sub">这笔订单没有商品明细。</div>';
-  const body=`<div style="margin-top:6px">${line('订单号','#'+o.id)}${line('买家',o.buyer)}${line('下单时间',o.created_at)}`
+  const body=`<div style="margin-top:6px">${line('订单号','#'+o.id)}${line('买家',o.buyer)}${line('收货人',[o.shipping_consignee,o.shipping_phone].filter(Boolean).join(' ')||'历史订单无地址')}${line('收货地址',o.shipping_address||'历史订单无地址')}${line('下单时间',o.created_at)}`
     +`${line('订单状态',enumCn(o.status))}${line('订单金额',money(items))}${line('本单佣金',money(o.club_commission))}`
     +`${line('物流',[o.carrier,o.tracking_no].filter(Boolean).join(' ')||'待发货')}${line('售后',o.after_sales_status||'无')}</div>`
     +`<div style="margin-top:14px"><b class="sub">商品明细</b><div style="margin-top:6px">${parts}</div></div>`;
