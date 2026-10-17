@@ -232,6 +232,13 @@ async function loadMall(){
   if(box&&!box.children.length)box.innerHTML=wSkMini(4);
   MALL_ALL=await api(`/api/public/clubs/${CLUB}/mall/products`);
   renderMall();renderCartBadge();
+  /* 分享出去的商品链接带 #pd=<id>：拉完列表后直接进那件商品的详情页。
+     只认一次（_pdDeepTried）—— 否则每次切回装备 tab 都会把用户扔进详情。 */
+  if(!window._pdDeepTried){
+    window._pdDeepTried=true;
+    const m=/^#pd=(\d+)$/.exec(location.hash||'');
+    if(m)openProduct(Number(m[1]));
+  }
 }catch(e){loaderError('#publicProducts',e,'loadMall 加载失败')}}
 /* 左侧竖栏是分类，右侧 tab 是排序 —— 参考图那种「男士/女士/鞋履 + 软壳夹克/三合一」是两级品类，
    我们库里没有第二层，硬造一层只会让老板在后台多维护一堆没意义的字段。这里把它变成顾客真会用的排序。 */
@@ -470,11 +477,16 @@ function cartStep(k,d){
 function cartClear(){cartSave([]);CART_DETAILS={}}
 function cartCount(){return cartLines().reduce((s,x)=>s+Math.max(1,Number(x.qty||1)),0)}
 function renderCartBadge(){
-  const b=document.getElementById('cartBadge');if(!b)return;
   const n=cartCount();
-  b.textContent=n>99?'99+':String(n);
-  b.hidden=n<=0;
-  b.parentElement?.classList.toggle('has',n>0);
+  /* 三颗角标：顶栏购物车钮 + 商品详情页顶栏 + 详情页吸底条。
+     后两颗只在详情页渲染后才存在于 DOM，取不到就跳过（原来是 `if(!b)return`，
+     结果详情页加购后角标永远是 0 —— 实测踩过）。 */
+  ['cartBadge','pdBarBadge','pdFootBadge'].forEach(id=>{
+    const b=document.getElementById(id);if(!b)return;
+    b.textContent=n>99?'99+':String(n);
+    b.hidden=n<=0;
+  });
+  document.getElementById('cartBadge')?.parentElement?.classList.toggle('has',n>0);
 }
 /* 购物车里的商品详情：带 user_id 回源才有 memberPrice（列表接口是公共数据，不带会员价）。 */
 function cartFindProduct(pid){return (MALL_ALL||[]).find(x=>String(x.id)===String(pid))||null}
@@ -658,99 +670,297 @@ async function openProduct(id){
   P_VID=first?first.id:null;P_QTY=1;
   box.innerHTML=productDetailHtml();
   window.scrollTo({top:0,behavior:'instant'});
-  bindProductGallery();
+  bindProductGallery();pdBindScroll();
+  renderCartBadge();
+  const m=$('#pdMask'),sh=$('#pdSheet');
+  if(m){m.classList.remove('on');m.hidden=true}
+  if(sh){sh.classList.remove('on');sh.hidden=true}
+}
+/* ── 商品详情页（对标 PEAKTRACE 详情页）────────────────────────────────────
+   版式来自参考稿：满宽图集（顶栏透明压在图上）→ 主信息（眉题 / 标题 / 副题 /
+   价格行）→ 两条入口行 → 可折叠的「商品详情 / 产品信息 / 规格与库存」→ 商品推荐
+   → 温馨提示 → 吸底操作条（购物车 + 加入购物车 + 立即购买）。
+   ★ 规格与数量不占页面：点两颗 CTA 才从底部弹出选择层 —— 参考稿就是这么分的，
+     「看」和「选」是两个动作，混在一页里信息密度会塌。
+   ★ 页面每一行都得有真数据：眉题取分类、副题取货号、产品信息取库存与会员折扣、
+     规格表取规格的库存与价格。参考稿那种「身高体重区间」我们库里没有，
+     一律不画 —— 不拿假参数填版式。后台配了真实规格后，尺码行与规格表自动出现。 */
+function pdClubName(){return document.querySelector('.web-top strong')?.textContent||'远拓户外'}
+/* 商品推荐：同页其它**有图**的在售商品。没有就整块不画 —— 空标题比没有标题更难看。 */
+function pdRecCards(cur){
+  const list=(MALL_ALL||[]).filter(x=>String(x.id)!==String(cur.id)&&productImages(x).length).slice(0,3);
+  if(!list.length)return '';
+  return `<section class="w-pd__rec"><div class="w-pd__rechd">商品推荐</div><div class="w-pd__recgrid">`
+    +list.map(x=>`<button class="w-pd__reccard" type="button" onclick="openProduct(${x.id})">
+        <span class="w-pd__recmedia"><img src="${esc(productImages(x)[0])}" alt="${esc(x.name)}" loading="lazy"></span>
+        <span class="w-pd__recname">${esc(x.name)}</span>
+        <span class="w-pd__recsub">${esc(x.category||'装备')}</span>
+        <span class="w-pd__recprice">${money(x.price)}</span>
+      </button>`).join('')+`</div></section>`;
+}
+/* 商品介绍按句拆点：description 是整段话，参考稿「全部性能」是两条短句。
+   拆不开（只有一句）就不画这个标题 —— 只有一个要点的列表等于没有列表。 */
+function pdBullets(p){
+  const s=String(p.description||'').split(/[。；;\n]/).map(x=>x.trim()).filter(x=>x.length>=4);
+  return s.length>1?s.slice(0,6):[];
 }
 function productDetailHtml(){
   const p=P_CUR;if(!p)return '';
-  const imgs=productImages(p),vs=productVariants(p),v=curVariant();
+  const imgs=productImages(p),v=curVariant();
   const price=productPrice(p,v),stock=productStock(p,v),out=stock<=0;
   /* 会员价要明着写出来：只写「会员折扣自动生效」而不给数字，
      顾客在结算前根本不知道自己到底省了多少，那句承诺等于没说。 */
   const mp=memberPriceOf(p,v),isMem=mp<price-0.004;
-  const sku=p.sku?String(p.sku):'';
-  return `<button class="w-back" type="button" onclick="showMallList()">${WI.back}返回装备</button>
+  const sku=p.sku?String(p.sku):'',cat=p.category||'装备';
+  const en=MALL_EN[cat]||'';
+  const vs=productVariants(p);
+  /* 只有一个规格时也给出一个「默认规格」行：规格选择层与规格表都要有东西可显示，
+     但**不显示尺码选择**（productVariants 已按约定在 ≤1 个规格时返回空）。 */
+  const sizes=vs.length?vs:[{id:null,name:'默认规格',price:null,stock:stock}];
+  const sameCat=(MALL_ALL||[]).filter(x=>x.category===cat).length;
+  const bullets=pdBullets(p);
+  return `<div class="w-pd">
+  <header class="w-pd__bar" id="pdBar">
+    <button class="w-pd__barback" type="button" aria-label="返回装备列表" onclick="showMallList()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7"/></svg></button>
+    <div class="w-pd__barinfo">
+      ${imgs[0]?`<img src="${esc(imgs[0])}" alt="" aria-hidden="true">`:''}
+      <div class="w-pd__barinfo__txt"><b>${esc(p.name)}</b><span>${money(mp)}</span></div>
+    </div>
+    <button class="w-pd__barbtn" type="button" aria-label="复制商品链接" onclick="pdCopyLink()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 14.4l4.8-4.8"/><path d="M11.2 6.6 12.8 5a3.7 3.7 0 0 1 5.2 5.2l-1.6 1.6"/><path d="M12.8 17.4 11.2 19A3.7 3.7 0 0 1 6 13.8l1.6-1.6"/></svg></button>
+    <button class="w-pd__barbtn" type="button" aria-label="购物车" onclick="openCart()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/></svg><i class="w-pd__barbadge" id="pdBarBadge" hidden>0</i></button>
+  </header>
   <div class="w-pd__gal" id="pdGal">
     ${imgs.length?`<div class="w-pd__track" id="pdTrack">${imgs.map((u,i)=>'<div class="w-pd__slide"><img src="'+esc(u)+'" alt="'+esc(p.name)+'"'+(i?' loading="lazy"':'')+'></div>').join('')}</div>`
       :'<div class="w-pd__noimg">'+WI.bag+'<span>暂无商品图片</span></div>'}
     ${imgs.length>1?`<div class="w-pd__dots" id="pdDots">${imgs.map((_,i)=>'<i'+(i===0?' class="on"':'')+'></i>').join('')}</div><div class="w-pd__count" id="pdCount">1/${imgs.length}</div>`:''}
   </div>
-  <div class="w-pd__head">
-    <div class="w-pd__price">${money(mp)}${isMem?`<s class="w-pd__was">${money(price)}</s><i class="w-pd__mem">会员价</i>`:''}</div>
-    <h2 class="w-pd__name">${esc(p.name)}</h2>
-    <div class="w-pd__meta">${esc(p.category||'装备')}${sku?' · 货号 '+esc(sku):''}${out?'':' · 库存 '+stock+' 件'}</div>
-  </div>
-  ${vs.length?`<div class="w-pd__block">
-    <div class="w-pd__label">选择规格${v?' <em>'+esc(v.name)+'</em>':''}</div>
-    <div class="w-pd__opts">${vs.map(x=>{
-      const o=Number(x.stock||0)<=0;
-      return '<button class="w-pd__opt'+(String(x.id)===String(P_VID)?' on':'')+(o?' is-out':'')+'" type="button"'+(o?' disabled':'')+' onclick="pickVariant('+x.id+')">'+esc(x.name)+(o?'<i>缺货</i>':(x.price!=null?'<i>'+money(x.price)+'</i>':''))+'</button>';
-    }).join('')}</div>
-  </div>`:''}
-  <div class="w-pd__block">
-    <div class="w-pd__label">数量<em>${out?'暂时缺货':'库存 '+stock+' 件'}</em></div>
-    <div class="w-pd__qty">
-      <button class="w-pd__qbtn" type="button" data-pstep="-1"${P_QTY<=1?' disabled':''} aria-label="减少数量">−</button>
-      <output id="pdQty">${P_QTY}</output>
-      <button class="w-pd__qbtn" type="button" data-pstep="1"${(out||P_QTY>=stock)?' disabled':''} aria-label="增加数量">+</button>
+  <div class="w-pd__main">
+    <div class="w-pd__eyebrow">${esc(en?en+' · '+cat:cat)}</div>
+    <h1 class="w-pd__title">${esc(p.name)}</h1>
+    <div class="w-pd__subtitle">${esc(pdClubName())}${sku?' · 款号 '+esc(sku):''}</div>
+    <div class="w-pd__pricerow">
+      <b class="w-pd__now">${money(mp)}</b>${isMem?`<s class="w-pd__was">${money(price)}</s><i class="w-pd__mem">会员价</i>`:''}
+      <span class="w-pd__stock${out?' is-out':''}">${out?'暂时缺货':'库存 '+stock+' 件'}</span>
+      <button class="w-pd__pricerow__share" type="button" aria-label="复制商品链接" onclick="pdCopyLink()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 14.4l4.8-4.8"/><path d="M11.2 6.6 12.8 5a3.7 3.7 0 0 1 5.2 5.2l-1.6 1.6"/><path d="M12.8 17.4 11.2 19A3.7 3.7 0 0 1 6 13.8l1.6-1.6"/></svg></button>
+    </div>
+    <div class="w-pd__rows">
+      <button class="w-pd__row" type="button" onclick="pdJumpCat('${esc(cat)}')">
+        <span class="w-pd__rowic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg></span>
+        <span class="w-pd__rowtxt">同分类装备 · ${esc(cat)}</span>
+        <span class="w-pd__rowend">${sameCat} 件</span>
+        <span class="w-pd__rowarrow"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></span>
+      </button>
+      ${p.description?`<button class="w-pd__row" type="button" onclick="pdGotoSec('detail')">
+        <span class="w-pd__rowic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h7l4 4v12H7z"/><path d="M14 4v4h4"/><path d="M10 12h6M10 16h6"/></svg></span>
+        <span class="w-pd__rowtxt">商品介绍与规格</span>
+        <span class="w-pd__rowarrow"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></span>
+      </button>`:''}
     </div>
   </div>
-  <div class="w-pd__block">
-    <div class="w-pd__label">服务</div>
-    <div class="w-pd__svc">
-      <div><b>平台统一发货</b><span>下单后由平台仓库统一出库，物流单号可在订单里查看。</span></div>
-      <div><b>会员折扣自动生效</b><span>结算时按你的会员等级自动计算，不需要先领券。</span></div>
-      <div><b>退换与售后</b><span>在「我的 · 装备订单与售后」里申请，审核进度可追踪。</span></div>
+  ${p.description?`<section class="w-pd__sec is-open" id="pdSecDetail">
+    <button class="w-pd__sechd" type="button" onclick="pdToggleSec(this)" aria-expanded="true">商品详情<i>−</i></button>
+    <div class="w-pd__secbody"><p class="w-pd__desc">${esc(p.description)}</p></div>
+  </section>`:''}
+  <section class="w-pd__sec" id="pdSecSpec">
+    <button class="w-pd__sechd" type="button" onclick="pdToggleSec(this)" aria-expanded="false">产品信息<i>+</i></button>
+    <div class="w-pd__secbody" hidden>
+      <table class="w-pd__kv">
+        <tr><th>分类</th><td>${esc(cat)}</td></tr>
+        ${sku?`<tr><th>货号</th><td>${esc(sku)}</td></tr>`:''}
+        <tr><th>库存</th><td>${out?'暂时缺货':stock+' 件'}</td></tr>
+        ${isMem?`<tr><th>会员折扣</th><td>会员价 ${money(mp)}（原价 ${money(price)}）</td></tr>`:''}
+      </table>
+      ${bullets.length?`<h4 class="w-pd__subhd">全部性能</h4><ul class="w-pd__bullets">${bullets.map(b=>`<li>${esc(b)}</li>`).join('')}</ul>`:''}
     </div>
+  </section>
+  <section class="w-pd__sec" id="pdSecSize">
+    <button class="w-pd__sechd" type="button" onclick="pdToggleSec(this)" aria-expanded="false">${vs.length?'尺码对照表':'规格与库存'}<i>+</i></button>
+    <div class="w-pd__secbody" hidden>
+      <table class="w-pd__sizetab">
+        <thead><tr><th>${vs.length?'尺码':'规格'}</th><th>库存</th><th>价格</th></tr></thead>
+        <tbody>${sizes.map(s=>{
+          const so=Number(s.stock||0)<=0;
+          const sp=s.price!=null?Number(s.price):price;
+          const smp=(s.price!=null&&isMem)?mp:sp;
+          return `<tr${so?' class="is-out"':''}><td>${esc(s.name)}</td><td>${so?'缺货':s.stock+' 件'}</td><td>${money(smp)}</td></tr>`;
+        }).join('')}</tbody>
+      </table>
+      <p class="w-pd__tabnote">${vs.length?'库存与价格为实时数据，以下单瞬间的结算结果为准。':'该商品当前只有一个规格；后台新增规格后，这里会出现尺码对照表。'}</p>
+    </div>
+  </section>
+  ${pdRecCards(p)}
+  <div class="w-pd__tips">
+    <b>温馨提示</b>
+    <ul>
+      <li>会员价按会员等级自动计算，最终金额以提交订单后的服务端结算为准。</li>
+      <li>实物商品由平台仓库统一发货，下单前需先填写收货地址。</li>
+      <li>库存与价格实时变动，售罄规格无法下单。</li>
+    </ul>
   </div>
-  ${p.description?`<div class="w-pd__block">
-    <div class="w-pd__label">商品介绍</div>
-    <div class="w-pd__desc">${esc(p.description)}</div>
-  </div>`:''}
-  <div class="w-pd__cta">
-    <div class="w-pd__sum"><span>合计${isMem?'（会员价）':''}</span><b id="pdTotal">${money(mp*P_QTY)}</b></div>
-    <button class="w-pd__add" type="button"${out?' disabled':''} onclick="addCurrentToCart()">加入购物车</button>
-    <button class="w-pd__buy" type="button"${out?' disabled':''} onclick="buyProduct()">${out?'暂时缺货':'立即购买'}</button>
+  <footer class="w-pd__foot">
+    <button class="w-pd__fcart" type="button" aria-label="购物车" onclick="openCart()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/></svg><i class="w-pd__barbadge" id="pdFootBadge" hidden>0</i></button>
+    <button class="w-pd__fadd" type="button"${out?' disabled':''} onclick="pdOpenSheet('cart')">加入购物车</button>
+    <button class="w-pd__fbuy" type="button"${out?' disabled':''} onclick="pdOpenSheet('buy')">${out?'暂时缺货':'立即购买'}</button>
+  </footer>
+  </div>
+  <div class="w-pd__mask" id="pdMask" hidden onclick="pdCloseSheet()"></div>
+  <div class="w-pd__sheet" id="pdSheet" hidden>
+    <div class="w-pd__sheethd">
+      ${imgs[0]?`<span class="w-pd__sheethd__img"><img src="${esc(imgs[0])}" alt=""></span>`:''}
+      <div class="w-pd__sheethd__txt"><b>${esc(p.name)}</b><span id="pdSheetPrice">${money(mp)}</span></div>
+      <button class="w-pd__sheetclose" type="button" aria-label="关闭" onclick="pdCloseSheet()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <div class="w-pd__sheetsec">
+      <div class="w-pd__sheetlabel">${vs.length?'尺码':'规格'}<em>最多购买 <b id="pdSheetMax">5</b> 件</em></div>
+      <div class="w-pd__sizes" id="pdSheetSizes">${sizes.map(s=>{
+        const so=Number(s.stock||0)<=0;
+        return `<button class="w-pd__size${so?' is-out':''}" type="button"${so?' disabled':''} data-size="${s.id==null?'':s.id}" onclick="pdPickSize(${s.id==null?'null':s.id})">${esc(s.name)}</button>`;
+      }).join('')}</div>
+    </div>
+    <div class="w-pd__sheetsec">
+      <div class="w-pd__sheetlabel">数量</div>
+      <div class="w-pd__stepper">
+        <button class="w-pd__stp" type="button" data-sqty="-1" aria-label="减少数量">−</button>
+        <output id="pdSheetQty">1</output>
+        <button class="w-pd__stp" type="button" data-sqty="1" aria-label="增加数量">+</button>
+      </div>
+    </div>
+    <button class="w-pd__sheetcta" type="button" id="pdSheetCta" onclick="pdSheetConfirm()">加入购物车</button>
   </div>`;
 }
-function addCurrentToCart(){
-  if(!P_CUR)return;
-  const v=curVariant(),stock=productStock(P_CUR,v);
-  if(stock<=0){toast('这件装备暂时缺货');return}
-  cartAdd(P_CUR.id,v?v.id:null,P_QTY);
-  toast('已加入购物车');
+/* ── 规格 / 数量选择层 ───────────────────────────────────────────────────
+   页面只负责「看」，选择是明确的一次动作：点加入购物车或立即购买才弹出。
+   弹层里改规格要同步刷新三处 —— 价格、数量上限、CTA 文案，所以走局部重绘。 */
+let PD_MODE='cart',PD_SIZE=null,PD_QTY=1;
+function pdSizeList(){
+  const p=P_CUR;if(!p)return [];
+  const vs=productVariants(p);            /* 只有一个规格时按约定不显示规格选择 */
+  return vs.length?vs:[{id:null,name:'默认规格',price:null,stock:Number(p.stock||0)}];
 }
-/* 换规格只重画整块详情页：规格会同时影响价格、库存、数量上限和合计，
-   局部改三四处比整体重渲染更容易漏。重渲染会滚回顶部，所以先把滚动位置存回来。 */
-function pickVariant(vid){
-  if(!P_CUR)return;
-  const v=productVariants(P_CUR).find(x=>String(x.id)===String(vid));
-  if(!v||Number(v.stock||0)<=0)return;
-  P_VID=vid;P_QTY=1;
-  const y=window.scrollY;
-  const box=$('#productDetail');if(box)box.innerHTML=productDetailHtml();
-  bindProductGallery();window.scrollTo({top:y,behavior:'instant'});
+function pdCurSize(){
+  const l=pdSizeList();
+  return l.find(x=>String(x.id)===String(PD_SIZE))||l.find(x=>Number(x.stock||0)>0)||l[0]||null;
 }
-function setProductQty(n){
+function pdSheetStock(){const s=pdCurSize();return s?Number(s.stock||0):0}
+function pdMaxQty(){return Math.max(1,Math.min(5,pdSheetStock()))}
+function pdOpenSheet(mode){
   if(!P_CUR)return;
-  const stock=productStock(P_CUR,curVariant());
-  P_QTY=Math.min(Math.max(1,Number(n)||1),Math.max(1,stock));
-  const v=curVariant(),price=memberPriceOf(P_CUR,v);
-  const q=$('#pdQty');if(q)q.textContent=P_QTY;
-  const t=$('#pdTotal');if(t)t.textContent=money(price*P_QTY);
-  const box=$('#productDetail');
-  if(box){
-    const dec=box.querySelector('[data-pstep="-1"]'),inc=box.querySelector('[data-pstep="1"]');
-    if(dec)dec.disabled=P_QTY<=1;
-    if(inc)inc.disabled=P_QTY>=stock;
-  }
+  PD_MODE=mode==='buy'?'buy':'cart';
+  PD_SIZE=P_VID!=null?P_VID:null;
+  PD_QTY=1;
+  const mask=$('#pdMask'),sheet=$('#pdSheet');
+  if(!mask||!sheet)return;
+  /* ★ 两个节点必须挂到 .web-shell 下再显示（不能留在 #productDetail 里、也不能挂 body）：
+     · 留在 #productDetail：.web-shell .wview 那条淡入动画给 #wmall 留了一个 identity
+       transform，position:fixed 会被这个祖先吸住、变成相对 #wmall 定位 —— 遮罩看着正常
+       （#wmall 盒子就是整页），抽屉却跑到页面最底部去了（实测截图里只有遮罩、没有抽屉）。
+     · 挂到 body：CSS 变量全在 .web-shell 上定义，出了这个壳 var(--w-ink) 失效，
+       背景变透明、白字白底（实测 chipBg=rgba(0,0,0,0)）。
+     .web-shell 自己是 position:relative 且没有 transform，挂这儿两边都成立。 */
+  const shell=document.querySelector('.web-shell')||document.body;
+  if(mask.parentElement!==shell)shell.appendChild(mask);
+  if(sheet.parentElement!==shell)shell.appendChild(sheet);
+  mask.hidden=false;sheet.hidden=false;
+  requestAnimationFrame(()=>{mask.classList.add('on');sheet.classList.add('on')});
+  pdPaintSheet();
 }
-/* 数量步进器的两个按钮是 productDetailHtml() 现场生成的，bindWebEvents() 跑的时候
+function pdCloseSheet(){
+  const mask=$('#pdMask'),sheet=$('#pdSheet');
+  mask?.classList.remove('on');sheet?.classList.remove('on');
+  setTimeout(()=>{if(mask)mask.hidden=true;if(sheet)sheet.hidden=true},240);
+}
+function pdPaintSheet(){
+  const p=P_CUR;if(!p)return;
+  const v=productVariants(p).length?pdCurSize():null;
+  const pr=$('#pdSheetPrice');if(pr)pr.textContent=money(memberPriceOf(p,v));
+  const mx=$('#pdSheetMax');if(mx)mx.textContent=pdMaxQty();
+  $$('#pdSheetSizes .w-pd__size').forEach(b=>b.classList.toggle('on',String(b.dataset.size)===String(PD_SIZE==null?'':PD_SIZE)));
+  const q=$('#pdSheetQty');if(q)q.textContent=PD_QTY;
+  const dec=$('#pdSheet [data-sqty="-1"]'),inc=$('#pdSheet [data-sqty="1"]');
+  if(dec)dec.disabled=PD_QTY<=1;
+  if(inc)inc.disabled=PD_QTY>=pdMaxQty();
+  const cta=$('#pdSheetCta');if(cta)cta.textContent=PD_MODE==='buy'?'立即购买':'加入购物车';
+}
+function pdPickSize(vid){
+  const s=pdSizeList().find(x=>String(x.id)===String(vid));
+  if(!s||Number(s.stock||0)<=0)return;
+  PD_SIZE=vid;PD_QTY=1;
+  pdPaintSheet();
+}
+/* 数量步进器的按钮是 productDetailHtml() 现场生成的，bindWebEvents() 跑的时候
    它们还不存在 —— 直接 addEventListener 会被静默跳过，按钮看着在、点了没反应
    （报名区的人数步进器踩过同一个坑）。所以挂到 document 上做事件委托。 */
 document.addEventListener('click',e=>{
-  const b=e.target.closest&&e.target.closest('#productDetail [data-pstep]');
-  if(b)setProductQty(P_QTY+Number(b.dataset.pstep));
+  const b=e.target.closest&&e.target.closest('#pdSheet [data-sqty]');
+  if(!b)return;
+  PD_QTY=Math.min(pdMaxQty(),Math.max(1,PD_QTY+Number(b.dataset.sqty)));
+  pdPaintSheet();
 });
+function pdSheetConfirm(){
+  const p=P_CUR;if(!p)return;
+  const realVs=productVariants(p);
+  const s=realVs.length?pdCurSize():null;
+  const stock=s?Number(s.stock||0):Number(p.stock||0);
+  if(stock<=0){toast('这个规格暂时缺货');return}
+  if(PD_QTY>stock){toast('库存只剩 '+stock+' 件');return}
+  if(PD_MODE==='cart'){
+    cartAdd(p.id,s?s.id:null,PD_QTY);
+    pdCloseSheet();
+    toast('已加入购物车');
+  }else{
+    pdCloseSheet();
+    openGearCheckout([{p,v:s,qty:PD_QTY}],false);
+  }
+}
+/* 复制商品链接：详情页要能被单独打开（刷新、分享出去的链接），
+   所以链接里带 #pd=<id>，loadMall 拉完列表后会认这个哈希。 */
+function pdCopyLink(){
+  if(!P_CUR)return;
+  const u=location.origin+location.pathname+'?club_id='+CLUB+'#pd='+P_CUR.id;
+  const ok=()=>toast('商品链接已复制，粘贴给好友即可打开');
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(u).then(ok).catch(()=>pdCopyFallback(u,ok));
+  else pdCopyFallback(u,ok);
+}
+function pdCopyFallback(u,ok){
+  try{
+    const ta=document.createElement('textarea');
+    ta.value=u;ta.style.position='fixed';ta.style.opacity='0';
+    document.body.appendChild(ta);ta.select();
+    document.execCommand('copy');document.body.removeChild(ta);ok();
+  }catch(e){toast('复制失败，请手动复制地址栏链接')}
+}
+/* 可折叠区块：参考稿的「商品详情 / 产品信息 / 尺码对照表」都是点标题展开收起。
+   默认只展开「商品详情」—— 一屏能看完的才默认打开，其它的等用户要。 */
+function pdToggleSec(btn){
+  const sec=btn.closest('.w-pd__sec');if(!sec)return;
+  const open=sec.classList.toggle('is-open');
+  btn.setAttribute('aria-expanded',open?'true':'false');
+  const i=btn.querySelector('i');if(i)i.textContent=open?'−':'+';
+  const body=sec.querySelector('.w-pd__secbody');if(body)body.hidden=!open;
+}
+function pdGotoSec(which){
+  const sec=document.getElementById(which==='spec'?'pdSecSpec':'pdSecDetail');
+  if(!sec)return;
+  if(!sec.classList.contains('is-open'))pdToggleSec(sec.querySelector('.w-pd__sechd'));
+  setTimeout(()=>{const y=sec.getBoundingClientRect().top+window.scrollY-72;window.scrollTo({top:y,behavior:'smooth'})},60);
+}
+function pdJumpCat(cat){
+  MALL_CAT=cat;
+  showMallList();
+}
+/* 顶部条：压在图上时是透明的（图标直接压在照片上，与参考稿同一个做法），
+   照片完全滚过之后才变白底、显出缩略商品信息。 */
+function pdBindScroll(){
+  const bar=$('#pdBar');if(!bar)return;
+  const gal=$('#pdGal');
+  const upd=()=>{
+    if(!gal){bar.classList.toggle('is-solid',window.scrollY>10);return}
+    bar.classList.toggle('is-solid',gal.getBoundingClientRect().bottom<=bar.getBoundingClientRect().bottom+4);
+  };
+  window.addEventListener('scroll',upd,{passive:true});
+  window.addEventListener('resize',upd);
+  upd();
+}
 /* 图集用原生 scroll-snap 横滑，监听 scroll 更新指示点 —— 不自己写惯性滚动，
    手机上的手感交给系统。 */
 function bindProductGallery(){
@@ -764,6 +974,7 @@ function bindProductGallery(){
   };
   track.addEventListener('scroll',upd,{passive:true});upd();
 }
+
 /* ── 确认订单页（装备电商链路的第二跳）──────────────────────────────────────
    「立即购买」与购物车「去结算」都落到这一页：装备是实物，付钱之前必须先看清三件事 ——
    寄到哪（地址簿，没有就当场新增）、买什么（商品与规格复核）、每一项多少钱
@@ -773,13 +984,6 @@ function bindProductGallery(){
 let CO_ITEMS=[],CO_ADDRS=[],CO_ADDR_ID=null,CO_VOUCHERS=[],CO_POINTS=0,CO_VOUCHER='',CO_POINTS_MAX=0,CO_FROM_CART=false;
 function coAddr(){return (CO_ADDRS||[]).find(a=>String(a.id)===String(CO_ADDR_ID))||(CO_ADDRS||[]).find(a=>Number(a.is_default))||(CO_ADDRS||[])[0]||null}
 function coFull(a){return [a.province,a.city,a.district,a.detail].filter(Boolean).join(' ')}
-async function buyProduct(){
-  const p=P_CUR;if(!p)return;
-  const v=curVariant(),stock=productStock(p,v);
-  if(stock<=0){showAlert({title:'暂时缺货',message:'这件装备当前没有可售库存。'});return}
-  if(P_QTY>stock){showAlert({title:'库存不足',message:'当前规格只剩 '+stock+' 件。'});return}
-  await openGearCheckout([{p,v,qty:P_QTY}],false);
-}
 /* 购物车结算：把每一行都核对一遍库存再进确认单 —— 让顾客在确认单上看到「有商品缺货」
    而不是提交后被 409 打回，前者还能改，后者只能重来。 */
 async function cartCheckout(){
@@ -1045,7 +1249,12 @@ window.coOnVoucher=coOnVoucher;
 window.backToProduct=backToProduct;
 window.openCart=openCart;
 window.quickAdd=quickAdd;
-window.addCurrentToCart=addCurrentToCart;
+/* addCurrentToCart 随「详情页内联加购钮」一起删了：加购统一走吸底条 →
+   底部规格抽屉（pdSheetConfirm），页面上不再有点位直接调它。
+   ★ 这行 window.xxx=fn 赋值是**顶层立即执行**的：被删函数只要还剩一行这种赋值，
+   整个 web.js 就在这一行 ReferenceError 中断，后面所有函数定义与 startWeb()
+   全都不跑（表现为「首页看着正常、深链/钱包/事件绑定全废」——
+   首页是 web-biz.js 自己拉的，跟 web.js 没关系）。删函数时务必全局搜一遍。 */
 
 /* ── 我的：毛玻璃会员卡上的身份与升级进度 ─────────────────────────────────── */
 /* 升级进度是真算出来的：tiers 里带 min_activity_spend / min_activity_count / qualification_mode。
@@ -1857,5 +2066,9 @@ async function startWeb(){
   const wanted=new URLSearchParams(location.search).get('activity');
   await loadHome();await loadWallet();
   if(wanted){await loadActivities();await openAct(Number(wanted))}
+  /* 带 #pd=<id> 进来（详情页「复制商品链接」指到的就是它）：先切到装备页再拉列表 ——
+     loadMall 里的深链处理器会接着把商品详情打开。没有这一段，分享出去的链接打开后
+     停在首页，要等用户手点「装备」tab 才生效（实测就是这样）。 */
+  if(/^#pd=\d+$/.test(location.hash||'')){wviewShow('wmall');await loadMall()}
 }
 startWeb();

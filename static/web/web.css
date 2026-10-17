@@ -1030,7 +1030,7 @@
    sticky 停在视口底即可，用 --w-navh 把它抬到导航上方。 */
 .web-shell{--w-navh:calc(70px + env(safe-area-inset-bottom))}
 .w-pd__sk{padding:14px}
-.w-pd__gal{position:relative;background:#eceff0;overflow:hidden}
+.w-pd__gal{position:relative;background:#eceff0;overflow:hidden;margin-top:-48px}
 .w-pd__track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;-webkit-overflow-scrolling:touch;scrollbar-width:none}
 .w-pd__track::-webkit-scrollbar{display:none}
 .w-pd__slide{flex:0 0 100%;scroll-snap-align:start;aspect-ratio:1/1;background:#eceff0}
@@ -1042,38 +1042,151 @@
 .w-pd__dots i{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.5);transition:background .2s,width .2s}
 .w-pd__dots i.on{background:#fff;width:14px;border-radius:99px}
 .w-pd__count{position:absolute;right:12px;bottom:12px;padding:4px 9px;border-radius:99px;background:rgba(18,23,20,.34);color:#fff;font-size:11px;font-variant-numeric:tabular-nums;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
-.w-pd__head{padding:16px 16px 15px;background:#fff}
-.w-pd__price{font-size:27px;font-weight:750;color:var(--w-accent);letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.1;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-/* 会员价：原价划掉 + 一枚「会员价」角标。只标数字不标来由，顾客会怀疑是不是改了价。 */
+/* ── 商品详情页（对标 PEAKTRACE 详情页）────────────────────────────────────
+   整页一列、卡片分段。换的是信息层级：参考稿把「看」和「选」彻底分开 ——
+   页面上只有图、文字与可折叠区，规格与数量是底部弹层里的一次明确动作。
+   顶部条压在图上：初始透明，图标直接压在照片上，与参考稿同一个做法；
+   照片完全滚过后才变白底、显出缩略商品信息。
+   ★ sticky + 图集负外边距，**不用 fixed**：.web-shell .wview 那条淡入动画
+     （animation:wFade ... both）会给 #wmall 留一个 identity transform，
+     fixed 会被这个祖先吸住、变成相对 #wmall 定位 —— 顶栏就跟着页面一起滚走了
+     （实测 #wmall 计算样式 transform=matrix(1,0,0,1,0,0)，fixed 子元素失效）。
+   ★ 顶栏必须排在图集**之前**、图集用 margin-top:-48px 上提：
+     顺序反了负外边距只会压到图集底部（实测 barTop=573 / galTop=63）。 */
+.w-pd__bar{
+  position:sticky;top:61px;z-index:40;
+  display:flex;align-items:center;gap:8px;padding:7px 12px;
+  background:transparent;transition:background .22s,box-shadow .22s;
+}
+.w-pd__bar.is-solid{
+  background:rgba(255,255,255,.96);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+  box-shadow:0 1px 0 var(--w-line);
+}
+.w-pd__barback,.w-pd__barbtn{
+  position:relative;flex:0 0 auto;width:34px;height:34px;border:0;border-radius:50%;
+  display:grid;place-items:center;background:rgba(255,255,255,.88);color:var(--w-ink);
+  cursor:pointer;-webkit-tap-highlight-color:transparent;box-shadow:0 2px 8px rgba(18,23,20,.12);
+}
+.w-pd__bar.is-solid .w-pd__barback,.w-pd__bar.is-solid .w-pd__barbtn{background:none;box-shadow:none}
+.w-pd__bar svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.w-pd__barinfo{
+  flex:1;min-width:0;display:flex;align-items:center;gap:9px;
+  opacity:0;transform:translateY(4px);transition:opacity .22s,transform .22s;pointer-events:none;
+}
+.w-pd__bar.is-solid .w-pd__barinfo{opacity:1;transform:none}
+.w-pd__barinfo img{width:32px;height:32px;border-radius:8px;object-fit:cover;flex:0 0 auto;background:#eceff0}
+.w-pd__barinfo__txt{min-width:0;display:grid;gap:1px}
+.w-pd__barinfo__txt b{font-size:13px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w-pd__barinfo__txt span{font-size:12px;font-weight:700;color:var(--w-accent);font-variant-numeric:tabular-nums}
+.w-pd__barbadge{
+  position:absolute;right:-3px;top:-3px;min-width:16px;height:16px;padding:0 4px;
+  border-radius:999px;background:var(--w-accent);color:#fff;font-size:10px;font-weight:700;
+  font-style:normal;line-height:16px;text-align:center;box-shadow:0 0 0 2px rgba(255,255,255,.92);
+}
+.w-pd__main{padding:14px 16px 4px;background:#fff}
+.w-pd__eyebrow{font-size:10.5px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;color:var(--w-muted)}
+.w-pd__title{margin:7px 0 0;font-size:20px;font-weight:750;line-height:1.34;letter-spacing:-.01em;color:var(--w-ink)}
+.w-pd__subtitle{margin:5px 0 0;font-size:12.5px;color:var(--w-muted)}
+.w-pd__pricerow{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin-top:12px}
+.w-pd__now{font-size:26px;font-weight:750;color:var(--w-accent);letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1}
 .w-pd__was{font-size:14px;font-weight:500;color:var(--w-mute);text-decoration:line-through}
+/* 会员价：原价划掉 + 一枚「会员价」角标。只标数字不标来由，顾客会怀疑是不是改了价。 */
 .w-pd__mem{font-size:11px;font-weight:700;font-style:normal;line-height:1;padding:4px 7px;border-radius:999px;color:#0f7a55;background:rgba(15,122,85,.12)}
-.w-pd__name{margin:7px 0 5px;font-size:17px;font-weight:650;line-height:1.42}
-.w-pd__meta{font-size:12px;color:var(--w-muted)}
-.w-pd__block{margin-top:10px;padding:15px 16px;background:#fff}
-.w-pd__label{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:13px;font-weight:650;margin-bottom:11px}
-.w-pd__label em{font-style:normal;font-weight:400;font-size:12px;color:var(--w-muted)}
-.w-pd__opts{display:flex;flex-wrap:wrap;gap:9px}
-.w-pd__opt{min-height:40px;padding:9px 15px;border:1px solid var(--w-line);border-radius:11px;background:#fff;font-size:13.5px;font-weight:600;color:var(--w-ink);cursor:pointer;transition:border-color .18s,background .18s,color .18s;-webkit-tap-highlight-color:transparent}
-.w-pd__opt i{display:block;margin-top:2px;font-style:normal;font-size:11px;font-weight:400;color:var(--w-muted);font-variant-numeric:tabular-nums}
-.w-pd__opt.on{border-color:var(--w-brand);background:var(--w-brand-soft);color:var(--w-brand)}
-.w-pd__opt.on i{color:var(--w-brand)}
-/* 缺货规格置灰但保留可见：让顾客知道有这个规格只是暂时没货，
-   直接不显示会让人以为商品就这几个尺码。 */
-.w-pd__opt.is-out{opacity:.55;cursor:not-allowed;background:#f4f5f3}
-.w-pd__qty{display:inline-flex;align-items:center;gap:2px;padding:3px;border:1px solid var(--w-line);border-radius:99px;background:#fff}
-.w-pd__qbtn{width:36px;height:36px;border:0;border-radius:50%;background:#f3f5f2;color:var(--w-ink);font-size:17px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.w-pd__qbtn:disabled{opacity:.32;cursor:not-allowed}
-.w-pd__qty output{min-width:30px;text-align:center;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
-.w-pd__svc{display:grid;gap:12px}
-.w-pd__svc>div{display:grid;gap:3px}
-.w-pd__svc b{font-size:13px;font-weight:650}
-.w-pd__svc span{font-size:12px;color:var(--w-muted);line-height:1.6}
-.w-pd__cta{position:sticky;bottom:var(--w-navh);z-index:30;margin-top:14px;display:flex;align-items:center;gap:14px;padding:11px 14px;background:rgba(255,255,255,.96);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border-top:1px solid var(--w-line)}
-.w-pd__sum{display:grid;gap:1px}
-.w-pd__sum span{font-size:11px;color:var(--w-muted)}
-.w-pd__sum b{font-size:20px;font-weight:750;color:var(--w-accent);font-variant-numeric:tabular-nums}
-.w-pd__buy{flex:1;min-height:46px;border:0;border-radius:14px;background:var(--w-ink);color:#fff;font-size:15px;font-weight:650;cursor:pointer;box-shadow:0 10px 24px rgba(18,23,20,.18);-webkit-tap-highlight-color:transparent}
-.w-pd__buy:disabled{background:#c3c8c4;box-shadow:none;cursor:not-allowed}
+.w-pd__stock{margin-left:auto;font-size:11.5px;color:var(--w-muted)}
+.w-pd__stock.is-out{color:var(--w-accent)}
+.w-pd__pricerow__share{width:30px;height:30px;border:0;border-radius:50%;display:grid;place-items:center;background:none;color:var(--w-muted);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.w-pd__pricerow__share svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+/* 两条入口行：都是真交互 —— 第一条跳到同分类列表，第二条展开并滚到商品介绍 */
+.w-pd__rows{margin-top:14px;border-top:1px solid var(--w-line)}
+.w-pd__row{display:flex;align-items:center;gap:10px;width:100%;min-height:46px;padding:0;border:0;border-bottom:1px solid var(--w-line);background:none;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.w-pd__rowic{flex:0 0 auto;display:grid;place-items:center;width:22px;color:var(--w-ink2)}
+.w-pd__rowic svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.w-pd__rowtxt{flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--w-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w-pd__rowend{font-size:11.5px;color:var(--w-muted)}
+.w-pd__rowarrow{flex:0 0 auto;color:#b6bfb8}
+.w-pd__rowarrow svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+/* 可折叠区：默认只展开「商品详情」（一屏看得完的才默认打开） */
+.w-pd__sec{margin-top:10px;background:#fff}
+.w-pd__sechd{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:48px;padding:0 16px;border:0;background:none;font-size:14px;font-weight:700;color:var(--w-ink);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.w-pd__sechd i{font-style:normal;font-size:17px;font-weight:400;color:var(--w-muted);width:18px;text-align:center}
+.w-pd__secbody{padding:0 16px 16px}
+.w-pd__secbody[hidden]{display:none}
+.w-pd__desc{margin:0;font-size:13px;line-height:1.78;color:var(--w-ink2)}
+.w-pd__kv{width:100%;border-collapse:collapse;font-size:13px}
+.w-pd__kv th,.w-pd__kv td{padding:11px 0;border-bottom:1px solid var(--w-line);text-align:left;vertical-align:top}
+.w-pd__kv th{width:86px;font-weight:400;color:var(--w-muted)}
+.w-pd__kv td{color:var(--w-ink);font-weight:500}
+.w-pd__kv tr:last-child th,.w-pd__kv tr:last-child td{border-bottom:0}
+.w-pd__subhd{margin:18px 0 8px;font-size:13px;font-weight:700;color:var(--w-ink)}
+.w-pd__bullets{margin:0;padding:0;list-style:none;display:grid;gap:7px}
+.w-pd__bullets li{position:relative;padding-left:13px;font-size:12.5px;line-height:1.7;color:var(--w-ink2)}
+.w-pd__bullets li:before{content:'';position:absolute;left:0;top:.62em;width:4px;height:4px;border-radius:1px;background:var(--w-brand)}
+.w-pd__sizetab{width:100%;border-collapse:collapse;font-size:12.5px;font-variant-numeric:tabular-nums}
+.w-pd__sizetab th,.w-pd__sizetab td{padding:10px 8px;border-bottom:1px solid var(--w-line);text-align:left}
+.w-pd__sizetab thead th{font-size:11px;font-weight:600;color:var(--w-muted)}
+.w-pd__sizetab tbody tr:last-child td{border-bottom:0}
+.w-pd__sizetab tr.is-out td{color:var(--w-muted);text-decoration:line-through}
+.w-pd__tabnote{margin:10px 0 0;font-size:11px;line-height:1.6;color:var(--w-muted)}
+/* 商品推荐：三列小卡（图 + 名称两行 + 分类 + 价格） */
+.w-pd__rec{margin-top:10px;padding:16px 16px 18px;background:#fff}
+.w-pd__rechd{margin:0 0 12px;font-size:14px;font-weight:700;color:var(--w-ink)}
+.w-pd__recgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.w-pd__reccard{display:grid;padding:0;border:0;background:none;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.w-pd__recmedia{display:block;aspect-ratio:1/1;border-radius:10px;overflow:hidden;background:#eceff0}
+.w-pd__recmedia img{width:100%;height:100%;object-fit:cover;display:block}
+.w-pd__recname{margin-top:7px;font-size:12px;font-weight:600;line-height:1.4;color:var(--w-ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:keep-all}
+.w-pd__recsub{margin-top:2px;font-size:10.5px;color:var(--w-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w-pd__recprice{margin-top:3px;font-size:13px;font-weight:700;color:var(--w-ink);font-variant-numeric:tabular-nums}
+/* 温馨提示：浅灰圆角卡，只写真实规则（会员价 / 发货 / 库存） */
+.w-pd__tips{margin:10px 0 0;padding:14px 16px;background:#f4f5f3;border-radius:12px}
+.w-pd__tips b{display:block;font-size:12.5px;font-weight:700;color:var(--w-ink)}
+.w-pd__tips ul{margin:8px 0 0;padding:0;list-style:none;display:grid;gap:6px}
+.w-pd__tips li{position:relative;padding-left:11px;font-size:11.5px;line-height:1.7;color:var(--w-muted)}
+.w-pd__tips li:before{content:'·';position:absolute;left:0;top:-1px;font-weight:700}
+/* 吸底操作条：购物车（描边小钮）+ 加入购物车（描边）+ 立即购买（实心黑） */
+.w-pd__foot{
+  position:sticky;bottom:var(--w-navh);z-index:35;display:flex;align-items:center;gap:10px;
+  padding:10px 12px;background:rgba(255,255,255,.97);
+  -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border-top:1px solid var(--w-line);
+}
+.w-pd__fcart{position:relative;flex:0 0 auto;width:44px;height:44px;border:1px solid var(--w-line);border-radius:14px;display:grid;place-items:center;background:#fff;color:var(--w-ink);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.w-pd__fcart svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.w-pd__fadd{flex:1;min-height:46px;border:1px solid var(--w-ink);border-radius:14px;background:#fff;color:var(--w-ink);font-size:14.5px;font-weight:650;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.w-pd__fbuy{flex:1;min-height:46px;border:0;border-radius:14px;background:var(--w-ink);color:#fff;font-size:14.5px;font-weight:650;cursor:pointer;box-shadow:0 8px 20px rgba(18,23,20,.16);-webkit-tap-highlight-color:transparent}
+.w-pd__fadd:disabled,.w-pd__fbuy:disabled{background:#eef0ed;color:#a9b2ab;border-color:#eef0ed;box-shadow:none;cursor:not-allowed}
+/* 规格 / 数量弹层：底部抽屉。width 与底部导航同一套 min(560px,100%) + left:50%，
+   桌面上不会横跨整个视口。 */
+.w-pd__mask{position:fixed;inset:0;z-index:60;background:rgba(12,18,15,.45);opacity:0;transition:opacity .22s}
+.w-pd__mask.on{opacity:1}
+.w-pd__sheet{
+  position:fixed;left:50%;bottom:0;z-index:61;width:min(560px,100%);
+  padding:16px 16px calc(14px + env(safe-area-inset-bottom));background:#fff;
+  border-radius:18px 18px 0 0;transform:translate(-50%,101%);
+  transition:transform .26s cubic-bezier(.22,.61,.36,1);
+}
+.w-pd__sheet.on{transform:translate(-50%,0)}
+.w-pd__sheethd{display:flex;align-items:center;gap:11px}
+.w-pd__sheethd__img{flex:0 0 auto;width:56px;height:56px;border-radius:10px;overflow:hidden;background:#eceff0}
+.w-pd__sheethd__img img{width:100%;height:100%;object-fit:cover;display:block}
+.w-pd__sheethd__txt{flex:1;min-width:0;display:grid;gap:3px}
+.w-pd__sheethd__txt b{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w-pd__sheethd__txt span{font-size:15px;font-weight:750;color:var(--w-accent);font-variant-numeric:tabular-nums}
+.w-pd__sheetclose{flex:0 0 auto;width:30px;height:30px;border:0;border-radius:50%;display:grid;place-items:center;background:#f2f4f1;color:var(--w-muted);cursor:pointer}
+.w-pd__sheetclose svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.w-pd__sheetsec{margin-top:16px}
+.w-pd__sheetlabel{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:10px;font-size:13px;font-weight:650;color:var(--w-ink)}
+.w-pd__sheetlabel em{font-style:normal;font-size:11.5px;font-weight:400;color:var(--w-muted)}
+.w-pd__sizes{display:flex;flex-wrap:wrap;gap:9px}
+/* 规格钮：选中=黑底白字（与立即购买同一个语言），缺货置灰保留可见 */
+.w-pd__size{min-height:40px;min-width:56px;padding:9px 14px;border:1px solid var(--w-line);border-radius:11px;background:#fff;font-size:13.5px;font-weight:600;color:var(--w-ink);cursor:pointer;transition:border-color .18s,background .18s,color .18s;-webkit-tap-highlight-color:transparent}
+.w-pd__size.on{border-color:var(--w-ink);background:var(--w-ink);color:#fff}
+.w-pd__size.is-out{opacity:.5;cursor:not-allowed;background:#f4f5f3}
+.w-pd__stepper{display:inline-flex;align-items:center;gap:2px;padding:3px;border:1px solid var(--w-line);border-radius:99px;background:#fff}
+.w-pd__stp{width:36px;height:36px;border:0;border-radius:50%;background:#f3f5f2;color:var(--w-ink);font-size:17px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.w-pd__stp:disabled{opacity:.32;cursor:not-allowed}
+.w-pd__stepper output{min-width:34px;text-align:center;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
+.w-pd__sheetcta{margin-top:18px;width:100%;min-height:48px;border:0;border-radius:14px;background:var(--w-ink);color:#fff;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 8px 20px rgba(18,23,20,.18);-webkit-tap-highlight-color:transparent}
 
 @media (max-width:380px){
   .w-shop__body{grid-template-columns:80px minmax(0,1fr)}
