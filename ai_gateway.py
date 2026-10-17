@@ -1,5 +1,6 @@
 from __future__ import annotations
 import base64
+import io
 import json
 import os
 import re
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+from PIL import Image
 
 from db import conn, setting
 
@@ -216,6 +218,16 @@ def _explain(exc: Exception) -> str:
     if isinstance(exc, (httpx.ConnectTimeout, httpx.ConnectError)):
         return (f'无法连接模型端点（{detail}）。请依次检查：服务器出网是否放行该域名、'
                 f'防火墙/安全组、DNS 解析，以及 baseUrl 是否写对。')
+    # HTTP 4xx/5xx：httpx 的默认串只有「状态码 + URL」，真正的原因在响应体里
+    # （DashScope 的 error.message，如 "'messages' must contain the word 'json'"）。
+    # 2026-10-17 线上实测：一次 opaque 400 让人完全无法定位，必须把响应体带上。
+    if isinstance(exc, httpx.HTTPStatusError):
+        try:
+            body = str(exc.response.text or '').strip().replace('\n', ' ')[:400]
+        except Exception:
+            body = ''
+        if body:
+            detail = f'{detail} | {body}'
     return detail
 
 
@@ -545,6 +557,41 @@ def record_mock_usage(club_id: int, task_type: str, prompt: str, output: dict[st
     return GatewayResponse(output, usage_id, 'mock', 'mock-full-capability', input_tokens, output_tokens, 0, request_id)
 
 
+def _encode_image(img: dict[str, Any]) -> dict[str, Any] | None:
+    """把一张上传的图片转成视觉模型能吃的 data URL；不合法就返回 None（跳过这张）。
+
+    ★ 2026-10-17 线上事故（用户「AI 写一个活动」400 全挂）：详情主调用在打标不可用
+      时会把 `source['images']` **原图** base64 进请求，而 PPT/Word 里抽出来的
+      1x1 占位图、8x8 项目符号、损坏文件全都混在里面。DashScope 对这类图的回应是
+      opaque 400（'The image format is illegal' / 'length and width ... must be
+      larger than 10'），httpx 的报错串又不含原因，用户只看到「400 Bad Request」。
+      打标路径（image_caption._shrink）早就用 PIL 重编码规避了，两边口径不一致才出的
+      事。这里统一收口，与打标路径同参数（最长边 1024 / RGB / JPEG q82）：
+        - PIL 打不开（损坏 / 非图片 / 文件没了 / 缺 path）→ 跳过；
+        - 任一边 ≤ 12px（DashScope 硬限制 > 10）→ 跳过，这种图对模型也没有信息量；
+        - 超过 1024px → 等比缩小，payload 从几十 MB 降到几 MB，调用也更快。
+    跳过是不可逆事实的最小损失：一张 1x1 占位图不该让整页生成失败。
+    """
+    path = str(img.get('path') or '')
+    if not path:
+        return None
+    try:
+        with Image.open(path) as im:
+            im.load()
+            w, h = im.size
+            if min(w, h) <= 12:
+                return None
+            scale = 1024 / float(max(w, h) or 1)
+            if scale < 1:
+                im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.LANCZOS)
+            buf = io.BytesIO()
+            im.convert('RGB').save(buf, 'JPEG', quality=82, optimize=True)
+            data = base64.b64encode(buf.getvalue()).decode()
+        return {'type': 'image_url', 'image_url': {'url': f'data:image/jpeg;base64,{data}'}}
+    except Exception:
+        return None
+
+
 async def generate_json(*, club_id: int, task_type: str, system_prompt: str, user_prompt: str,
                         images: list[dict[str, Any]] | None = None) -> GatewayResponse | None:
     """
@@ -563,13 +610,12 @@ async def generate_json(*, club_id: int, task_type: str, system_prompt: str, use
 
     content: list[dict[str, Any]] = [{'type': 'text', 'text': user_prompt}]
     # 默认不限制用户上传图片数量。若未来某 Provider 有硬限制，应在该 Provider adapter 内显式处理，
-    # 不能因为计费或套餐偷偷减少上下文。
+    # 不能因为计费或套餐偷偷减少上下文。但「模型明确不接受」的图（≤10px / 打不开）必须挡掉，
+    # 否则一张 1x1 占位图就能让整个请求 400（2026-10-17 线上实测）。
     for img in (images or []):
-        p = Path(img['path'])
-        ext = p.suffix.lower().replace('.', '') or 'jpeg'
-        mime_ext = 'jpeg' if ext in {'jpg', 'jpeg'} else ext
-        data = base64.b64encode(p.read_bytes()).decode()
-        content.append({'type': 'image_url', 'image_url': {'url': f'data:image/{mime_ext};base64,{data}'}})
+        part = _encode_image(img)
+        if part is not None:
+            content.append(part)
 
     last_error: Exception | None = None
     for idx, provider in enumerate(providers):
@@ -579,27 +625,36 @@ async def generate_json(*, club_id: int, task_type: str, system_prompt: str, use
         try:
             payload = {
                 'model': model,
-                'messages': [
-                    {'role': 'system', 'content': system_prompt},
-                    {'role': 'user', 'content': content},
-                ],
                 'temperature': float(os.getenv('AI_TEMPERATURE', '0.8')),
             }
             # qwen3 系新旗舰（qwen3.8-max 等）默认开思考模式：非流式调用下思考期不吐任何字节，
             # 大输入任务轻松超过读超时（症状：ReadTimeout）。营销文案类任务不需要思考，
             # qwen preset 显式关闭；其余 preset 不加该参数，避免不兼容报错。
             # 需要思考质量时设 AI_QWEN_ENABLE_THINKING=1（并自行调大 AI_TIMEOUT_SECONDS）。
+            # 强制 JSON 输出（DashScope 兼容端点实测支持）：长图等大 JSON 任务在
+            # qwen3.8-max 下偶发返回不合法 JSON（截断/夹带说明文字），解析层救不回。
+            # 服务端硬约束比提示词恳求可靠；其余 preset 不加，避免不兼容。
+            # ★ DashScope 硬性要求：用 json_object 时 messages 里必须出现 "json" 字样，
+            #   否则整个请求 400（2026-10-17 线上实测，报错还不含原因，极难定位）。
+            #   当前所有任务的提示词都恰好带 JSON，但这是巧合不是契约——改一次提示词
+            #   就可能全线 400。这里兜底补一句，保证任何 prompt 组合都不踩坑。
+            sys_content = system_prompt
             if provider.preset == 'qwen':
                 payload['enable_thinking'] = _truthy(os.getenv('AI_QWEN_ENABLE_THINKING', '0'), False)
-                # 强制 JSON 输出（DashScope 兼容端点实测支持）：长图等大 JSON 任务在
-                # qwen3.8-max 下偶发返回不合法 JSON（截断/夹带说明文字），解析层救不回。
-                # 服务端硬约束比提示词恳求可靠；其余 preset 不加，避免不兼容。
                 payload['response_format'] = {'type': 'json_object'}
+                if 'json' not in (system_prompt + '\n' + user_prompt).lower():
+                    sys_content = system_prompt + '\n只输出 JSON。'
             async with _httpx_client(float(os.getenv('AI_TIMEOUT_SECONDS', '420'))) as client:
                 r = await client.post(
                     provider.base_url,
                     headers={'Authorization': f'Bearer {provider.api_key}', 'Content-Type': 'application/json'},
-                    json=payload,
+                    json={
+                        **payload,
+                        'messages': [
+                            {'role': 'system', 'content': sys_content},
+                            {'role': 'user', 'content': content},
+                        ],
+                    },
                 )
                 r.raise_for_status()
                 raw = r.json()

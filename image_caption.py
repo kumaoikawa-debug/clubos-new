@@ -391,7 +391,15 @@ def caption_lines(master: dict[str, Any], caps: dict[str, dict[str, Any]]) -> li
             continue
         ref = _norm_ref(m.get('ref'))
         w, h = int(m.get('width') or 0), int(m.get('height') or 0)
-        if w < 600:
+        # ★ 2026-10-17：原来这里只按「宽 >= 600」过滤，把微信压缩后的竖图（如 400×533）
+        #   整批挡在清单外 —— 它们打标成功了却列不出来，lines 不足半数就把打标判为
+        #   「基本失败」，主调用只好退回「原图直喂视觉模型」，而原图里只要混进一张
+        #   1x1 占位图/损坏文件就让 DashScope 400、整页生成挂掉（线上实测）。
+        #   改成与 caption_media 的 _big_enough 同口径（短边 >= 240）：能打标的图
+        #   就列出来，回退路径只留给真正的打标失败。
+        if not w or not h:
+            continue          # 尺寸补不上（文件没了）的，列了也选不到
+        if min(w, h) < 240:
             continue
         cap = caps.get(ref) or {}
         usable = cap.get('usable', m.get('usable', True))

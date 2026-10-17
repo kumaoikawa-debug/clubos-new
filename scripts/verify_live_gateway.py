@@ -35,9 +35,20 @@ import dev_openai_stub  # noqa: E402
 from db import init_db, conn, rows  # noqa: E402
 import ai_gateway  # noqa: E402
 
-PNG_1PX = base64.b64decode(
-    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8AAAwAB/AF+7b0hAAAAAElFTkSuQmCC'
-)
+# 视觉测试用的合法尺寸 PNG（64×64，运行时生成，免得以讹传讹抄坏 base64）。
+# ★ 2026-10-17：原来这里内嵌一张 1×1 PNG，而 Gateway 现在会把 ≤12px 的图跳过
+#   （DashScope 硬性要求每边 >10px，1×1 占位图正是线上 400 事故的元凶），
+#   于是「请求体携带 image_url」这项必然失败。fixture 必须用真实尺寸的图。
+def _png_64px() -> bytes:
+    import io
+
+    from PIL import Image
+    im = Image.new('RGB', (64, 64), (90, 140, 90))
+    for x in range(64):
+        im.putpixel((x, 32), (200, 60, 60))
+    buf = io.BytesIO()
+    im.save(buf, 'PNG')
+    return buf.getvalue()
 
 results: list[tuple[str, bool, str]] = []
 
@@ -137,7 +148,7 @@ def main() -> int:
 
     # ---- 4. 视觉路由：带图必须切到具备视觉能力的 Provider ----
     img = TMP / 'pic.png'
-    img.write_bytes(PNG_1PX)
+    img.write_bytes(_png_64px())
     before = len(_read_log(ok_log))
     resp_v = asyncio.run(ai_gateway.generate_json(
         club_id=1, task_type='detail', system_prompt='SYS', user_prompt='USER 带图',
