@@ -259,16 +259,37 @@ function renderMallTabs(){
   const box=$('#mallTabs');if(!box)return;
   box.innerHTML=MALL_SORTS.map(s=>`<button class="${s.k===MALL_SORT?'on':''}" type="button" data-s="${s.k}">${s.label}</button>`).join('');
 }
-/* ── 主视觉横幅 ───────────────────────────────────────────────────────────
-   参考图顶部那张是最上层的一张山野照片 —— 不是商品图，是品牌影像。所以这里用俱乐部的
-   **真实活动封面**，而不是拿占位图冒充照片：一张封面都没有时走品牌渐变兜底，文案照旧。
-   最多 3 张，再多也不轮播 —— 装备页的主视觉是背景板，不是给顾客刷的陈列位。 */
-const MALL_HERO_MAX=3;
-/* 主视觉用的活动封面。**不能读 ACT_ALL** —— C 端首页真正的渲染在 web-biz.js，
-   web.js 里的 loadHome 是死代码，所以「从首页点进装备页」时 ACT_ALL 还是空的（实测
-   heroSlides=1 且无图）。这里自己按需拉一次公开活动列表；拉不到就保持品牌渐变兜底，
-   不打断商城主体。用独立变量存，避免污染活动列表页的缓存。 */
-let MALL_HERO_ACTS=[],_heroActTried=false;
+/* ── 主视觉轮播 ───────────────────────────────────────────────────────────
+   用户 2026-10-17 要求：这块要能自动轮播，并且每张图都能点进**对应的商品**。
+   所以片子不再是纯品牌影像 —— 优先取在售商品的真实图片，一张片子绑定一个商品 id，
+   点进商品详情页；只有当在售商品**一张图都没有**时才退回活动封面（纯影像、不可点，
+   点进去背后没有商品，只能给顾客一个空承诺），再没有就走品牌渐变兜底。
+   最多 5 张：主视觉是入口，不是相册。 */
+const MALL_HERO_MAX=5;
+const MALL_HERO_MS=4200;     /* 自动轮播间隔 */
+const MALL_HERO_HOLD=7000;   /* 用户自己滑动后先停这么久，再接着自动播 */
+let MALL_HERO_ACTS=[],_heroActTried=false,_heroTimer=0,_heroHoldTimer=0,_mallHeroSig='';
+
+function heroSlides(){
+  const out=[];
+  (MALL_ALL||[]).forEach(x=>{
+    if(out.length>=MALL_HERO_MAX)return;
+    const u=productImages(x)[0];          /* 第一张就是商品卡上的主图，两处保持同一张 */
+    if(!u)return;
+    out.push({pid:x.id,url:u,name:x.name||'',price:Number(x.price||0),stock:Number(x.stock||0)});
+  });
+  if(out.length)return out;
+  MALL_HERO_ACTS.forEach(a=>{
+    const u=a&&a.cover;
+    if(!u||out.length>=MALL_HERO_MAX)return;
+    if(out.some(x=>x.url===u))return;     /* 同一张封面被多场活动引用时只画一次 */
+    out.push({pid:null,url:u,name:'',price:null,stock:0});
+  });
+  return out;
+}
+/* 活动封面按需拉一次。**不能读 ACT_ALL** —— C 端首页真正的渲染在 web-biz.js，
+   web.js 里的 loadHome 是死代码，从首页点进装备页时 ACT_ALL 还是空的（实测过）。
+   只有「商品一张图都没有」才需要它，所以平时这个请求根本不发。 */
 async function ensureHeroCovers(){
   if(_heroActTried)return;
   _heroActTried=true;
@@ -276,50 +297,83 @@ async function ensureHeroCovers(){
     const acts=await api(`/api/public/clubs/${CLUB}/activities`);
     MALL_HERO_ACTS=Array.isArray(acts)?acts:[];
     renderMallHero();
-  }catch(e){/* 拉失败就维持渐变兜底 */}
+  }catch(e){/* 拉失败就维持品牌渐变兜底，不打断商城主体 */}
 }
-function mallHeroSlides(){
-  const out=[];
-  MALL_HERO_ACTS.forEach(a=>{
-    const u=a&&a.cover;if(!u||out.length>=MALL_HERO_MAX)return;
-    if(out.some(x=>x.url===u))return;   /* 同一张封面被多场活动引用时只画一次 */
-    out.push({url:u,title:a.title||''});
-  });
-  return out;
-}
-let _mallHeroSig='';
+
 function renderMallHero(){
   const box=$('#mallHero');if(!box)return;
-  ensureHeroCovers();
-  const slides=mallHeroSlides(),sig=slides.map(x=>x.url).join('|')+'#'+MALL_ALL.length;
+  const slides=heroSlides();
+  const sig=slides.map(x=>(x.pid==null?'-':x.pid)+'@'+x.url).join('|')+'#'+MALL_ALL.length;
   /* 搜索每敲一个字都会重跑 renderMall，主视觉不该跟着重建（会把轮播拨回第一张）。 */
   if(sig===_mallHeroSig&&box.children.length)return;
   _mallHeroSig=sig;
+  heroStop();
   const badge=`<span class="w-shop__hbadge">在售 ${MALL_ALL.length} 件</span>`;
-  /* 参考图的主视觉只有一张图和中间那个细边「本季新品」标签，没有叠一段文案 ——
-     「共几件在售」下面区块头已经写了一遍，主视觉上再写一次就是同一句话出现两遍。 */
   const tag='<span class="w-shop__htag">本季新品</span>';
   if(!slides.length){
-    box.innerHTML=`<div class="w-shop__htrack"><div class="w-shop__hslide is-fallback">${badge}${tag}</div></div>`;
+    box.innerHTML=`<div class="w-shop__hwrap"><div class="w-shop__htrack"><div class="w-shop__hslide is-fallback"></div></div>${badge}${tag}</div>`;
+    ensureHeroCovers();
     return;
   }
-  box.innerHTML=`<div class="w-shop__htrack" id="mallHeroTrack">`
-    +slides.map((x,i)=>`<div class="w-shop__hslide"><img src="${esc(x.url)}" alt="${esc(x.title)}"${i?' loading="lazy"':''}>${badge}${tag}</div>`).join('')
-    +'</div>'
-    +(slides.length>1?`<div class="w-shop__hdots">${slides.map((_,i)=>`<i${i===0?' class="on"':''}></i>`).join('')}</div>`:'');
+  const dots=slides.map((_,i)=>`<button type="button" class="${i?'':'on'}" data-hd="${i}" aria-label="第 ${i+1} 张" onclick="heroGo(${i})"></button>`).join('');
+  box.innerHTML=`<div class="w-shop__hwrap"><div class="w-shop__htrack" id="mallHeroTrack">`
+    +slides.map((x,i)=>{
+      const cap=x.name
+        ? `<span class="w-shop__hcap"><b>${esc(x.name)}</b>${x.price!=null?`<i>${money(x.price)}</i>`:''}</span>`
+        : '';
+      const img=`<img src="${esc(x.url)}" alt="${esc(x.name)}"${i?' loading="lazy"':''} draggable="false">`;
+      /* 有商品 id 的片子渲染成 <button>：语义就是「点我进商品」，键盘/读屏都能用；
+         没有商品的（活动封面兜底）渲染成 div，去掉可点暗示。 */
+      return x.pid!=null
+        ? `<button type="button" class="w-shop__hslide" data-hp="${x.pid}" aria-label="${esc(x.name)}，查看商品详情" onclick="openProduct(${x.pid})">${img}${cap}</button>`
+        : `<div class="w-shop__hslide" aria-hidden="true">${img}</div>`;
+    }).join('')
+    +`</div>${badge}${tag}</div>`
+    +(slides.length>1?`<div class="w-shop__hdots" id="mallHeroDots">${dots}</div>`:'');
   if(slides.length>1)bindMallHero();
 }
+
+function heroSlideCount(){const t=$('#mallHeroTrack');return t?t.children.length:0}
+function heroIdx(){
+  const t=$('#mallHeroTrack');if(!t||!t.children.length)return 0;
+  return Math.max(0,Math.min(t.children.length-1,Math.round(t.scrollLeft/Math.max(1,t.clientWidth))));
+}
+function heroDots(k){
+  document.querySelectorAll('#mallHeroDots button').forEach((d,j)=>d.classList.toggle('on',j===k));
+}
+/* 跳到第 i 张。用 scroll-snap 容器原生的 scrollTo，不做 transform 位移 ——
+   手指滑动和自动轮播走同一套，位置状态只有一个（scrollLeft），不会互相打架。 */
+function heroGo(i){
+  const t=$('#mallHeroTrack');const n=heroSlideCount();if(!t||!n)return;
+  const k=((Number(i)||0)%n+n)%n;
+  t.scrollTo({left:Math.round(k*t.clientWidth),behavior:'smooth'});
+  heroDots(k);
+}
+function heroStop(){clearInterval(_heroTimer);_heroTimer=0}
+function heroPlay(){
+  heroStop();
+  const t=$('#mallHeroTrack');
+  /* 容器被藏起来（进详情/结算/购物车）或只有一张时不播：空转的定时器只会白烧电。 */
+  if(!t||!t.offsetParent||t.children.length<2||document.hidden)return;
+  _heroTimer=setInterval(()=>{
+    const el=$('#mallHeroTrack');
+    if(!el||!el.offsetParent||document.hidden)return;
+    heroGo(heroIdx()+1);
+  },MALL_HERO_MS);
+}
+/* 用户自己动了就先停手，等他看完再接着播 —— 和手指抢着滑是最差的体验。 */
+function heroHold(){
+  heroStop();clearTimeout(_heroHoldTimer);_heroHoldTimer=setTimeout(heroPlay,MALL_HERO_HOLD);
+}
 function bindMallHero(){
-  const track=$('#mallHeroTrack');if(!track)return;
-  const dots=[...document.querySelectorAll('#mallHero .w-shop__hdots i')];
-  const n=track.children.length;let wt=0;
-  const sync=()=>{
-    const i=Math.max(0,Math.min(n-1,Math.round(track.scrollLeft/Math.max(1,track.clientWidth))));
-    dots.forEach((d,k)=>d.classList.toggle('on',k===i));
-  };
-  /* 和首页 hero 同一个做法：滚动停下 60ms 再量，惯性滚动期间每帧读 scrollLeft 会让指示点乱跳。 */
-  track.addEventListener('scroll',()=>{clearTimeout(wt);wt=setTimeout(sync,60)},{passive:true});
-  sync();
+  const t=$('#mallHeroTrack');if(!t)return;
+  let wt=0;
+  /* 滚动停下 60ms 再量：惯性滚动期间每帧读 scrollLeft 会让指示点乱跳。 */
+  const sync=()=>{clearTimeout(wt);wt=setTimeout(()=>heroDots(heroIdx()),60)};
+  t.addEventListener('scroll',sync,{passive:true});
+  ['pointerdown','touchstart','wheel'].forEach(ev=>t.addEventListener(ev,heroHold,{passive:true}));
+  heroDots(heroIdx());
+  heroPlay();
 }
 
 function renderMall(){
@@ -439,6 +493,7 @@ function cartTotals(){
 }
 async function openCart(){
   wviewShow('wmall');
+  heroStop();
   const shop=document.querySelector('#wmall .w-shop');if(shop)shop.style.display='none';
   const d=$('#productDetail');if(d){d.innerHTML='';d.style.display='none'}
   const k=$('#gearCheckout');if(k){k.innerHTML='';k.style.display='none'}
@@ -552,6 +607,7 @@ function showCheckoutPane(){
   const k=$('#gearCheckout');if(k)k.style.display='block';
 }
 function showProductPane(){
+  heroStop();
   const shop=document.querySelector('#wmall .w-shop');if(shop)shop.style.display='none';
   const cv=$('#cartView');if(cv){cv.innerHTML='';cv.style.display='none'}
   const k=$('#gearCheckout');if(k){k.innerHTML='';k.style.display='none'}
@@ -564,6 +620,7 @@ function showMallList(){
   const cv=$('#cartView');if(cv){cv.innerHTML='';cv.style.display='none'}
   const shop=document.querySelector('#wmall .w-shop');if(shop)shop.style.display='';
   if(MALL_ALL.length)renderMall();else loadMall();
+  heroPlay();
 }
 /* 从活动详情页的出行清单点装备进来时的中转（用户 2026-10-06 要求：先看商品详情再决定买不买）。
    ★ 必须先切到 wmall 视图：#productDetail 是 wmall 的子节点，wmall 整体 display:none 时，
@@ -1150,6 +1207,8 @@ function wviewShow(id,tab){
   const shell=document.querySelector('.web-shell');
   shell?.classList.toggle('is-home',id==='whome');
   shell?.classList.toggle('is-mall',id==='wmall');
+  /* 主视觉轮播只在装备页跑：别的页面看不到它，定时器还在滑只是白烧电。 */
+  if(id==='wmall')heroPlay();else heroStop();
   if(id!=='whome')shell?.classList.remove('is-scrolled');
   return true;
 }

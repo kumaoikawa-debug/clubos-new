@@ -324,37 +324,78 @@
 /* 主视觉：用俱乐部的**真实活动封面**（参考图顶部那张也是最上层的一张山野照片，
    不是商品图）。没有任何封面时走品牌渐变兜底 —— 不拿占位图冒充照片。
    版式照参考稿：4:3 一张图 + 正下方细边「本季新品」标签 + 指示点，不再叠一段文案。 */
+/* 主视觉轮播：外面 wrap 负责圆角和**不随片子滑动的**角标，里面 track 负责滑动。
+   ★ 有 2 张以上才自动播（JS），只有 1 张时就是一张静态图 —— 不会出现「一张图也在跳」。
+   ★ 片子优先是**在售商品实拍**（用户要求每张都能点进商品），首图不是品牌影像时
+     视觉会更偏「货架」；只在商品无图时才退回山野封面。 */
 .w-shop__hero{margin:0 0 20px}
 .w-shop__hero:empty{display:none}
-.w-shop__htrack{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;border-radius:12px}
+.w-shop__hwrap{position:relative;border-radius:12px;overflow:hidden;background:linear-gradient(152deg,#1f4d3a,#121714)}
+.w-shop__htrack{
+  display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;
+  overscroll-behavior-x:contain;
+}
 .w-shop__htrack::-webkit-scrollbar{display:none}
 .w-shop__hslide{
   position:relative;flex:0 0 100%;scroll-snap-align:start;aspect-ratio:4/3;
-  border-radius:12px;overflow:hidden;background:linear-gradient(152deg,#1f4d3a,#121714);
+  display:block;width:100%;margin:0;padding:0;border:0;background:none;overflow:hidden;
+  color:#fff;font:inherit;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;
 }
+.w-shop__hslide[aria-hidden="true"]{cursor:default}
 .w-shop__hslide.is-fallback{
   background-image:
     radial-gradient(120% 78% at 16% 4%,rgba(31,107,74,.52),transparent 60%),
     radial-gradient(96% 70% at 88% 98%,rgba(196,85,43,.36),transparent 62%),
     linear-gradient(158deg,#1d2b24,#26332b 54%,#121b16);
 }
-.w-shop__hslide img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.w-shop__hslide:after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(12,18,15,.04) 46%,rgba(12,18,15,.5))}
+.w-shop__hslide img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;pointer-events:none}
+/* 底部渐变保证白字可读：不铺黑条 —— 参考稿整块是照片，被一条色带切断就不成立了。 */
+.w-shop__hslide:after{
+  content:'';position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(180deg,rgba(12,18,15,0) 38%,rgba(12,18,15,.28) 68%,rgba(12,18,15,.74));
+}
+/* 商品说明贴在左下：名字 + 价格同行。价格不换行、名字单行省略，
+   长名字不会把价格挤出画面（右对齐的价格也永远看得见）。 */
+.w-shop__hcap{
+  position:absolute;left:13px;right:13px;bottom:13px;z-index:2;
+  display:flex;align-items:baseline;gap:8px;pointer-events:none;
+}
+.w-shop__hcap b{
+  min-width:0;font-size:13px;font-weight:600;letter-spacing:.01em;line-height:1.3;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:0 1px 6px rgba(0,0,0,.4);
+}
+.w-shop__hcap i{
+  flex:0 0 auto;font-style:normal;font-size:13.5px;font-weight:700;letter-spacing:-.01em;
+  font-variant-numeric:tabular-nums;text-shadow:0 1px 6px rgba(0,0,0,.4);
+}
+/* 「本季新品」从底部正中挪到左上：片子底下现在要放商品名和价格，
+   两者都挤在底部正中在窄屏（主栏只有 ~250px）会直接叠在一起。 */
+/* ★ 两个角标改成「白底黑字」而不是白字透明底：主视觉现在多半是**棚拍商品图**，
+   底色是浅灰/白 —— 白字压在浅色照片上几乎看不见（首版实测就是这样）。
+   白底黑字在任何底色的片子上都成立，也跟商品卡上的角标是同一套语言。 */
 .w-shop__htag{
-  position:absolute;left:50%;bottom:30px;transform:translateX(-50%);z-index:2;
-  padding:7px 15px;border:1px solid rgba(255,255,255,.82);background:rgba(10,14,12,.14);
-  -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);
-  color:#fff;font-size:11.5px;font-weight:600;letter-spacing:.16em;white-space:nowrap;
+  position:absolute;left:12px;top:12px;z-index:3;pointer-events:none;
+  padding:5px 10px;border-radius:2px;background:rgba(255,255,255,.94);
+  color:var(--w-ink);font-size:10.5px;font-weight:700;letter-spacing:.14em;white-space:nowrap;
+  box-shadow:0 2px 8px rgba(12,18,15,.14);
 }
 .w-shop__hbadge{
-  position:absolute;right:12px;top:12px;z-index:2;padding:5px 10px;border-radius:999px;
-  border:1px solid rgba(255,255,255,.55);background:rgba(0,0,0,.18);
-  -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
-  color:#fff;font-size:10px;font-weight:600;letter-spacing:.04em;
+  position:absolute;right:12px;top:12px;z-index:3;pointer-events:none;
+  padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.94);
+  color:var(--w-ink2);font-size:10px;font-weight:600;letter-spacing:.04em;white-space:nowrap;
+  box-shadow:0 2px 8px rgba(12,18,15,.14);
 }
-.w-shop__hdots{display:flex;justify-content:center;gap:6px;margin-top:10px}
-.w-shop__hdots i{width:5px;height:5px;border-radius:50%;background:#c8cec9;transition:all .2s}
-.w-shop__hdots i.on{width:14px;border-radius:3px;background:var(--w-ink)}
+/* 指示点：可点的按钮（18×18 命中区，视觉仍是 5px 小点），当前项拉长成细条。 */
+.w-shop__hdots{display:flex;justify-content:center;align-items:center;margin-top:4px}
+.w-shop__hdots button{
+  width:18px;height:18px;padding:0;border:0;background:none;display:grid;place-items:center;
+  cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.w-shop__hdots button:before{
+  content:'';width:5px;height:5px;border-radius:50%;background:#c8cec9;
+  transition:width .22s,background .22s,border-radius .22s;
+}
+.w-shop__hdots button.on:before{width:14px;border-radius:3px;background:var(--w-ink)}
 
 /* 区块头：标题跟当前分类走（参考图里标题就是当前分类 + 一行英文小字） */
 .w-shop__head{margin:0}
