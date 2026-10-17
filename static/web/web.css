@@ -290,12 +290,12 @@
 .w-field input::-webkit-search-cancel-button{-webkit-appearance:none}
 
 /* ── 装备商城：左分类导轨 + 右主视觉/双列网格（对齐 PEAKTRACE 小程序商城版式） ──
-   版式来自参考图：搜索整宽 → 左导轨（中文 + 副标两行，选中项**不填充色块**，只在
-   左边缘出一条黑条）+ 右内容（主视觉横幅 → 区块头 → 双列网格）。
+   版式来自参考图：搜索整宽 → 左导轨（中文大字 + 英文小字两行，选中项**不填充色块**，
+   只在左边缘出一条黑条）+ 右内容（主视觉横幅 → 区块头 → 双列商品网格）。
    一列里始终只有「当前项」在说话，所以选中态只用字重/字色/黑条，不用背景块。 */
 .w-shop{min-height:64vh}
 .w-shop__top{padding:12px 14px 10px}
-.w-shop__body{display:grid;grid-template-columns:92px minmax(0,1fr);align-items:start}
+.w-shop__body{display:grid;grid-template-columns:96px minmax(0,1fr);align-items:start}
 
 /* 左导轨：浅暖灰底 + 右侧细分隔线。sticky 让长列表滚动时分类始终在手边；
    top 取顶栏实测高度（12px padding ×2 + 36px 按钮 + 1px 描边），与 .web-top 对齐。
@@ -303,54 +303,64 @@
 .w-shop__side{
   align-self:start;position:sticky;top:61px;
   background:#f7f8f5;border-right:1px solid var(--w-line);
-  padding:8px 0 32px;
+  padding:6px 0 32px;
 }
 .w-shop__side button{
-  position:relative;display:block;width:100%;padding:11px 8px 11px 14px;border:0;background:none;
+  position:relative;display:block;width:100%;padding:13px 8px 13px 13px;border:0;background:none;
   text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent;transition:color .18s;
 }
-.w-shop__cat{display:block;font-size:13px;font-weight:500;line-height:1.3;color:#9aa39d;word-break:keep-all}
-.w-shop__cnt{display:block;margin-top:3px;font-size:10px;font-weight:600;letter-spacing:.06em;color:#b4bcb6;font-variant-numeric:tabular-nums}
+.w-shop__cat{display:block;font-size:14.5px;font-weight:500;line-height:1.32;color:#a6aea8;word-break:keep-all;letter-spacing:-.01em}
+.w-shop__en{display:block;margin-top:4px;font-size:8.5px;font-weight:600;letter-spacing:.13em;color:#bcc3bd;text-transform:uppercase;font-variant-numeric:tabular-nums}
 .w-shop__side button.on .w-shop__cat{color:var(--w-ink);font-weight:700}
-.w-shop__side button.on .w-shop__cnt{color:var(--w-ink2)}
+.w-shop__side button.on .w-shop__en{color:var(--w-ink2)}
 .w-shop__side button.on:before{
   content:'';position:absolute;left:0;top:50%;transform:translateY(-50%);
-  width:3px;height:22px;background:var(--w-ink);border-radius:0 2px 2px 0;
+  width:3px;height:24px;background:var(--w-ink);border-radius:0 2px 2px 0;
 }
 .w-shop__side button:focus-visible{outline:2px solid var(--w-brand);outline-offset:-2px}
 
 .w-shop__main{padding:0 14px 26px;min-width:0}
 
 /* 主视觉：用俱乐部的**真实活动封面**（参考图顶部那张也是最上层的一张山野照片，
-   不是商品图）。没有任何封面时走品牌渐变兜底 —— 不拿占位图冒充照片。 */
-.w-shop__hero{margin:0 0 18px}
+   不是商品图）。没有任何封面时走品牌渐变兜底 —— 不拿占位图冒充照片。
+   版式照参考稿：4:3 一张图 + 正下方细边「本季新品」标签 + 指示点，不再叠一段文案。 */
+.w-shop__hero{margin:0 0 20px}
 .w-shop__hero:empty{display:none}
-.w-shop__htrack{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;border-radius:16px}
+.w-shop__htrack{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;border-radius:12px}
 .w-shop__htrack::-webkit-scrollbar{display:none}
 .w-shop__hslide{
-  position:relative;flex:0 0 100%;scroll-snap-align:start;aspect-ratio:16/10;
-  border-radius:16px;overflow:hidden;background:linear-gradient(152deg,#1f4d3a,#121714);
+  position:relative;flex:0 0 100%;scroll-snap-align:start;aspect-ratio:4/3;
+  border-radius:12px;overflow:hidden;background:linear-gradient(152deg,#1f4d3a,#121714);
+}
+.w-shop__hslide.is-fallback{
+  background-image:
+    radial-gradient(120% 78% at 16% 4%,rgba(31,107,74,.52),transparent 60%),
+    radial-gradient(96% 70% at 88% 98%,rgba(196,85,43,.36),transparent 62%),
+    linear-gradient(158deg,#1d2b24,#26332b 54%,#121b16);
 }
 .w-shop__hslide img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.w-shop__hslide:after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(12,18,15,.05) 38%,rgba(12,18,15,.74))}
-.w-shop__hcopy{position:absolute;left:16px;right:16px;bottom:14px;z-index:2;color:#fff}
-.w-shop__heyebrow{font-size:9.5px;font-weight:700;letter-spacing:.2em;opacity:.85}
-.w-shop__hcopy h2{margin:6px 0 0;font-size:20px;font-weight:700;letter-spacing:-.01em;color:#fff}
-.w-shop__hcopy p{margin:5px 0 0;font-size:11.5px;line-height:1.5;opacity:.88}
+.w-shop__hslide:after{content:'';position:absolute;inset:0;background:linear-gradient(180deg,rgba(12,18,15,.04) 46%,rgba(12,18,15,.5))}
+.w-shop__htag{
+  position:absolute;left:50%;bottom:30px;transform:translateX(-50%);z-index:2;
+  padding:7px 15px;border:1px solid rgba(255,255,255,.82);background:rgba(10,14,12,.14);
+  -webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px);
+  color:#fff;font-size:11.5px;font-weight:600;letter-spacing:.16em;white-space:nowrap;
+}
 .w-shop__hbadge{
   position:absolute;right:12px;top:12px;z-index:2;padding:5px 10px;border-radius:999px;
   border:1px solid rgba(255,255,255,.55);background:rgba(0,0,0,.18);
   -webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px);
   color:#fff;font-size:10px;font-weight:600;letter-spacing:.04em;
 }
-.w-shop__hdots{display:flex;justify-content:center;gap:6px;margin-top:9px}
+.w-shop__hdots{display:flex;justify-content:center;gap:6px;margin-top:10px}
 .w-shop__hdots i{width:5px;height:5px;border-radius:50%;background:#c8cec9;transition:all .2s}
 .w-shop__hdots i.on{width:14px;border-radius:3px;background:var(--w-ink)}
 
-/* 区块头：标题跟当前分类走（参考图里标题就是当前分类），副标说清「共几件在售」 */
+/* 区块头：标题跟当前分类走（参考图里标题就是当前分类 + 一行英文小字） */
 .w-shop__head{margin:0}
-.w-shop__title{margin:0;font-size:17px;font-weight:700;letter-spacing:-.01em;color:var(--w-ink)}
-.w-shop__sub{margin:5px 0 0;font-size:11.5px;color:var(--w-muted);line-height:1.55}
+.w-shop__title{margin:0;font-size:21px;font-weight:700;letter-spacing:-.02em;color:var(--w-ink)}
+.w-shop__head .w-shop__en{margin-top:5px;font-size:9px;font-weight:600;letter-spacing:.17em;color:#adb5af;text-transform:uppercase}
+.w-shop__sub{margin:7px 0 0;font-size:11.5px;color:var(--w-muted);line-height:1.55}
 /* 排序：保留功能但压到最轻 —— 一行灰字，选中项变黑加粗（和导轨同一个表达法）。
    min-height 38px 保证点击区够大（本项目约定点击目标 ≥38px）。 */
 .w-shop__tabs{display:flex;gap:16px;margin:12px 0 14px;overflow-x:auto;scrollbar-width:none}
@@ -365,36 +375,114 @@
 
 /* 商品卡：**必须保留 .web-card 类** —— experience-consumer.js 是靠 `#publicProducts .web-card`
    数商品张数的，卡片换个类名它就会认为「0 件在售」并把容器内容整个换成空态。
-   参考图里卡片没有按钮，整张卡就是入口（键盘通路由 bindWebEvents 的 keydown 委托补齐）。 */
+   参考图里卡片没有按钮，整张卡就是入口（键盘通路由 bindWebEvents 的 keydown 委托补齐）。
+   信息顺序也照参考稿：方图 → 名称 →「分类 · 库存」→ 价格。 */
 .web-shell .web-card.w-product{
   background:none;border:0;border-radius:0;padding:0;margin:0;box-shadow:none;
   display:flex;flex-direction:column;cursor:pointer;-webkit-tap-highlight-color:transparent;
 }
 .w-product__media{
-  position:relative;aspect-ratio:1/1;border-radius:14px;overflow:hidden;
+  position:relative;aspect-ratio:1/1;border-radius:10px;overflow:hidden;
   background:linear-gradient(160deg,#f3f4f1,#e7eae5);
   display:grid;place-items:center;transition:transform .35s,filter .35s;
 }
 .w-product__media svg{width:44px;height:44px;stroke:#b5bfb7;fill:none;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
-.w-product__media img{width:100%;height:100%;object-fit:cover}
+.w-product__media img{width:100%;height:100%;object-fit:cover;display:block}
 .web-card.w-product:active .w-product__media{transform:scale(.985)}
 .web-card.w-product.is-out .w-product__media{filter:grayscale(.55)}
 .w-product__flag{
   position:absolute;left:9px;top:9px;padding:3px 8px;border-radius:999px;
   background:rgba(255,255,255,.94);color:var(--w-ink);font-size:10px;font-weight:700;
 }
+/* 快速加购：参考稿卡片上没这颗按钮，但它让「逛 → 加购 → 结算」少两次跳转；
+   做成右下角白底圆钮，只在图片区占一个角，不破坏版式。 */
+.w-product__add{
+  position:absolute;right:8px;bottom:8px;z-index:2;width:30px;height:30px;border:0;border-radius:50%;
+  display:grid;place-items:center;background:rgba(255,255,255,.95);color:var(--w-ink);
+  box-shadow:0 3px 10px rgba(18,23,20,.16);cursor:pointer;-webkit-tap-highlight-color:transparent;
+}
+.w-product__add:active{transform:scale(.94)}
+.w-product__add svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 .w-product__inner{display:flex;flex-direction:column;flex:1}
 .w-product__name{
-  margin:10px 0 0;font-size:12.5px;font-weight:600;line-height:1.45;color:var(--w-ink);
+  margin:10px 0 0;font-size:13px;font-weight:600;line-height:1.45;color:var(--w-ink);
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
   word-break:keep-all;overflow-wrap:break-word;
 }
-.w-product__price{margin:6px 0 0;font-size:14px;font-weight:750;color:var(--w-accent);font-variant-numeric:tabular-nums}
-.w-product__meta{margin:3px 0 0;font-size:11px;color:var(--w-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w-product__meta{margin:4px 0 0;font-size:11px;color:var(--w-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.w-product__price{margin:6px 0 0;font-size:15px;font-weight:700;color:var(--w-ink);letter-spacing:-.01em;font-variant-numeric:tabular-nums}
 
 /* 参考图是「左分类 + 右双列」。这个网格必须显式声明 —— `.w-grid` 这个类名在本项目
    其它任何地方都没有定义，不写就是裸 div、商品卡会单列一列堆到底（实测就是这样）。 */
-.w-shop__main .w-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 12px;align-content:start}
+.w-shop__main .w-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:22px 12px;align-content:start}
+
+/* ── 顶栏购物车：只在装备页（.is-mall）或车里真有东西时出现 ─────────────────
+   常驻在首页/活动页会让人以为「这里也能买」，而车里是空的。 */
+.web-top__cart{
+  display:none;position:relative;width:38px;height:38px;flex:0 0 38px;place-items:center;
+  border:0;background:none;color:inherit;cursor:pointer;border-radius:50%;-webkit-tap-highlight-color:transparent;
+}
+.web-top__cart svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.web-top__cart:active{background:rgba(127,138,131,.18)}
+.web-shell.is-mall .web-top__cart,.web-top__cart.has{display:grid}
+.web-top__badge{
+  position:absolute;top:1px;right:0;min-width:16px;height:16px;padding:0 4px;border-radius:999px;
+  background:var(--w-accent);color:#fff;font-size:10px;font-weight:700;font-style:normal;
+  line-height:16px;text-align:center;border:2px solid #fff;box-sizing:content-box;
+}
+
+/* ── 购物车页 ─────────────────────────────────────────────────────────────── */
+.w-cart{padding:8px 14px 20px;min-height:60vh}
+.w-cart__hd{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:2px 0 10px}
+.w-cart__hd .w-back{padding:0;margin:0}
+.w-cart__title{font-size:17px;font-weight:700;letter-spacing:-.01em}
+.w-cart__cnt{font-size:11.5px;color:var(--w-muted);font-variant-numeric:tabular-nums}
+.w-cart__list{display:grid;gap:10px}
+.w-cart__row{
+  position:relative;display:grid;grid-template-columns:78px minmax(0,1fr);gap:11px;
+  background:#fff;border:1px solid var(--w-line);border-radius:14px;padding:10px 10px 12px;
+}
+.w-cart__row.is-out{opacity:.72}
+.w-cart__img{width:78px;height:78px;border-radius:10px;overflow:hidden;background:#f0f2ef;display:grid;place-items:center}
+.w-cart__img img{width:100%;height:100%;object-fit:cover;display:block}
+.w-cart__img svg{width:26px;height:26px;stroke:#b5bfb7;fill:none;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.w-cart__main{min-width:0;display:flex;flex-direction:column;gap:4px;padding-right:26px}
+.w-cart__name{font-size:13px;font-weight:600;line-height:1.4;color:var(--w-ink);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.w-cart__spec{font-size:11px;color:var(--w-muted);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.w-cart__bottom{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px}
+.w-cart__price{font-size:14.5px;font-weight:700;color:var(--w-ink);font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:6px}
+.w-cart__price s{font-size:11px;font-weight:500;color:var(--w-mute);text-decoration:line-through}
+.w-cart__del{
+  position:absolute;right:6px;top:6px;width:28px;height:28px;border:0;border-radius:50%;
+  background:none;color:#a3ada7;display:grid;place-items:center;cursor:pointer;
+}
+.w-cart__del svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round}
+.w-cart__del:active{background:#f1f3ef}
+.w-cart__tips{padding:14px 2px 0;font-size:11px;line-height:1.6;color:var(--w-muted)}
+.w-cart__empty{
+  display:grid;place-items:center;gap:8px;padding:64px 20px;text-align:center;color:var(--w-muted);
+}
+.w-cart__empty svg{width:40px;height:40px;stroke:#b9c2bc;fill:none;stroke-width:1.3;stroke-linecap:round;stroke-linejoin:round}
+.w-cart__empty b{font-size:14px;color:var(--w-ink)}
+.w-cart__empty span{font-size:12px;line-height:1.6}
+.w-cart__empty .w-act{margin-top:8px}
+/* 底部结算条：吸在导航之上，和详情页的 CTA 同一条视觉语言 */
+.w-cart__bar{
+  position:sticky;bottom:var(--w-navh);z-index:30;margin:16px -14px 0;
+  display:flex;align-items:center;gap:14px;padding:11px 14px;
+  background:rgba(255,255,255,.96);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+  border-top:1px solid var(--w-line);
+}
+.w-cart__sum{display:grid;gap:1px;min-width:0}
+.w-cart__sum span{font-size:11px;color:var(--w-muted)}
+.w-cart__sum b{font-size:20px;font-weight:750;color:var(--w-ink);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.w-cart__sum em{font-style:normal;font-size:10.5px;color:var(--w-brand)}
+.w-cart__go{
+  flex:1;min-height:46px;border:0;border-radius:14px;background:var(--w-ink);color:#fff;
+  font-size:15px;font-weight:650;cursor:pointer;box-shadow:0 10px 24px rgba(18,23,20,.18);
+  -webkit-tap-highlight-color:transparent;
+}
+.w-cart__go:disabled{background:#c3c8c4;box-shadow:none;cursor:not-allowed}
 
 /* ── 我的：深色照片底 + 毛玻璃卡（可隆会员中心） ─────────────────────── */
 .w-me__stage{position:relative;padding:20px 16px 30px;overflow:hidden;background:var(--w-ink)}
@@ -1396,3 +1484,94 @@
  .ux-consent-overlay .ux-dialog{width:96vw}
  .ux-consent-scroll{max-height:44vh}
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   装备详情页：商品介绍（资料里没有 description 时整块不渲染，不编文案）
+   ══════════════════════════════════════════════════════════════════════════ */
+.w-pd__desc{font-size:13.5px;line-height:1.85;color:var(--w-ink);white-space:pre-line}
+.w-pd__desc p{margin:0 0 10px}
+.w-pd__desc p:last-child{margin-bottom:0}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   确认订单页（#gearCheckout）：收货地址 + 商品 + 价格明细 + 底部提交栏
+   与详情页同一套底色/卡片语言：白卡、12~16px 内边距、底部毛玻璃操作栏。
+   ══════════════════════════════════════════════════════════════════════════ */
+.w-co{padding-bottom:14px}
+.w-co .w-back{margin:12px 12px 2px}
+.w-co__card{margin:10px 12px 0;padding:14px 16px;background:#fff;border-radius:16px}
+.w-co__card:first-of-type{margin-top:2px}
+/* 地址卡：整卡可点（切换 / 管理地址），右侧一个箭头暗示还有下文 */
+.w-co__addr{display:flex;align-items:center;gap:12px;width:100%;border:0;background:none;padding:0;text-align:left;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.w-co__addric{flex:0 0 auto;width:34px;height:34px;border-radius:50%;background:var(--w-brand-soft);display:grid;place-items:center;color:var(--w-brand)}
+.w-co__addric svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.w-co__addrmain{flex:1;min-width:0;display:grid;gap:3px}
+.w-co__addrwho{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650}
+.w-co__addrwho span{font-weight:500;font-size:12.5px;color:var(--w-muted);font-variant-numeric:tabular-nums}
+.w-co__addrfull{font-size:12.5px;color:var(--w-muted);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.w-co__addrarrow{flex:0 0 auto;color:#b9c2bc}
+.w-co__addrarrow svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+/* 没有地址时：虚线占位，明说「寄到哪里」而不是一个空白行 */
+.w-co__noaddr{display:flex;align-items:center;justify-content:center;gap:7px;width:100%;min-height:64px;border:1.5px dashed var(--w-line);border-radius:14px;background:#fbfcfb;color:var(--w-muted);font-size:13px;font-weight:600;cursor:pointer}
+.w-co__noaddr svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round}
+/* 地址簿面板：点地址卡展开，列表 + 新增表单都内联在这里，不借弹窗 */
+.w-co__abook{margin:10px 12px 0;padding:0 16px 14px;background:#fff;border-radius:16px}
+.w-co__abook__hd{display:flex;align-items:center;justify-content:space-between;padding:13px 0 4px;font-size:13px;font-weight:650}
+.w-co__abook__hd em{font-style:normal;font-weight:400;font-size:12px;color:var(--w-muted)}
+.w-co__aopt{display:flex;align-items:flex-start;gap:10px;width:100%;border:0;border-bottom:1px solid var(--w-line);background:none;padding:12px 0;text-align:left;cursor:pointer}
+.w-co__aopt:last-of-type{border-bottom:0}
+.w-co__aopt__dot{flex:0 0 auto;width:17px;height:17px;margin-top:2px;border-radius:50%;border:1.5px solid #c3c8c4;display:grid;place-items:center}
+.w-co__aopt.on .w-co__aopt__dot{border-color:var(--w-brand);background:var(--w-brand)}
+.w-co__aopt.on .w-co__aopt__dot::after{content:'';width:6px;height:6px;border-radius:50%;background:#fff}
+.w-co__aopt__main{flex:1;min-width:0;display:grid;gap:2px}
+.w-co__aopt__who{font-size:13px;font-weight:600}
+.w-co__aopt__who span{font-weight:400;font-size:12px;color:var(--w-muted);margin-left:7px}
+.w-co__aopt__full{font-size:12px;color:var(--w-muted);line-height:1.5}
+.w-co__aopt__tag{flex:0 0 auto;font-size:10.5px;font-weight:700;color:var(--w-brand);background:var(--w-brand-soft);border-radius:999px;padding:3px 7px;line-height:1}
+.w-co__aopt__ops{display:flex;gap:6px;margin-top:5px}
+.w-co__aopt__ops button{border:0;background:none;padding:2px 0;font-size:11.5px;color:var(--w-muted);cursor:pointer;text-decoration:underline}
+.w-co__aopt__ops button+button{margin-left:8px}
+/* 地址表单 */
+.w-co__form{display:grid;gap:10px;padding:12px 0 2px;border-top:1px dashed var(--w-line);margin-top:8px}
+.w-co__form__row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.w-co__inp{width:100%;min-height:42px;padding:10px 12px;border:1px solid var(--w-line);border-radius:11px;background:#fff;font-size:13.5px;color:var(--w-ink);font-family:inherit}
+.w-co__inp:focus{outline:none;border-color:var(--w-brand)}
+.w-co__inp::placeholder{color:#aab4ad}
+textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
+.w-co__form__save{justify-self:start;min-height:40px;padding:0 20px;border:0;border-radius:11px;background:var(--w-ink);color:#fff;font-size:13.5px;font-weight:650;cursor:pointer}
+.w-co__form__save:disabled{background:#c3c8c4;cursor:not-allowed}
+.w-co__form__cancel{border:0;background:none;font-size:12.5px;color:var(--w-muted);cursor:pointer;text-decoration:underline}
+.w-co__form__err{font-size:12px;color:#c0392b;line-height:1.5}
+/* 商品行 */
+.w-co__prod{display:flex;gap:12px}
+.w-co__prod__img{flex:0 0 auto;width:76px;height:76px;border-radius:12px;overflow:hidden;background:#eceff0}
+.w-co__prod__img img{width:100%;height:100%;object-fit:cover;display:block}
+.w-co__prod__img .w-co__prod__noimg{width:100%;height:100%;display:grid;place-items:center;color:#b9c2bc}
+.w-co__prod__img .w-co__prod__noimg svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.4}
+.w-co__prod__main{flex:1;min-width:0;display:grid;gap:4px;align-content:start}
+.w-co__prod__name{font-size:14px;font-weight:650;line-height:1.4}
+.w-co__prod__spec{font-size:12px;color:var(--w-muted)}
+.w-co__prod__price{margin-left:auto;text-align:right;display:grid;gap:2px;align-content:start}
+.w-co__prod__price b{font-size:14.5px;font-weight:700;font-variant-numeric:tabular-nums}
+.w-co__prod__price s{font-size:11.5px;color:var(--w-mute);font-weight:400}
+.w-co__prod__price span{font-size:11.5px;color:var(--w-muted)}
+/* 价格明细 */
+.w-co__rows{display:grid;gap:9px;margin-top:12px;padding-top:12px;border-top:1px dashed var(--w-line)}
+.w-co__row{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px}
+.w-co__row span{color:var(--w-muted)}
+.w-co__row b{font-weight:650;font-variant-numeric:tabular-nums}
+.w-co__row--free b{color:#0f7a55}
+.w-co__row--cut b{color:#0f7a55}
+.w-co__pts{display:flex;align-items:center;gap:8px}
+.w-co__pts input{width:84px;min-height:34px;padding:6px 9px;border:1px solid var(--w-line);border-radius:9px;font-size:13px;text-align:right;font-variant-numeric:tabular-nums;font-family:inherit}
+.w-co__pts input:focus{outline:none;border-color:var(--w-brand)}
+.w-co__pts em{font-style:normal;font-size:11.5px;color:var(--w-muted)}
+.w-co__sel{min-height:34px;max-width:170px;padding:6px 9px;border:1px solid var(--w-line);border-radius:9px;background:#fff;font-size:12.5px;font-family:inherit;color:var(--w-ink)}
+.w-co__sel:focus{outline:none;border-color:var(--w-brand)}
+.w-co__est{margin:10px 12px 0;font-size:11.5px;color:var(--w-muted);line-height:1.6;padding:0 4px}
+/* 底部提交栏：与详情页 .w-pd__cta 同一套毛玻璃 + sticky */
+.w-co__bar{position:sticky;bottom:var(--w-navh);z-index:30;margin-top:14px;display:flex;align-items:center;gap:14px;padding:11px 14px;background:rgba(255,255,255,.96);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);border-top:1px solid var(--w-line)}
+.w-co__sum{display:grid;gap:1px}
+.w-co__sum span{font-size:11px;color:var(--w-muted)}
+.w-co__sum b{font-size:20px;font-weight:750;color:var(--w-accent);font-variant-numeric:tabular-nums}
+.w-co__submit{flex:1;min-height:46px;border:0;border-radius:14px;background:var(--w-ink);color:#fff;font-size:15px;font-weight:650;cursor:pointer;box-shadow:0 10px 24px rgba(18,23,20,.18);-webkit-tap-highlight-color:transparent}
+.w-co__submit:disabled{background:#c3c8c4;box-shadow:none;cursor:not-allowed}

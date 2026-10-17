@@ -149,7 +149,7 @@ function miniCard(x){
   </button>`;
 }
 function miniGear(x){
-  return `<button class="w-mini w-mini--gear" type="button" onclick="buy(${x.id})">
+  return `<button class="w-mini w-mini--gear" type="button" onclick="openProductFromPacking(${x.id})">
     <div class="w-mini__media">${x.image_url?`<img src="${esc(x.image_url)}" alt="" loading="lazy">`:WI.bag}</div>
     <div class="w-mini__title">${esc(x.name)}</div>
     <div class="w-mini__meta"><span class="w-mini__price">${priceHtml(x.price,{pending:x.priceFrom==='pending'})}</span></div>
@@ -231,7 +231,7 @@ async function loadMall(){
   skel('#publicProducts',4);try{const box=$('#publicProducts');
   if(box&&!box.children.length)box.innerHTML=wSkMini(4);
   MALL_ALL=await api(`/api/public/clubs/${CLUB}/mall/products`);
-  renderMall();
+  renderMall();renderCartBadge();
 }catch(e){loaderError('#publicProducts',e,'loadMall 加载失败')}}
 /* 左侧竖栏是分类，右侧 tab 是排序 —— 参考图那种「男士/女士/鞋履 + 软壳夹克/三合一」是两级品类，
    我们库里没有第二层，硬造一层只会让老板在后台多维护一堆没意义的字段。这里把它变成顾客真会用的排序。 */
@@ -240,15 +240,20 @@ const MALL_SORTS=[
   {k:'low',label:'价格从低到高',cmp:(a,b)=>Number(a.price||0)-Number(b.price||0)},
   {k:'high',label:'价格从高到低',cmp:(a,b)=>Number(b.price||0)-Number(a.price||0)}
 ];
+/* 分类导轨的英文副标：参考图是「中文大字 + 英文小字」两行。
+   只给**库里真实存在**的分类配英文；配不到的分类改印在售件数 —— 不硬编一个英文别名凑版式。 */
+const MALL_EN={'全部':'ALL','服装':'APPAREL','背包':'PACKS','徒步装备':'TREKKING','露营装备':'CAMPING',
+  '鞋履':'FOOTWEAR','配件':'ACCESSORIES','装备':'GEAR','睡袋':'SLEEPING','炊具':'COOKWARE'};
 function mallCats(){return ['全部'].concat(Array.from(new Set(MALL_ALL.map(x=>x.category).filter(Boolean))))}
 function renderMallCats(){
   const box=$('#mallCats');if(!box)return;
   const cats=mallCats();
   if(!cats.includes(MALL_CAT))MALL_CAT='全部';
   const cnt=c=>c==='全部'?MALL_ALL.length:MALL_ALL.filter(x=>x.category===c).length;
-  /* 参考图的导轨是「中文大字 + 小字副标」两行，选中项不填充色块、只在左边缘出黑条。
-     副标用真实的在售件数 —— 库里没有英文别名，就不编一个英文出来凑版式。 */
-  box.innerHTML=cats.map(c=>`<button class="${c===MALL_CAT?'on':''}" type="button" data-c="${esc(c)}"${c===MALL_CAT?' aria-current="true"':''}><span class="w-shop__cat">${esc(c)}</span><span class="w-shop__cnt">${cnt(c)} 件</span></button>`).join('');
+  box.innerHTML=cats.map(c=>{
+    const sub=MALL_EN[c]||(cnt(c)+' 件');
+    return `<button class="${c===MALL_CAT?'on':''}" type="button" data-c="${esc(c)}"${c===MALL_CAT?' aria-current="true"':''}><span class="w-shop__cat">${esc(c==='全部'?'全部商品':c)}</span><span class="w-shop__en">${esc(sub)}</span></button>`;
+  }).join('');
 }
 function renderMallTabs(){
   const box=$('#mallTabs');if(!box)return;
@@ -291,15 +296,15 @@ function renderMallHero(){
   if(sig===_mallHeroSig&&box.children.length)return;
   _mallHeroSig=sig;
   const badge=`<span class="w-shop__hbadge">在售 ${MALL_ALL.length} 件</span>`;
-  const copy='<div class="w-shop__hcopy"><div class="w-shop__heyebrow">REMOTE OUTDOOR · GEAR</div>'
-    +'<h2>山系装备</h2>'
-    +`<p>共 ${MALL_ALL.length} 件在售 · 会员等级折扣结算自动生效</p></div>`;
+  /* 参考图的主视觉只有一张图和中间那个细边「本季新品」标签，没有叠一段文案 ——
+     「共几件在售」下面区块头已经写了一遍，主视觉上再写一次就是同一句话出现两遍。 */
+  const tag='<span class="w-shop__htag">本季新品</span>';
   if(!slides.length){
-    box.innerHTML=`<div class="w-shop__htrack"><div class="w-shop__hslide">${badge}${copy}</div></div>`;
+    box.innerHTML=`<div class="w-shop__htrack"><div class="w-shop__hslide is-fallback">${badge}${tag}</div></div>`;
     return;
   }
   box.innerHTML=`<div class="w-shop__htrack" id="mallHeroTrack">`
-    +slides.map((x,i)=>`<div class="w-shop__hslide"><img src="${esc(x.url)}" alt="${esc(x.title)}"${i?' loading="lazy"':''}>${badge}${copy}</div>`).join('')
+    +slides.map((x,i)=>`<div class="w-shop__hslide"><img src="${esc(x.url)}" alt="${esc(x.title)}"${i?' loading="lazy"':''}>${badge}${tag}</div>`).join('')
     +'</div>'
     +(slides.length>1?`<div class="w-shop__hdots">${slides.map((_,i)=>`<i${i===0?' class="on"':''}></i>`).join('')}</div>`:'');
   if(slides.length>1)bindMallHero();
@@ -337,11 +342,11 @@ function renderMall(){
   if(s&&s.cmp)list=list.sort(s.cmp);
   box.innerHTML=list.length?list.map(productCard).join('')
     :`<div class="w-empty" style="grid-column:1/-1">${WI.empty}<div>${q?'没有匹配的装备':'这个分类暂时没有在售装备'}</div>${q?'<div style="margin-top:6px">换个关键词，或清空搜索。</div>':''}</div>`;
-  /* 区块头：标题跟当前分类走（参考图里标题就是当前分类），副标说清「还剩几件」。
-     #mallNote 不再改写 —— 它固定放平台口径的说明，件数统一由副标承担，
-     同一屏里不会出现两处「共 N 件」互相打架的说法。 */
-  const ttl=$('#mallTitle'),sub=$('#mallSub');
-  if(ttl)ttl.textContent=MALL_CAT==='全部'?'全部装备':MALL_CAT;
+  /* 区块头：标题跟当前分类走（参考图里标题就是当前分类 + 一行英文小字）。 */
+  const ttl=$('#mallTitle'),en=$('#mallEn'),sub=$('#mallSub');
+  const catTitle=MALL_CAT==='全部'?'全部商品':MALL_CAT;
+  if(ttl)ttl.textContent=catTitle;
+  if(en)en.textContent=MALL_EN[MALL_CAT]||(MALL_CAT==='全部'?'ALL':'');
   if(sub)sub.textContent=q
     ? `「${q}」匹配 ${list.length} 件 · 共 ${MALL_ALL.length} 件在售`
     : (MALL_CAT==='全部'
@@ -349,7 +354,8 @@ function renderMall(){
         : `${MALL_CAT} · 共 ${list.length} 件在售`);
 }
 /* 商品卡必须带 .web-card 类：experience-consumer.js 是按 `#publicProducts .web-card` 数商品张数的，
-   卡片换类名它就会判定「0 件在售」并把整个容器换成空态文案。外观由 .w-product 覆盖。 */
+   卡片换类名它就会判定「0 件在售」并把整个容器换成空态文案。外观由 .w-product 覆盖。
+   版式对齐参考稿：方图 → 名称（两行）→「分类 · 库存」小字 → 价格；右下角一个加购圆钮。 */
 function productCard(x){
   const out=Number(x.stock||0)<=0,cat=x.category||'装备';
   /* 参考图的卡片没有按钮，整张卡就是入口。去掉按钮后必须补 aria-label ——
@@ -357,14 +363,155 @@ function productCard(x){
      键盘通路（Enter/空格）由 bindWebEvents 的 keydown 委托补齐（on 属性只绑 click）。 */
   return `<div class="web-card w-product${out?' is-out':''}" role="button" tabindex="0"
     aria-label="${esc(x.name)}，${money(x.price)}${out?'，暂时缺货':''}" onclick="openProduct(${x.id})">
-    <div class="w-product__media">${x.image_url?`<img src="${esc(x.image_url)}" alt="" loading="lazy">`:WI.bag}${out?'<span class="w-product__flag">缺货</span>':''}</div>
+    <div class="w-product__media">${x.image_url?`<img src="${esc(x.image_url)}" alt="${esc(x.name)}" loading="lazy">`:WI.bag}${out?'<span class="w-product__flag">缺货</span>':''}
+      ${out?'':`<button class="w-product__add" type="button" aria-label="把${esc(x.name)}加入购物车" onclick="event.stopPropagation();quickAdd(${x.id})"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/><path d="M12 12.9v4.2M9.9 15h4.2"/></svg></button>`}
+    </div>
     <div class="w-product__inner">
       <div class="w-product__name">${esc(x.name)}</div>
-      <div class="w-product__price">${money(x.price)}</div>
       <div class="w-product__meta">${esc(cat)} · ${out?'暂时缺货':`库存 ${x.stock}`}</div>
+      <div class="w-product__price">${money(x.price)}</div>
     </div>
   </div>`;
 }
+/* 列表页快速加购：列表里没有会员价（会员价跟人走），所以这里只负责「放进购物车」，
+   真正的价格在打开购物车时按商品详情接口回源核对 —— 列表价与结算价不会各说各话。 */
+function quickAdd(pid){
+  const p=(MALL_ALL||[]).find(x=>String(x.id)===String(pid));
+  if(!p){toast('这件装备暂时看不了');return}
+  if(Number(p.stock||0)<=0){toast('这件装备暂时缺货');return}
+  const vs=(p.variants||[]).filter(v=>v&&v.id!=null&&Number(v.stock||0)>0);
+  const v=vs.length>1?vs[0]:null;
+  cartAdd(p.id,v?v.id:null,1);
+  toast(v?`已加入购物车 · ${v.name}`:'已加入购物车');
+}
+
+/* ── 购物车（本地） ─────────────────────────────────────────────────────────
+   本地只存「商品 id / 规格 id / 数量」三件事，价格与库存一律在打开购物车、结算时
+   按后端实时数据核对 —— 后台改价、下架、售罄都不会被一张旧缓存骗过去。
+   没有服务端购物车是刻意的：这个项目没有跨设备登录态，服务端车会变成一份没人清的死数据。 */
+const CART_KEY='clubos_cart_v1';
+let CART_DETAILS={};
+function cartLines(){
+  try{const v=JSON.parse(localStorage.getItem(CART_KEY)||'[]');return Array.isArray(v)?v.filter(x=>x&&x.productId):[]}catch(e){return []}
+}
+function cartSave(list){
+  try{localStorage.setItem(CART_KEY,JSON.stringify(list))}catch(e){}
+  renderCartBadge();
+}
+function cartKeyOf(x){return String(x.productId)+'|'+String(x.variantId||'')}
+function cartAdd(pid,vid,qty){
+  const list=cartLines(),k=String(pid)+'|'+String(vid||'');
+  const hit=list.find(x=>cartKeyOf(x)===k);
+  if(hit)hit.qty=Math.min(99,Number(hit.qty||1)+Math.max(1,Number(qty||1)));
+  else list.push({productId:Number(pid),variantId:vid||null,qty:Math.max(1,Number(qty||1))});
+  cartSave(list);
+}
+function cartRemove(k){cartSave(cartLines().filter(x=>cartKeyOf(x)!==k));paintCart()}
+function cartStep(k,d){
+  const list=cartLines(),hit=list.find(x=>cartKeyOf(x)===k);
+  if(!hit)return;
+  hit.qty=Math.min(99,Math.max(1,Number(hit.qty||1)+Number(d||0)));
+  cartSave(list);paintCart();
+}
+function cartClear(){cartSave([]);CART_DETAILS={}}
+function cartCount(){return cartLines().reduce((s,x)=>s+Math.max(1,Number(x.qty||1)),0)}
+function renderCartBadge(){
+  const b=document.getElementById('cartBadge');if(!b)return;
+  const n=cartCount();
+  b.textContent=n>99?'99+':String(n);
+  b.hidden=n<=0;
+  b.parentElement?.classList.toggle('has',n>0);
+}
+/* 购物车里的商品详情：带 user_id 回源才有 memberPrice（列表接口是公共数据，不带会员价）。 */
+function cartFindProduct(pid){return (MALL_ALL||[]).find(x=>String(x.id)===String(pid))||null}
+function cartDetail(pid){const k=String(pid);if(CART_DETAILS[k]!==undefined)return CART_DETAILS[k];return cartFindProduct(pid)}
+function cartVariantOf(p,vid){if(!p||vid==null)return null;return (p.variants||[]).find(v=>String(v.id)===String(vid))||null}
+function cartTotals(){
+  let gross=0,unit=0,count=0,bad=0;
+  cartLines().forEach(l=>{
+    const p=cartDetail(l.productId);if(!p){bad++;return}
+    const v=cartVariantOf(p,l.variantId),q=Math.max(1,Number(l.qty||1));
+    const st=v?Number(v.stock||0):Number(p.stock||0);
+    if(st<=0)bad++;
+    gross+=productPrice(p,v)*q;unit+=memberPriceOf(p,v)*q;count+=q;
+  });
+  return {gross,unit,cut:Math.max(0,gross-unit),count,bad};
+}
+async function openCart(){
+  wviewShow('wmall');
+  const shop=document.querySelector('#wmall .w-shop');if(shop)shop.style.display='none';
+  const d=$('#productDetail');if(d){d.innerHTML='';d.style.display='none'}
+  const k=$('#gearCheckout');if(k){k.innerHTML='';k.style.display='none'}
+  window.scrollTo({top:0,behavior:'instant'});
+  await renderCart();
+}
+async function renderCart(){
+  const box=$('#cartView');if(!box)return;
+  box.style.display='block';
+  const lines=cartLines();
+  if(!lines.length){
+    box.innerHTML=`<div class="w-cart"><div class="w-cart__hd"><button class="w-back" type="button" onclick="showMallList()">${WI.back}继续购物</button></div>
+      <div class="w-cart__empty">${WI.bag}<b>购物车是空的</b><span>挑一两件山系装备，结算时会员折扣自动生效。</span><button class="w-act" type="button" onclick="showMallList()">去逛逛</button></div></div>`;
+    return;
+  }
+  box.innerHTML=`<div class="w-cart"><div class="w-cart__hd"><span class="w-cart__title">购物车</span><span class="w-cart__cnt">${cartCount()} 件</span></div><div class="w-sk">${wSkRows(2)}</div></div>`;
+  if(!MALL_ALL.length){try{MALL_ALL=await api(`/api/public/clubs/${CLUB}/mall/products`)}catch(e){}}
+  await Promise.all(lines.map(async l=>{
+    const k=String(l.productId);
+    if(CART_DETAILS[k]!==undefined)return;
+    try{CART_DETAILS[k]=await api(`/api/public/clubs/${CLUB}/mall/products/${l.productId}?user_id=${USER}`)}catch(e){CART_DETAILS[k]=null}
+  }));
+  /* 下架商品直接从车里清掉：留着一条点不动、也不能结算的行，顾客只会以为购物车坏了。 */
+  const alive=cartLines().filter(l=>cartDetail(l.productId));
+  if(alive.length!==cartLines().length)cartSave(alive);
+  paintCart();renderCartBadge();
+}
+function paintCart(){
+  const box=$('#cartView');if(!box)return;
+  const lines=cartLines();
+  if(!lines.length){box.innerHTML=`<div class="w-cart"><div class="w-cart__hd"><button class="w-back" type="button" onclick="showMallList()">${WI.back}继续购物</button></div>
+      <div class="w-cart__empty">${WI.bag}<b>购物车是空的</b><span>挑一两件山系装备，结算时会员折扣自动生效。</span><button class="w-act" type="button" onclick="showMallList()">去逛逛</button></div></div>`;return}
+  const t=cartTotals();
+  const rows=lines.map(l=>{
+    const p=cartDetail(l.productId);if(!p)return '';
+    const v=cartVariantOf(p,l.variantId),q=Math.max(1,Number(l.qty||1));
+    const unit=memberPriceOf(p,v),orig=productPrice(p,v);
+    const stock=v?Number(v.stock||0):Number(p.stock||0),dead=stock<=0;
+    const img=(p.images&&p.images[0]&&(p.images[0].url||p.images[0]))||p.image_url||'';
+    const k=cartKeyOf(l);
+    return `<div class="w-cart__row${dead?' is-out':''}">
+      <div class="w-cart__img">${img?`<img src="${esc(img)}" alt="${esc(p.name)}">`:WI.bag}</div>
+      <div class="w-cart__main">
+        <div class="w-cart__name">${esc(p.name)}</div>
+        <div class="w-cart__spec">${esc(p.category||'装备')}${v?' · '+esc(v.name):''}${dead?' · 暂时缺货':''}</div>
+        <div class="w-cart__bottom">
+          <div class="w-cart__price">${money(unit)}${unit<orig-0.004?`<s>${money(orig)}</s>`:''}</div>
+          <div class="w-pd__qty">
+            <button class="w-pd__qbtn" type="button" data-cstep="-1" data-k="${esc(k)}"${q<=1?' disabled':''} aria-label="减少数量">−</button>
+            <output>${q}</output>
+            <button class="w-pd__qbtn" type="button" data-cstep="1" data-k="${esc(k)}"${(dead||q>=stock)?' disabled':''} aria-label="增加数量">+</button>
+          </div>
+        </div>
+      </div>
+      <button class="w-cart__del" type="button" data-cdel="${esc(k)}" aria-label="从购物车移除${esc(p.name)}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg></button>
+    </div>`;
+  }).join('');
+  box.innerHTML=`<div class="w-cart">
+    <div class="w-cart__hd"><button class="w-back" type="button" onclick="showMallList()">${WI.back}继续购物</button><span class="w-cart__cnt">${t.count} 件</span></div>
+    <div class="w-cart__list">${rows}</div>
+    <div class="w-cart__tips">平台统一发货 · 会员折扣结算时自动生效 · 支持 7 天无理由（不影响二次销售）</div>
+    <div class="w-cart__bar">
+      <div class="w-cart__sum"><span>合计（${t.count} 件）</span><b>${money(t.unit)}</b>${t.cut>0?`<em>会员已省 ${money(t.cut)}</em>`:''}</div>
+      <button class="w-cart__go" type="button" onclick="cartCheckout()"${t.bad?' disabled':''}>${t.bad?'有商品暂时缺货':'去结算'}</button>
+    </div>
+  </div>`;
+}
+document.addEventListener('click',e=>{
+  const s=e.target.closest&&e.target.closest('#cartView [data-cstep]');
+  if(s){e.preventDefault();cartStep(s.dataset.k,Number(s.dataset.cstep));return}
+  const d=e.target.closest&&e.target.closest('#cartView [data-cdel]');
+  if(d){e.preventDefault();cartRemove(d.dataset.cdel);}
+});
 
 /* ── 装备详情页 ───────────────────────────────────────────────────────────────
    和 openAct 一个套路（列表区留在 DOM 里靠 display 切，返回不用重拉），但多一层状态：
@@ -397,13 +544,24 @@ function curVariant(){
   if(!P_CUR)return null;
   return productVariants(P_CUR).find(v=>String(v.id)===String(P_VID))||null;
 }
+function showCheckoutPane(){
+  const shop=document.querySelector('#wmall .w-shop');if(shop)shop.style.display='none';
+  /* 详情页只藏不删：从确认单返回时要能原地回到详情，不用重新拉商品。 */
+  const d=$('#productDetail');if(d)d.style.display='none';
+  const cv=$('#cartView');if(cv){cv.innerHTML='';cv.style.display='none'}
+  const k=$('#gearCheckout');if(k)k.style.display='block';
+}
 function showProductPane(){
   const shop=document.querySelector('#wmall .w-shop');if(shop)shop.style.display='none';
+  const cv=$('#cartView');if(cv){cv.innerHTML='';cv.style.display='none'}
+  const k=$('#gearCheckout');if(k){k.innerHTML='';k.style.display='none'}
   const d=$('#productDetail');if(d)d.style.display='block';
 }
 function showMallList(){
   P_CUR=null;P_VID=null;P_QTY=1;
   const d=$('#productDetail');if(d){d.innerHTML='';d.style.display='none'}
+  const k=$('#gearCheckout');if(k){k.innerHTML='';k.style.display='none'}
+  const cv=$('#cartView');if(cv){cv.innerHTML='';cv.style.display='none'}
   const shop=document.querySelector('#wmall .w-shop');if(shop)shop.style.display='';
   if(MALL_ALL.length)renderMall();else loadMall();
 }
@@ -462,7 +620,7 @@ function productDetailHtml(){
   <div class="w-pd__head">
     <div class="w-pd__price">${money(mp)}${isMem?`<s class="w-pd__was">${money(price)}</s><i class="w-pd__mem">会员价</i>`:''}</div>
     <h2 class="w-pd__name">${esc(p.name)}</h2>
-    <div class="w-pd__meta">${esc(p.category||'装备')}${sku?' · 货号 '+esc(sku):''}</div>
+    <div class="w-pd__meta">${esc(p.category||'装备')}${sku?' · 货号 '+esc(sku):''}${out?'':' · 库存 '+stock+' 件'}</div>
   </div>
   ${vs.length?`<div class="w-pd__block">
     <div class="w-pd__label">选择规格${v?' <em>'+esc(v.name)+'</em>':''}</div>
@@ -487,10 +645,22 @@ function productDetailHtml(){
       <div><b>退换与售后</b><span>在「我的 · 装备订单与售后」里申请，审核进度可追踪。</span></div>
     </div>
   </div>
+  ${p.description?`<div class="w-pd__block">
+    <div class="w-pd__label">商品介绍</div>
+    <div class="w-pd__desc">${esc(p.description)}</div>
+  </div>`:''}
   <div class="w-pd__cta">
     <div class="w-pd__sum"><span>合计${isMem?'（会员价）':''}</span><b id="pdTotal">${money(mp*P_QTY)}</b></div>
+    <button class="w-pd__add" type="button"${out?' disabled':''} onclick="addCurrentToCart()">加入购物车</button>
     <button class="w-pd__buy" type="button"${out?' disabled':''} onclick="buyProduct()">${out?'暂时缺货':'立即购买'}</button>
   </div>`;
+}
+function addCurrentToCart(){
+  if(!P_CUR)return;
+  const v=curVariant(),stock=productStock(P_CUR,v);
+  if(stock<=0){toast('这件装备暂时缺货');return}
+  cartAdd(P_CUR.id,v?v.id:null,P_QTY);
+  toast('已加入购物车');
 }
 /* 换规格只重画整块详情页：规格会同时影响价格、库存、数量上限和合计，
    局部改三四处比整体重渲染更容易漏。重渲染会滚回顶部，所以先把滚动位置存回来。 */
@@ -537,34 +707,288 @@ function bindProductGallery(){
   };
   track.addEventListener('scroll',upd,{passive:true});upd();
 }
+/* ── 确认订单页（装备电商链路的第二跳）──────────────────────────────────────
+   「立即购买」与购物车「去结算」都落到这一页：装备是实物，付钱之前必须先看清三件事 ——
+   寄到哪（地址簿，没有就当场新增）、买什么（商品与规格复核）、每一项多少钱
+   （会员折扣 / 积分 / 福利券逐行列明）。本页只做预估：会员价与积分余额都来自
+   真实接口，但「最终以服务端结算为准」这句话必须写在页面上 —— 支付面板与收据里
+   的服务端数字才是准的。 */
+let CO_ITEMS=[],CO_ADDRS=[],CO_ADDR_ID=null,CO_VOUCHERS=[],CO_POINTS=0,CO_VOUCHER='',CO_POINTS_MAX=0,CO_FROM_CART=false;
+function coAddr(){return (CO_ADDRS||[]).find(a=>String(a.id)===String(CO_ADDR_ID))||(CO_ADDRS||[]).find(a=>Number(a.is_default))||(CO_ADDRS||[])[0]||null}
+function coFull(a){return [a.province,a.city,a.district,a.detail].filter(Boolean).join(' ')}
 async function buyProduct(){
   const p=P_CUR;if(!p)return;
   const v=curVariant(),stock=productStock(p,v);
   if(stock<=0){showAlert({title:'暂时缺货',message:'这件装备当前没有可售库存。'});return}
   if(P_QTY>stock){showAlert({title:'库存不足',message:'当前规格只剩 '+stock+' 件。'});return}
-  const item={productId:p.id,quantity:P_QTY};
-  if(v)item.variantId=v.id;
-  let w;try{w=await api(`/api/public/users/${USER}/wallet?club_id=${CLUB}`)}catch(e){w={gearPoints:0}}
-  let vouchers=[];try{vouchers=await api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=gear`)}catch(e){}
-  const label=v?'已选 '+v.name+' × '+P_QTY:'已选 '+P_QTY+' 件';
-  let f=await showForm({title:'确认下单',desc:label+'，合计 '+money(productPrice(p,v)*P_QTY)+'。选择本单使用的装备积分与福利券。',submitText:'提交订单',
-    fields:[{name:'use',label:'使用装备积分',type:'number',value:0,min:0,help:`当前可用装备积分 ${Number(w.gearPoints||0)}`},
-            {name:'voucher',label:'装备福利券',type:'select',value:'',options:[{value:'',label:'不使用福利券'}].concat((vouchers||[]).map(x=>({value:x.voucher_code,label:`${x.title} · 抵 ${money(x.cash_value)}`})))}]});
-  if(!f)return;
+  await openGearCheckout([{p,v,qty:P_QTY}],false);
+}
+/* 购物车结算：把每一行都核对一遍库存再进确认单 —— 让顾客在确认单上看到「有商品缺货」
+   而不是提交后被 409 打回，前者还能改，后者只能重来。 */
+async function cartCheckout(){
+  const lines=cartLines();
+  if(!lines.length){showAlert({title:'购物车是空的',message:'先挑一件装备再结算。'});return}
+  const items=[];
+  for(const l of lines){
+    const p=cartDetail(l.productId);
+    if(!p)continue;
+    const v=cartVariantOf(p,l.variantId);
+    const stock=v?Number(v.stock||0):Number(p.stock||0);
+    if(stock<=0){showAlert({title:'有商品暂时缺货',message:`${p.name} 当前没有可售库存，请先移除或换个规格。`});return}
+    items.push({p,v,qty:Math.min(Math.max(1,Number(l.qty||1)),stock)});
+  }
+  if(!items.length){showAlert({title:'购物车是空的',message:'先挑一件装备再结算。'});return}
+  await openGearCheckout(items,true);
+}
+async function openGearCheckout(items,fromCart){
+  const box=$('#gearCheckout');if(!box||!items||!items.length)return;
+  CO_ITEMS=items;CO_FROM_CART=!!fromCart;
+  showCheckoutPane();
+  box.innerHTML='<div class="w-pd__sk">'+wSkMini(1)+'</div>';
+  CO_ADDR_ID=null;CO_VOUCHER='';CO_POINTS=0;CO_POINTS_MAX=0;CO_ADDRS=[];CO_VOUCHERS=[];
+  let wallet={gearPoints:0};
+  try{wallet=await api(`/api/public/users/${USER}/wallet?club_id=${CLUB}`)}catch(e){}
+  CO_POINTS_MAX=Number(wallet.gearPoints||0);
+  try{CO_ADDRS=await api(`/api/public/users/${USER}/addresses`)||[]}catch(e){}
+  try{CO_VOUCHERS=await api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=gear`)||[]}catch(e){}
+  box.innerHTML=gearCheckoutHtml();
+  window.scrollTo({top:0,behavior:'instant'});
+}
+function backToProduct(){
+  if(CO_FROM_CART){openCart();return}
+  showProductPane();
+}
+/* 地址卡与地址簿分块渲染：增改地址后只重绘这两块，
+   不动商品与价格明细 —— 用户正在填的积分/券不能被一次地址操作抹掉。 */
+function coAddrCardHtml(){
+  const a=coAddr();
+  if(!a)return `<div class="w-co__card"><button class="w-co__noaddr" type="button" onclick="coToggleAbook(true)">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>添加收货地址</button></div>`;
+  return `<div class="w-co__card" id="coAddrCard"><button class="w-co__addr" type="button" onclick="coToggleAbook()">
+    <span class="w-co__addric"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s6.2-5.5 6.2-10.4a6.2 6.2 0 1 0-12.4 0C5.8 15.5 12 21 12 21z"/><circle cx="12" cy="10.4" r="2.3"/></svg></span>
+    <span class="w-co__addrmain">
+      <span class="w-co__addrwho">${esc(a.consignee)} <span>${esc(a.phone)}</span></span>
+      <span class="w-co__addrfull">${esc(a.full||coFull(a))}</span>
+    </span>
+    <span class="w-co__addrarrow"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></span>
+  </button></div>`;
+}
+function coAbookHtml(){
+  const cur=coAddr();
+  const list=(CO_ADDRS||[]).map(a=>`<div class="w-co__aopt${String(a.id)===String(cur&&cur.id)?' on':''}">
+    <button class="w-co__aopt__dot" type="button" aria-label="选择这个地址" onclick="coPickAddr(${a.id})"></button>
+    <div class="w-co__aopt__main" onclick="coPickAddr(${a.id})">
+      <div class="w-co__aopt__who">${esc(a.consignee)}<span>${esc(a.phone)}</span></div>
+      <div class="w-co__aopt__full">${esc(a.full||coFull(a))}</div>
+      <div class="w-co__aopt__ops">
+        ${Number(a.is_default)?'':`<button type="button" onclick="coDefaultAddr(event,${a.id})">设为默认</button>`}
+        <button type="button" onclick="coDelAddr(event,${a.id})">删除</button>
+      </div>
+    </div>
+    ${Number(a.is_default)?'<span class="w-co__aopt__tag">默认</span>':''}
+  </div>`).join('')||'<div style="padding:8px 0;color:var(--w-muted);font-size:12.5px">还没有保存的地址，先添加一个。</div>';
+  return `<div class="w-co__abook" id="coAbook">
+    <div class="w-co__abook__hd">收货地址<em>点地址即可切换，提交后按选中地址发货</em></div>
+    ${list}
+    <form class="w-co__form" onsubmit="return coSaveAddr(event)">
+      <div class="w-co__form__row">
+        <input class="w-co__inp" id="coAfName" placeholder="收货人姓名" maxlength="20" autocomplete="name">
+        <input class="w-co__inp" id="coAfPhone" placeholder="手机号（11 位）" inputmode="numeric" maxlength="11" autocomplete="tel">
+      </div>
+      <div class="w-co__form__row">
+        <input class="w-co__inp" id="coAfProv" placeholder="省 / 直辖市" maxlength="20">
+        <input class="w-co__inp" id="coAfCity" placeholder="城市" maxlength="20">
+      </div>
+      <div class="w-co__form__row">
+        <input class="w-co__inp" id="coAfDist" placeholder="区 / 县（选填）" maxlength="20">
+        <input class="w-co__inp" id="coAfDetail" placeholder="详细地址：街道、门牌号、楼层" maxlength="80" autocomplete="street-address">
+      </div>
+      <div class="w-co__form__err" id="coAfErr" hidden></div>
+      <div style="display:flex;align-items:center;gap:16px">
+        <button class="w-co__form__save" type="submit">保存地址</button>
+        <button class="w-co__form__cancel" type="button" onclick="coToggleAbook(false)">收起</button>
+      </div>
+    </form>
+  </div>`;
+}
+function coRenderAddr(){
+  const card=document.getElementById('coAddrCard');
+  if(card){card.outerHTML=coAddrCardHtml();}
+  else{
+    const no=document.querySelector('#gearCheckout .w-co__noaddr');
+    if(no)no.closest('.w-co__card').outerHTML=coAddrCardHtml();
+  }
+  const book=document.getElementById('coAbook');
+  if(book)book.outerHTML=coAbookHtml();
+}
+function coToggleAbook(force){
+  let book=document.getElementById('coAbook');
+  if(!book){
+    const anchor=document.getElementById('coAddrCard')||document.querySelector('#gearCheckout .w-co__noaddr');
+    if(anchor)anchor.closest('.w-co__card').insertAdjacentHTML('afterend',coAbookHtml());
+    return;
+  }
+  book.hidden=(force!==undefined)?!force:!book.hidden;
+}
+function coPickAddr(id){CO_ADDR_ID=id;coRenderAddr()}
+async function coDefaultAddr(e,id){
+  e.stopPropagation();
   try{
-    let d=await api(`/api/public/clubs/${CLUB}/gear-checkout`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({userId:USER,items:[item],gearPoints:Number(f.use||0),voucherCodes:f.voucher?[f.voucher]:[]})});
-    let paid=await payCheckout(d);if(!paid)return;
-    await showAlert({title:'下单成功',message:`实际支付 ${money(paid.cashPaid)}
+    await api(`/api/public/users/${USER}/addresses/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({isDefault:true})});
+    CO_ADDRS=await api(`/api/public/users/${USER}/addresses`)||[];
+    coRenderAddr();toast('已设为默认地址');
+  }catch(err){showAlert({title:'设置失败',message:err.message})}
+}
+async function coDelAddr(e,id){
+  e.stopPropagation();
+  if(!await uxConfirm({title:'删除这个地址',message:'删除后不可恢复，需要时重新添加。',confirmText:'删除',danger:true}))return;
+  try{
+    await api(`/api/public/users/${USER}/addresses/${id}`,{method:'DELETE'});
+    CO_ADDRS=await api(`/api/public/users/${USER}/addresses`)||[];
+    if(String(CO_ADDR_ID)===String(id))CO_ADDR_ID=null;
+    coRenderAddr();
+  }catch(err){showAlert({title:'删除失败',message:err.message})}
+}
+async function coSaveAddr(ev){
+  ev.preventDefault();
+  const err=$('#coAfErr');
+  const v={consignee:($('#coAfName').value||'').trim(),phone:($('#coAfPhone').value||'').trim(),
+           province:($('#coAfProv').value||'').trim(),city:($('#coAfCity').value||'').trim(),
+           district:($('#coAfDist').value||'').trim(),detail:($('#coAfDetail').value||'').trim()};
+  let msg='';
+  if(!v.consignee)msg='请填写收货人姓名';
+  else if(!/^1\d{10}$/.test(v.phone))msg='请填写 11 位手机号';
+  else if(!v.province||!v.city)msg='请填写省份与城市';
+  else if(!v.detail)msg='请填写详细地址';
+  if(msg){if(err){err.textContent=msg;err.hidden=false}toast(msg);return false}
+  if(err)err.hidden=true;
+  const btn=document.querySelector('#coAbook .w-co__form__save');
+  const st=uxBusyOn(btn);
+  try{
+    const a=await api(`/api/public/users/${USER}/addresses`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});
+    CO_ADDRS=await api(`/api/public/users/${USER}/addresses`)||[];
+    CO_ADDR_ID=a.id;
+    coRenderAddr();
+    toast('地址已保存');
+  }catch(e){if(err){err.textContent=e.message||'保存失败，请稍后再试';err.hidden=false}}
+  finally{uxBusyOff(st)}
+  return false;
+}
+function coOnPoints(){
+  const inp=$('#coPtsInp');if(!inp)return;
+  let n=Math.floor(Number(inp.value||0));
+  if(!isFinite(n)||n<0)n=0;
+  if(n>CO_POINTS_MAX){n=CO_POINTS_MAX;inp.value=n;toast('最多可用 '+CO_POINTS_MAX+' 装备积分')}
+  CO_POINTS=n;coRefreshSum();
+}
+function coOnVoucher(){const s=$('#coVsel');CO_VOUCHER=s?s.value:'';coRefreshSum()}
+/* 预估口径与服务端一致：先会员折扣、再积分（100 分 = ¥1）、后福利券。
+   页面上写清是预估，精确数以提交后支付面板与收据为准。 */
+function coCalc(){
+  if(!CO_ITEMS.length)return null;
+  let gross=0,base=0,count=0;
+  CO_ITEMS.forEach(it=>{
+    const q=Math.max(1,Number(it.qty||1));
+    gross+=productPrice(it.p,it.v)*q;
+    base+=memberPriceOf(it.p,it.v)*q;
+    count+=q;
+  });
+  const memberCut=Math.max(0,gross-base);
+  const isMem=memberCut>0.004;
+  const ptsUsed=Math.min(CO_POINTS,CO_POINTS_MAX,Math.floor(base*100+1e-9));
+  const ptsCut=ptsUsed/100;
+  const vv=(CO_VOUCHERS||[]).find(x=>x.voucher_code===CO_VOUCHER);
+  const vCut=Math.min(Number(vv&&vv.cash_value||0),Math.max(0,base-ptsCut));
+  const pay=Math.max(0,base-ptsCut-vCut);
+  return {gross,base,unit:base,memberCut,isMem,count,ptsUsed,ptsCut,vv,vCut,pay};
+}
+function coRefreshSum(){
+  const c=coCalc();if(!c)return;
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.textContent=v};
+  set('coPtsRow',c.ptsUsed?'-'+money(c.ptsCut):'-'+money(0));
+  set('coVRow',c.vCut?'-'+money(c.vCut):'-'+money(0));
+  set('coBarPay',money(c.pay));
+}
+function coItemHtml(it){
+  const p=it.p,img=(p.images&&p.images[0]&&(p.images[0].url||p.images[0]))||p.image_url||'';
+  const v=it.v,unit=memberPriceOf(p,v),orig=productPrice(p,v),q=Math.max(1,Number(it.qty||1));
+  return `<div class="w-co__prod">
+      <div class="w-co__prod__img">${img?`<img src="${esc(img)}" alt="${esc(p.name)}">`:`<div class="w-co__prod__noimg">${WI.bag}</div>`}</div>
+      <div class="w-co__prod__main">
+        <div class="w-co__prod__name">${esc(p.name)}</div>
+        <div class="w-co__prod__spec">${esc(p.category||'装备')}${v?' · '+esc(v.name):''}${p.sku?' · 货号 '+esc(p.sku):''}</div>
+      </div>
+      <div class="w-co__prod__price">
+        <b>${money(unit)}</b>
+        ${unit<orig-0.004?`<s>${money(orig)}</s>`:''}
+        <span>×${q}</span>
+      </div>
+    </div>`;
+}
+function gearCheckoutHtml(){
+  if(!CO_ITEMS.length)return '';
+  const c=coCalc();
+  const vouOpts=['<option value="">不使用福利券</option>'].concat((CO_VOUCHERS||[]).map(x=>`<option value="${esc(x.voucher_code)}"${String(x.voucher_code)===String(CO_VOUCHER)?' selected':''}>${esc(x.title)} · 抵 ${money(x.cash_value)}</option>`)).join('');
+  return `<div class="w-co">
+  <button class="w-back" type="button" onclick="backToProduct()">${WI.back}${CO_FROM_CART?'返回购物车':'返回商品'}</button>
+  ${coAddrCardHtml()}
+  <div class="w-co__card">
+    ${CO_ITEMS.map(coItemHtml).join('')}
+    <div class="w-co__rows">
+      <div class="w-co__row"><span>商品金额（${c.count} 件）</span><b>${money(c.gross)}</b></div>
+      ${c.isMem?`<div class="w-co__row w-co__row--cut"><span>会员等级折扣</span><b>-${money(c.memberCut)}</b></div>`:''}
+      ${CO_POINTS_MAX>0?`<div class="w-co__row"><span>装备积分抵扣</span><span class="w-co__pts"><input id="coPtsInp" type="number" min="0" max="${CO_POINTS_MAX}" value="${CO_POINTS}" inputmode="numeric" oninput="coOnPoints()" aria-label="使用装备积分"><b id="coPtsRow">-${money(c.ptsCut)}</b><em>可用 ${CO_POINTS_MAX} 分 · 100 分抵 ¥1</em></span></div>`:''}
+      ${(CO_VOUCHERS||[]).length?`<div class="w-co__row"><span>福利券</span><span class="w-co__pts"><select class="w-co__sel" id="coVsel" onchange="coOnVoucher()">${vouOpts}</select>${CO_VOUCHER?`<b id="coVRow">-${money(c.vCut)}</b>`:''}</span></div>`:''}
+      <div class="w-co__row w-co__row--free"><span>运费</span><b>平台包邮</b></div>
+    </div>
+  </div>
+  <div class="w-co__est">会员折扣、积分与福利券为按当前规则的预估，最终以服务端结算金额为准；精确金额在提交后的支付面板与付款收据里。</div>
+  <div class="w-co__bar">
+    <div class="w-co__sum"><span>预估实付</span><b id="coBarPay">${money(c.pay)}</b></div>
+    <button class="w-co__submit" type="button" onclick="submitGearOrder()">提交订单</button>
+  </div>
+  </div>`;
+}
+async function submitGearOrder(){
+  const a=coAddr();
+  if(!a){toast('请先添加并选择收货地址');return}
+  if(!CO_ITEMS.length)return;
+  const items=CO_ITEMS.map(it=>{
+    const o={productId:it.p.id,quantity:Math.max(1,Number(it.qty||1))};
+    if(it.v)o.variantId=it.v.id;
+    return o;
+  });
+  return uxFlow('gear-checkout',async()=>{
+    try{
+      const d=await api(`/api/public/clubs/${CLUB}/gear-checkout`,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({userId:USER,items,gearPoints:CO_POINTS,voucherCodes:CO_VOUCHER?[CO_VOUCHER]:[],addressId:a.id})});
+      const paid=await payCheckout(d);if(!paid)return;
+      if(CO_FROM_CART)cartClear();
+      await showAlert({title:'下单成功',message:`实际支付 ${money(paid.cashPaid)}
 获得 ${paid.gearPointsEarned} 装备积分${paid.platformBenefitSubsidy?`
 平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}
 俱乐部获得 ${money(paid.clubCommission)} 佣金
 俱乐部获得 ${paid.clubAIReward} AI Credits奖励`});
-    loadWallet();loadMemberCenter();
-    /* 库存变了，回列表要重新拉一次，否则卡片上还是旧库存。 */
-    MALL_ALL=[];loadMall();showMallList();
-  }catch(e){showAlert({title:'下单失败',message:e.message})}
+      loadWallet();loadMemberCenter();
+      if(typeof loadOrders==='function')loadOrders();
+      /* 库存变了，回列表要重新拉一次，否则卡片上还是旧库存。 */
+      MALL_ALL=[];showMallList();
+    }catch(e){showAlert({title:'下单失败',message:e.message})}
+  });
 }
+window.submitGearOrder=submitGearOrder;
+window.openGearCheckout=openGearCheckout;
+window.coPickAddr=coPickAddr;
+window.coDefaultAddr=coDefaultAddr;
+window.coDelAddr=coDelAddr;
+window.coSaveAddr=coSaveAddr;
+window.coToggleAbook=coToggleAbook;
+window.coOnPoints=coOnPoints;
+window.coOnVoucher=coOnVoucher;
+window.backToProduct=backToProduct;
+window.openCart=openCart;
+window.quickAdd=quickAdd;
+window.addCurrentToCart=addCurrentToCart;
 
 /* ── 我的：毛玻璃会员卡上的身份与升级进度 ─────────────────────────────────── */
 /* 升级进度是真算出来的：tiers 里带 min_activity_spend / min_activity_count / qualification_mode。
@@ -725,6 +1149,7 @@ function wviewShow(id,tab){
   /* 首页顶栏要浮在 hero 照片上，靠 .is-home 切；其余视图顶栏是白底吸顶。 */
   const shell=document.querySelector('.web-shell');
   shell?.classList.toggle('is-home',id==='whome');
+  shell?.classList.toggle('is-mall',id==='wmall');
   if(id!=='whome')shell?.classList.remove('is-scrolled');
   return true;
 }
@@ -743,7 +1168,7 @@ function wv(id,b){
   /* 和「活动」tab 同一个道理：点「装备」是要看列表。详情页开着时不复位，
      tab 已经高亮在装备上、内容却还是刚才那件商品，会被读成「点了没反应」。 */
   if(id==='wmall'){
-    if($('#productDetail')&&$('#productDetail').innerHTML)showMallList();
+    if(($('#productDetail')&&$('#productDetail').innerHTML)||($('#gearCheckout')&&$('#gearCheckout').innerHTML))showMallList();
     else if(MALL_ALL.length)renderMall();else loadMall();
   }
   if(id==='wme'){loadMemberCenter();loadOrders()}
@@ -1143,7 +1568,7 @@ async function signupNow(){if(!currentAct||!currentOcc){showAlert({title:'请选
 async function waitForCheckoutPaid(checkoutId,attempts=45){for(let i=0;i<attempts;i++){await new Promise(r=>setTimeout(r,2000));let x=await api(`/api/public/checkouts/${checkoutId}`);if(x.status==='paid'||x.payment_status==='succeeded')return x.result||x;if(x.payment_status==='failed')throw new Error('支付失败，可重新发起支付')}throw new Error('支付状态仍在处理中，请稍后到“我的订单”查看')}
 async function payCheckout(checkout){let p=await api(`/api/public/checkouts/${checkout.checkoutId}/pay`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({simulateSuccess:!Boolean(clubosCookie('clubos_csrf')),returnUrl:location.href})});if(p.paymentStatus==='succeeded')return p.result;let a=p.paymentAction||{};if(a.type==='redirect'&&a.url){location.href=a.url;return null}if(a.type==='jsapi'&&a.params){if(window.WeixinJSBridge){await new Promise((resolve,reject)=>WeixinJSBridge.invoke('getBrandWCPayRequest',a.params,r=>String(r.err_msg||'').includes(':ok')?resolve(r):reject(new Error(r.err_msg||'微信支付未完成'))));return await waitForCheckoutPaid(checkout.checkoutId)}showAlert({title:'无法唤起微信支付',message:'当前页面不在微信 JSAPI 环境，请在微信内打开'});return null}if(a.type==='qrcode'&&a.url){await showAlert({title:'请扫码完成支付',message:'微信 Native 支付 code_url：'+a.url,wide:true});return await waitForCheckoutPaid(checkout.checkoutId,15)}return null}
 async function signupNow(){if(!currentAct||!currentOcc){showAlert({title:'请选择团期',message:'当前没有可报名的团期，请稍后再试或联系俱乐部。'});return}let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';try{let d=await api(`/api/public/activities/${currentAct.id}/checkout`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:PAYER_NAME,phone:PAYER_PHONE,occurrenceId:currentOcc.id,clubPoints:cp,gearPoints:gp,voucherCodes:voucher?[voucher]:[],participants:bookingParticipants})});let paid=await payCheckout(d);if(!paid)return;await showAlert({title:'报名成功',message:`${paid.participantCount||bookingParticipants.length} 人\n实际支付 ${money(paid.cashPaid)}\n本次获得 ${paid.clubPointsEarned} 活动积分${paid.clubBenefitDiscount?`\n俱乐部福利抵扣 ${money(paid.clubBenefitDiscount)}`:''}${paid.platformBenefitSubsidy?`\n平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}`});await loadWallet();openAct(currentAct.id)}catch(e){showAlert({title:'操作失败',message:e.message})}}
-async function buy(pid){let w=await api(`/api/public/users/${USER}/wallet?club_id=${CLUB}`);let vouchers=[];try{vouchers=await api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=gear`)}catch(e){}let v=await showForm({title:'确认下单',desc:'选择本单使用的装备积分与福利券。',submitText:'提交订单',fields:[{name:'use',label:'使用装备积分',type:'number',value:0,min:0,help:`当前可用装备积分 ${w.gearPoints}`},{name:'voucher',label:'装备福利券',type:'select',value:'',options:[{value:'',label:'不使用福利券'}].concat(vouchers.map(x=>({value:x.voucher_code,label:`${x.title} · 抵 ${money(x.cash_value)}`})))}]});if(!v)return;try{let d=await api(`/api/public/clubs/${CLUB}/gear-checkout`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:USER,items:[{productId:pid,quantity:1}],gearPoints:Number(v.use||0),voucherCodes:v.voucher?[v.voucher]:[]})});let paid=await payCheckout(d);if(!paid)return;await showAlert({title:'下单成功',message:`实际支付 ${money(paid.cashPaid)}\n获得 ${paid.gearPointsEarned} 装备积分${paid.platformBenefitSubsidy?`\n平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}\n俱乐部获得 ${money(paid.clubCommission)} 佣金\n俱乐部获得 ${paid.clubAIReward} AI Credits奖励`});loadWallet();loadMemberCenter()}catch(e){showAlert({title:'下单失败',message:e.message})}}
+async function buy(pid){if(typeof openProductFromPacking==='function')return openProductFromPacking(pid);toast('商品详情暂不可用')}
 /* 「户外能力」页。后端没有任何 skill / ability / rating 表，所以这里不编造能力值，
    只用该用户在俱乐部的真实记录：报名过的活动 + 买过的装备。
    项目类型是从活动标题归纳出来的，页面上就按「参加过的项目类型」来写，
@@ -1295,6 +1720,7 @@ async function loadOrders(){
     return `<div class="w-ord">
       <div class="w-ord__hd"><b>装备订单 #${x.id}</b>${badge(ordSt(x.status),stTone(x.status))}</div>
       <div class="w-ord__items">${items||'<div class="w-item"><span>商品</span></div>'}</div>
+      ${x.shipping_consignee?`<div class="w-ord__meta"><span>${esc(x.shipping_consignee)} ${esc(x.shipping_phone||'')}</span></div><div class="w-ord__meta"><span>${esc(x.shipping_address||'')}</span></div>`:''}
       <div class="w-ord__amt"><span>实付</span><b>${money(x.total)}</b></div>
       <div class="w-ord__meta"><span>${esc(x.carrier||'待发货')}${x.tracking_no?' '+esc(x.tracking_no):''}</span></div>
       <div class="w-ord__refund">退款：${esc(refundStateText(x))}</div>

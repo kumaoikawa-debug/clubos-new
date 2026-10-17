@@ -2,7 +2,7 @@
 <!-- 内联 SVG 图标：省掉 /favicon.ico 的 404（浏览器默认会去请求它）。
      用山形描边，和底部导航的图标同一套笔画。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121714'/%3E%3Cpath d='M3.5 23.5 12 11l4.6 7.6 3-4.8 8.9 9.7z' fill='none' stroke='%237fd0a4' stroke-width='2.1' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/shared.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261014a"><link rel="stylesheet" href="/static/web/web.css?v=20261016a"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
+<link rel="stylesheet" href="/static/shared.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261014a"><link rel="stylesheet" href="/static/web/web.css?v=20261017b"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
 
 <!-- C 端骨架：5 视图（首页 / 活动 / 装备 / 户外能力 / 我的）。
      结构类 .web-shell / .web-top / .web-content / .wview / .web-nav 全部保留 ——
@@ -14,6 +14,9 @@
   <header class="web-top">
     <button class="web-top__btn" type="button" onclick="wv('wactivities')" aria-label="搜索活动"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.4"/><path d="m16 16 4.2 4.2"/></svg></button>
     <strong>远拓户外</strong>
+    <!-- 购物车：只在装备页（.is-mall）或车里真有东西时出现（见 web.css .web-top__cart）。
+         #cartBadge 是角标数字，renderCartBadge() 把它和父按钮的 .has 一起切显隐。 -->
+    <button class="web-top__cart" type="button" onclick="openCart()" aria-label="购物车"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.3 11.4a1.5 1.5 0 0 0 1.5 1.2h8.4a1.5 1.5 0 0 0 1.5-1.2L21 7H6"/><circle cx="9.5" cy="20" r="1.1"/><circle cx="17" cy="20" r="1.1"/></svg><i class="web-top__badge" id="cartBadge" hidden>0</i></button>
     <button class="web-top__btn" type="button" onclick="wv('wme')" aria-label="我的"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20.2a7.2 7.2 0 0 1 14.4 0"/></svg></button>
   </header>
 
@@ -64,6 +67,7 @@
             <div class="w-shop__hero" id="mallHero"></div>
             <div class="w-shop__head">
               <h2 class="w-shop__title" id="mallTitle">全部装备</h2>
+              <div class="w-shop__en" id="mallEn"></div>
               <div class="w-shop__sub" id="mallSub">正在读取在售装备…</div>
             </div>
             <div class="w-shop__tabs" id="mallTabs"></div>
@@ -76,6 +80,12 @@
            返回时不用重新拉数据。它不能放进 #publicProducts，否则会被
            experience-consumer.js 当成又一件商品数进去。 -->
       <div id="productDetail"></div>
+      <!-- 确认订单页：详情 →（收货地址 + 价格明细）→ 提交订单 → 支付。
+           装备是实物、平台统一发货，所以这一页必须收到一个真实地址才让提交。
+           同样留在 DOM 里靠 display 切换（#gearCheckout 是 wmall 的子节点）。 -->
+      <div id="gearCheckout"></div>
+      <!-- 购物车页：与详情/结算同级，靠 display 切换。openCart/renderCart/paintCart 写这里。 -->
+      <div id="cartView"></div>
     </section>
 
     <!-- ── 业务介绍：俱乐部老板可自定义的板块（后台开关 + 自定义内容）──────
@@ -158,12 +168,12 @@
 </div>
 
 <script src="/static/shared.js?v=20261014a"></script>
-<script src="/static/web/web.js?v=20261016a"></script>
+<script src="/static/web/web.js?v=20261017b"></script>
 <script src="/static/web/web-biz.js?v=20261014a"></script>
 <script src="/static/ux/clubos-ux.js?v=20261014a"></script>
 <script src="/static/ux/workflows-web.js?v=20261014a"></script>
 <script src="/static/ux/qr-local.js?v=20261014a"></script>
 <script src="/static/ux/experience-core.js?v=20261014a"></script>
-<script src="/static/ux/payment-experience.js?v=20261014a"></script>
+<script src="/static/ux/payment-experience.js?v=20261017a"></script>
 <script src="/static/ux/experience-consumer.js?v=20261016a"></script>
 </body></html>
