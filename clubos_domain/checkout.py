@@ -149,7 +149,7 @@ class CheckoutEngine:
         return intent_id, quote, policy_snapshot, benefit_quote
 
     def create_gear_intent(self,c,*,club_id:int,user_id:int,items:list[dict],resolved_products:list[tuple[dict,int]],
-                           requested_gear_points:int=0,voucher_codes:list[str]|None=None):
+                           requested_gear_points:int=0,voucher_codes:list[str]|None=None,address:dict|None=None):
         original=sum(float(p['price'])*q for p,q in resolved_products)
         # 会员等级装备折扣：俱乐部后台按等级配置了 gear_discount（1.0 无折扣 / 0.95 九五折）。
         # 之前这里根本没读它 —— C 端会员中心白纸黑字写着「装备商城 9.5 折」、
@@ -181,6 +181,11 @@ class CheckoutEngine:
         payload={'items':[{'productId':int(p['id']),'quantity':int(q),'unitPrice':float(p['price']),
                            'variantId':p.get('_variantId'),'variantName':p.get('_variantName'),
                            'commerceVariantId':p.get('commerce_variant_id')} for p,q in resolved_products]}
+        # 收货信息快照进结算单 payload：装备是实物，付款后平台仓库要按它发货。
+        # 存快照而不是只存 addressId —— 用户之后改地址簿，历史订单的收件信息不能跟着变。
+        if address: payload['address']={'consignee':str(address.get('consignee') or ''),'phone':str(address.get('phone') or ''),
+                                        'province':str(address.get('province') or ''),'city':str(address.get('city') or ''),
+                                        'district':str(address.get('district') or ''),'detail':str(address.get('detail') or '')}
         redemption_ids=[x['redemptionId'] for x in benefit_quote['applied']]
         c.execute('''INSERT INTO checkout_intents(
           id,kind,user_id,club_id,status,original_amount,cash_amount,club_points_reserved,
@@ -323,12 +328,16 @@ class CheckoutEngine:
             if stock<q: raise OverflowError(f"{p['name']}{(' · '+p['_variantName']) if p.get('_variantName') else ''} 库存不足")
             commission += float(p['price'])*q*float(p['commission_rate'])
             resolved.append((p,q))
+        addr=payload.get('address') or {}
         c.execute('''INSERT INTO gear_orders(user_id,source_club_id,total,cash_paid,platform_point_subsidy,
-                     platform_benefit_subsidy,benefit_redemption_ids_json,status,club_commission,commerce_order_id,payment_status)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                     platform_benefit_subsidy,benefit_redemption_ids_json,status,club_commission,commerce_order_id,payment_status,
+                     shipping_consignee,shipping_phone,shipping_address)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (intent['user_id'],intent['club_id'],intent['original_amount'],intent['cash_amount'],intent['platform_point_subsidy'],
                    intent.get('platform_benefit_subsidy',0),intent.get('benefit_redemption_ids_json') or '[]',
-                   'paid',commission,commerce_order_id,'succeeded'))
+                   'paid',commission,commerce_order_id,'succeeded',
+                   addr.get('consignee') or None,addr.get('phone') or None,
+                   ' '.join([str(addr.get(k) or '') for k in ('province','city','district','detail') if addr.get(k)]) or None))
         oid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         for p,q in resolved:
             c.execute('INSERT INTO gear_order_items(order_id,product_id,variant_id,variant_name,quantity,unit_price,unit_cost_snapshot) VALUES(?,?,?,?,?,?,?)',(oid,p['id'],p.get('_variantId'),p.get('_variantName'),q,p['price'],float(p.get('average_cost') or 0)))

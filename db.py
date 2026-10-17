@@ -194,6 +194,27 @@ def _run_compat_migrations(c):
     _ensure_column(c,'gear_orders','refunded_cash_total','refunded_cash_total REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'gear_orders','refunded_goods_total','refunded_goods_total REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'refund_requests','after_sales_case_id','after_sales_case_id TEXT')
+    # 电商购买链路补全：商品图文描述 / 订单收货信息 / 用户地址簿。
+    # 装备是实物、由平台统一发货，结算单里没有收货信息，整条购买链就断在
+    # 「付了钱货不知道寄到哪」。三处都可空 —— 历史订单没有地址仍然合法。
+    _ensure_column(c,'products','description','description TEXT')
+    _ensure_column(c,'gear_orders','shipping_consignee','shipping_consignee TEXT')
+    _ensure_column(c,'gear_orders','shipping_phone','shipping_phone TEXT')
+    _ensure_column(c,'gear_orders','shipping_address','shipping_address TEXT')
+    c.execute('''CREATE TABLE IF NOT EXISTS user_addresses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        consignee TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        province TEXT NOT NULL DEFAULT '',
+        city TEXT NOT NULL DEFAULT '',
+        district TEXT NOT NULL DEFAULT '',
+        detail TEXT NOT NULL DEFAULT '',
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_user_addresses_user ON user_addresses(user_id,is_default DESC,id DESC)')
     # v0.27 库存下沉到规格：流水与订单明细要能指到具体规格。
     # 都可空 —— 无规格商品（以及 v0.27 之前的历史流水）variant_id 为 NULL 仍然合法。
     _ensure_column(c,'inventory_movements','variant_id','variant_id INTEGER')

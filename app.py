@@ -1993,7 +1993,7 @@ def club_orders(club_id:int):
     # 带上买家与商品明细：俱乐部端点开订单要能看到「卖了哪几件、各多少」，
     # 只回一行 total 的话「商城订单详情」只能是空壳。
     with conn() as c:
-        orders=rows(c.execute('SELECT o.id,o.total,o.status,o.tracking_no,o.carrier,o.club_commission,o.after_sales_status,o.created_at,u.name buyer FROM gear_orders o JOIN users u ON u.id=o.user_id WHERE o.source_club_id=? ORDER BY o.id DESC',(club_id,)))
+        orders=rows(c.execute('SELECT o.id,o.total,o.status,o.tracking_no,o.carrier,o.club_commission,o.after_sales_status,o.created_at,o.shipping_consignee,o.shipping_phone,o.shipping_address,u.name buyer FROM gear_orders o JOIN users u ON u.id=o.user_id WHERE o.source_club_id=? ORDER BY o.id DESC',(club_id,)))
         items=rows(c.execute('''SELECT i.order_id,i.product_id,i.variant_name,i.quantity,i.unit_price,i.unit_cost_snapshot,p.name product_name
                                 FROM gear_order_items i LEFT JOIN products p ON p.id=i.product_id
                                 WHERE i.order_id IN (SELECT id FROM gear_orders WHERE source_club_id=?)''',(club_id,)))
@@ -2396,6 +2396,19 @@ def create_activity_checkout(activity_id:int,payload:dict=Body(...)):
             'commerceProvider':'clubos-domain','commerceCartId':None,'commerceNote':None,'nextAction':'PAY',
             'participantCount':len(participants),'participantPolicy':participant_policy.as_dict()}
 
+def _gear_address_snapshot(c,*,user_id:int,address_id):
+    """装备是实物、由平台统一发货：结算单必须落到一个真实存在的收货地址。
+    只认地址簿里的 id（按 user_id 归属校验），不认前端传来的地址文本 ——
+    否则谁都可以往结算单里写一个不属于自己的地址。"""
+    if not address_id: raise HTTPException(400,'请先添加收货地址')
+    try: aid=int(address_id)
+    except (TypeError,ValueError): raise HTTPException(400,'收货地址不存在')
+    a=row(c.execute('SELECT * FROM user_addresses WHERE id=? AND user_id=?',(aid,user_id)))
+    if not a: raise HTTPException(400,'收货地址不存在')
+    return {'consignee':a['consignee'],'phone':a['phone'],
+            'province':a['province'] or '','city':a['city'] or '',
+            'district':a['district'] or '','detail':a['detail'] or ''}
+
 @app.post('/api/public/clubs/{club_id}/gear-checkout')
 def create_gear_checkout(club_id:int,payload:dict=Body(...)):
     club_or_404(club_id); user_id=int(payload.get('userId',1)); items=payload.get('items',[]); req_gp=max(0,int(payload.get('gearPoints',0))); voucher_codes=payload.get('voucherCodes') or []
@@ -2422,7 +2435,7 @@ def create_gear_checkout(club_id:int,payload:dict=Body(...)):
                 stock=int(p['stock'] or 0)
             if stock<q: raise HTTPException(409,f"{p['name']}{(' · '+p['_variantName']) if p.get('_variantName') else ''} 库存不足")
             resolved.append((p,q))
-        try: intent_id,q,ipayload,benefits=checkout_engine.create_gear_intent(c,club_id=club_id,user_id=user_id,items=items,resolved_products=resolved,requested_gear_points=req_gp,voucher_codes=voucher_codes)
+        try: intent_id,q,ipayload,benefits=checkout_engine.create_gear_intent(c,club_id=club_id,user_id=user_id,items=items,resolved_products=resolved,requested_gear_points=req_gp,voucher_codes=voucher_codes,address=_gear_address_snapshot(c,user_id=user_id,address_id=payload.get('addressId')))
         except ValueError as e: raise HTTPException(409,str(e))
     cart_id=None; commerce_note=None
     if commerce_provider()=='medusa':
@@ -3038,7 +3051,7 @@ def public_product(club_id:int, product_id:int, user_id:int|None=None):
     # 详情页要能被单独打开（刷新、分享出去的链接），所以不能只靠列表缓存。
     if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
     with conn() as c:
-        p=row(c.execute('SELECT id,name,sku,price,stock,status,image_url,category FROM products WHERE id=? AND status="active"',(product_id,)))
+        p=row(c.execute('SELECT id,name,sku,price,stock,status,image_url,category,description FROM products WHERE id=? AND status="active"',(product_id,)))
         if not p: raise HTTPException(404,'商品不存在')
         out=_with_extras(c,[p])[0]
         # 会员价要能被看见：会员中心写着「装备商城 X 折 —— 在装备商城里直接看到会员价」，
@@ -3122,6 +3135,76 @@ def public_redeem_benefit(club_id:int,benefit_id:int,payload:dict=Body(...)):
 @app.get('/api/public/users/{user_id}/wallet')
 def wallet(user_id:int,club_id:int=1):
     with conn() as c:return wallet_snapshot(c,user_id,club_id)
+
+def _address_full(a:dict)->str:
+    return ' '.join([str(a.get(k) or '') for k in ('province','city','district','detail') if a.get(k)])
+
+def _validate_address(payload:dict)->dict:
+    consignee=str(payload.get('consignee') or '').strip()
+    phone=str(payload.get('phone') or '').strip()
+    province=str(payload.get('province') or '').strip()
+    city=str(payload.get('city') or '').strip()
+    district=str(payload.get('district') or '').strip()
+    detail=str(payload.get('detail') or '').strip()
+    if not consignee: raise HTTPException(400,'请填写收货人姓名')
+    if not re.match(r'^1\d{10}$',phone): raise HTTPException(400,'请填写 11 位手机号')
+    if not (province and city) or not detail: raise HTTPException(400,'请填写完整的省市区与详细地址')
+    return {'consignee':consignee,'phone':phone,'province':province,'city':city,'district':district,'detail':detail}
+
+@app.get('/api/public/users/{user_id}/addresses')
+def user_addresses(user_id:int):
+    with conn() as c:
+        out=rows(c.execute('SELECT * FROM user_addresses WHERE user_id=? ORDER BY is_default DESC,id DESC',(user_id,)))
+        for a in out: a['full']=_address_full(a)
+        return out
+
+@app.post('/api/public/users/{user_id}/addresses')
+def user_add_address(user_id:int,payload:dict=Body(...)):
+    v=_validate_address(payload)
+    with conn() as c:
+        # 第一条地址自动成为默认地址：没有默认地址时确认订单页会逼用户每次重选。
+        first=c.execute('SELECT COUNT(*) FROM user_addresses WHERE user_id=?',(user_id,)).fetchone()[0]==0
+        is_default=1 if (first or payload.get('isDefault')) else 0
+        if is_default:
+            c.execute('UPDATE user_addresses SET is_default=0 WHERE user_id=?',(user_id,))
+        c.execute('''INSERT INTO user_addresses(user_id,consignee,phone,province,city,district,detail,is_default)
+                     VALUES(?,?,?,?,?,?,?,?)''',(user_id,v['consignee'],v['phone'],v['province'],v['city'],v['district'],v['detail'],is_default))
+        aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        a=row(c.execute('SELECT * FROM user_addresses WHERE id=?',(aid,)))
+        a['full']=_address_full(a)
+        return a
+
+@app.patch('/api/public/users/{user_id}/addresses/{address_id}')
+def user_update_address(user_id:int,address_id:int,payload:dict=Body(...)):
+    with conn() as c:
+        a=row(c.execute('SELECT * FROM user_addresses WHERE id=? AND user_id=?',(address_id,user_id)))
+        if not a: raise HTTPException(404,'地址不存在')
+        fields=['consignee','phone','province','city','district','detail']
+        sets=[];vals=[]
+        if any(k in payload for k in fields):
+            merged={**a,**{k:payload[k] for k in fields if k in payload}}
+            v=_validate_address(merged)
+            for k in fields: sets.append(f'{k}=?');vals.append(v[k])
+        if payload.get('isDefault'):
+            c.execute('UPDATE user_addresses SET is_default=0 WHERE user_id=?',(user_id,))
+            sets.append('is_default=1')
+        if sets:
+            c.execute(f'UPDATE user_addresses SET {", ".join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?',vals+[address_id])
+        out=row(c.execute('SELECT * FROM user_addresses WHERE id=?',(address_id,)))
+        out['full']=_address_full(out)
+        return out
+
+@app.delete('/api/public/users/{user_id}/addresses/{address_id}')
+def user_delete_address(user_id:int,address_id:int):
+    with conn() as c:
+        a=row(c.execute('SELECT * FROM user_addresses WHERE id=? AND user_id=?',(address_id,user_id)))
+        if not a: raise HTTPException(404,'地址不存在')
+        c.execute('DELETE FROM user_addresses WHERE id=?',(address_id,))
+        # 删掉的正好是默认地址时，把剩下最早的一条补成默认，避免用户回到「没有默认地址」的状态。
+        if a['is_default']:
+            left=row(c.execute('SELECT id FROM user_addresses WHERE user_id=? ORDER BY id LIMIT 1',(user_id,)))
+            if left: c.execute('UPDATE user_addresses SET is_default=1 WHERE id=?',(left['id'],))
+    return {'ok':True}
 
 def _refund_progress(kind:str,status:str|None):
     st=str(status or 'none')
@@ -3624,8 +3707,8 @@ def _safe_sync_inventory_products(product_ids:list[int]|set[int]):
 def platform_add_product(payload:dict=Body(...)):
     initial_stock=max(0,int(payload.get('stock',0) or 0))
     with conn() as c:
-        c.execute("INSERT INTO products(name,sku,price,stock,status,image_url,category,commission_rate,reorder_point,commerce_sync_status) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                  (payload['name'],payload['sku'],payload['price'],0,payload.get('status','active'),payload.get('image_url'),payload.get('category'),payload.get('commission_rate',0.08),max(0,int(payload.get('reorder_point',payload.get('reorderPoint',5)) or 0)),'pending' if commerce_provider()=='medusa' else 'local'))
+        c.execute("INSERT INTO products(name,sku,price,stock,status,image_url,category,commission_rate,reorder_point,description,commerce_sync_status) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                  (payload['name'],payload['sku'],payload['price'],0,payload.get('status','active'),payload.get('image_url'),payload.get('category'),payload.get('commission_rate',0.08),max(0,int(payload.get('reorder_point',payload.get('reorderPoint',5)) or 0)),str(payload.get('description') or ''),'pending' if commerce_provider()=='medusa' else 'local'))
         pid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         if initial_stock:
             inventory_engine.adjust_stock(c,product_id=pid,quantity_delta=initial_stock,reason='新商品期初库存',actor_type='platform',reference_type='product_opening',reference_id=str(pid))
@@ -3680,7 +3763,7 @@ def platform_decide_product_visibility(request_id:int,payload:dict=Body(...)):
 
 @app.patch('/api/platform/products/{product_id}')
 def platform_update_product(product_id:int,payload:dict=Body(...)):
-    allowed=['name','price','status','image_url','category','commission_rate','reorder_point'];sets=[];vals=[]
+    allowed=['name','price','status','image_url','category','commission_rate','reorder_point','description'];sets=[];vals=[]
     if 'reorderPoint' in payload and 'reorder_point' not in payload: payload={**payload,'reorder_point':payload.get('reorderPoint')}
     with conn() as c:
         p=row(c.execute('SELECT * FROM products WHERE id=?',(product_id,)))

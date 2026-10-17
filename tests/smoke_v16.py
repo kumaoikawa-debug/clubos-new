@@ -1,7 +1,10 @@
 # 报名/结算强制校验参加人证件（idType + idNumber）；本脚本写于该规则之前，
 # 由 tests/_identity_patch.py 统一补齐 participants（仅补缺失项，不改写已有断言）。
+# 装备结算单必须落在真实地址簿地址上（app.py _gear_address_snapshot），
+# 由 tests/_address_patch.py 统一补地址（仅补缺失的 addressId，不改写已有断言）。
 import sys as _sys; _sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[1] / 'tests'))
 import _identity_patch  # noqa: F401
+import _address_patch  # noqa: F401  # 装备结算必须带收货地址（_gear_address_snapshot）
 from pathlib import Path
 import os, sys
 ROOT=Path(__file__).resolve().parents[1]
