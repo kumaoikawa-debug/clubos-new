@@ -81,7 +81,7 @@
   const field=form.elements.namedItem('files'),textarea=form.elements.namedItem('prompt');
   if(!field||!textarea)return;
   const drop=field.closest('.drop');drop.classList.add('ux-file-drop');drop.setAttribute('role','group');drop.setAttribute('aria-label','活动素材');
-  const help=document.createElement('div');help.className='ux-upload-help';help.innerHTML='<strong>支持的资料</strong><p>PPT / Word / PDF / 图片；可以上传多份资料，AI 会结合原始事实与图片组织动态内容。手机拍摄的大图会自动压缩后再上传，不必手动缩小。</p><div class="ux-upload-list" aria-live="polite">尚未选择文件</div>';
+  const help=document.createElement('div');help.className='ux-upload-help';help.innerHTML='<strong>支持的资料</strong><p>PPT / Word / PDF / 图片（含 iPhone HEIC 照片）；也可以只在这里输入文案、再添加照片，一样能生成活动详情。可以上传多份资料，AI 会结合原始事实与图片组织动态内容。手机拍摄的大图会自动压缩后再上传，不必手动缩小。</p><div class="ux-upload-list" aria-live="polite">尚未选择文件</div>';
   drop.appendChild(help);
   /* ★ 累加，不替换。<input type=file> 的原生行为是「每次选择整体顶掉上一次」，
      拖放旧代码也是 field.files=e.dataTransfer.files 直接整体覆盖 —— 用户先选几张现场照片、

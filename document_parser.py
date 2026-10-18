@@ -6,12 +6,46 @@ from typing import Iterable
 import fitz
 from pptx import Presentation
 from docx import Document
-from PIL import Image
+from PIL import Image, ImageOps
+
+# iPhone 照片默认是 HEIC：不装解码器时它们会被当「类型不支持」跳过，老板只会以为
+# 「传了照片系统却没用」。装了就注册 opener，让 PIL 直接读 HEIC/HEIF（转 JPEG 见 save_uploads）。
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    _HAS_HEIF = True
+except Exception:
+    _HAS_HEIF = False
 
 from cost_guard import redact_cost_text
 
-ALLOWED = {'.pptx','.docx','.pdf','.txt','.md','.jpg','.jpeg','.png','.webp'}
-IMAGE_EXTS = {'.jpg','.jpeg','.png','.webp'}
+# 图片扩展名与浏览器可显示性对齐：HEIC 浏览器不认，会在 save_uploads 里转成 JPEG 再入库；
+# 其余（bmp/gif/tiff/avif）浏览器原生可显示，直接按原图引用。
+ALLOWED = {'.pptx','.docx','.pdf','.txt','.md',
+           '.jpg','.jpeg','.png','.webp','.heic','.heif','.bmp','.gif','.tif','.tiff','.avif'}
+IMAGE_EXTS = {'.jpg','.jpeg','.png','.webp','.heic','.heif','.bmp','.gif','.tif','.tiff','.avif'}
+# 老版 Office / WPS 扩展名：微信传输、WPS「另存」常把 docx/pptx 内容存成 .doc/.ppt/.wps 后缀。
+# 这类文件实为 zip（PK 头），save_uploads 里按真实格式纠正扩展名后正常解析；
+# 真正的老格式（OLE 复合文档）解析不了，走「类型不支持」提示。
+_LEGACY_OFFICE = {'.doc','.ppt','.wps'}
+
+
+def _sniff_zip_office(path: Path) -> str | None:
+    """文件是 zip 时返回纠正后的扩展名（.docx/.pptx），不是 zip 或结构认不出返回 None。"""
+    try:
+        with open(path, 'rb') as fh:
+            if fh.read(4) != b'PK\x03\x04':
+                return None
+        import zipfile as _zf
+        with _zf.ZipFile(path) as z:
+            names = z.namelist()
+        if any(n.startswith('word/') for n in names):
+            return '.docx'
+        if any(n.startswith('ppt/') for n in names):
+            return '.pptx'
+    except Exception:
+        return None
+    return None
 
 
 def _safe_name(name: str) -> str:
@@ -115,6 +149,23 @@ def _natural_key(name: str):
     return [int(part) if part.isdigit() else part.lower() for part in re.split(r'(\d+)', name)]
 
 
+def _to_browser_image(path: Path) -> Path:
+    """浏览器显示不了的图（HEIC/HEIF、TIFF）→ JPEG，否则 C 端引用会裂图；其余原样返回，失败也原样返回。"""
+    ext=path.suffix.lower()
+    if ext not in ('.heic','.heif','.tif','.tiff'):
+        return path
+    if ext in ('.heic','.heif') and not _HAS_HEIF:
+        return path
+    jpg=path.with_suffix('.jpg')
+    try:
+        with Image.open(path) as im:
+            ImageOps.exif_transpose(im).convert('RGB').save(str(jpg),quality=92)
+        path.unlink(missing_ok=True)
+        return jpg
+    except Exception:
+        return path
+
+
 def _extract_office_media(path: Path, out_dir: Path) -> list[Path]:
     """Extract embedded PPTX/DOCX media without re-rendering the document.
     The model still receives the full original text and the original embedded visual assets.
@@ -140,7 +191,7 @@ def _extract_office_media(path: Path, out_dir: Path) -> list[Path]:
                 dest=out_dir/f"{path.stem}_{Path(name).name}"
                 dest.parent.mkdir(parents=True,exist_ok=True)
                 dest.write_bytes(z.read(name))
-                media.append(dest)
+                media.append(_to_browser_image(dest))
     except Exception:
         pass
     return media
@@ -160,23 +211,53 @@ def _extract_pdf_previews(path: Path, out_dir: Path, max_pages: int = 24) -> lis
     return previews
 
 
-def save_uploads(files, upload_dir: Path, *, max_total_bytes: int | None = None):
+def save_uploads(files, upload_dir: Path, *, max_total_bytes: int | None = None, skipped_out: list | None = None):
     # Never silently truncate source documents. Reject oversize requests before calling AI.
+    # skipped_out：被跳过的原始文件名逐个记到这里（调用方据此如实告知用户），
+    # 「zip 伪装成 .doc/.ppt/.wps 被救回来」的不算跳过。
     upload_dir.mkdir(parents=True, exist_ok=True)
     saved=[]; total=0
     if max_total_bytes is not None and len(files)>20:
         raise ValueError('at most 20 source files per generation')
     for f in files:
-        ext=Path(f.filename or '').suffix.lower()
-        if ext not in ALLOWED:
-            if max_total_bytes is not None:raise ValueError(f'unsupported file type: {ext}')
+        orig=Path(f.filename or '')
+        ext=orig.suffix.lower()
+        if ext not in ALLOWED and ext not in _LEGACY_OFFICE:
+            # 一律跳过并记录（过去 prod 是整批 413 中断：一个不认识的扩展名会连累
+            # 其余正常资料全部用不了，用户只会看到一句英文报错）。
+            if skipped_out is not None: skipped_out.append(f.filename or '')
             continue
-        dest=upload_dir/_safe_name(f.filename or f'upload{ext}')
+        eff_ext=ext
+        if ext in _LEGACY_OFFICE:
+            head=f.file.read(4); f.file.seek(0)
+            if head!=b'PK\x03\x04':
+                # 真老格式（OLE），纯 Python 解析不了：如实计入跳过，前端提示另存。
+                if skipped_out is not None: skipped_out.append(f.filename or '')
+                continue
+            # zip：按内容判断真实格式（word/ → docx，ppt/ → pptx）
+            import zipfile as _zf
+            real=None
+            try:
+                f.file.seek(0)
+                with _zf.ZipFile(f.file) as z:
+                    names=z.namelist()
+                if any(n.startswith('word/') for n in names): real='.docx'
+                elif any(n.startswith('ppt/') for n in names): real='.pptx'
+            except Exception:
+                real=None
+            if not real:
+                if skipped_out is not None: skipped_out.append(f.filename or '')
+                continue
+            eff_ext=real
+        stem=_safe_name(orig.stem or ('upload'+eff_ext))
+        dest=upload_dir/(stem+eff_ext)
         if dest.exists():
             dest=upload_dir/(dest.stem+'_'+str(len(saved))+dest.suffix)
         if max_total_bytes is None:
+            f.file.seek(0)
             dest.write_bytes(f.file.read())
         else:
+            f.file.seek(0)
             with dest.open('wb') as output:
                 while True:
                     chunk=f.file.read(min(1024*1024,max_total_bytes-total+1))
@@ -186,6 +267,23 @@ def save_uploads(files, upload_dir: Path, *, max_total_bytes: int | None = None)
                         output.close();dest.unlink(missing_ok=True)
                         raise ValueError('source files exceed 20MB total limit')
                     output.write(chunk)
+        # 浏览器显示不了的图片（HEIC/HEIF、TIFF）：统一转成 JPEG 再入库，C 端引用才不会裂图。
+        if eff_ext in ('.heic','.heif','.tif','.tiff'):
+            if eff_ext in ('.heic','.heif') and not _HAS_HEIF:
+                dest.unlink(missing_ok=True)
+                if skipped_out is not None: skipped_out.append(f.filename or '')
+                continue
+            jpg=dest.with_suffix('.jpg')
+            try:
+                with Image.open(dest) as im:
+                    im=ImageOps.exif_transpose(im)   # iPhone 照片按 EXIF 摆正方向
+                    im.convert('RGB').save(str(jpg),quality=92)
+                dest.unlink(missing_ok=True)
+                dest=jpg
+            except Exception:
+                dest.unlink(missing_ok=True);jpg.unlink(missing_ok=True)
+                if skipped_out is not None: skipped_out.append(f.filename or '')
+                continue
         saved.append(dest)
     return saved
 

@@ -296,7 +296,7 @@ $('#createForm').onsubmit=async e=>{
     if(_skip.length||_rerr.length){
       showAlert({title:'有文件没能读进去',message:
         (_rerr.length?`打不开：${_rerr.join('、')}（可能已损坏或加密）；`:'')
-        +(_skip.length?`类型不支持，已跳过：${_skip.join('、')}（支持 PPT / Word / PDF / 文字文件，图片支持 JPG / PNG / WEBP）。`:'')
+        +(_skip.length?`类型不支持，已跳过：${_skip.join('、')}（支持 PPT / Word / PDF / 文字文件；图片支持 JPG / PNG / WEBP / HEIC 手机照 / BMP / GIF。老版 .doc / .ppt / .wps 若总被跳过，请用 Office 或 WPS 另存为 .docx / .pptx 或 PDF）。`:'')
         +'其余资料已正常读取并用于生成。如果被跳过的是活动方案，请另存为 PDF 或 PPT 后重新上传。'});
     }
     await loadDash();go('activities');await openActivity(r.activityId);

@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from db import init_db, conn, row, rows, jdump, jload, setting
-from document_parser import save_uploads, parse_sources, _image_kind, ALLOWED as ALLOWED_UPLOAD_EXTS
+from document_parser import save_uploads, parse_sources, _image_kind
 from cost_guard import sanitize_for_frontend, master_has_cost_evidence
 from ai_engine import (generate_activity, generate_channel, regenerate_detail, detail_outline,
                        _fact_digest, pick_cover_media)
@@ -559,11 +559,11 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
         if pending: raise HTTPException(409,'已有一次 AI 生成正在进行中，请等它完成（或刷新页面查看结果）再提交新的。')
     batch=UPLOAD/str(club_id)/uuid.uuid4().hex
     try:
-        saved=save_uploads(files,batch,max_total_bytes=20*1024*1024 if IS_PROD else None)
         # 不支持的格式过去被静默丢掉：老板传了几张 HEIC 手机照，系统只字不提，
-        # 他只会以为「系统读错文件了」。这里逐个记下来，在结果里如实告知。
-        _skipped=[str(f.filename or '') for f in files
-                  if Path(str(f.filename or '')).suffix.lower() not in ALLOWED_UPLOAD_EXTS]
+        # 他只会以为「系统读错文件了」。save_uploads 现在把每个跳过的文件名如实记下来
+        # （.doc/.ppt/.wps 里的 zip 伪装者会被按真实格式救回，不算跳过）。
+        _skipped=[]
+        saved=save_uploads(files,batch,max_total_bytes=20*1024*1024 if IS_PROD else None,skipped_out=_skipped)
         if IS_PROD:
             for item in saved:
                 if item.suffix.lower() in ('.pptx','.docx'):
