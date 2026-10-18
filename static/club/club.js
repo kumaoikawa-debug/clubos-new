@@ -560,10 +560,10 @@ async function loadContent(){
     ['longpic','AI 宣传长图','★ 推荐：让大模型自己排版，直接出 750px 公众号长图，可下载 2 倍图。结构、配色、留白都由模型决定，不再走固定模板'],
     ['wechat','微信公众号图文','AI 重排公众号阅读节奏；生成后可直接预览，并一键复制带格式图文到公众号编辑器'],
     ['xhs','小红书图文','文案为主：独立标题、Hook、正文与话题标签可直接复制走；另出一张 1080×1440 首页海报，并把其余现场照片裁成 3:4 九宫格配图'],
-    ['poster','活动招募海报','用活动真实封面 + AI 文案在本地合成 1080×1440 海报，可直接下载'],
-    ['recap','活动回顾','只在有真实现场素材时才写；素材不足会明确告诉你缺什么，不编造']
+    ['poster','活动招募海报','用活动真实封面 + AI 文案在本地合成 1080×1440 海报，可直接下载']
   ];
   $('#channelArea').innerHTML=cards.map(x=>`<div class="card channel-card"><div><strong>${x[1]}</strong><p>${x[2]}</p><div class="sub">当前活动：${esc(a.title)}</div></div><button class="btn secondary" onclick="genChannel('${x[0]}',${a.id})">AI 生成${x[1]}</button></div>`).join('');
+  renderRecapPanel(acts);
   // 已生成内容里补上「这是哪场活动的」——以前只显示 活动 #12，活动一多就认不出来。
   const byId={}; acts.forEach(x=>{byId[x.id]=x});
   $('#contentList').innerHTML=(content||[]).map(x=>{const t=byId[x.activity_id];const cur=Number(x.activity_id)===Number(window.__contentActId);return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title||channelLabel(x.channel))}</div><div class="list-row__sub">${t?`活动：${esc(t.title)}`:`活动 #${x.activity_id}`} · ${esc(x.created_at||'')}</div></div><div class="list-row__end"><span class="tag">${esc(channelLabel(x.channel))}</span>${t&&!cur?`<button class="btn ghost" onclick="actPickChoose(${x.activity_id})">切到这场</button>`:''}<button class="btn secondary" onclick="openContentAsset(${x.id})">查看成品</button><button class="btn ghost" style="color:var(--danger,#b54644)" title="删除这条已生成内容" onclick="deleteContentAsset(${x.id})">删除</button></div></div>`}).join('')
@@ -631,6 +631,107 @@ async function openContentAsset(assetId){
     const d=await api(`/api/club/${CLUB}/content/${assetId}`);
     await openChannelOutput(d.channel,d.content||{},{activityId:Number(d.activity_id)});
   }catch(e){showAlert({title:'打开失败',message:e.message})}
+}
+/* ===== 活动回顾（2026-10-18 独立流程，老板定的逻辑）=====
+   回顾不是宣发渠道：它挂在「为哪场活动做内容」里、对还没开始的活动生成是 bug。
+   正确流程：活动结束 → 上传现场照片 + 填几句基础文案 → 系统生成回顾图文。
+   这里只列「已结束」的活动；日期解析规则与后端 _activity_last_date 保持一致（两边一起改）。 */
+function actLastDate(a){
+  const s=[a.event_date,(a.activityMaster||{}).date].filter(Boolean).join(' ');
+  if(!s)return null;
+  let last=null,year=null,d;
+  const mk=(y,m,dd)=>{d=new Date(y,m-1,dd);return (d.getFullYear()===y&&d.getMonth()===m-1&&d.getDate()===dd)?d:null};
+  String(s).replace(/(\d{4})\s*[年\-\/.]\s*(\d{1,2})\s*[月\-\/.]\s*(\d{1,2})/g,(_,y,m,dd)=>{
+    year=+y;d=mk(+y,+m,+dd);if(d&&(!last||d>last))last=d;return '';
+  });
+  if(year!=null){
+    // 缺年份的后半段（如「2026年10月30日—11月1日」里的 11月1日）继承年份
+    String(s).replace(/(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/g,(_,m,dd)=>{
+      d=mk(year,+m,+dd);if(d&&(!last||d>last))last=d;return '';
+    });
+  }
+  return last;
+}
+function actEnded(a){
+  const d=actLastDate(a);if(!d)return false;
+  const t=new Date();t.setHours(0,0,0,0);
+  return d<t;   // 最后一天在今天之前 = 已结束（进行中/未开始都不算）
+}
+function renderRecapPanel(acts){
+  const host=$('#recapBody');if(!host)return;
+  const ended=(acts||[]).filter(actEnded);
+  if(!ended.length){
+    host.innerHTML='<div class="empty">还没有已结束的活动。活动结束后，在这里上传现场照片生成回顾。</div>';
+    return;
+  }
+  if(!Number(window.__recapActId||0)||!ended.some(a=>a.id===Number(window.__recapActId)))window.__recapActId=ended[0].id;
+  host.innerHTML=`
+    <div class="sub" style="margin-bottom:6px">选择已结束的活动（共 ${ended.length} 场；未结束的活动不能生成回顾）</div>
+    <select id="recapActSel" style="max-width:460px;padding:8px 10px">${ended.map(a=>`<option value="${a.id}"${a.id===Number(window.__recapActId)?' selected':''}>${esc(a.title)}${a.event_date?` · ${esc(a.event_date)}`:''}</option>`).join('')}</select>
+    <div style="margin-top:12px"><div class="sub" style="margin-bottom:4px">现场照片（可多选；手机 HEIC 直传支持，自动转 JPEG）</div>
+    <input type="file" id="recapFiles" multiple accept="image/*,.heic,.heif,.bmp,.gif,.tif,.tiff,.avif"></div>
+    <div style="margin-top:12px"><div class="sub" style="margin-bottom:4px">基础文案 / 领队记录（可不填，但写了回顾才真实）</div>
+    <textarea id="recapNote" rows="4" style="width:100%;max-width:680px;padding:8px 10px" placeholder="例如：12 个人全员登顶，山顶风大但出了太阳；下山路上有人扭了脚踝已处理；晚饭火锅全员到齐……"></textarea></div>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="btn secondary" id="recapGo">AI 生成活动回顾</button>
+      <span class="sub" id="recapHint"></span>
+    </div>`;
+  $('#recapActSel').onchange=e=>{window.__recapActId=Number(e.target.value)||0};
+  const fi=$('#recapFiles');
+  fi.onchange=()=>{$('#recapHint').textContent=fi.files.length?`已选 ${fi.files.length} 张照片`:''};
+  $('#recapGo').onclick=genRecap;
+}
+async function genRecap(){
+  const id=Number(window.__recapActId||0);
+  if(!id){toast('请先选择一场已结束的活动');return}
+  const note=($('#recapNote')?.value||'').trim();
+  const files=[...($('#recapFiles')?.files||[])];
+  if(!files.length&&!note){
+    showAlert({title:'还缺素材',message:'回顾只能写真正发生过的事：请至少上传 1 张现场照片，或填写几句现场记录。'});
+    return;
+  }
+  const mat=[files.length?`${files.length} 张现场照片`:'',note?'你填写的现场记录':''].filter(Boolean).join(' 和 ');
+  if(window.uxConfirm&&!await uxConfirm({title:'生成活动回顾',
+    message:`系统会结合这场活动的资料${mat?'、'+mat:''}调用 AI 生成回顾图文，产生一次 AI Credits 计费。生成后可直接预览、复制、下载。`,
+    confirmText:'开始生成'}))return;
+  const fd=new FormData();fd.append('note',note);
+  files.forEach(f=>fd.append('files',f));
+  try{
+    const d=await api(`/api/club/${CLUB}/activities/${id}/recap`,{method:'POST',body:fd});
+    // 生成异步化（与长图同理）：live 真模型带完整写作契约常超 55s 网关上限，
+    // 立即返回轮询 status，完成后自动打开成品；期间页面可正常使用。
+    if(d&&d.pending){
+      toast('回顾已开始生成，约需 1-2 分钟，完成后自动打开，可先做别的');
+      const started=Date.now();
+      while(Date.now()-started<8*60*1000){
+        await new Promise(r=>setTimeout(r,6000));
+        let st;
+        try{st=await api(`/api/club/${CLUB}/activities/${id}/recap/status`)}
+        catch(_e){continue}
+        if(st.status==='done'){
+          toast('活动回顾生成完成');
+          if(st.skipped&&st.skipped.length)toast(`有 ${st.skipped.length} 个文件不是可识别的图片，已跳过`);
+          const full=await api(`/api/club/${CLUB}/content/${st.assetId}`);
+          window.channelRenderResetCtx&&channelRenderResetCtx(id);
+          await openChannelOutput('recap',full.content||{},{activityId:id});
+          await loadContent();
+          if(window.loadCredits)await loadCredits();
+          return;
+        }
+        if(st.status==='error'){showAlert({title:'生成失败',message:st.error||'请重试'});return}
+      }
+      showAlert({title:'仍在生成中',message:'这次生成时间较长，后台不会中断；稍后到「已生成内容」里查看成品。'});
+      await loadContent();
+      return;
+    }
+    // 兼容：mock/旧实现直接同步返回成品
+    if(d&&d.skippedFiles&&d.skippedFiles.length)toast(`有 ${d.skippedFiles.length} 个文件不是可识别的图片，已跳过`);
+    toast('活动回顾已生成');
+    window.channelRenderResetCtx&&channelRenderResetCtx(id);
+    await openChannelOutput('recap',d,{activityId:id});
+    await loadContent();
+    if(window.loadCredits)await loadCredits();
+  }catch(e){showAlert({title:'生成失败',message:e.message})}
 }
 /* ===== 报名与执行：以单个活动为基础，再按档期（团期）拆开 =====
    老板的原话：把所有档期汇总到一起，后台就分不清哪些人是 9 号的、哪些人是 10 号的。

@@ -2487,3 +2487,68 @@ Activity Master（事实锚点）：{json.dumps(activity_master,ensure_ascii=Fal
               'preferredMediaRefs':([cover_url] if cover_url else [])+gallery[:1],'coverUrl':cover_url}
     else:data={'needsActualData':True,'title':f'{title}｜活动回顾','message':'请上传现场照片或领队记录后再生成真实活动回顾。'}
     return data,record_mock_usage(club_id,channel,prompt,data)
+
+
+# ══ 活动回顾（2026-10-18 独立流程）══
+# 老板指出的逻辑 bug：回顾不是宣发渠道，不该挂在「为哪场活动做内容」里对着招募资料凭空写。
+# 正确逻辑：活动结束之后，老板上传现场照片 + 写几句基础文案，系统再生成回顾。
+# 素材契约：只认真实素材 —— 照片 ref 由后端落库时给定（rcap_*），文案是老板/领队的现场记录。
+_RECAP_BRIEF = """recap（活动回顾）：这场活动**已经结束**，写一篇「事后回顾」，不是招募文案。
+★ 全文用过去时叙述真正发生过的事：怎么集合出发、当天流程、现场的高光时刻、怎么收尾。
+★ 素材只有两样：领队/老板写的现场记录 + 现场照片清单。规则：
+- 现场记录里写到的细节（人数、天气、路线、趣事、意外与处理）是全文的骨架，优先展开；
+- 照片画面可以客观描述（配合照片说明），但不得虚构记录里没有的对话、人名、数字与情节；
+- 不写招募话术（「快来报名」「名额有限」「错过再等一年」这类一句都不能有）；
+  结尾用轻收束（如对下一场的期待或一句总结），不放报名表单式 CTA。
+- 结构：title（≤26 字，像回顾不像广告）→ summary → blocks[]
+  （lead + 3~6 节 narrative/media + gallery 收照片 + 轻收尾）。
+- mediaRefs 只允许引用给定清单里的现场照片 ref（rcap_*），一节 1~3 张，
+  全文照片覆盖不低于 60%，别把所有图堆到文末。"""
+
+
+async def generate_recap(club_id:int,master:dict[str,Any],note:str,photos:list[dict[str,Any]]):
+    """活动回顾：素材 = 老板上传的现场照片 + 基础文案（区别于宣发渠道的「招募」语境）。
+
+    photos 是后端落库后的真实照片条目（ref/url/name），模型只允许引用这些 ref；
+    note 为空时只依据照片画面做客观回顾。离线/mock 时用真实素材拼一篇诚实的基础回顾。
+    """
+    title=str(master.get('title') or '')
+    refs=[str(p.get('ref')) for p in photos if p.get('ref')]
+    photo_lines='\n'.join(
+        f"- {p.get('ref')}：{str(p.get('name') or '')}" + (f"（{p['desc']}）" if p.get('desc') else '')
+        for p in photos if p.get('ref')) or '（本次未上传照片，请只依据现场记录写文字回顾，blocks 里不要放 mediaRefs）'
+    facts={k:master.get(k) for k in ('title','date','location','capacity','duration') if master.get(k)}
+    prompt=f"""为下面这场已经结束的活动写一篇活动回顾（recap）。
+活动事实锚点：{json.dumps(facts,ensure_ascii=False)}
+现场照片清单（mediaRefs 只允许引用这里的 ref，别的一个都不许）：
+{photo_lines}
+领队/老板的现场记录（第一手素材，可能是零散短句；记录里的事实原样保留，禁止改写数字与人名）：
+{note.strip() or '（未填写——请只依据照片画面做客观回顾，不虚构任何细节）'}
+
+{_WRITING_CONTRACT}
+
+本渠道要求：
+{_RECAP_BRIEF}
+输出结构（强制；字段名不得改动）：
+{{"title":"","summary":"","blocks":[{{"type":"lead|narrative|media|gallery|quote|timeline|facts|cta","headline":"","body":"","mediaRefs":[],"items":[{{"label":"","value":""}}]}}]}}
+正文必须全部放进 blocks 数组，形状与公众号一致。
+严格 JSON，不要 Markdown，不要解释。"""
+    gw=await generate_json(club_id=club_id,task_type='recap',system_prompt=SYSTEM,user_prompt=prompt)
+    if gw:
+        data=gw.data or {}
+        data=normalize_channel_blocks(data)
+        if isinstance(data.get('blocks'),list):
+            # 回顾的图片池就是老板上传的现场照片本身：缺图按序铺、越界 ref 剔除
+            data['blocks']=_ensure_media_refs(data['blocks'],refs)
+            data['blocks']=_sanitize_blocks(data['blocks'],allowed_refs=set(refs))
+        data,_changed=scrub_cost_data(data)
+        if not str(data.get('title') or '').strip():data['title']=f'{title}｜活动回顾'
+        return data,gw
+    # 离线 / mock 兜底：用真实照片 + 记录拼一篇诚实的基础回顾（不编故事）
+    blocks=[{'type':'lead','headline':f'{title}｜活动回顾',
+             'body':(note.strip() or '现场记录待补充，以下是本次活动留下的现场照片。'),
+             'mediaRefs':refs[:1]}]
+    if len(refs)>1:
+        blocks.append({'type':'gallery','headline':'现场相册','mediaRefs':refs[1:]})
+    data={'title':f'{title}｜活动回顾','summary':note.strip()[:80],'blocks':blocks}
+    return data,record_mock_usage(club_id,'recap',prompt,data)

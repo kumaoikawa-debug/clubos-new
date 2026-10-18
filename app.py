@@ -1,7 +1,7 @@
 from __future__ import annotations
 import uuid, os, io, csv, re, zipfile, shutil, asyncio
 from sqlite3 import IntegrityError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from pathlib import Path
 from urllib.parse import unquote, quote, urlsplit
 from PIL import Image
@@ -10,10 +10,10 @@ from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from db import init_db, conn, row, rows, jdump, jload, setting
-from document_parser import save_uploads, parse_sources, _image_kind
+from document_parser import save_uploads, parse_sources, _image_kind, IMAGE_EXTS as _IMAGE_UPLOAD_EXTS
 from cost_guard import sanitize_for_frontend, master_has_cost_evidence
 from ai_engine import (generate_activity, generate_channel, regenerate_detail, detail_outline,
-                       _fact_digest, pick_cover_media)
+                       _fact_digest, pick_cover_media, generate_recap)
 from longpic import generate_longpic, build_fact_pack
 from image_caption import caption_media, caption_lines, persist_captions
 from ai_billing import ensure_credits, charge_credits, credit_cost
@@ -368,6 +368,46 @@ def _repair_master_media(master:dict,source:dict|None)->dict:
         if ref not in seen:out.append(dict(x));seen.add(ref)
     master['media']=out
     return master
+
+
+def _strip_recap_media(master:dict)->dict:
+    """宣发渠道的媒体池剔除「活动回顾」事后上传的现场照片（source='recap'）。
+    招募物料里混进活动结束才有的照片（全员合影、领队花絮等）是语义事故；
+    回顾内容自己渲染时不受影响（ref 直接落在 master.media 里）。"""
+    if isinstance(master,dict) and isinstance(master.get('media'),list):
+        master['media']=[m for m in master['media']
+                         if not(isinstance(m,dict) and m.get('source')=='recap')]
+    return master
+
+
+_FULL_DATE_RE=re.compile(r'(\d{4})\s*[年\-/.]\s*(\d{1,2})\s*[月\-/.]\s*(\d{1,2})')
+_PART_DATE_RE=re.compile(r'(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?')
+
+def _activity_last_date(*texts)->'date|None':
+    """从活动日期文案解析「最后一天」，判断活动是否已结束。
+
+    支持「2026年10月30日—11月1日」「2026-10-30~11-01」「2026.10.30」等写法；
+    缺年份的后半段（—11月1日）继承上一个已解析的年份。解析不出来返回 None。
+    与前端 club.js 的 actLastDate() 保持同一套规则，两边要一起改。
+    """
+    last=None;year=None
+    for t in texts:
+        s=str(t or '')
+        if not s:continue
+        for m in _FULL_DATE_RE.finditer(s):
+            try:cand=date(int(m.group(1)),int(m.group(2)),int(m.group(3)))
+            except ValueError:continue
+            year=int(m.group(1))
+            if last is None or cand>last:last=cand
+        if year is not None:
+            # 「—11月1日」这类缺年份的后半段；完整日期会被上面先匹配，重复构造无害
+            for m in _PART_DATE_RE.finditer(s):
+                try:cand=date(year,int(m.group(1)),int(m.group(2)))
+                except ValueError:continue
+                # 只接受与已有日期相差 <400 天的（防止把零散数字误当日期拉飞）
+                if last is not None and abs((cand-last).days)>=400:continue
+                if last is None or cand>last:last=cand
+    return last
 
 
 from clubos_domain.leader_recommend import ACTIVITY_TYPES as _LEADER_ACTIVITY_TYPES
@@ -1350,7 +1390,10 @@ def club_activity_cover(club_id:int, activity_id:int):
 _LONGPIC_JOBS: dict[tuple[int, int], dict] = {}
 
 async def _longpic_job(club_id:int,activity_id:int,master:dict,detail:dict,
-                       source_text:str,cover_url:str|None,seed:int):
+                       source_text:str,cover_url:str|None,seed:int,persist_master:dict|None=None):
+    """persist_master：落库用的完整 master（含 source='recap' 的回顾照片）。
+    生成用 master 是剥离过回顾照片的版本；若直接把它落库，会把老板上传的
+    回顾照片从活动资料里整批删掉（旧回顾成品的图片随之失效，2026-10-18 实测复现）。"""
     job=_LONGPIC_JOBS.setdefault((club_id,activity_id),{'status':'running'})
     try:
         caps=await caption_media(club_id,master)
@@ -1366,10 +1409,11 @@ async def _longpic_job(club_id:int,activity_id:int,master:dict,detail:dict,
             job.update(status='error',error=str(e)); return
         if not content.get('html'):
             job.update(status='error',error='模型没有返回可用的排版内容，请再试一次。'); return
-        persist_captions(master,caps)
+        store=persist_master if persist_master is not None else master
+        persist_captions(store,caps)
         with conn() as c:
             c.execute('UPDATE activities SET activity_master_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
-                      (jdump(master),activity_id,club_id))
+                      (jdump(store),activity_id,club_id))
             cur=c.execute('INSERT INTO content_assets(club_id,activity_id,channel,title,body_json) VALUES(?,?,?,?,?)',(
                 club_id,activity_id,'longpic',content.get('title'),jdump(content)))
             asset_id=cur.lastrowid
@@ -1382,13 +1426,36 @@ async def _longpic_job(club_id:int,activity_id:int,master:dict,detail:dict,
 def longpic_status(club_id:int,activity_id:int):
     return _LONGPIC_JOBS.get((club_id,activity_id)) or {'status':'idle'}
 
+
+# ══ 活动回顾：异步作业表（与长图同理，live 真模型常超 55s 网关上限）══
+_RECAP_JOBS: dict[tuple[int, int], dict] = {}
+
+async def _recap_job(club_id:int,activity_id:int,master:dict,note:str,entries:list[dict]):
+    job=_RECAP_JOBS.setdefault((club_id,activity_id),{'status':'running'})
+    try:
+        try: content,usage=await generate_recap(club_id,master,note,entries)
+        except AIGatewayError as e:
+            job.update(status='error',error=str(e)); return
+        charge_credits(club_id,'recap',usage.usage_id)
+        with conn() as c:
+            cur=c.execute('INSERT INTO content_assets(club_id,activity_id,channel,title,body_json) VALUES(?,?,?,?,?)',(
+                club_id,activity_id,'recap',content.get('title') or '',jdump(content)))
+            asset_id=cur.lastrowid
+        job.update(status='done',assetId=asset_id,title=content.get('title'),
+                   skipped=job.get('skipped') or [])
+    except Exception as e:  # 兜底：任何未预期异常都要让前端退出轮询
+        job.update(status='error',error=f'生成过程出现异常：{e}')
+
 @app.post('/api/club/{club_id}/activities/{activity_id}/channel/{channel}')
 async def channel_generate(club_id:int,activity_id:int,channel:str):
-    if channel not in {'wechat','xhs','poster','recap','longpic'}: raise HTTPException(400,'unsupported channel')
+    # recap（活动回顾）2026-10-18 起不再是宣发渠道：它属于「活动结束之后」的独立流程，
+    # 素材是事后上传的现场照片与文案，走 POST .../activities/{id}/recap。
+    if channel not in {'wechat','xhs','poster','longpic'}: raise HTTPException(400,'unsupported channel')
     ensure_credits(club_id,channel)
     with conn() as c:a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
     if not a: raise HTTPException(404,'活动不存在')
     master=jload(a['activity_master_json'],{});detail=jload(a['detail_json'],{})
+    master=_strip_recap_media(master)
     # 渠道内容必须能看到第一手资料：原始方案里的具体数字 / 专名 / 动作才是好文案的素材库。
     # 只给模型看抽取后的 master/detail，公众号推文就只能把已压缩的事实再压缩一遍。
     source_text=str(jload(a['source_json'],{}).get('text') or '')
@@ -1405,6 +1472,11 @@ async def channel_generate(club_id:int,activity_id:int,channel:str):
     #   （早期"模型直出整段 HTML"的实现作为**回退路径**保留在 longpic.py，模型结构化失败时用。）
     if channel=='longpic':
         master=_repair_master_media(master or {},_activity_source(a)[0])
+        # 落库用 master_full 持有 media 列表的独立副本（_strip_recap_media 是原地替换，
+        # 浅引用会被一起剥掉）；生成用剥离回顾照片的版本。
+        master_full=dict(master)
+        if isinstance(master.get('media'),list): master_full['media']=list(master['media'])
+        master=_strip_recap_media(master)   # 生成用：剥离回顾照片
         # 已有作业在跑：直接回当前状态，绝不并发重跑（防止双倍 Credits + 双份成品）。
         prev=_LONGPIC_JOBS.get((club_id,activity_id))
         if prev and prev.get('status')=='running':
@@ -1416,7 +1488,7 @@ async def channel_generate(club_id:int,activity_id:int,channel:str):
         seed=activity_id*997+int(_prev or 0)
         _LONGPIC_JOBS[(club_id,activity_id)]={'status':'running','started':datetime.utcnow().isoformat()}
         asyncio.create_task(_longpic_job(club_id,activity_id,master,detail,
-                                         source_text,cover_url,seed))
+                                         source_text,cover_url,seed,persist_master=master_full))
         return {'pending':True,'channel':'longpic','activityId':activity_id,'status':'running'}
 
     try: content,usage=await generate_channel(club_id,master,detail,channel,cover_url=cover_url,source_text=source_text)
@@ -1425,6 +1497,89 @@ async def channel_generate(club_id:int,activity_id:int,channel:str):
     with conn() as c:c.execute('INSERT INTO content_assets(club_id,activity_id,channel,title,body_json) VALUES(?,?,?,?,?)',(
         club_id,activity_id,channel,content.get('title') or (content.get('titleOptions') or [''])[0],jdump(content)))
     return content
+
+
+@app.post('/api/club/{club_id}/activities/{activity_id}/recap')
+async def recap_generate(club_id:int,activity_id:int,note:str=Form(''),
+                         files:list[UploadFile]=File(default=[])):
+    """活动回顾（2026-10-18 独立流程，替换原渠道版 recap）。
+
+    逻辑（老板定的）：回顾不是宣发渠道——活动结束之后，老板上传现场照片 + 写几句
+    基础文案，系统再生成回顾。硬闸：
+    ① 活动必须已结束（按日期文案解析「最后一天」< 今天；解析不出来就拒绝，不猜）；
+    ② 至少要有 1 张现场照片或 1 段现场记录——回顾只写真事，没有素材就明说，不编造。
+    照片入库 master.media（source='recap'），渲染走 /api/club/.../media/ 白名单；
+    宣发渠道的媒体池会剔除这批照片（_strip_recap_media）。
+    生成走异步作业（与长图同理：live 真模型带完整写作契约常超 55s，同步必被网关掐断），
+    本端点只做校验 + 落盘 + 起任务，立即返回 {pending:true}，前端轮询 /recap/status。
+    """
+    club_or_404(club_id); ensure_credits(club_id,'recap')
+    with conn() as c:
+        a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+    if not a: raise HTTPException(404,'活动不存在')
+    master=_repair_master_media(jload(a['activity_master_json'],{}) or {},_activity_source(a)[0])
+    last=_activity_last_date(a.get('event_date'),(master or {}).get('date'))
+    if last is None:
+        _raw=str(a.get('event_date') or (master or {}).get('date') or '').strip() or '未填写'
+        raise HTTPException(422,f'无法从活动日期（{_raw}）判断这场活动是否已结束。'
+                                '活动回顾只能给「已结束」的活动生成，请先把活动日期补充为具体日期。')
+    if last>=date.today():
+        raise HTTPException(422,f'这场活动还没结束（{last.isoformat()}），还不能生成回顾。'
+                                '活动结束后，上传现场照片和基础文案再来生成。')
+    note=(note or '').strip()
+    img_files=[f for f in (files or [])
+               if Path(f.filename or '').suffix.lower() in _IMAGE_UPLOAD_EXTS]
+    if not img_files and not note:
+        raise HTTPException(422,'回顾必须有真实素材：请至少上传 1 张现场照片，'
+                                '或填写几句现场记录（人数、天气、路线、高光时刻……）。')
+    recap_entries=[];_skipped=[]
+    if img_files:
+        batch=UPLOAD/str(club_id)/uuid.uuid4().hex
+        try:
+            saved=save_uploads(img_files,batch,
+                               max_total_bytes=20*1024*1024 if IS_PROD else None,
+                               skipped_out=_skipped)
+        except ValueError as e:
+            shutil.rmtree(batch,ignore_errors=True)
+            raise HTTPException(413,str(e))
+        # ★ ref 编号要接着这场活动已有的回顾照片往后排：每批都从 rcap_01 起会撞号，
+        #   ref→url 映射里旧图被新图顶掉，旧回顾成品的图片会串成新照片（实测复现过）。
+        _rcap_base=sum(1 for m in (master.get('media') or [])
+                       if isinstance(m,dict) and str(m.get('ref') or '').startswith('rcap_'))
+        for i,p in enumerate(saved,1):
+            w=h=None
+            try:
+                with Image.open(p) as im:w,h=im.size
+            except Exception:pass
+            recap_entries.append({'ref':f'rcap_{_rcap_base+i:02d}','url':f'/static/uploads/{club_id}/{batch.name}/{p.name}',
+                                  'kind':'photo','source':'recap','name':p.name,
+                                  'desc':p.stem,'width':w,'height':h})
+        if not recap_entries and not note:
+            _names='、'.join(str(x or '文件') for x in _skipped[:3]) or '上传的文件'
+            raise HTTPException(422,f'{_names}都没能作为照片读入。请换用 jpg/png 等常见图片格式，'
+                                    '或直接填写几句现场记录。')
+    # 现场照片进 master.media：club 端媒体代理白名单=master.media，不入库就渲染不出来。
+    if recap_entries:
+        _have={str(m.get('url')) for m in (master.get('media') or []) if isinstance(m,dict)}
+        for e in recap_entries:
+            if e['url'] not in _have:master.setdefault('media',[]).append(e)
+        with conn() as c:
+            c.execute('UPDATE activities SET activity_master_json=?,updated_at=CURRENT_TIMESTAMP '
+                      'WHERE id=? AND club_id=?',(jdump(master),activity_id,club_id))
+    # 已有作业在跑：直接回当前状态，绝不并发重跑（防止双倍 Credits + 双份成品）。
+    prev=_RECAP_JOBS.get((club_id,activity_id))
+    if prev and prev.get('status')=='running':
+        return {'pending':True,'channel':'recap','activityId':activity_id,
+                'status':'running','note':'这场活动的回顾正在生成中，请等待完成。'}
+    _RECAP_JOBS[(club_id,activity_id)]={'status':'running','started':datetime.utcnow().isoformat(),
+                                        'skipped':[str(x) for x in _skipped]}
+    asyncio.create_task(_recap_job(club_id,activity_id,master,note,recap_entries))
+    return {'pending':True,'channel':'recap','activityId':activity_id,'status':'running'}
+
+
+@app.get('/api/club/{club_id}/activities/{activity_id}/recap/status')
+def recap_status(club_id:int,activity_id:int):
+    return _RECAP_JOBS.get((club_id,activity_id)) or {'status':'idle'}
 
 @app.get('/api/club/{club_id}/content')
 def content_list(club_id:int):
