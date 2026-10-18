@@ -381,9 +381,13 @@ function promoHtmlDoc(html){
   var body=hardenPromoHtml(html);
   /* hardenPromoHtml 会把外链 / javascript: 的 src 剥成空，留下无 src 的 <img> → 当作裂图整标签删 */
   body=body.replace(/<img\b[^>]*>/gi,function(tag){return /\bsrc=["']/i.test(tag)?tag:'';});
+  /* 模型声明了 --bg 却常忘给 body 上底色（2026-10-18 深色画册实测）→ 确定性补：
+     从它的 <style> 里抽出第一个 --bg，直接注入基础样式，杜绝深色块之间漏白。 */
+  var bg='';var m=String(body).match(/--bg\s*:\s*([^;}]+)/i);if(m)bg=m[1].trim();
   return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
     +'<meta name="viewport" content="width=device-width,initial-scale=1">'
     +'<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent}'
+    +(bg?'html{background:'+bg.replace(/[<"\']/g,'')+'}':'')
     +'body{width:100%;overflow-x:hidden;font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}'
     +'img{max-width:100%;height:auto;display:block}section{display:block}a{color:inherit}</style></head><body>'
     +body+'</body></html>';
@@ -395,15 +399,46 @@ function mountPromoHtml(html,mm){
     +'style="width:100%;border:0;display:block;background:transparent" '
     +'srcdoc="'+escAttr(doc)+'"></iframe></div>';
 }
-/* 阶段二：iframe 载入后量取内部高度，避免内容被裁切；图片晚到再补量一次 */
+/* 阶段二：iframe 载入后量取内部高度，避免内容被裁切；图片晚到再补量一次。
+   ★ 2026-10-18 加固（club 端宣传区在默认隐藏的 tab 里实测踩坑）：
+   iframe 处于 display:none 容器时 scrollHeight=0，量出的高度是垃圾（24px），
+   用户切到 tab 后没人再量 → 内容整页被裁。两层修复：
+   ① ResizeObserver 盯 iframe 自身宽度：0 → 真实宽度（隐藏→可见 / 布局变化）就重量；
+   ② 内部每张未完成的 <img> 挂一次性 load 补量（图片晚到撑高内容）。 */
+function sizePromoIframe(ifr){
+  try{var d=ifr.contentDocument;if(d&&d.body){ifr.style.height=(d.body.scrollHeight+16)+'px';
+    setTimeout(function(){try{ifr.style.height=(d.body.scrollHeight+24)+'px';}catch(_){}},800);}}catch(_){}
+}
+function setupPromoIframe(ifr){
+  if(!ifr||ifr.__promoSetup)return;ifr.__promoSetup=true;
+  sizePromoIframe(ifr);
+  try{var d=ifr.contentDocument;
+    if(d)d.querySelectorAll('img').forEach(function(im){
+      if(!im.complete)im.addEventListener('load',function(){sizePromoIframe(ifr);},{once:true});});}catch(_){}
+  if(typeof ResizeObserver!=='undefined'){
+    var lastW=-1;
+    try{ifr.__promoRO=new ResizeObserver(function(){
+      var w=ifr.getBoundingClientRect().width;
+      if(w>0&&Math.abs(w-lastW)>1){lastW=w;sizePromoIframe(ifr);}
+    });ifr.__promoRO.observe(ifr);}catch(_){}
+  }
+}
 if(typeof document!=='undefined'){
   document.addEventListener('load',function(e){
     var t=e&&e.target;
     if(t&&t.nodeType===1&&t.tagName==='IFRAME'){
-      var host=t.closest?t.closest('.ed-promo-html'):null;
-      if(host){try{var d=t.contentDocument;if(d&&d.body){t.style.height=(d.body.scrollHeight+16)+'px';
-        setTimeout(function(){try{t.style.height=(d.body.scrollHeight+24)+'px';}catch(_){}},800);}}catch(_){}}
+      if(t.closest&&t.closest('.ed-promo-html'))setupPromoIframe(t);
     }
+  },true);
+  /* tab 切换 / 容器展开后 iframe 宽度从 0 变正：load 已发生的旧 iframe 也要补量 */
+  document.addEventListener('click',function(e){
+    var btn=e&&e.target&&e.target.closest?e.target.closest('button,.tab,[role=tab]'):null;
+    if(!btn)return;
+    setTimeout(function(){
+      document.querySelectorAll('.ed-promo-html iframe').forEach(function(ifr){
+        if(ifr.getBoundingClientRect().width>0&&parseInt(ifr.style.height||'0',10)<80)sizePromoIframe(ifr);
+      });
+    },60);
   },true);
 }
 
