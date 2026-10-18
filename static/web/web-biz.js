@@ -110,39 +110,19 @@ window.loadHome=async function(){
   }
 };
 
-/* ── ② 活动页：主题卡 peek 轮播 + 全部活动瀑布流 ─────────────────────────
-   只把有封面的活动做成主题卡：没封面时那张卡是一块深色渐变，放在 C 位等于告诉
-   顾客「这家的活动连张图都没有」。宁可少两张卡，也不把兜底图摆到台面上。 */
+/* ── ② 活动页：分类磁贴 + 地区 chips + 全部活动瀑布流 ─────────────────────
+   2026-10-18 按用户要求删掉顶部主题卡大图轮播（#actFeatured 已从骨架里移除）。
+   这里不再画轮播，只负责拉数据 + 交给基础层的 renderActivityList：
+   磁贴 / chips / 瀑布流全部在 web.js 的 renderActivityList 里画（筛选状态也在那儿），
+   覆盖层重复一份会让两个入口渲染出两种结果。 */
 window.loadActivities=async function(){
-  const car=$('#actFeatured'),box=$('#publicActivities'),emp=$('#activityEmpty');
-  if(car&&!car.children.length)car.innerHTML='<div class="w-sk"><div class="w-sk__bar" style="height:380px"></div></div>';
+  const box=$('#publicActivities'),emp=$('#activityEmpty');
   if(box&&!box.children.length)box.innerHTML='<div class="w-sk-row"></div><div class="w-sk-row"></div>';
   try{
     const acts=await api(`/api/public/clubs/${CLUB}/activities`);
     /* 裸赋值，理由同 loadHome：window.ACT_ALL= 更新的是 window 属性，
        读不到 web.js 的 `let ACT_ALL` 绑定。 */
     ACT_ALL=acts;
-    const list=(acts||[]).slice().sort((a,b)=>Number(b.id||0)-Number(a.id||0));
-    if(car){
-      /* 有封面的优先做主题卡；**一张都没封面时也要把板块摆出来**（走兜底视觉）。
-         早先这里是「filter(x=>x.cover)，空了就 display:none」——线上两条活动都没配
-         封面，于是活动页只剩瀑布流，老板打开一看：「这个板块没有改呀」。整块消失
-         比兜底图糟得多：顾客还会以为这页坏了。
-         有真图时仍只显示真图的 —— 一屏里真照片和色块混着，比全兜底更掉价。 */
-      const withCover=list.filter(x=>x.cover);
-      const f=(withCover.length?withCover:list).slice(0,5);
-      car.classList.toggle('is-fallback',!withCover.length);
-      car.style.display=f.length?'':'none';
-      car.innerHTML=f.length
-        ?'<div class="w-theme__track">'+f.map(themeCard).join('')+'</div>'
-          +(f.length>1?'<div class="w-theme__meter"><i></i></div>':'')
-        :'';
-      const t=car.querySelector('.w-theme__track');
-      if(t&&f.length>1)bindCaro(t,car.querySelector('.w-theme__meter i'));
-    }
-    /* 磁贴 / chips / 瀑布流统一交给 web.js 的 renderActivityList 画：分类与地区
-       筛选的逻辑在基础层（和状态放在一起），覆盖层只管轮播。空态、「清除筛选」
-       也都在那里，不在这里重复一份。 */
     renderActivityList();
   }catch(e){ if(box)box.innerHTML='<div class="w-empty">活动加载失败，请稍后重试<button class="w-retry" type="button" onclick="loadActivities()">重新加载</button></div>'; if(emp)emp.innerHTML=''; }
 };

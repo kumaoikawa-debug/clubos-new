@@ -2,7 +2,7 @@
 <!-- 内联 SVG 图标：省掉 /favicon.ico 的 404（浏览器默认会去请求它）。
      用山形描边，和底部导航的图标同一套笔画。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121714'/%3E%3Cpath d='M3.5 23.5 12 11l4.6 7.6 3-4.8 8.9 9.7z' fill='none' stroke='%237fd0a4' stroke-width='2.1' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/shared.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261014a"><link rel="stylesheet" href="/static/web/web.css?v=20261018a"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
+<link rel="stylesheet" href="/static/shared.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261014a"><link rel="stylesheet" href="/static/web/web.css?v=20261018c"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
 
 <!-- C 端骨架：5 视图（首页 / 活动 / 装备 / 户外能力 / 我的）。
      结构类 .web-shell / .web-top / .web-content / .wview / .web-nav 全部保留 ——
@@ -33,27 +33,26 @@
       <div class="w-pad w-waterfall" id="homeFeed"></div>
     </section>
 
-    <!-- ── 活动：主题卡 peek 轮播 + 分类磁贴 + 地区 chips + 全部活动瀑布流 ────
-         主题卡 = 中间一张竖版大卡、左右各露出相邻卡片的边（.w-theme__*）。
-         分类磁贴（#actCats）= 参考图「在地探索」那一行带图选项：按主题挑一场，
-         磁贴图用该主题下第一场活动的**真实封面**，没有就走品牌渐变兜底、不画假图；
-         地区 chips（#activityChips）= 第二道筛选，按地点串里的真实地名归组。
-         两个维度都由前端从活动的真实字段（标题 / 地点）推导 —— 活动表没有
-         「类型」字段，也不为这个改后端、让老板多维护一堆字段。
+    <!-- ── 活动：分类磁贴 + 地区 chips + 全部活动瀑布流 ────────────────────
+         2026-10-18 按用户要求改版：**删掉顶部「本期主推」主题卡大图轮播**（首屏那张
+         占满一屏的竖版大卡），活动页直接从「活动分类」开始 —— 顾客进来第一眼要
+         看到可选项，不是先看一张推广大图再往下滑。
+         同时删掉「全部活动 / 共 N 场可报名」这块区块头：分类磁贴每张都标着场次，
+         地区 chips 也带计数，再顶一行标题＋场次属于重复信息。
+         分类磁贴（#actCats）= 带图选项：按主题挑一场，磁贴图用该主题下第一场活动的
+         **真实封面**，没有就走品牌渐变兜底、不画假图；地区 chips（#activityChips）
+         = 第二道筛选，按地点串里的真实地名归组。两个维度都由前端从活动的真实字段
+         （标题 / 地点）推导 —— 活动表没有「类型」字段，不为这个改后端。
          #publicActivities 保留：experience-core.js 靠它定位，删掉 = 装饰层静默失效。 -->
     <section id="wactivities" class="wview" style="display:none">
       <div id="activityList">
-        <div class="w-carousel" id="actFeatured"></div>
         <!-- 这两块用 div 而非 section：外层 #wactivities 本身就是 section，
              再嵌一层会让「#wactivities 里有哪些子块」这类静态断言按第一个
              section 闭合标签切分时提前截断（tests/web_act_view_guard.py）。 -->
-        <div class="w-sec w-pad">
+        <div class="w-sec w-pad w-sec--cats">
           <div class="w-sec__head"><div><h2>活动分类</h2><p>按主题挑一场，再按地区收窄</p></div></div>
           <div class="w-cats" id="actCats"></div>
           <div class="w-chips w-chips--acts" id="activityChips"></div>
-        </div>
-        <div class="w-sec w-sec--list">
-          <div class="w-sec__head"><div><h2>全部活动</h2><p id="actCount">正在读取活动…</p></div></div>
         </div>
         <div class="w-waterfall" id="publicActivities"></div>
         <div id="activityEmpty"></div>
@@ -118,6 +117,7 @@
     <section id="wme" class="wview" style="display:none">
       <div class="wme-hero">
         <div class="wme-hero__bg"></div>
+        <div class="wme-hero__shine"></div>
         <button class="wme-card" type="button" onclick="pushMe('membercard')" aria-label="查看会员信息">
           <div class="wme-card__top">
             <div class="wme-card__id">
@@ -127,32 +127,48 @@
                 <div class="wme-card__no" id="meCardNo">NO. —</div>
               </div>
             </div>
-            <canvas class="wme-card__qr" id="meQr" width="88" height="88"></canvas>
+            <span class="wme-card__qrtile"><canvas class="wme-card__qr" id="meQr" width="88" height="88"></canvas></span>
           </div>
           <div class="wme-card__bot">
-            <div class="wme-card__grow"><b id="meGrow">0</b><span>成长值（元）</span></div>
-            <div class="wme-card__up" id="meUp">—</div>
+            <div class="wme-card__grow"><b id="meGrow">0</b><em class="wme-card__unit">元</em><span>成长值</span></div>
+            <div class="wme-card__up"><span id="meUp">—</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></div>
           </div>
+          <!-- 升级进度：成长值到下一档门槛的比例（me.js 写 #meProg 的 width） -->
+          <div class="wme-card__prog"><i id="meProg"></i></div>
         </button>
       </div>
 
       <div class="wme-points">
-        <div class="wme-point"><b id="meClubPts">0</b><span>可用积分</span></div>
-        <div class="wme-point"><b id="meGearPts">0</b><span>装备积分</span></div>
+        <div class="wme-point">
+          <span class="wme-point__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.6v4.8l3.2 2"/></svg></span>
+          <div class="wme-point__txt"><b id="meClubPts">0</b><span>可用积分</span></div>
+        </div>
+        <div class="wme-point">
+          <span class="wme-point__ic wme-point__ic--gear"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.6 8.4h12.8l-1.1 11H6.7z"/><path d="M8.8 8.4V6.8a3.2 3.2 0 0 1 6.4 0v1.6"/></svg></span>
+          <div class="wme-point__txt"><b id="meGearPts">0</b><span>装备积分</span></div>
+        </div>
       </div>
 
       <div class="wme-quad" id="meQuad"></div>
 
       <div class="wme-sec">
-        <div class="wme-sec__hd"><span>商城订单</span><button class="wme-sec__all" type="button" onclick="pushMe('orders','all')">查看全部 ›</button></div>
+        <div class="wme-sec__hd"><span>商城订单</span><button class="wme-sec__all" type="button" onclick="pushMe('orders','all')">查看全部<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></button></div>
         <div class="wme-orders" id="meOrders"></div>
       </div>
 
       <div class="wme-list" id="meList">
-        <button class="wme-li" type="button" onclick="pushMe('aftersale')"><span>售后 / 退款</span><i>›</i></button>
-        <button class="wme-li" type="button" onclick="pushMe('service')"><span>联系我们</span><i>›</i></button>
-        <button class="wme-li" type="button" onclick="pushMe('about')"><span>关于远拓户外</span><i>›</i></button>
-        <button class="wme-li wme-li--out" type="button" onclick="meLogout()"><span>退出登录</span><i>›</i></button>
+        <button class="wme-li" type="button" onclick="pushMe('aftersale')">
+          <span class="wme-li__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.6 10.4a7.4 7.4 0 1 1 2 6"/><path d="M4.4 5.6v4.8h4.8"/></svg></span>
+          <span class="wme-li__tx">售后 / 退款</span><i class="wme-li__ar">›</i></button>
+        <button class="wme-li" type="button" onclick="pushMe('service')">
+          <span class="wme-li__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 5.8h13.6v10.4H9.4L5.2 19z"/><path d="M8.8 9.6h6.4M8.8 12.6h4"/></svg></span>
+          <span class="wme-li__tx">联系我们</span><i class="wme-li__ar">›</i></button>
+        <button class="wme-li" type="button" onclick="pushMe('about')">
+          <span class="wme-li__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.4"/><path d="M12 11v5.2"/><path d="M12 8.2h.01"/></svg></span>
+          <span class="wme-li__tx">关于远拓户外</span><i class="wme-li__ar">›</i></button>
+        <button class="wme-li wme-li--out" type="button" onclick="meLogout()">
+          <span class="wme-li__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.4 6.6V4.8H5.2v14.4h9.2v-1.8"/><path d="M11.4 12h8.2"/><path d="m16.6 8.8 3.2 3.2-3.2 3.2"/></svg></span>
+          <span class="wme-li__tx">退出登录</span><i class="wme-li__ar">›</i></button>
       </div>
       <div class="wme-foot">远拓户外 · MEMBER</div>
     </section>
@@ -172,9 +188,9 @@
 </div>
 
 <script src="/static/shared.js?v=20261014a"></script>
-<script src="/static/web/web.js?v=20261017g"></script>
-<script src="/static/web/web-biz.js?v=20261017g"></script>
-<script src="/static/web/me.js?v=20261018b"></script>
+<script src="/static/web/web.js?v=20261018c"></script>
+<script src="/static/web/web-biz.js?v=20261018c"></script>
+<script src="/static/web/me.js?v=20261018c"></script>
 <script src="/static/ux/clubos-ux.js?v=20261014a"></script>
 <script src="/static/ux/workflows-web.js?v=20261014a"></script>
 <script src="/static/ux/qr-local.js?v=20261014a"></script>

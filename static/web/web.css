@@ -1744,52 +1744,193 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 .w-co__submit:disabled{background:#c3c8c4;box-shadow:none;cursor:not-allowed}
 
 /* ===========================================================================
-   C 端「我的」整页（参考 PEAKTRACE 小程序「我的」版式）
-   —— 深色会员卡 + 积分 + 四宫格 + 商城订单五态 + 服务列表 + 二级页栈
+   C 端「我的」整页 —— 2026-10-18 视觉重做（版式沿用 PEAKTRACE，观感重排）
+   ---------------------------------------------------------------------------
+   布局没动（会员卡 → 积分 → 四宫格 → 商城订单五态 → 服务列表），重做的是观感：
+   · 会员卡从「深灰玻璃板」改成品牌深绿渐变 + 斜向高光，二维码放进白色圆角方块
+     （深色底上直接贴白底 canvas 很脏，白方块才像一张实体会员卡）；
+   · 成长值改成「数字 + 单位 + 升级提示 + 进度条」四件套 —— 只写一句
+     「再消费 ¥500 升级」，顾客不知道自己离下一档还有多远，进度条才说得清；
+   · 积分卡向上压住渐变底（负 margin），一屏之内把「身份」和「余额」连成一块；
+   · 四宫格 / 订单五态 / 服务列表全部补线稿图标：一行四个纯文字块在手机上读起来
+     像表格、不像入口；角标从「压在文字后面」改成「钉在图标右上角」，数字多大都
+     不会盖住标签；
+   · 卡片统一 18px 圆角 + 极浅投影、段间距 12px，页面底色用 --w-bg 让白卡浮起来。
    =========================================================================== */
-.web-shell .wme-hero{position:relative;padding:18px 16px 22px;overflow:hidden;background:linear-gradient(160deg,#16201b 0%,#0f1714 55%,#0c1310 100%)}
-.web-shell .wme-hero__bg{position:absolute;inset:0;background:radial-gradient(120% 80% at 82% 0%,rgba(21,98,67,.55),transparent 60%),radial-gradient(90% 70% at 0% 100%,rgba(127,208,164,.18),transparent 55%);pointer-events:none}
-.web-shell .wme-card{position:relative;display:block;width:100%;border:0;text-align:left;background:linear-gradient(135deg,rgba(255,255,255,.14),rgba(255,255,255,.06));border:1px solid rgba(255,255,255,.18);border-radius:20px;padding:16px;color:#fff;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);box-shadow:0 18px 40px rgba(0,0,0,.35);cursor:pointer}
-.web-shell .wme-card__top{display:flex;align-items:center;justify-content:space-between;gap:12px}
-.web-shell .wme-card__id{display:flex;align-items:center;gap:12px;min-width:0}
-.web-shell .wme-ava{width:46px;height:46px;flex:0 0 46px;border-radius:50%;background:rgba(255,255,255,.16);display:grid;place-items:center;font-size:18px;font-weight:700;color:#fff}
-.web-shell .wme-card__name{display:flex;align-items:center;gap:8px}
-.web-shell .wme-card__name span{font-size:16px;font-weight:700}
-.web-shell .wme-tier{font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;background:rgba(127,208,164,.22);color:#aef0cf;border:1px solid rgba(127,208,164,.4)}
-.web-shell .wme-card__no{font-size:12px;color:rgba(255,255,255,.6);margin-top:3px;letter-spacing:.04em}
-.web-shell .wme-card__qr{width:72px;height:72px;flex:0 0 72px;border-radius:10px;background:#fff;padding:4px}
-.web-shell .wme-card__bot{display:flex;align-items:flex-end;justify-content:space-between;margin-top:16px;gap:10px}
-.web-shell .wme-card__grow{display:flex;align-items:baseline;gap:6px}
-.web-shell .wme-card__grow b{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums}
-.web-shell .wme-card__grow span{font-size:11px;color:rgba(255,255,255,.6)}
-.web-shell .wme-card__up{font-size:12px;color:#aef0cf;max-width:55%;text-align:right}
+.web-shell .wme-hero{
+  position:relative;padding:16px 14px 34px;overflow:hidden;
+  background:linear-gradient(158deg,#0d5138 0%,#0a3627 46%,#08201a 100%);
+}
+.web-shell .wme-hero__bg{
+  position:absolute;inset:0;pointer-events:none;
+  background:
+    radial-gradient(112% 86% at 92% -12%,rgba(127,224,172,.34),transparent 60%),
+    radial-gradient(86% 70% at -6% 108%,rgba(216,110,58,.18),transparent 62%);
+}
+.web-shell .wme-hero__shine{
+  position:absolute;top:-60%;right:-20%;width:76%;height:220%;pointer-events:none;
+  background:linear-gradient(104deg,rgba(255,255,255,0) 42%,rgba(255,255,255,.07) 50%,rgba(255,255,255,0) 58%);
+  transform:rotate(6deg);
+}
+.web-shell .wme-card{
+  position:relative;display:block;width:100%;border:0;text-align:left;cursor:pointer;
+  padding:16px 16px 14px;border-radius:22px;color:#fff;-webkit-tap-highlight-color:transparent;
+  background:linear-gradient(142deg,rgba(255,255,255,.17) 0%,rgba(255,255,255,.055) 52%,rgba(255,255,255,.12) 100%);
+  box-shadow:0 18px 36px rgba(2,18,12,.42),inset 0 1px 0 rgba(255,255,255,.26),inset 0 0 0 1px rgba(255,255,255,.1);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
+.web-shell .wme-card__top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.web-shell .wme-card__id{display:flex;align-items:center;gap:11px;min-width:0}
+.web-shell .wme-ava{
+  width:44px;height:44px;flex:0 0 44px;border-radius:50%;display:grid;place-items:center;
+  font-size:17px;font-weight:800;color:#08291d;letter-spacing:.02em;
+  background:linear-gradient(145deg,#a8f0cb,#3fbd85 58%,#1c8b60);
+  box-shadow:0 6px 14px rgba(0,0,0,.28),0 0 0 2px rgba(255,255,255,.22);
+}
+.web-shell .wme-card__who{min-width:0}
+.web-shell .wme-card__name{display:flex;align-items:center;gap:7px}
+.web-shell .wme-card__name span{font-size:16.5px;font-weight:700;letter-spacing:.01em}
+.web-shell .wme-tier{
+  font-style:normal;font-size:10px;font-weight:700;line-height:1.5;
+  padding:2px 7px;border-radius:99px;color:#d8f7e6;background:rgba(255,255,255,.14);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.26);
+}
+.web-shell .wme-card__no{
+  margin-top:5px;font-size:11px;letter-spacing:.14em;color:rgba(255,255,255,.56);
+  font-variant-numeric:tabular-nums;
+}
+/* 二维码必须落在白底上：深绿底 + 白底 canvas 会在四周留一圈生硬的白边，
+   包一层圆角白卡后它才像「卡片上的码」，扫得动也看得舒服。 */
+.web-shell .wme-card__qrtile{
+  flex:0 0 auto;display:grid;place-items:center;padding:6px;border-radius:13px;background:#fff;
+  box-shadow:0 8px 18px rgba(0,0,0,.26);
+}
+.web-shell .wme-card__qr{display:block;width:62px;height:62px}
+.web-shell .wme-card__bot{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-top:14px}
+.web-shell .wme-card__grow{display:flex;align-items:baseline;gap:5px}
+.web-shell .wme-card__grow b{font-size:26px;font-weight:800;line-height:1;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.web-shell .wme-card__grow em{font-style:normal;font-size:11.5px;font-weight:600;color:rgba(255,255,255,.72)}
+.web-shell .wme-card__grow span{margin-left:2px;font-size:11px;color:rgba(255,255,255,.52)}
+.web-shell .wme-card__up{display:flex;align-items:center;gap:2px;font-size:11.5px;color:#a9ecc8;text-align:right}
+.web-shell .wme-card__up svg{
+  width:13px;height:13px;flex:0 0 13px;stroke:currentColor;fill:none;
+  stroke-width:2;stroke-linecap:round;stroke-linejoin:round;opacity:.8;
+}
+.web-shell .wme-card__prog{position:relative;height:3px;margin-top:10px;border-radius:99px;background:rgba(255,255,255,.1);overflow:hidden}
+.web-shell .wme-card__prog i{
+  display:block;height:100%;width:0;border-radius:99px;
+  background:linear-gradient(90deg,#6fd8a4,#d7f7e6);
+  transition:width .5s cubic-bezier(.3,.8,.3,1);
+}
 
-.web-shell .wme-points{display:flex;gap:10px;padding:14px 16px;background:var(--w-bg)}
-.web-shell .wme-point{flex:1;background:#fff;border:1px solid var(--w-line);border-radius:14px;padding:14px;text-align:center}
-.web-shell .wme-point b{display:block;font-size:22px;font-weight:800;color:var(--w-brand);font-variant-numeric:tabular-nums}
-.web-shell .wme-point span{font-size:11px;color:var(--w-muted);margin-top:4px;display:block}
+/* 积分：白卡负 margin 压住渐变底，把「身份」和「余额」连成一块 */
+.web-shell .wme-points{
+  position:relative;z-index:2;display:grid;grid-template-columns:1fr 1fr;
+  margin:-22px 14px 0;padding:13px 4px;border-radius:18px;background:#fff;
+  box-shadow:0 10px 26px rgba(15,36,26,.1),inset 0 0 0 1px rgba(18,23,20,.04);
+}
+.web-shell .wme-point{display:flex;align-items:center;gap:10px;padding:0 12px;min-width:0}
+.web-shell .wme-point+.wme-point{box-shadow:inset 1px 0 0 var(--w-line)}
+.web-shell .wme-point__ic{
+  width:34px;height:34px;flex:0 0 34px;border-radius:12px;display:grid;place-items:center;
+  background:var(--w-brand-soft);color:var(--w-brand);
+}
+.web-shell .wme-point__ic--gear{background:#f6f1e8;color:#8a6a35}
+.web-shell .wme-point__ic svg{
+  width:18px;height:18px;stroke:currentColor;fill:none;
+  stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;
+}
+.web-shell .wme-point__txt{min-width:0}
+.web-shell .wme-point__txt b{display:block;font-size:20px;font-weight:800;line-height:1.1;color:var(--w-ink);font-variant-numeric:tabular-nums}
+.web-shell .wme-point__txt span{display:block;margin-top:2px;font-size:11px;color:var(--w-muted)}
 
-.web-shell .wme-quad{display:grid;grid-template-columns:repeat(4,1fr);gap:0;background:#fff;border-top:1px solid var(--w-line);border-bottom:1px solid var(--w-line)}
-.web-shell .wme-quad__c{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;padding:16px 6px;background:none;border:0;border-right:1px solid var(--w-line);cursor:pointer}
-.web-shell .wme-quad__c:last-child{border-right:0}
-.web-shell .wme-quad__t{font-size:12.5px;color:var(--w-ink2);font-weight:600}
-.web-shell .wme-quad__n{position:absolute;top:8px;right:16px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;background:var(--w-accent);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center}
+/* 四宫格 */
+.web-shell .wme-quad{
+  display:grid;grid-template-columns:repeat(4,1fr);margin:12px 14px 0;
+  padding:16px 6px;border-radius:18px;background:#fff;
+  box-shadow:0 8px 22px rgba(15,36,26,.08),inset 0 0 0 1px rgba(18,23,20,.04);
+}
+.web-shell .wme-quad__c{
+  position:relative;display:flex;flex-direction:column;align-items:center;gap:7px;
+  padding:0;background:none;border:0;cursor:pointer;-webkit-tap-highlight-color:transparent;
+  transition:transform .18s cubic-bezier(.3,.8,.3,1);
+}
+.web-shell .wme-quad__c:active{transform:scale(.94)}
+.web-shell .wme-quad__ic{
+  position:relative;display:grid;place-items:center;width:42px;height:42px;
+  border-radius:14px;background:#f2f6f3;color:var(--w-brand);
+}
+.web-shell .wme-quad__ic svg{
+  width:20px;height:20px;stroke:currentColor;fill:none;
+  stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;
+}
+/* 角标钉在图标右上角，并留 2px 白环把图标与数字分开（压在文字后面会盖住标签）。 */
+.web-shell .wme-quad__n{
+  position:absolute;top:-5px;right:-7px;min-width:16px;height:16px;padding:0 4px;
+  border-radius:99px;background:var(--w-accent);color:#fff;font-size:9.5px;font-weight:700;
+  line-height:16px;text-align:center;font-variant-numeric:tabular-nums;
+  box-shadow:0 0 0 2px #fff;
+}
+.web-shell .wme-quad__t{font-size:12px;font-weight:600;color:var(--w-ink2);white-space:nowrap}
 
-.web-shell .wme-sec{padding:16px;background:var(--w-bg)}
-.web-shell .wme-sec__hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.web-shell .wme-sec__hd span{font-size:15px;font-weight:700}
-.web-shell .wme-sec__all{background:none;border:0;color:var(--w-muted);font-size:12px;cursor:pointer}
-.web-shell .wme-orders{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;background:#fff;border:1px solid var(--w-line);border-radius:16px;padding:14px 8px}
-.web-shell .wme-order{position:relative;display:flex;flex-direction:column;align-items:center;gap:6px;background:none;border:0;cursor:pointer}
-.web-shell .wme-order__t{font-size:12px;color:var(--w-ink2)}
-.web-shell .wme-order__n{position:absolute;top:-4px;right:10px;min-width:15px;height:15px;padding:0 4px;border-radius:99px;background:var(--w-accent);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center}
+/* 商城订单五态 */
+.web-shell .wme-sec{margin-top:18px;padding:0 14px}
+.web-shell .wme-sec__hd{display:flex;align-items:center;justify-content:space-between;padding:0 2px 10px}
+.web-shell .wme-sec__hd span{font-size:15px;font-weight:700;letter-spacing:.01em}
+.web-shell .wme-sec__all{
+  display:flex;align-items:center;gap:1px;padding:2px 0;border:0;background:none;
+  color:var(--w-muted);font-size:12px;cursor:pointer;
+}
+.web-shell .wme-sec__all svg{
+  width:13px;height:13px;stroke:currentColor;fill:none;
+  stroke-width:2;stroke-linecap:round;stroke-linejoin:round;
+}
+.web-shell .wme-orders{
+  display:grid;grid-template-columns:repeat(5,1fr);padding:16px 4px;border-radius:18px;background:#fff;
+  box-shadow:0 8px 22px rgba(15,36,26,.08),inset 0 0 0 1px rgba(18,23,20,.04);
+}
+.web-shell .wme-order{
+  position:relative;display:flex;flex-direction:column;align-items:center;gap:7px;
+  padding:0;background:none;border:0;cursor:pointer;
+  transition:transform .18s cubic-bezier(.3,.8,.3,1);
+}
+.web-shell .wme-order:active{transform:scale(.94)}
+.web-shell .wme-order__ic{position:relative;display:grid;place-items:center;width:26px;height:26px;color:var(--w-ink2)}
+.web-shell .wme-order__ic svg{
+  width:23px;height:23px;stroke:currentColor;fill:none;
+  stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;
+}
+.web-shell .wme-order__n{
+  position:absolute;top:-6px;right:-10px;min-width:15px;height:15px;padding:0 4px;
+  border-radius:99px;background:var(--w-accent);color:#fff;font-size:9.5px;font-weight:700;
+  line-height:15px;text-align:center;font-variant-numeric:tabular-nums;
+  box-shadow:0 0 0 2px #fff;
+}
+.web-shell .wme-order__t{font-size:11.5px;color:var(--w-ink2);white-space:nowrap}
 
-.web-shell .wme-list{margin:12px 16px 0;background:#fff;border:1px solid var(--w-line);border-radius:16px;overflow:hidden}
-.web-shell .wme-li{display:flex;align-items:center;justify-content:space-between;width:100%;padding:15px 16px;background:none;border:0;border-bottom:1px solid var(--w-line);font-size:14px;color:var(--w-ink);cursor:pointer;text-align:left}
-.web-shell .wme-li:last-child{border-bottom:0}
-.web-shell .wme-li i{color:var(--w-muted);font-style:normal;font-size:16px}
-.web-shell .wme-li--out{color:var(--w-accent)}
-.web-shell .wme-foot{text-align:center;font-size:11px;letter-spacing:.12em;color:var(--w-muted);padding:16px}
+/* 服务列表 */
+.web-shell .wme-list{
+  margin:16px 14px 0;border-radius:18px;background:#fff;overflow:hidden;
+  box-shadow:0 8px 22px rgba(15,36,26,.08),inset 0 0 0 1px rgba(18,23,20,.04);
+}
+.web-shell .wme-li{
+  display:flex;align-items:center;gap:12px;width:100%;padding:15px 16px;
+  background:none;border:0;cursor:pointer;text-align:left;color:var(--w-ink);
+  -webkit-tap-highlight-color:transparent;
+}
+/* 分隔线用 inset 阴影而不是 border-bottom：最后一行不用再写一条 :last-child 去border */
+.web-shell .wme-li+.wme-li{box-shadow:inset 0 1px 0 var(--w-line)}
+.web-shell .wme-li:active{background:#fafbfa}
+.web-shell .wme-li__ic{display:grid;place-items:center;width:20px;height:20px;flex:0 0 20px;color:var(--w-muted)}
+.web-shell .wme-li__ic svg{
+  width:19px;height:19px;stroke:currentColor;fill:none;
+  stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;
+}
+.web-shell .wme-li__tx{flex:1;font-size:14px;font-weight:500}
+.web-shell .wme-li__ar{font-style:normal;font-size:17px;line-height:1;color:#c3cac5}
+.web-shell .wme-li--out .wme-li__tx,
+.web-shell .wme-li--out .wme-li__ic{color:#c2452f}
+.web-shell .wme-foot{text-align:center;font-size:10.5px;letter-spacing:.16em;color:#b3bcb7;padding:18px 0 6px}
 
 /* ── 二级页栈（覆盖整屏）─────────────────────────────────────────────────── */
 .web-shell .me-stack{position:fixed;left:0;right:0;top:0;bottom:0;z-index:60;background:var(--w-bg);display:flex;flex-direction:column}
@@ -1889,3 +2030,73 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 .web-shell .me-mc__bar{height:6px;border-radius:99px;background:rgba(255,255,255,.18);margin:14px 0 6px;overflow:hidden}
 .web-shell .me-mc__bar i{display:block;height:100%;background:linear-gradient(90deg,#7fd0a4,#156243)}
 .web-shell .me-mc__up{font-size:12.5px;color:#aef0cf}
+
+/* ===========================================================================
+   2026-10-18 三处细节：活动页去掉主题卡后的首屏间距 / 规格表「缺货」小标 /
+   二级页卡片观感统一
+   =========================================================================== */
+/* 活动页已删掉占满一屏的主题卡，分类区成了首屏第一块 ——
+   与顶栏之间留一口气（顶栏是 fixed，内容要靠 padding 让开），分类区之后
+   再接瀑布流，间距比原来的「区块头」小一档，免得中间空出一片。 */
+.web-shell .w-sec--cats{padding-top:16px}
+.web-shell .w-sec--cats + .w-waterfall{padding-top:8px}
+/* 规格表里的「缺货」小标：整行已有 line-through，小标必须去掉删除线，
+   否则「缺货」两个字会被划穿、读成「这个规格不存在」。 */
+.web-shell .w-pd__sizetab .w-pd__soldout{
+  display:inline-block;margin-left:6px;padding:1px 6px;border-radius:99px;
+  background:#fdeeea;color:#c2452f;font-size:10px;font-style:normal;font-weight:600;
+  text-decoration:none;vertical-align:middle;
+}
+/* 二级页：与主页面同一套圆角与投影（原来是一圈 1px 描边，和主页面不是一种材质） */
+.web-shell .me-card2{border-color:transparent;box-shadow:0 8px 22px rgba(15,36,26,.07),inset 0 0 0 1px rgba(18,23,20,.05)}
+.web-shell .me-subnav{background:rgba(255,255,255,.94);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-bottom-color:rgba(18,23,20,.06);padding:12px 14px}
+.web-shell .me-back{color:var(--w-ink);font-size:14px;font-weight:600}
+.web-shell .me-subtitle{font-size:15.5px;letter-spacing:.01em}
+.web-shell .me-tab{padding:7px 15px;font-weight:500}
+.web-shell .me-subbody{padding:16px 16px 32px}
+
+/* ── 二级页：空态 / 等级卡 / 标签行（2026-10-18 视觉细化）────────────────── */
+.web-shell .me-empty{
+  display:flex;flex-direction:column;align-items:center;gap:4px;
+  padding:44px 20px 28px;text-align:center;
+}
+.web-shell .me-empty__ic{
+  width:54px;height:54px;border-radius:19px;display:grid;place-items:center;margin-bottom:8px;
+  background:#fff;color:#c6cec9;box-shadow:0 8px 20px rgba(15,36,26,.07),inset 0 0 0 1px rgba(18,23,20,.04);
+}
+.web-shell .me-empty__ic svg{width:25px;height:25px;stroke:currentColor;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.web-shell .me-empty b{font-size:14px;font-weight:600;color:var(--w-ink2)}
+.web-shell .me-empty__sub{font-size:12px;color:var(--w-muted);line-height:1.6;max-width:240px}
+/* 等级卡：当前档加一圈品牌绿环 + 徽标，其余保持安静 */
+.web-shell .me-tier-row{border-color:transparent;box-shadow:0 8px 22px rgba(15,36,26,.07),inset 0 0 0 1px rgba(18,23,20,.05);padding:13px 15px}
+.web-shell .me-tier-row.on{box-shadow:0 10px 24px rgba(21,98,67,.12),inset 0 0 0 1.5px rgba(21,98,67,.5)}
+.web-shell .me-tier-row__hd{display:flex;align-items:center;gap:8px}
+.web-shell .me-tier-row__name{font-size:15px}
+.web-shell .me-tier-row__cur{
+  font-style:normal;font-size:10px;font-weight:700;line-height:1.6;padding:1px 7px;border-radius:99px;
+  background:var(--w-brand);color:#fff;
+}
+.web-shell .me-tier-row__disc{margin-left:auto;font-size:12px;color:var(--w-brand);font-weight:600}
+.web-shell .me-tier-row__cond{margin-top:5px;line-height:1.5}
+/* 标签行：最后一个不被容器边距切掉半颗 */
+.web-shell .me-tabs{flex-wrap:wrap;overflow:visible;gap:8px;padding:0 0 10px;margin:0}
+/* 六个标签在 390px 上排不进一行：横滑会把「退款」藏在屏幕外（看不见就当没有），
+   换行显示全部更符合「一眼看到有哪几类」的用法。 */
+
+/* ── 会员信息页：进度条/升级提示/统计行收进白卡（原来散在页底、颜色还按深色卡写）── */
+.web-shell .me-mc__card{
+  border-radius:22px;padding:18px 17px 16px;
+  background:linear-gradient(158deg,#0d5138 0%,#0a3627 46%,#08201a 100%);
+  box-shadow:0 18px 36px rgba(2,18,12,.3),inset 0 1px 0 rgba(255,255,255,.16);
+}
+.web-shell .me-mc__qrtile{flex:0 0 auto;display:grid;place-items:center;padding:6px;border-radius:13px;background:#fff;box-shadow:0 8px 18px rgba(0,0,0,.26)}
+.web-shell .me-mc__qr{width:62px;height:62px;display:block;border-radius:0;background:none;padding:0}
+.web-shell .me-mc__grow{display:flex;align-items:baseline;gap:5px;margin-top:16px}
+.web-shell .me-mc__grow b{font-size:28px;font-weight:800;line-height:1;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.web-shell .me-mc__grow em{font-style:normal;font-size:12px;font-weight:600;color:rgba(255,255,255,.72)}
+.web-shell .me-mc__grow span{margin-left:2px;font-size:11.5px;color:rgba(255,255,255,.52)}
+.web-shell .me-mc__panel{margin-top:12px;padding:16px 16px 4px;border-radius:18px;background:#fff;box-shadow:0 8px 22px rgba(15,36,26,.08),inset 0 0 0 1px rgba(18,23,20,.04)}
+.web-shell .me-mc__bar{height:5px;border-radius:99px;background:#edf1ee;overflow:hidden}
+.web-shell .me-mc__bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#2fa06d,#7fd0a4)}
+.web-shell .me-mc__up{margin:8px 0 14px;font-size:12.5px;color:var(--w-ink2)}
+.web-shell .me-mc__rows{border-top:1px solid var(--w-line)}

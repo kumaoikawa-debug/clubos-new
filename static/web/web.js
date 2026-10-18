@@ -460,7 +460,9 @@ function renderMall(){
 }
 /* 商品卡必须带 .web-card 类：experience-consumer.js 是按 `#publicProducts .web-card` 数商品张数的，
    卡片换类名它就会判定「0 件在售」并把整个容器换成空态文案。外观由 .w-product 覆盖。
-   版式对齐参考稿：方图 → 名称（两行）→「分类 · 库存」小字 → 价格；右下角一个加购圆钮。 */
+   版式对齐参考稿：方图 → 名称（两行）→「分类」小字 → 价格；右下角一个加购圆钮。
+   ★ 2026-10-18 起卡片**不再印库存数字**：顾客关心的是「能不能买」，不是仓库里剩几件；
+     真的售罄时靠角标「缺货」+ 加购钮消失表达，不需要把数量写在卡上。 */
 function productCard(x){
   const out=Number(x.stock||0)<=0,cat=x.category||'装备';
   /* 参考图的卡片没有按钮，整张卡就是入口。去掉按钮后必须补 aria-label ——
@@ -473,7 +475,7 @@ function productCard(x){
     </div>
     <div class="w-product__inner">
       <div class="w-product__name">${esc(x.name)}</div>
-      <div class="w-product__meta">${esc(cat)} · ${out?'暂时缺货':`库存 ${x.stock}`}</div>
+      <div class="w-product__meta">${esc(cat)}${out?' · 暂时缺货':''}</div>
       <div class="w-product__price">${money(x.price)}</div>
     </div>
   </div>`;
@@ -784,7 +786,7 @@ function productDetailHtml(){
     <div class="w-pd__subtitle">${esc(pdClubName())}${sku?' · 款号 '+esc(sku):''}</div>
     <div class="w-pd__pricerow">
       <b class="w-pd__now">${money(mp)}</b>${isMem?`<s class="w-pd__was">${money(price)}</s><i class="w-pd__mem">会员价</i>`:''}
-      <span class="w-pd__stock${out?' is-out':''}">${out?'暂时缺货':'库存 '+stock+' 件'}</span>
+      ${out?'<span class="w-pd__stock is-out">暂时缺货</span>':''}
       <button class="w-pd__pricerow__share" type="button" aria-label="复制商品链接" onclick="pdCopyLink()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 14.4l4.8-4.8"/><path d="M11.2 6.6 12.8 5a3.7 3.7 0 0 1 5.2 5.2l-1.6 1.6"/><path d="M12.8 17.4 11.2 19A3.7 3.7 0 0 1 6 13.8l1.6-1.6"/></svg></button>
     </div>
     <div class="w-pd__rows">
@@ -811,25 +813,24 @@ function productDetailHtml(){
       <table class="w-pd__kv">
         <tr><th>分类</th><td>${esc(cat)}</td></tr>
         ${sku?`<tr><th>货号</th><td>${esc(sku)}</td></tr>`:''}
-        <tr><th>库存</th><td>${out?'暂时缺货':stock+' 件'}</td></tr>
         ${isMem?`<tr><th>会员折扣</th><td>会员价 ${money(mp)}（原价 ${money(price)}）</td></tr>`:''}
       </table>
       ${bullets.length?`<h4 class="w-pd__subhd">全部性能</h4><ul class="w-pd__bullets">${bullets.map(b=>`<li>${esc(b)}</li>`).join('')}</ul>`:''}
     </div>
   </section>
   <section class="w-pd__sec" id="pdSecSize">
-    <button class="w-pd__sechd" type="button" onclick="pdToggleSec(this)" aria-expanded="false">${vs.length?'尺码对照表':'规格与库存'}<i>+</i></button>
+    <button class="w-pd__sechd" type="button" onclick="pdToggleSec(this)" aria-expanded="false">${vs.length?'尺码对照表':'规格与价格'}<i>+</i></button>
     <div class="w-pd__secbody" hidden>
       <table class="w-pd__sizetab">
-        <thead><tr><th>${vs.length?'尺码':'规格'}</th><th>库存</th><th>价格</th></tr></thead>
+        <thead><tr><th>${vs.length?'尺码':'规格'}</th><th>价格</th></tr></thead>
         <tbody>${sizes.map(s=>{
           const so=Number(s.stock||0)<=0;
           const sp=s.price!=null?Number(s.price):price;
           const smp=(s.price!=null&&isMem)?mp:sp;
-          return `<tr${so?' class="is-out"':''}><td>${esc(s.name)}</td><td>${so?'缺货':s.stock+' 件'}</td><td>${money(smp)}</td></tr>`;
+          return `<tr${so?' class="is-out"':''}><td>${esc(s.name)}${so?'<i class="w-pd__soldout">缺货</i>':''}</td><td>${money(smp)}</td></tr>`;
         }).join('')}</tbody>
       </table>
-      <p class="w-pd__tabnote">${vs.length?'库存与价格为实时数据，以下单瞬间的结算结果为准。':'该商品当前只有一个规格；后台新增规格后，这里会出现尺码对照表。'}</p>
+      <p class="w-pd__tabnote">${vs.length?'价格为实时数据，以下单瞬间的结算结果为准。':'该商品当前只有一个规格；后台新增规格后，这里会出现尺码对照表。'}</p>
     </div>
   </section>
   ${pdRecCards(p)}
@@ -838,7 +839,7 @@ function productDetailHtml(){
     <ul>
       <li>会员价按会员等级自动计算，最终金额以提交订单后的服务端结算为准。</li>
       <li>实物商品由平台仓库统一发货，下单前需先填写收货地址。</li>
-      <li>库存与价格实时变动，售罄规格无法下单。</li>
+      <li>售罄规格无法下单，价格实时变动。</li>
     </ul>
   </div>
   <footer class="w-pd__foot">
@@ -946,7 +947,7 @@ function pdSheetConfirm(){
   const s=realVs.length?pdCurSize():null;
   const stock=s?Number(s.stock||0):Number(p.stock||0);
   if(stock<=0){toast('这个规格暂时缺货');return}
-  if(PD_QTY>stock){toast('库存只剩 '+stock+' 件');return}
+  if(PD_QTY>stock){toast('这个规格买不了这么多了');return}
   if(PD_MODE==='cart'){
     cartAdd(p.id,s?s.id:null,PD_QTY);
     pdCloseSheet();

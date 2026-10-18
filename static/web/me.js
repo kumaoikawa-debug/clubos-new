@@ -28,7 +28,12 @@ const ME={ mc:null, oc:null, addr:[], vch:[], club:null, ts:0, cardNo:'', name:'
 /* ── 小工具 ───────────────────────────────────────────────────────────── */
 function setT(id,t){const e=document.getElementById(id); if(e)e.textContent=(t==null?'':t);}
 function meBadge(t,tone){return `<span class="me-badge me-badge--${tone||'def'}">${esc(t==null?'':t)}</span>`;}
-function empty(t,s){return `<div class="me-empty">${esc(t||'')}</div>`+(s?`<div class="me-empty__sub">${esc(s)}</div>`:'');}
+/* 空态：只有一行灰字会让人以为页面没加载完。给一枚淡淡的图标 + 标题 +
+   一句解释，说明「这里本该有什么」，空页面才不像坏页面。 */
+function empty(t,s){
+  return `<div class="me-empty"><span class="me-empty__ic">${meIcon('box')}</span>`
+    +`<b>${esc(t||'')}</b>${s?`<span class="me-empty__sub">${esc(s)}</span>`:''}</div>`;
+}
 
 const ME_ST={
   pending:{t:'待付款',k:'wait'}, paid:{t:'待发货',k:'info'}, shipped:{t:'待收货',k:'info'},
@@ -85,6 +90,40 @@ function meUpTip(){
   const needCnt=Math.max(0,(Number(nx.min_activity_count)||0)-(Number(w.activityCount)||0));
   return needCnt>0?`再参加 ${needCnt} 场活动升级${nx.name}`:`已满足${nx.name}条件`;
 }
+/* 线稿图标（与底部导航同一套笔画：1.7px、圆角、无填充）。
+   四宫格/订单五态原来只有文字，一行四个纯文字块在手机上像表格 —— 加图标才有"入口"的可读性。 */
+const ME_IC={
+  regs:'<path d="M4.6 8.2h14.8v11.2H4.6z"/><path d="M8.2 4.6v4M15.8 4.6v4"/><path d="m9.2 13.6 2 2 3.6-3.8"/>',
+  gift:'<path d="M4.4 9.4h15.2v9.8H4.4z"/><path d="M4.4 9.4h15.2M12 9.4v9.8"/><path d="M12 9.4S9.6 4.6 7.6 5.8c-1.7 1-.8 3.6 4.4 3.6Zm0 0s2.4-4.8 4.4-3.6c1.7 1 .8 3.6-4.4 3.6Z"/>',
+  pin:'<path d="M12 20s6.2-5.6 6.2-10.1A6.2 6.2 0 0 0 5.8 9.9C5.8 14.4 12 20 12 20Z"/><circle cx="12" cy="9.8" r="2.2"/>',
+  coupon:'<path d="M4 8.6h16v2.6a1.8 1.8 0 0 0 0 3.6v2.6H4v-2.6a1.8 1.8 0 0 0 0-3.6z"/><path d="M14.4 11.4h3.2M14.4 14h3.2"/>',
+  wait:'<path d="M4.4 7.4h15.2v11H4.4z"/><path d="M4.4 10.6h15.2"/><path d="M7.4 14.6h3.2"/>',
+  send:'<path d="M4.4 8h9.2v8H4.4z"/><path d="M13.6 10.4h3.6l2.4 2.6v3H13.6z"/><path d="M4.4 16h1.4M17.6 16h1.9"/>',
+  truck:'<path d="M2.8 7.4h9.6v8.2H2.8z"/><path d="M12.4 10h4l3 3.1v2.5h-7z"/><circle cx="6" cy="17.6" r="1.5"/><circle cx="16.4" cy="17.6" r="1.5"/>',
+  star:'<path d="m12 4.8 2.3 4.7 5.2.7-3.8 3.6.9 5.1-4.6-2.5-4.6 2.5.9-5.1L4.5 10.2l5.2-.7z"/>',
+  refund:'<path d="M4.6 10.4a7.4 7.4 0 1 1 2 6"/><path d="M4.4 5.6v4.8h4.8"/>',
+  box:'<path d="M4.4 8.6 12 4.8l7.6 3.8v6.8L12 19.2 4.4 15.4z"/><path d="M4.4 8.6 12 12.4l7.6-3.8M12 12.4v6.8"/>'
+};
+function meIcon(k){return `<svg viewBox="0 0 24 24" aria-hidden="true">${ME_IC[k]||''}</svg>`;}
+/* 升级进度（0-100）：当前档与下一档之间，按「消费额」或「场次」算比例。
+   到最高档 = 100%，数据异常时给 0 而不是 NaN（width:NaN% 会让整条进度条消失）。 */
+function meProgPct(){
+  const w=meWallet(), tiers=meTiers();
+  const cur=tiers.find(t=>String(t.name)===(w.memberLevel||''))||null;
+  const nx=tiers.filter(t=>(Number(t.rank)||0)>(Number(cur&&cur.rank)||0))
+                .sort((a,b)=>(Number(a.rank)||0)-(Number(b.rank)||0))[0]||null;
+  if(!nx) return 100;
+  const base=Number(cur&&cur.min_activity_spend)||0, top=Number(nx.min_activity_spend)||0;
+  const v=Number(w.lifetimeActivitySpend)||0;
+  if(top>base){
+    const p=Math.round((v-base)/(top-base)*100);
+    return isFinite(p)?Math.max(0,Math.min(100,p)):0;
+  }
+  const cb=Number(cur&&cur.min_activity_count)||0, cn=Number(nx.min_activity_count)||0;
+  const n=Number(w.activityCount)||0;
+  if(cn>cb){const p=Math.round((n-cb)/(cn-cb)*100);return isFinite(p)?Math.max(0,Math.min(100,p)):0;}
+  return 0;
+}
 function drawMeQr(canvasId,text){
   const c=document.getElementById(canvasId); if(!c||!window.ClubOSQR)return;
   try{ window.ClubOSQR.draw(c, text); }catch(e){}
@@ -96,8 +135,16 @@ function mePaintHome(){
   setT('meName', ME.name);
   setT('meTier', w.memberLevel||'普通会员');
   setT('meCardNo', 'NO. '+(ME.cardNo||'—'));
-  setT('meGrow', Math.round(Number(w.lifetimeActivitySpend)||0));
+  setT('meGrow', (Math.round(Number(w.lifetimeActivitySpend)||0)).toLocaleString('zh-CN'));
   setT('meUp', meUpTip());
+  /* 0% 的进度条只是页面上一条没有含义的灰线（新人一进来就是 0），
+     直接藏掉；有进展才画 —— 那时它才真的在表达「还差多少」。 */
+  const pg=document.getElementById('meProg');
+  if(pg){
+    const pct=meProgPct();
+    pg.style.width=pct+'%';
+    if(pg.parentElement) pg.parentElement.style.display=pct>0?'':'none';
+  }
   drawMeQr('meQr', location.origin+'/web?club_id='+CLUB+'&user='+USER+'#member');
   renderMeQuad();
   renderMeOrders();
@@ -105,23 +152,27 @@ function mePaintHome(){
 function renderMeQuad(){
   const box=document.getElementById('meQuad'); if(!box)return;
   const cells=[
-    ['我的报名', meActivity().length, 'myregs'],
-    ['会员权益', meBenefits().length, 'member'],
-    ['收货地址', ME.addr.length, 'address'],
-    ['优惠券', ME.vch.length, 'coupons']
+    ['我的报名', meActivity().length, 'myregs', 'regs'],
+    ['会员权益', meBenefits().length, 'member', 'gift'],
+    ['收货地址', ME.addr.length, 'address', 'pin'],
+    ['优惠券', ME.vch.length, 'coupons', 'coupon']
   ];
-  box.innerHTML=cells.map(([t,n,go])=>
+  box.innerHTML=cells.map(([t,n,go,ic])=>
     `<button class="wme-quad__c" type="button" onclick="pushMe('${go}')">
-       <span class="wme-quad__t">${esc(t)}</span>${n?`<i class="wme-quad__n">${n}</i>`:''}
+       <span class="wme-quad__ic">${meIcon(ic)}${n?`<i class="wme-quad__n">${n>99?'99+':n}</i>`:''}</span>
+       <span class="wme-quad__t">${esc(t)}</span>
      </button>`).join('');
 }
 function renderMeOrders(){
   const box=document.getElementById('meOrders'); if(!box)return;
   const c=meOrderCounts();
-  const order=[['待付款',c.pending,'pending'],['待发货',c.paid,'paid'],['待收货',c.shipped,'shipped'],['待评价',c.completed,'completed'],['退款',c.refund,'refund']];
-  box.innerHTML=order.map(([t,n,st])=>
+  const order=[['待付款',c.pending,'pending','wait'],['待发货',c.paid,'paid','send'],
+               ['待收货',c.shipped,'shipped','truck'],['待评价',c.completed,'completed','star'],
+               ['退款',c.refund,'refund','refund']];
+  box.innerHTML=order.map(([t,n,st,ic])=>
     `<button class="wme-order" type="button" onclick="pushMe('orders','${st}')">
-       <span class="wme-order__t">${esc(t)}</span>${n?`<i class="wme-order__n">${n}</i>`:''}
+       <span class="wme-order__ic">${meIcon(ic)}${n?`<i class="wme-order__n">${n>99?'99':n}</i>`:''}</span>
+       <span class="wme-order__t">${esc(t)}</span>
      </button>`).join('');
 }
 
@@ -184,8 +235,12 @@ function meOrderCard(o){
   const kind=o._kind||o.orderKind||(o.items?'gear':'activity');
   let inner='', acts='';
   if(kind==='gear'){
-    inner=`<div class="me-card2__meta">装备订单 #${esc(o.id)}</div>`+
-      (o.items||[]).map(i=>`<div class="me-item"><span>${esc(i.product_name)}</span><b>×${i.quantity}</b></div>`).join('')+
+    /* 单件订单的商品名已经做了标题，明细里再列一遍就是同一行话说两次 ——
+       单件只报「共 N 件」，多件才逐行列商品。 */
+    const its=o.items||[];
+    const totalQty=its.reduce((n,i)=>n+Number(i.quantity||0),0);
+    inner=`<div class="me-card2__meta">订单号 #${esc(o.id)}${totalQty?' · 共 '+totalQty+' 件':''}</div>`+
+      (its.length>1?its.map(i=>`<div class="me-item"><span>${esc(i.product_name)}</span><b>×${i.quantity}</b></div>`).join(''):'')+
       (o.shipping_consignee?`<div class="me-card2__meta">${esc(o.shipping_consignee)} ${esc(o.shipping_phone||'')} · ${esc(o.shipping_address||'')}</div>`:'')+
       `<div class="me-card2__amt">实付 <b>${money(o.total||0)}</b></div>`+
       (o.carrier||o.tracking_no?`<div class="me-card2__meta">${esc(o.carrier||'')} ${esc(o.tracking_no||'')}</div>`:'');
@@ -202,8 +257,13 @@ function meOrderCard(o){
       acts = rq&&rq.eligible?`<button class="me-btn me-btn--danger" onclick="requestActivityRefund(${o.id},${rq.cashRefundAmount||0},${rq.cashRefundPercent||0})">申请退款</button>`:`<span class="me-note">当前不可退款${rq&&rq.reason?' · '+esc(rq.reason):''}</span>`;
     }
   }
+  /* 标题用**真实主体**（商品名 / 活动名），不是「装备订单」这种类别词 ——
+     类别已经由状态徽标和下面的明细说明，标题再写一遍等于浪费一行最好的位置。 */
+  const head=kind==='gear'
+    ? ((o.items&&o.items[0]&&o.items[0].product_name)||'装备订单')
+    : (o.activity_title||'活动报名');
   return `<div class="me-card2">
-    <div class="me-card2__hd"><b>${kind==='gear'?'装备订单':'活动报名'}</b>${meBadge(meStLabel(o.status),meStTone(o.status))}</div>
+    <div class="me-card2__hd"><b>${esc(head)}</b>${meBadge(meStLabel(o.status),meStTone(o.status))}</div>
     ${inner}
     <div class="me-card2__ref">退款：${esc((typeof refundStateText==='function')?refundStateText(o):'')}</div>
     ${acts?`<div class="me-card2__ops">${acts}</div>`:''}
@@ -237,10 +297,11 @@ SUB_ME.member=function(){
   const tiers=meTiers(), ben=meBenefits();
   const tHtml=tiers.map(t=>{
     const disc=(t.gear_discount&&t.gear_discount<1)?(Math.round(t.gear_discount*1000)/10)+' 折':'原价';
-    return `<div class="me-tier-row">
-      <div class="me-tier-row__name">${esc(t.name)}</div>
+    const cur=String((meWallet().memberLevel)||'');
+    const isCur=cur&&String(t.name)===cur;
+    return `<div class="me-tier-row${isCur?' on':''}">
+      <div class="me-tier-row__hd"><span class="me-tier-row__name">${esc(t.name)}</span>${isCur?'<i class="me-tier-row__cur">当前等级</i>':''}<span class="me-tier-row__disc">${disc}</span></div>
       <div class="me-tier-row__cond">${esc(t.qualification_mode==='ANY'?'满足其一即可':'需同时满足')} · 消费满 ${money(t.min_activity_spend||0)} 或 参加 ${t.min_activity_count||0} 场</div>
-      <div class="me-tier-row__disc">装备折扣 ${disc}</div>
     </div>`;
   }).join('');
   const bHtml=ben.length?ben.map(b=>`<div class="me-bnf">
@@ -319,24 +380,29 @@ SUB_ME.about=function(){
     </div>`;
 };
 SUB_ME.membercard=function(){
-  const w=meWallet(), tiers=meTiers();
-  const cur=tiers.find(t=>String(t.name)===(w.memberLevel||''))||null;
-  const nx=tiers.filter(t=>(Number(t.rank)||0)>(Number(cur&&cur.rank)||0)).sort((a,b)=>(Number(a.rank)||0)-(Number(b.rank)||0))[0]||null;
-  const prog=(cur&&nx)?Math.max(0,Math.min(100,Math.round((Number(w.lifetimeActivitySpend||0)/(Number(nx.min_activity_spend)||1))*100))):(nx?0:100);
+  const w=meWallet();
+  /* 进度条与统计数据必须放进白卡：原来进度条与「再消费…」直接落在浅灰页底上，
+     而它们的颜色是按深色卡写的（浅绿 / 半透明白）→ 几乎看不见。
+     卡片用与主页面同一套品牌渐变，二维码同样落在白色圆角方块里。 */
+  const grow=Math.round(Number(w.lifetimeActivitySpend)||0).toLocaleString('zh-CN');
   return `<div class="me-mc">
       <div class="me-mc__card">
         <div class="me-mc__top">
           <div class="me-mc__ava">${esc((ME.name||'远')[0])}</div>
-          <div class="me-mc__id"><div class="me-mc__tier">${esc(w.memberLevel||'普通会员')}</div><div class="me-mc__no">${esc(ME.cardNo||'')}</div></div>
-          <canvas class="me-mc__qr" id="meMcQr" width="92" height="92"></canvas>
+          <div class="me-mc__id"><div class="me-mc__tier">${esc(w.memberLevel||'普通会员')}</div><div class="me-mc__no">NO. ${esc(ME.cardNo||'')}</div></div>
+          <span class="me-mc__qrtile"><canvas class="me-mc__qr" id="meMcQr" width="92" height="92"></canvas></span>
         </div>
-        <div class="me-mc__grow"><b>${money(w.lifetimeActivitySpend||0)}</b><span>成长值（元）</span></div>
+        <div class="me-mc__grow"><b>${grow}</b><em>元</em><span>成长值</span></div>
       </div>
-      <div class="me-mc__bar"><i style="width:${prog}%"></i></div>
-      <div class="me-mc__up">${esc(meUpTip())}</div>
-      <div class="me-info__row"><span>可用积分</span><b>${w.clubPoints??0}</b></div>
-      <div class="me-info__row"><span>装备积分</span><b>${w.gearPoints??0}</b></div>
-      <div class="me-info__row"><span>已参加活动</span><b>${w.activityCount||0} 场</b></div>
+      <div class="me-mc__panel">
+        <div class="me-mc__bar"><i style="width:${meProgPct()}%"></i></div>
+        <div class="me-mc__up">${esc(meUpTip())}</div>
+        <div class="me-mc__rows">
+          <div class="me-info__row"><span>可用积分</span><b>${w.clubPoints??0}</b></div>
+          <div class="me-info__row"><span>装备积分</span><b>${w.gearPoints??0}</b></div>
+          <div class="me-info__row"><span>已参加活动</span><b>${w.activityCount||0} 场</b></div>
+        </div>
+      </div>
     </div>`;
 };
 SUB_ME_AFTER.membercard=function(){ drawMeQr('meMcQr', location.origin+'/web?club_id='+CLUB+'&user='+USER+'#member'); };
