@@ -501,12 +501,18 @@
   function hardenLongpic(html) {
     return String(html || '').replace(/(src|href)\s*=\s*(["'])([^"']*)\2/gi,
       function (whole, attr, q, val) {
-        var v = String(val || '');
-        if (/^(https?:)?\/\//i.test(v)) {
-          try { if (new URL(v, location.href).origin === location.origin) return whole; } catch (e) { return ''; }
-        }
+        var v = String(val || '').trim();
+        if (!v) return '';
         if (/^data:image\//i.test(v)) return whole;
-        return '';
+        /* 带 scheme 或协议相对：只放行同源 http(s)；其余（javascript:/mailto:/外链）剥掉 */
+        if (/^[a-z][a-z0-9+.-]*:/i.test(v) || /^\/\//.test(v)) {
+          if (/^(https?:)?\/\//i.test(v)) {
+            try { if (new URL(v, location.href).origin === location.origin) return whole; } catch (e) {}
+          }
+          return '';
+        }
+        /* 相对路径（/api/…、/static/…、./x）＝同源，必须保留（与 hardenPromoHtml 同修） */
+        return whole;
       });
   }
 

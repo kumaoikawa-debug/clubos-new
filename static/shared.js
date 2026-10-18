@@ -357,11 +357,24 @@ function resolveMediaRefsHtml(html,mm){
   return t;
 }
 function hardenPromoHtml(html){
+  /* 只允许同源 / 数据 URL，外链与 javascript: 一律剥。★注意「相对路径」必须放行：
+     详情里的照片 src 经 resolveMediaRefsHtml 解析后是 `/static/uploads/…`（相对同源），
+     旧逻辑只认 http(s):// 与 data:image/，相对路径一路落到 return '' →
+     照片 src 被整批剥空，promoHtmlDoc 再把无 src 的 <img> 删掉，页面只剩 <figcaption>
+     图注、没有图（2026-10-18 用户截图实证「AI 详情还是只有文字」）。 */
   return String(html||'').replace(/(src|href)\s*=\s*(["'])([^"']*)\2/gi,function(whole,attr,q,val){
-    var v=String(val||'');
-    if(/^(https?:)?\/\//i.test(v)){try{if(new URL(v,location.href).origin===location.origin)return whole;}catch(e){return '';}}
+    var v=String(val||'').trim();
+    if(!v)return '';
     if(/^data:image\//i.test(v))return whole;
-    return '';
+    /* 带 scheme（http:/https:/javascript:/mailto:…）或协议相对 //host/…：只放行同源 http(s) */
+    if(/^[a-z][a-z0-9+.-]*:/i.test(v)||/^\/\//.test(v)){
+      if(/^(https?:)?\/\//i.test(v)){
+        try{if(new URL(v,location.href).origin===location.origin)return whole;}catch(e){}
+      }
+      return '';
+    }
+    /* 其余全是相对路径（/static/uploads/…、./x、x.png）＝同源资源，保留 */
+    return whole;
   });
 }
 function promoHtmlDoc(html){
