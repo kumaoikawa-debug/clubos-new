@@ -185,17 +185,21 @@ function actRegionOf(x){
 }
 function actThemeLabel(k){const t=ACT_THEMES.find(x=>x.k===k);return t?t.label:'全部'}
 function actRegionLabel(k){if(k==='all')return '全部';const r=ACT_REGIONS.find(x=>x.k===k);return r?r.label:'其它地区'}
-/* 瀑布流卡片（首页 / 活动页共用）：双列，封面 + 日期角标 + 标题 + 地点·价格。
+/* 瀑布流卡片（首页 / 活动页共用）：双列网格，封面 + 标题 + 「日期 · 价格」一行。
+   2026-10-18 用户反馈：图上的日期角标去掉、副标题只留「活动日期+价格」（地点不上卡）。
    没封面走渐变兜底，不造灰假图块（顾客会把灰块当成「图挂了」）。
    定义在 web.js（基础层）：web-biz.js 的首页瀑布流与活动页列表都调它。 */
 function feedCard(x){
-  const cov=x.cover||'',d=wDay(x.event_date);
+  const cov=x.cover||'';
+  /* 日期：标准日期出「M月D日」；模糊值（如「2026年10月（具体日期待定）」）取括号前一段；
+     什么都没有才是「团期待定」。 */
+  const dt=wDate(x.event_date);
+  const dl=dt?(dt.m+'月'+dt.d+'日'):String(x.event_date||'').split('（')[0].trim();
   return `<button class="w-fd" type="button" onclick="openAct(${Number(x.id)})" aria-label="${esc(x.title)} 详情">
     <div class="w-fd__media${cov?'':' is-fallback'}">${cov?`<img src="${esc(cov)}" alt="" loading="lazy">`:''}</div>
-    ${d?`<span class="w-fd__date">${esc(d)}</span>`:''}
     <div class="w-fd__copy">
       <h3>${esc(x.title)}</h3>
-      <div class="w-fd__meta"><span>${esc(x.location||'户外')}</span><b>${priceHtml(x.price,{unit:'/人',pending:x.priceFrom==='pending'})}</b></div>
+      <div class="w-fd__meta"><span>${dl?esc(dl):'团期待定'}</span><b>${priceHtml(x.price,{unit:'/人',pending:x.priceFrom==='pending'})}</b></div>
     </div>
   </button>`;
 }
