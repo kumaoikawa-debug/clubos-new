@@ -136,6 +136,9 @@ def _run_compat_migrations(c):
     _ensure_column(c,'clubs','contact_name','contact_name TEXT')
     _ensure_column(c,'clubs','contact_phone','contact_phone TEXT')
     _ensure_column(c,'clubs','city','city TEXT')
+    # 活动城市（2026-10-23 用户反馈）：SaaS 面向全国，后台新建活动要选城市、C 端要按城市筛选。
+    # 历史活动没有该列 → 前端按 location 文本兜底推导（static/ux/clubos-cities.js），不回写库。
+    _ensure_column(c,'activities','city','city TEXT')
     _ensure_column(c,'clubs','application_note','application_note TEXT')
     _ensure_column(c,'clubs','business_license_ref','business_license_ref TEXT')
     _ensure_column(c,'clubs','reviewed_at','reviewed_at TEXT')

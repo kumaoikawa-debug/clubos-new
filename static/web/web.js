@@ -1,4 +1,4 @@
-let CLUB=Number(new URLSearchParams(location.search).get('club_id')||1),USER=1,PAYER_NAME='林野',PAYER_PHONE='13800000001';let currentAct=null,currentOcc=null,activityVouchers=[],bookingParticipants=[];let ACT_ALL=[],ACT_CAT='all',ACT_REGION='all',MALL_ALL=[],MALL_CAT='全部',MALL_SORT='rec';
+let CLUB=Number(new URLSearchParams(location.search).get('club_id')||1),USER=1,PAYER_NAME='林野',PAYER_PHONE='13800000001';let currentAct=null,currentOcc=null,activityVouchers=[],bookingParticipants=[];let ACT_ALL=[],ACT_CAT='all',ACT_REGION='all',ACT_CITY='all',ACT_CITY_LOCATED='',MALL_ALL=[],MALL_CAT='全部',MALL_SORT='rec';
 /* ══════════════════════════════════════════════════════════════════════════
    C 端视觉层（配合 static/web/web.css）
    ══════════════════════════════════════════════════════════════════════════ */
@@ -170,21 +170,23 @@ const ACT_THEMES=[
   {k:'heal',  label:'疗愈静心', re:/疗愈|颂钵|冥想|禅修|森林|瑜伽|正念|温泉/},
   {k:'family',label:'亲子研学', re:/亲子|儿童|研学|夏令营|成长营|自然教育/}
 ];
-const ACT_REGIONS=[
-  {k:'chuanxi', label:'川西高原', re:/川西|阿坝|甘孜|康定|理县|黑水|新都桥|鱼子西|四姑娘|丹巴|稻城|亚丁|色达|九寨|黄龙|毕棚沟|达古|蜀山/},
-  {k:'chengdu', label:'成都周边', re:/成都|邛崃|都江堰|彭州|崇州|大邑|蒲江|温江|双流|新津|龙泉|眉山|雅安|乐山/}
-];
 /* 主题可多选命中：返回该活动命中的全部主题 key（磁贴计数与筛选共用）。 */
 function actThemesOf(x){return ACT_THEMES.filter(t=>t.re.test(String(x.title||''))).map(t=>t.k)}
-/* 地区取第一个命中的规则；地点为空 → ''（这类活动只出现在「全部」里）。 */
-function actRegionOf(x){
-  const s=String(x.location||'');
-  if(!s.trim())return '';
-  for(const r of ACT_REGIONS)if(r.re.test(s))return r.k;
-  return 'other';
+/* 城市筛选（2026-10-23 用户反馈：SaaS 面向全国，前端按城市筛选、定位默认当前城市）。
+   城市来源优先级：活动显式 city 字段 > 老数据按 location 文本兜底推导（clubos-cities.js）。
+   ACT_CITY='all' 表示全部；定位命中的城市若有活动，进入活动页默认跳到该市（见 renderActivityList 里的 maybeLocate）。 */
+function actCityOf(x){return window.clubosCityOf?window.clubosCityOf(x):(x.city||'')}
+function actCityLabel(c){return c==='all'?'全部':(c==='other'?'其它地区':c)}
+let ACT_GEO_TRIED=false;
+function maybeLocate(){
+  if(ACT_GEO_TRIED)return;ACT_GEO_TRIED=true;
+  if(!navigator.geolocation||!window.clubosNearestCity)return;
+  try{navigator.geolocation.getCurrentPosition(pos=>{
+    const c=window.clubosNearestCity(pos.coords.latitude,pos.coords.longitude);
+    if(c){ACT_CITY_LOCATED=c;const has=ACT_ALL.some(x=>actCityOf(x)===c);if(ACT_CITY==='all'&&has)ACT_CITY=c;renderActivityRegions();renderActivityList();}
+  },()=>{},{timeout:6000,maximumAge:600000});}catch(e){}
 }
 function actThemeLabel(k){const t=ACT_THEMES.find(x=>x.k===k);return t?t.label:'全部'}
-function actRegionLabel(k){if(k==='all')return '全部';const r=ACT_REGIONS.find(x=>x.k===k);return r?r.label:'其它地区'}
 /* 瀑布流卡片（首页 / 活动页共用）：双列网格，封面 + 标题 + 「日期 · 价格」一行。
    2026-10-18 用户反馈：图上的日期角标去掉、副标题只留「活动日期+价格」（地点不上卡）。
    没封面走渐变兜底，不造灰假图块（顾客会把灰块当成「图挂了」）。
@@ -239,19 +241,30 @@ function renderActivityCats(){
    才出现（不占位、不点空）。 */
 function renderActivityRegions(){
   const box=$('#activityChips');if(!box)return;
-  const regs=[{k:'all',label:'全部'}].concat(ACT_REGIONS).concat([{k:'other',label:'其它地区'}]);
-  let html='';
-  for(const r of regs){
-    const n=r.k==='all'?ACT_ALL.length:ACT_ALL.filter(x=>actRegionOf(x)===r.k).length;
-    if(r.k==='other'&&n===0)continue;
-    const off=r.k!=='all'&&n===0;
-    html+=`<button class="w-chip${r.k===ACT_REGION?' on':''}" type="button" data-r="${r.k}"${off?' disabled':''}>${r.label}<i>${n}</i></button>`;
+  /* 城市 chips：第二道筛选。计数按「活动显式 city + 老数据 location 兜底」归组；
+     定位命中城市带 📍 标记；「其它地区」只在真有这类（无城市归属）活动时才出现。 */
+  const counts={};
+  ACT_ALL.forEach(x=>{const c=actCityOf(x);if(c)counts[c]=(counts[c]||0)+1});
+  const cities=Object.keys(counts);
+  const other=ACT_ALL.filter(x=>!actCityOf(x)).length;
+  cities.sort((a,b)=>{
+    if(ACT_CITY_LOCATED){if(a===ACT_CITY_LOCATED)return -1;if(b===ACT_CITY_LOCATED)return 1;}
+    return (counts[b]||0)-(counts[a]||0);
+  });
+  let html=`<button class="w-chip${ACT_CITY==='all'?' on':''}" type="button" data-city="all">全部<i>${ACT_ALL.length}</i></button>`;
+  for(const c of cities){
+    const loc=ACT_CITY_LOCATED===c?' <span class="w-chip__loc" title="已定位到当前城市">📍</span>':'';
+    html+=`<button class="w-chip${ACT_CITY===c?' on':''}" type="button" data-city="${esc(c)}">${esc(c)}${loc}<i>${counts[c]}</i></button>`;
   }
+  if(other>0)html+=`<button class="w-chip${ACT_CITY==='other'?' on':''}" type="button" data-city="other">其它地区<i>${other}</i></button>`;
   box.innerHTML=html;
 }
-function resetActFilters(){ACT_CAT='all';ACT_REGION='all';renderActivityList()}
+function resetActFilters(){ACT_CAT='all';ACT_CITY='all';renderActivityList()}
 function renderActivityList(){
   const box=$('#publicActivities');if(!box)return;
+  /* 进入活动页主动按浏览器定位的城市预筛（仅一次）：命中且该市有活动就默认跳到该市；
+     不命中或用户拒绝定位则保持「全部」。 */
+  maybeLocate();
   /* 磁贴 / chips / 列表都必须在这里渲染：从首页进活动页时 ACT_ALL 已经由
      loadHome 填好，wv() 会走「已有数据 → 直接渲染」的快路径、根本不经过
      loadActivities()，挂在 loadActivities 里的东西会被整个跳过。
@@ -259,19 +272,20 @@ function renderActivityList(){
   renderActivityCats();renderActivityRegions();
   let list=ACT_ALL.slice();
   if(ACT_CAT!=='all')list=list.filter(x=>actThemesOf(x).includes(ACT_CAT));
-  if(ACT_REGION!=='all')list=list.filter(x=>actRegionOf(x)===ACT_REGION);
+  if(ACT_CITY!=='all')list=list.filter(x=>{if(ACT_CITY==='other')return !actCityOf(x);return actCityOf(x)===ACT_CITY});
   /* 最新上架的排最前（id 倒序 = 上架顺序），与首页瀑布流同一口径。 */
   list.sort((a,b)=>Number(b.id||0)-Number(a.id||0));
   box.innerHTML=list.map(feedCard).join('');
   const cnt=$('#actCount');
   if(cnt){
-    const flt=[ACT_CAT!=='all'?actThemeLabel(ACT_CAT):'',ACT_REGION!=='all'?actRegionLabel(ACT_REGION):''].filter(Boolean);
+    const flt=[ACT_CAT!=='all'?actThemeLabel(ACT_CAT):'',ACT_CITY!=='all'?actCityLabel(ACT_CITY):''].filter(Boolean);
+    const located=ACT_CITY_LOCATED&&ACT_CITY===ACT_CITY_LOCATED?'（已在 '+ACT_CITY_LOCATED+' 附近）':'';
     cnt.textContent=ACT_ALL.length
-      ?(flt.length?flt.join(' · ')+' · 共 '+list.length+' 场':'共 '+list.length+' 场可报名')
+      ?(flt.length?flt.join(' · ')+' · 共 '+list.length+' 场'+located:'共 '+list.length+' 场可报名'+located)
       :'暂时没有已发布的活动';
   }
   const emp=$('#activityEmpty');
-  if(emp)emp.innerHTML=list.length?'':`<div class="w-empty">${WI.empty}<div>没有符合条件的活动</div><div style="margin-top:6px">换个分类或地区试试。</div><button class="w-retry" type="button" onclick="resetActFilters()">清除筛选</button></div>`;
+  if(emp)emp.innerHTML=list.length?'':`<div class="w-empty">${WI.empty}<div>没有符合条件的活动</div><div style="margin-top:6px">${ACT_CITY!=='all'?'当前城市暂无活动，':'换个分类或'}试试其它城市。</div><button class="w-retry" type="button" onclick="resetActFilters()">清除筛选</button></div>`;
 }
 
 /* ── 装备商城 ─────────────────────────────────────────────────────────────── */
@@ -1400,10 +1414,10 @@ function openHelp(){
 /* 列表页的筛选/搜索接线。容器的委托只绑一次（这些容器是静态 HTML，不会被 innerHTML 换掉；
    被换掉的是它们的内容），所以不会像逐次渲染那样反复叠加监听。 */
 function bindWebEvents(){
-  /* 活动页两道筛选：分类磁贴（主题，data-c）与地区 chips（data-r）。
+  /* 活动页两道筛选：分类磁贴（主题，data-c）与城市 chips（data-city）。
      点击后只重画「选项自身 + 列表」，不重新拉数据（ACT_ALL 已在内存里）。 */
   $('#actCats')?.addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b||b.disabled)return;ACT_CAT=b.dataset.c;renderActivityCats();renderActivityList()});
-  $('#activityChips')?.addEventListener('click',e=>{const b=e.target.closest('[data-r]');if(!b||b.disabled)return;ACT_REGION=b.dataset.r;renderActivityRegions();renderActivityList()});
+  $('#activityChips')?.addEventListener('click',e=>{const b=e.target.closest('[data-city]');if(!b||b.disabled)return;ACT_CITY=b.dataset.city;renderActivityRegions();renderActivityList()});
   $('#mallCats')?.addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b)return;MALL_CAT=b.dataset.c;renderMallCats();renderMall()});
   $('#mallTabs')?.addEventListener('click',e=>{const b=e.target.closest('[data-s]');if(!b)return;MALL_SORT=b.dataset.s;renderMallTabs();renderMall()});
   $('#gearSearch')?.addEventListener('input',()=>renderMall());

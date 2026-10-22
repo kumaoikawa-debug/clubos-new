@@ -60,3 +60,7 @@ python tests/member_manage_smoke.py
 # 有账户才放行并回带打款账户摘要，结算幂等，记录可核对打到了哪张卡。
 # 需要 CLUBOS_TEST_OPEN=1（俱乐部写接口在 demo 模式仍要求登录，由调用方环境提供）。
 python tests/mall_commission_search_settlement_smoke.py
+# 城市维度（2026-10-23 用户反馈：SaaS 面向全国，后台新建活动选城市、C 端按城市筛选 + 定位默认当前城市）：
+# 手工新建/编辑写入 city、俱乐部与公开活动列表带 city、老活动（无 city）兜底为空；
+# 另含 node 校验 clubos-cities.js 的 location 兜底推导与定位最近城市。自带临时库隔离。
+python tests/city_dimension_smoke.py

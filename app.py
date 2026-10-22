@@ -279,7 +279,7 @@ def club_business_analytics(club_id:int,window_days:int=Query(30,alias='windowDa
 def club_activities(club_id:int):
     # 积分策略页要在列表里直接看到每场活动的积分规则，因此把 7 个积分列一起带出来，
     # 免得页面上为每一行再打一次 points-policy。
-    with conn() as c:return rows(c.execute('''SELECT id,title,status,event_date,location,price,capacity,created_at,cover,
+    with conn() as c:return rows(c.execute('''SELECT id,title,status,event_date,location,city,price,capacity,created_at,cover,
         points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent,
         accept_gear_points,gear_points_max_discount_amount,club_points_earn_rate_override
         FROM activities WHERE club_id=? ORDER BY id DESC''',(club_id,)))
@@ -549,20 +549,22 @@ def _release_detail_version(c,version_id:int)->None:
     c.execute('DELETE FROM activity_detail_versions WHERE id=? AND status=\'pending\'',(version_id,))
 
 
-async def _run_generate_job(club_id:int,job_id:int,source:dict,refresh_facts:bool=False,direction:str=''):
+async def _run_generate_job(club_id:int,job_id:int,source:dict,refresh_facts:bool=False,direction:str='',city:str=''):
     """后台执行真模型生成（live 模式）。任何异常都落进 job.error，绝不能静默丢任务。"""
+    city_val=str(city or '').strip()[:40] or None
     try:
         with conn() as c:
             c.execute('UPDATE ai_generate_jobs SET status="running",stage="generating",started_at=CURRENT_TIMESTAMP WHERE id=?',(job_id,))
         result,usage=await generate_activity(club_id,source,direction=direction)
         master=result['activity_master']; detail=result['detail']
+        if city_val: master['city']=city_val
         with conn() as c:
             c.execute('UPDATE ai_generate_jobs SET stage="saving" WHERE id=?',(job_id,))
         charge_credits(club_id,'detail',usage.usage_id)
         title=master.get('title') or 'AI生成活动'
         with conn() as c:
-            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,price,capacity,activity_master_json,detail_json,source_json) VALUES(?,?,?,?,?,?,?,?,?,?)',(
-                club_id,title,'draft',master.get('date',''),master.get('location',''),float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source))))
+            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,source_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(
+                club_id,title,'draft',master.get('date',''),master.get('location',''),city_val,float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source))))
             aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
             vid,_n=_reserve_detail_version(c,club_id=club_id,activity_id=aid,origin='ai-generate')
             _finalize_detail_version(c,version_id=vid,activity_id=aid,detail=detail,master=master,
@@ -587,8 +589,9 @@ def ai_generate_job(club_id:int,job_id:int):
             'createdAt':j['created_at'],'finishedAt':j['finished_at']}
 
 @app.post('/api/club/{club_id}/activities/ai-generate')
-async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Form(''),files:list[UploadFile]=File(default=[])):
+async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Form(''),city:str=Form(''),files:list[UploadFile]=File(default=[])):
     club_or_404(club_id); ensure_credits(club_id,'detail')
+    city_val=str(city or '').strip()[:40] or None
     # live 模式下真模型要跑几分钟，同步响应会被网关空闲超时掐断（2026-09-28 实测：
     # 上传 14MB 请求体 11s 就能完整过网关，吞吐根本不是瓶颈；死的是几分钟的同步等待）。
     # 所以 live 一律改异步任务；mock 秒回，保持同步不破坏回归脚本。
@@ -649,11 +652,12 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
         try: result,usage=await generate_activity(club_id,source)
         except AIGatewayError as e: raise HTTPException(502,str(e))
         master=result['activity_master']; detail=result['detail']
+        if city_val: master['city']=city_val
         charge_credits(club_id,'detail',usage.usage_id)
         title=master.get('title') or 'AI生成活动'
         with conn() as c:
-            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,price,capacity,activity_master_json,detail_json,source_json) VALUES(?,?,?,?,?,?,?,?,?,?)',(
-                club_id,title,'draft',master.get('date',''),master.get('location',''),float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source))))
+            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,source_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(
+                club_id,title,'draft',master.get('date',''),master.get('location',''),city_val,float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source))))
             aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
             vid,_n=_reserve_detail_version(c,club_id=club_id,activity_id=aid,origin='ai-generate')
             _finalize_detail_version(c,version_id=vid,activity_id=aid,detail=detail,master=master,
@@ -666,7 +670,7 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
     with conn() as c:
         cur=c.execute('INSERT INTO ai_generate_jobs(club_id,status,stage,summary_json) VALUES(?,"queued","queued",?)',(club_id,jdump(summary)))
         jid=int(cur.lastrowid)
-    background_tasks.add_task(_run_generate_job,club_id,jid,source)
+    background_tasks.add_task(_run_generate_job,club_id,jid,source,city=city_val)
     return {'jobId':jid,'stage':'queued','source':summary}
 
 @app.post('/api/club/{club_id}/activities')
@@ -694,7 +698,8 @@ def create_activity_manual(club_id:int,payload:dict=Body(...)):
     # 团期 start_at 至少要能解析出「日期+时间」（C 端 _occRange 依赖 HH:mm），只给日期时补一个默认出发时间。
     occ_start=event_date
     if occ_start and not re.search(r'\d{1,2}:\d{2}',occ_start): occ_start+=' 08:00'
-    master={'title':title,'date':event_date or '待定','location':location or '待定',
+    city=str(payload.get('city') or '').strip()[:40] or None
+    master={'title':title,'date':event_date or '待定','location':location or '待定','city':city or '',
             'price':price,'capacity':capacity,'checklist':[],'createdVia':'manual'}
     detail={'title':title,'summary':summary,'blocks':[]}
     if summary: detail['blocks'].append({'type':'lead','text':summary})
@@ -705,8 +710,8 @@ def create_activity_manual(club_id:int,payload:dict=Body(...)):
         {'label':'名额','value':(f'{capacity} 人' if capacity else '待定')},
     ]})
     with conn() as c:
-        cur=c.execute('INSERT INTO activities(club_id,title,status,event_date,location,price,capacity,activity_master_json,detail_json) VALUES(?,?,?,?,?,?,?,?,?)',
-            (club_id,title,'draft',event_date,location,price,capacity,jdump(master),jdump(detail)))
+        cur=c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json) VALUES(?,?,?,?,?,?,?,?,?,?)',
+            (club_id,title,'draft',event_date,location,city,price,capacity,jdump(master),jdump(detail)))
         aid=int(cur.lastrowid)
         if occ_start:
             c.execute('INSERT INTO activity_occurrences(activity_id,club_id,start_at,price,capacity,status,label) VALUES(?,?,?,?,?,?,?)',
@@ -1243,6 +1248,7 @@ def update_activity(club_id:int,activity_id:int,payload:dict=Body(...)):
             fields['title']=t[:80]
         if 'eventDate' in payload: fields['event_date']=str(payload.get('eventDate') or '').strip() or None
         if 'location' in payload: fields['location']=str(payload.get('location') or '').strip() or None
+        if 'city' in payload: fields['city']=str(payload.get('city') or '').strip()[:40] or None
         if 'price' in payload:
             try: v=float(payload.get('price'))
             except (TypeError,ValueError): raise HTTPException(400,'价格必须是数字')
@@ -1268,6 +1274,7 @@ def update_activity(club_id:int,activity_id:int,payload:dict=Body(...)):
         if 'title' in fields: master['title']=fields['title']
         if 'event_date' in fields: master['date']=fields['event_date'] or ''
         if 'location' in fields: master['location']=fields['location'] or ''
+        if 'city' in fields: master['city']=fields['city'] or ''
         if 'price' in fields:
             master['price']=fields['price']
             # 俱乐部主动设定了对外售价 → 标记 'priced'，解除「成本表来源→待定」的粘性判定，
@@ -2534,7 +2541,7 @@ def club_biz_media(club_id:int,asset_path:str):
 def public_activities(club_id:int):
     if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
     with conn() as c:
-        acts=rows(c.execute('SELECT id,title,event_date,location,price,capacity,cover,activity_master_json FROM activities WHERE club_id=? AND status="published" ORDER BY id DESC',(club_id,)))
+        acts=rows(c.execute('SELECT id,title,event_date,location,city,price,capacity,cover,activity_master_json FROM activities WHERE club_id=? AND status="published" ORDER BY id DESC',(club_id,)))
     for a in acts:
         # ★ 成本闸门（2026-10-06）：成本表来源且俱乐部未定价（priceFrom 非 'priced'）的活动，
         # 顶层 price 是「合计÷人数」推出来的内部单价，绝不能当对外售价摆上列表卡。铁证判定后归零

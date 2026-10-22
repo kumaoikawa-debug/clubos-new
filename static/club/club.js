@@ -47,6 +47,7 @@ async function loadActivities(){
   try{
   const s=$('#activitySearch'); if(s&&!s.__wired){s.__wired=true;s.oninput=()=>renderActivityList()}
   const so=$('#activitySort'); if(so&&!so.__wired){so.__wired=true;so.onchange=()=>renderActivityList()}
+  const cf=$('#activityCity'); if(cf&&!cf.__wired){cf.__wired=true;cf.onchange=()=>renderActivityList()}
   _acts=await api(`/api/club/${CLUB}/activities`);
   renderActivityList();
   }catch(e){loaderError('#activityRows',e,'活动列表加载失败')}
@@ -61,25 +62,36 @@ function actSorter(sort){
     ||((x,y)=>(x.k||'9999').localeCompare(y.k||'9999')||(x.a.id-y.a.id));
 }
 function syncActRail(){$$('.act-mini').forEach(el=>el.classList.toggle('active',Number(el.dataset.id)===_actOpenId))}
+/* 城市标签（2026-10-23 用户反馈）：优先用活动显式 city，老数据按 location 兜底（clubos-cities.js）。 */
+function actCityTag(a){try{return window.clubosCityOf?window.clubosCityOf(a):(a.city||'')}catch(e){return a.city||''}}
 function activityMini(a,k){
   const draft=a.status==='draft';
+  const cityTag=actCityTag(a);
   const thumb=a.cover?` style="background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')"`:` cov-${a.id%6+1}`;
   return `<div class="act-mini${_actOpenId===a.id?' active':''}" data-id="${a.id}" role="button" tabindex="0" onclick="openActivity(${a.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openActivity(${a.id})}">`
     +`<span class="act-mini__thumb"${thumb}>${a.cover?'':(draft?'✎':'⛰')}<span class="cover-flag ${a.cover?'cover-flag--ok':'cover-flag--missing'}">${a.cover?'封面':'未设封面'}</span></span>`
     +`<span class="act-mini__body"><span class="act-mini__title">${esc(a.title)}</span>`
-    +`<span class="act-mini__meta"><span>${esc(dateText(k||a.event_date))}</span><span class="badge ${draft?'badge--soon':'badge--published'} badge--dot">${draft?'草稿':'已发布'}</span><span class="act-mini__price">${money(a.price)}</span></span></span>`
+    +`<span class="act-mini__meta"><span>${esc(dateText(k||a.event_date))}</span><span class="badge ${draft?'badge--soon':'badge--published'} badge--dot">${draft?'草稿':'已发布'}</span><span class="act-mini__price">${money(a.price)}</span>${cityTag?'<span class="act-mini__city">📍 '+esc(cityTag)+'</span>':''}</span></span>`
     +`<span class="act-mini__ops"><button type="button" class="act-op" onclick="event.stopPropagation();editActivity(${a.id})">编辑</button><button type="button" class="act-op act-op--danger" onclick="event.stopPropagation();deleteActivity(${a.id})">删除</button></span>`+`</div>`;
 }
 function renderActivityList(){
   const box=$('#activityRows'); if(!box)return;
   const q=($('#activitySearch')?.value||'').trim().toLowerCase();
   const sort=$('#activitySort')?.value||'date-asc';
-  const rows=_acts.map(a=>({a,k:actDateKey(a)})).filter(({a})=>{
+  /* 城市筛选（2026-10-23）：把活动按城市归组填充下拉（保留当前选择），再过滤。 */
+  const cf=$('#activityCity'); const curCity=cf?cf.value:'all';
+  const cityCounts={};
+  _acts.forEach(a=>{const c=actCityTag(a);if(c)cityCounts[c]=(cityCounts[c]||0)+1});
+  const cities=Object.keys(cityCounts).sort((a,b)=>(cityCounts[b]||0)-(cityCounts[a]||0));
+  if(cf){let opts='<option value="all">全部城市</option>';for(const c of cities)opts+=`<option value="${esc(c)}">${esc(c)}（${cityCounts[c]}）</option>`;cf.innerHTML=opts;if(curCity)cf.value=curCity;}
+  const cityF=(cf&&cf.value&&cf.value!=='all')?cf.value:'all';
+  let rows=_acts.map(a=>({a,k:actDateKey(a)})).filter(({a})=>{
+    if(cityF!=='all'&&actCityTag(a)!==cityF)return false;
     if(!q)return true;
     return [a.title,a.location,a.event_date,a.status,String(a.price)].filter(Boolean).join(' ').toLowerCase().includes(q);
   });
   rows.sort(actSorter(sort));
-  const cnt=$('#actRailCount'); if(cnt)cnt.textContent=(q?`${rows.length} / ${_acts.length}`:`${rows.length}`)+' 场活动';
+  const cnt=$('#actRailCount'); if(cnt)cnt.textContent=(q||cityF!=='all'?`${rows.length} / ${_acts.length}`:`${rows.length}`)+' 场活动';
   box.innerHTML=rows.map(({a,k})=>activityMini(a,k)).join('')
     ||`<div class="reg-none">${q?'没有匹配的活动，换个关键词或清空搜索。':'还没有活动，点右上角「＋ AI 发活动」。'}</div>`;
   syncActRail();
@@ -325,6 +337,7 @@ async function createActivityManual(){
       {name:'title',label:'活动名称',type:'text',required:true,full:true,placeholder:'例如：10月24日 蓥华山轻徒步'},
       {name:'eventDate',label:'出发时间',type:'datetime',required:true,defaultTime:'08:00',help:'用于生成首个团期；只填日期时按 08:00 出发。'},
       {name:'location',label:'集合地 / 目的地',type:'text',placeholder:'如：成都 邛崃 兴福寺'},
+      {name:'city',label:'活动城市（可选）',type:'select',options:[{value:'',label:'（暂不选 / 由地点推断）'}].concat((window.CLUBOS_CITIES||[]).map(c=>({value:c,label:c}))),value:''},
       {name:'price',label:'活动价格（元）',type:'number',min:0,step:.01,value:0},
       {name:'capacity',label:'总名额（人）',type:'number',min:0,step:1,value:20},
       {name:'summary',label:'一句话介绍（可选）',type:'textarea',full:true,placeholder:'例如：轻装穿越竹林与寺观，适合入门徒步。'}
@@ -332,7 +345,7 @@ async function createActivityManual(){
   if(!d)return;
   try{
     const r=await api(`/api/club/${CLUB}/activities`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title:d.title,eventDate:d.eventDate,location:d.location,price:d.price,capacity:d.capacity,summary:d.summary})});
+      body:JSON.stringify({title:d.title,eventDate:d.eventDate,location:d.location,city:d.city,price:d.price,capacity:d.capacity,summary:d.summary})});
     toast('已创建草稿，可继续编辑后发布');
     await loadDash();go('activities');await openActivity(r.activityId);await loadActivities();
   }catch(e){showAlert({title:'创建失败',message:e.message})}
@@ -1252,13 +1265,14 @@ async function editActivity(id){
     try{a=await api(`/api/club/${CLUB}/activities/${id}`)}catch(e){showAlert({title:'读取活动失败',message:e.message});return}
   }
   const before={title:String(a.title||''),eventDate:String(a.event_date||''),location:String(a.location||''),
-                price:Number(a.price||0),capacity:Number(a.capacity||0)};
+                price:Number(a.price||0),capacity:Number(a.capacity||0),city:String(a.city||'')};
   const d=await uxForm({title:'编辑活动基本信息',
     subtitle:'改的是活动事实（名称 / 日期 / 地点 / 价格 / 名额），会同步到 C 端与页面上的事实字段；AI 详情文案如需重写，请用「重新生成 / 换一版」。',
     fields:[
       {name:'title',label:'活动名称',type:'text',required:true,full:true,value:a.title||''},
       {name:'eventDate',label:'活动日期',type:'text',value:a.event_date||'',placeholder:'如：2026-10-24 或 2026年10月24日'},
       {name:'location',label:'集合地 / 目的地',type:'text',value:a.location||''},
+      {name:'city',label:'活动城市（可选）',type:'select',options:[{value:'',label:'（暂不选 / 由地点推断）'}].concat((window.CLUBOS_CITIES||[]).map(c=>({value:c,label:c}))),value:a.city||''},
       {name:'price',label:'活动价格（元）',type:'number',min:0,step:.01,value:a.price||0},
       {name:'capacity',label:'总名额（人）',type:'number',min:0,step:1,value:a.capacity||0},
       {name:'checklist',label:'出行清单（每行一项）',type:'textarea',full:true,
@@ -1270,12 +1284,13 @@ async function editActivity(id){
   const checklistLines=String(d.checklist||'').split('\n').map(x=>x.trim()).filter(Boolean);
   await uxFlow('editActivity',async()=>{
     await api(`/api/club/${CLUB}/activities/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title:d.title,eventDate:d.eventDate,location:d.location,price:d.price,capacity:d.capacity,checklist:checklistLines})});
+      body:JSON.stringify({title:d.title,eventDate:d.eventDate,location:d.location,city:d.city,price:d.price,capacity:d.capacity,checklist:checklistLines})});
     const beforeList=(a.activityMaster?.checklist||[]).join('|');
     const changed=[];
     if(String(d.title||'').trim()!==before.title.trim())changed.push('名称');
     if(String(d.eventDate||'').trim()!==before.eventDate.trim())changed.push('日期');
     if(String(d.location||'').trim()!==before.location.trim())changed.push('地点');
+    if(String(d.city||'').trim()!==before.city.trim())changed.push('城市');
     if(Number(d.price)!==before.price)changed.push('价格');
     if(Number(d.capacity)!==before.capacity)changed.push('总名额');
     if(checklistLines.join('|')!==beforeList)changed.push('出行清单');
