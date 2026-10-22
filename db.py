@@ -149,6 +149,7 @@ def _run_compat_migrations(c):
     _ensure_column(c,'registrations','club_benefit_discount','club_benefit_discount REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'registrations','platform_benefit_subsidy','platform_benefit_subsidy REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'registrations','benefit_redemption_ids_json',"benefit_redemption_ids_json TEXT NOT NULL DEFAULT '[]'")
+    _ensure_column(c,'benefit_redemptions','gift_note','gift_note TEXT')
     _ensure_column(c,'activities','points_enabled','points_enabled INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'activities','earn_club_points','earn_club_points INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'activities','accept_club_points','accept_club_points INTEGER NOT NULL DEFAULT 1')

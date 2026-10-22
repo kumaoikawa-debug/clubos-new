@@ -1,5 +1,5 @@
 from __future__ import annotations
-import uuid, os, io, csv, re, zipfile, shutil, asyncio
+import uuid, os, io, csv, re, zipfile, shutil, asyncio, secrets
 from sqlite3 import IntegrityError
 from datetime import datetime, timedelta, date
 from pathlib import Path
@@ -2074,6 +2074,102 @@ def club_benefit_redemptions(club_id:int):
     with conn() as c:return rows(c.execute('''SELECT r.*,b.title,u.name user_name FROM benefit_redemptions r
         JOIN member_benefits b ON b.id=r.benefit_id JOIN users u ON u.id=r.user_id
         WHERE r.display_club_id=? ORDER BY r.id DESC''',(club_id,)))
+
+# ---- 会员深度管理（2026-10-22 用户截图反馈：点进会员要看全量信息 + 调积分 + 赠券）----
+# 脱敏纪律同 _public_leaders：这里全是俱乐部自己建档/收单的数据，俱乐部后台可见；
+# 但 C 端公开接口绝不复用本函数——给领队的备注、内部成本一律不出俱乐部边界。
+
+@app.get('/api/club/{club_id}/members/{user_id}')
+def club_member_detail(club_id:int,user_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        member=row(c.execute('''SELECT m.*,u.name,u.phone,u.created_at AS user_created_at
+                                FROM club_members m JOIN users u ON u.id=m.user_id
+                                WHERE m.club_id=? AND m.user_id=?''',(club_id,user_id)))
+        if not member: raise HTTPException(404,'该用户还不是本俱乐部会员')
+        # 先确认会员存在再刷新：refresh_member 对陌生 user_id 会 INSERT，撞外键约束。
+        membership_engine.refresh_member(c,club_id=club_id,user_id=user_id)
+        member=row(c.execute('''SELECT m.*,u.name,u.phone,u.created_at AS user_created_at
+                                FROM club_members m JOIN users u ON u.id=m.user_id
+                                WHERE m.club_id=? AND m.user_id=?''',(club_id,user_id)))
+        g=row(c.execute('SELECT balance FROM gear_point_accounts WHERE user_id=?',(user_id,)))
+        member['gear_points']=int((g or {}).get('balance') or 0)
+        tiers=membership_engine.list_tiers(c,club_id)
+        tier=next((t for t in tiers if t.get('id')==member.get('current_tier_id')),None)
+        activity_orders=rows(c.execute('''SELECT r.id,r.occurrence_id,r.status,r.payment_status,r.refund_status,
+                                                 r.amount,r.participant_count,r.created_at,a.title,a.location,a.event_date
+                                          FROM registrations r JOIN activities a ON a.id=r.activity_id
+                                          WHERE r.user_id=? AND r.club_id=? ORDER BY r.id DESC LIMIT 50''',(user_id,club_id)))
+        for o in activity_orders:
+            o['participants']=rows(c.execute('SELECT name,phone,status FROM registration_participants WHERE registration_id=? ORDER BY id',(o['id'],)))
+        gear_orders=rows(c.execute('''SELECT o.*,(SELECT GROUP_CONCAT(COALESCE(p.name,'已下架商品')||' x'||i.quantity,'；')
+                                          FROM gear_order_items i LEFT JOIN products p ON p.id=i.product_id
+                                          WHERE i.order_id=o.id) AS items_text
+                                   FROM gear_orders o WHERE o.user_id=? ORDER BY o.id DESC LIMIT 50''',(user_id,)))
+        club_ledger=rows(c.execute('SELECT * FROM club_point_ledger WHERE club_id=? AND user_id=? ORDER BY id DESC LIMIT 30',(club_id,user_id)))
+        gear_ledger=rows(c.execute('SELECT * FROM gear_point_ledger WHERE user_id=? ORDER BY id DESC LIMIT 30',(user_id,)))
+        vouchers=rows(c.execute('''SELECT r.*,b.title,b.benefit_type,b.description
+                                   FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
+                                   WHERE r.user_id=? AND r.display_club_id=? ORDER BY r.id DESC LIMIT 50''',(user_id,club_id)))
+    return {'member':member,'tier':tier,'activityOrders':activity_orders,'gearOrders':gear_orders,
+            'clubLedger':club_ledger,'gearLedger':gear_ledger,'vouchers':vouchers}
+
+@app.post('/api/club/{club_id}/members/{user_id}/points')
+def club_adjust_member_points(club_id:int,user_id:int,payload:dict=Body(...)):
+    """手工增减会员积分。正数加、负数扣；每次调整必写积分流水（type=manual_adjust），
+    余额不允许被调成负数。装备积分是平台体系积分，扣减时同样落 gear_point_ledger。"""
+    club_or_404(club_id)
+    kind=str(payload.get('kind') or 'club').lower()
+    if kind not in ('club','gear'): raise HTTPException(400,'积分类型只能是 club（活动积分）或 gear（装备积分）')
+    try: amount=int(payload.get('amount') or 0)
+    except (TypeError,ValueError): raise HTTPException(400,'调整数量必须是整数')
+    if amount==0: raise HTTPException(400,'调整数量不能为 0')
+    if abs(amount)>1000000: raise HTTPException(400,'单次调整幅度不能超过 1,000,000')
+    note=str(payload.get('note') or '').strip()[:200] or '俱乐部手工调整'
+    with conn() as c:
+        mem=row(c.execute('SELECT club_points_balance FROM club_members WHERE club_id=? AND user_id=?',(club_id,user_id)))
+        if not mem: raise HTTPException(404,'该用户还不是本俱乐部会员')
+        if kind=='club':
+            newbal=int(mem['club_points_balance'] or 0)+amount
+            if newbal<0: raise HTTPException(409,f'调整后活动积分为 {newbal}，不能为负；请先调小扣减数量')
+            c.execute('UPDATE club_members SET club_points_balance=? WHERE club_id=? AND user_id=?',(newbal,club_id,user_id))
+            c.execute('''INSERT INTO club_point_ledger(club_id,user_id,type,amount,source_type,source_id,note)
+                         VALUES(?,?,?,?,?,?,?)''',(club_id,user_id,'manual_adjust',amount,'manual','',note))
+        else:
+            acc=row(c.execute('SELECT balance FROM gear_point_accounts WHERE user_id=?',(user_id,)))
+            newbal=int((acc or {}).get('balance') or 0)+amount
+            if newbal<0: raise HTTPException(409,f'调整后装备积分为 {newbal}，不能为负；请先调小扣减数量')
+            if not acc: c.execute('INSERT INTO gear_point_accounts(user_id,balance) VALUES(?,?)',(user_id,newbal))
+            else: c.execute('UPDATE gear_point_accounts SET balance=? WHERE user_id=?',(newbal,user_id))
+            c.execute('''INSERT INTO gear_point_ledger(user_id,type,amount,source_type,source_id,note)
+                         VALUES(?,?,?,?,?,?)''',(user_id,'manual_adjust',amount,'manual','',note))
+    return {'ok':True,'kind':kind,'amount':amount,'balance':newbal}
+
+@app.post('/api/club/{club_id}/members/{user_id}/vouchers')
+def club_gift_member_voucher(club_id:int,user_id:int,payload:dict=Body(...)):
+    """把本俱乐部在营销里已生成的优惠券直接赠给会员（零积分，成本由俱乐部承担）。
+    赠出的券立刻出现在顾客 C 端「可用福利券」里，报名付款时可直接抵扣。"""
+    club_or_404(club_id)
+    try: benefit_id=int(payload.get('benefitId'))
+    except (TypeError,ValueError): raise HTTPException(400,'请选择要赠送的优惠券')
+    note=str(payload.get('note') or '').strip()[:200] or '俱乐部赠送'
+    with conn() as c:
+        mem=row(c.execute('SELECT id FROM club_members WHERE club_id=? AND user_id=?',(club_id,user_id)))
+        if not mem: raise HTTPException(404,'该用户还不是本俱乐部会员')
+        b=row(c.execute('SELECT * FROM member_benefits WHERE id=?',(benefit_id,)))
+        if not b or b['status']!='active': raise HTTPException(404,'优惠券不存在或已下架')
+        if b['owner_type']!='CLUB' or int(b['owner_club_id'] or 0)!=club_id:
+            raise HTTPException(409,'只能赠送本俱乐部创建的优惠券；平台福利由总平台发放')
+        if b['stock'] is not None:
+            if int(b['stock'])<=0: raise HTTPException(409,'该优惠券库存不足')
+            c.execute('UPDATE member_benefits SET stock=stock-1,updated_at=CURRENT_TIMESTAMP WHERE id=?',(benefit_id,))
+        code='BEN-'+secrets.token_hex(4).upper()
+        c.execute('''INSERT INTO benefit_redemptions(benefit_id,user_id,display_club_id,point_type,points_spent,
+                     funding_owner,cash_value,status,voucher_code,gift_note) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                  (benefit_id,user_id,club_id,b['points_type'],0,'CLUB',float(b['cash_value'] or 0),'issued',code,note))
+        rid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+    return {'ok':True,'redemptionId':rid,'voucherCode':code,'title':b['title'],
+            'benefitType':b['benefit_type'],'cashValue':float(b['cash_value'] or 0)}
 
 @app.get('/api/club/{club_id}/credits')
 def credits(club_id:int):

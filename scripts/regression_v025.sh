@@ -49,3 +49,8 @@ python tests/detail_style_smoke.py
 #    （集合/应急/带队/sent 通知/分车），草稿通知与领队手机号、内部备注不下发。
 # 需要 CLUBOS_TEST_OPEN=1（俱乐部写接口在 demo 模式仍要求登录，由调用方环境提供）。
 python tests/execution_trip_smoke.py
+# 会员深度管理（2026-10-22 用户截图反馈「点进会员要看全量信息 + 调积分 + 赠券」）：
+# 详情聚合（个人信息/订单/券/流水）、积分手工增减（负数/越界/非法入参/流水落账）、
+# 赠券（零积分、俱乐部承担、库存扣减、售罄/平台券/非会员被拒）、赠券立刻进 C 端可用券。
+# 需要 CLUBOS_TEST_OPEN=1（俱乐部写接口在 demo 模式仍要求登录，由调用方环境提供）。
+python tests/member_manage_smoke.py

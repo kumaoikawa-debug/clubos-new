@@ -65,4 +65,40 @@ window.retryRefundProvider=async id=>uxTask(async()=>{const r=await api('/api/cl
 window.rejectRefund=async id=>uxTask(async()=>{const d=await uxForm({title:'拒绝活动退款申请',subtitle:'拒绝原因会留在本俱乐部退款记录中。',fields:[{name:'note',label:'处理原因',type:'textarea',required:true,full:true,value:'不符合本活动退款规则'}],submitText:'确认拒绝'});if(!d)return;await post('/api/club/'+CLUB+'/refunds/'+id+'/reject',d);toast('已拒绝退款');loadRegs()});
 window.approveRefund=async id=>uxTask(async()=>{if(!await uxConfirm({title:'同意活动退款',message:'确认本俱乐部的退款规则和申请金额后继续。实际退款取决于支付渠道处理状态。',confirmText:'同意并提交退款'}))return;const r=await api('/api/club/'+CLUB+'/refunds/'+id+'/approve',{method:'POST'});toast(r.status==='succeeded'?'退款已完成':'已同意，等待支付渠道退款');loadRegs()});
 window.clubInsurance=async(pid,regId)=>uxTask(async()=>{const d=await uxForm({title:'参加人保险资料',fields:[{name:'status',label:'保险状态',type:'select',required:true,options:[{value:'pending',label:'待处理'},{value:'submitted',label:'已提交'},{value:'insured',label:'已承保'},{value:'failed',label:'提交失败'},{value:'not_required',label:'无需保险'}]},{name:'provider',label:'保险公司 / 渠道'},{name:'policyNo',label:'保单号',full:true}],submitText:'保存保险状态'});if(!d)return;await patch('/api/club/'+CLUB+'/participants/'+pid+'/insurance',d);toast('保险状态已更新');document.querySelector('.modal.show')?.remove();showParticipants(regId);loadRegs()});
+
+/* 会员深度管理（2026-10-22 用户截图反馈）：点进会员 → 看全量信息 + 手工调积分 + 赠券。
+   两个写流程都走 /api/club/{c}/members/{uid}/...；成功后原位刷新详情弹窗
+   （renderMemberDetail 在 club.js，全局可用），并刷新列表余额。 */
+const _refreshMemberDetail=userId=>{
+  loadMembers();
+  const ov=window._memberDetailOv;
+  if(ov&&ov.isConnected)renderMemberDetail(ov,userId);
+};
+window.adjustMemberPoints=async(userId,kind)=>uxTask(async()=>{
+  const isClub=kind==='club';
+  const d=await uxForm({title:isClub?'调整活动积分':'调整装备积分',
+    subtitle:'正数＝增加，负数＝扣减。每次调整都会写进该会员的积分流水；扣减不能超过当前余额。',
+    fields:[{name:'amount',label:'调整数量（正数增加 / 负数扣减）',type:'number',step:1,required:true,value:100,help:'例：补偿 500 分填 500；纠错扣 200 分填 -200'},
+           {name:'note',label:'调整原因',required:true,full:true,value:'投诉补偿',placeholder:'会显示在积分流水里，请写清楚原因'}],
+    submitText:'确认调整'});
+  if(!d||!d.amount)return;
+  const r=await post(`/api/club/${CLUB}/members/${userId}/points`,{kind,amount:Number(d.amount),note:d.note});
+  toast(`${isClub?'活动':'装备'}积分已调整，当前余额 ${r.balance}`);
+  _refreshMemberDetail(userId);
+});
+window.giftMemberVoucher=async userId=>uxTask(async()=>{
+  let benefits=[];try{benefits=await api(`/api/club/${CLUB}/benefits`)}catch(e){benefits=[]}
+  const giftof=(benefits||[]).filter(b=>b.owner_type==='CLUB'&&b.status==='active'&&(b.stock==null||Number(b.stock)>0));
+  if(!giftof.length){toast('营销里还没有可赠送的券，请先在本页面「本俱乐部福利」创建');return}
+  const d=await uxForm({title:'赠送优惠券',
+    subtitle:'顾客立刻在自己账户里收到这张券，报名付款时可直接抵扣；券库存会相应扣减。',
+    fields:[{name:'benefitId',label:'选择优惠券',type:'select',required:true,full:true,
+             options:giftof.map(b=>({value:b.id,label:`${b.title}${b.benefit_type==='activity_coupon'?`（抵扣 ${money(b.cash_value||0)}）`:'（非现金福利）'} · 库存 ${b.stock==null?'不限':b.stock}`}))},
+           {name:'note',label:'赠送说明（可选）',full:true,placeholder:'如：老会员回馈'}],
+    submitText:'确认赠送'});
+  if(!d)return;
+  const r=await post(`/api/club/${CLUB}/members/${userId}/vouchers`,{benefitId:Number(d.benefitId),note:d.note});
+  toast(`已赠送「${r.title}」· 券码 ${r.voucherCode}`);
+  _refreshMemberDetail(userId);
+});
 })();

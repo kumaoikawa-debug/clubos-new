@@ -524,3 +524,6 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .set-tab:hover{color:#22352a}
 .set-tab.active{background:#fff;color:#22352a;font-weight:600;box-shadow:0 1px 4px #1025171a}
 .set-pane{min-width:0}
+
+/* 会员行整行可点（会员详情），2026-10-22 用户反馈 */
+.member-row{cursor:pointer}

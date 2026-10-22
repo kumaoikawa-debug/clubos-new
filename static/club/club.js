@@ -790,7 +790,7 @@ async function loadMembers(){skel('#tierList',3);
     api(`/api/club/${CLUB}/members`),api(`/api/club/${CLUB}/membership/tiers`),
     api(`/api/club/${CLUB}/benefits`),api(`/api/club/${CLUB}/benefits/redemptions`)
   ]);
-  $('#memberRows').innerHTML=a.map(x=>`<tr><td>${esc(x.name)}</td><td><strong>${esc(x.level)}</strong></td><td>${x.activity_count||0}</td><td>${money(x.lifetime_activity_spend||0)}</td><td>${x.club_points_balance}</td><td>${x.gear_points}</td><td>${esc(x.phone||'')}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">暂无会员</td></tr>';
+  $('#memberRows').innerHTML=a.map(x=>`<tr class="member-row" onclick="openMember(${x.user_id})"><td>${esc(x.name)}</td><td><strong>${esc(x.level)}</strong></td><td>${x.activity_count||0}</td><td>${money(x.lifetime_activity_spend||0)}</td><td>${x.club_points_balance}</td><td>${x.gear_points}</td><td>${esc(x.phone||'')}</td><td><span class="sub">查看详情 ›</span></td></tr>`).join('')||'<tr><td colspan="8" class="empty">暂无会员</td></tr>';
   _tiers=tiers;
   $('#tierList').innerHTML=tiers.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)} <span class="tag">Rank ${x.rank}</span>${tierGearChip(x)}</div><div class="list-row__sub">活动消费 ≥ ${money(x.min_activity_spend)} · 活动次数 ≥ ${x.min_activity_count} · ${x.qualification_mode==='ALL'?'同时满足':'任一满足'}</div><div class="list-row__sub">${tierGearNote(x)}</div></div><div class="list-row__end"><button class="btn ghost" onclick="editTier(${x.id})">编辑</button></div></div>`).join('');
   $('#clubBenefitList').innerHTML=benefits.filter(x=>x.owner_type==='CLUB').map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${x.points_cost} 活动积分 · ${x.benefit_type==='activity_coupon'?`活动抵扣 ${money(x.cash_value)}`:esc(x.benefit_type)} · 成本由俱乐部承担 · 库存 ${x.stock==null?'不限':x.stock}</div></div></div>`).join('')||'<div class="empty">还没有俱乐部福利</div>';
@@ -798,6 +798,68 @@ async function loadMembers(){skel('#tierList',3);
   }catch(e){loaderError('#tierList',e,'客户与会员加载失败')}
 }
 async function recalcMembership(){await api(`/api/club/${CLUB}/membership/recalculate`,{method:'POST'});toast('会员等级已重新计算');loadMembers()}
+
+/* 会员深度管理（2026-10-22 用户截图反馈：「点进去之后，应该查看到所有相关该用户的信息」）。
+   详情弹窗用 uxDialog 自定义 body：个人信息 / 积分（可调）/ 历史订单 / 优惠券（可赠）/ 积分流水。
+   调积分与赠券两个写流程在 workflows-club.js（adjustMemberPoints / giftMemberVoucher），
+   成功后回调 renderMemberDetail 原位刷新，不叠弹窗。 */
+window._memberDetailOv=null;
+async function openMember(userId){
+  const ov=uxDialog({title:'会员详情',wide:true,body:'<div class="empty">正在加载会员资料…</div>',
+    foot:'<button class="btn ghost" type="button" data-close>关闭</button>'});
+  ov.querySelector('[data-close]').onclick=()=>ov.uxClose();
+  window._memberDetailOv=ov;
+  await renderMemberDetail(ov,userId);
+}
+async function renderMemberDetail(ov,userId){
+  const body=ov.querySelector('.ux-dialog-body'); if(!body)return;
+  body.innerHTML='<div class="empty">正在加载会员资料…</div>';
+  let d;
+  try{ d=await api(`/api/club/${CLUB}/members/${userId}`); }
+  catch(e){ body.innerHTML=`<div class="empty">${esc(e.message||'加载失败')}</div>`; return; }
+  const m=d.member||{};
+  const regStatusCn={paid:'已支付',refunded:'已退款',cancelled:'已取消',pending:'待支付'};
+  const refundCn={requested:'退款审核中',processing:'退款中',succeeded:'已退款',rejected:'退款被拒'};
+  const ledTypeCn={earn:'获得',redeem:'抵扣',hold:'锁定',restore:'返还',benefit_redeem:'福利兑换',manual_adjust:'手工调整'};
+  const voucherStatusCn={issued:'可用',held:'占用中',used:'已使用'};
+  const actOrders=d.activityOrders||[],gearOrders=d.gearOrders||[],vouchers=d.vouchers||[];
+  const clubLedger=d.clubLedger||[],gearLedger=d.gearLedger||[];
+  const ledRow=(l,label)=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${label} ${l.amount>0?'+':''}${l.amount}</div><div class="list-row__sub">${ledTypeCn[l.type]||esc(l.type)} · ${esc(l.note||'')} · ${esc((l.created_at||'').slice(0,16))}</div></div></div>`;
+  body.innerHTML=`
+    <div class="grid g2" style="align-items:start">
+      <div class="card">
+        <h3>${esc(m.name||'')} <span class="tag">${esc(m.level||'非会员')}</span></h3>
+        <div class="sub">${esc(m.phone||'未留手机')} · 注册于 ${esc((m.user_created_at||'').slice(0,10))} · 用户 #${m.user_id}</div>
+        <div class="sub" style="margin-top:6px">${d.tier?`当前等级「${esc(d.tier.name||'')}」`:'暂未达到任何等级规则'} · 活动 ${m.activity_count||0} 次 · 累计消费 ${money(m.lifetime_activity_spend||0)}</div>
+      </div>
+      <div class="card">
+        <div class="panel-title"><h3>积分</h3><span class="sub">调整会写积分流水</span></div>
+        <div class="grid g2">
+          <div class="stat-tile"><div class="k">活动积分</div><div class="v">${m.club_points_balance||0}</div><div class="hint">本俱乐部体系内使用</div><div style="margin-top:10px"><button class="btn secondary" onclick="adjustMemberPoints(${m.user_id},'club')">调整</button></div></div>
+          <div class="stat-tile"><div class="k">装备积分</div><div class="v">${m.gear_points||0}</div><div class="hint">ClubOS 平台体系</div><div style="margin-top:10px"><button class="btn secondary" onclick="adjustMemberPoints(${m.user_id},'gear')">调整</button></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="card section">
+      <div class="panel-title"><h3>历史订单 · 活动</h3><span class="tag">${actOrders.length} 笔</span></div>
+      ${actOrders.map(o=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(o.title||'')}</div><div class="list-row__sub">${esc(o.event_date||'')} · ${esc(o.location||'')}</div><div class="list-row__sub">实付 ${money(o.amount||0)} · 参加人 ${(o.participants||[]).length} 人${(o.participants||[]).length?`（${o.participants.map(p=>esc(p.name)).join('、')}）`:''}</div></div><div class="list-row__end"><span class="tag ${o.status==='paid'?'':'orange'}">${regStatusCn[o.status]||esc(o.status)}</span>${o.refund_status&&o.refund_status!=='none'?`<span class="tag orange">${refundCn[o.refund_status]||esc(o.refund_status)}</span>`:''}</div></div>`).join('')||'<div class="empty">暂无活动订单</div>'}
+    </div>
+    <div class="card section">
+      <div class="panel-title"><h3>历史订单 · 装备</h3><span class="tag">${gearOrders.length} 笔</span></div>
+      ${gearOrders.map(o=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">订单 #${o.id} · ${money(o.total||0)}</div><div class="list-row__sub">${esc(o.items_text||'商品已下架')}</div></div><div class="list-row__end"><span class="tag ${o.status==='paid'?'':'orange'}">${esc(o.status)}</span>${o.after_sales_status&&o.after_sales_status!=='none'?`<span class="tag orange">售后 ${esc(o.after_sales_status)}</span>`:''}</div></div>`).join('')||'<div class="empty">暂无装备订单</div>'}
+    </div>
+    <div class="grid g2 section">
+      <div class="card">
+        <div class="panel-title"><h3>优惠券</h3><button class="btn secondary" onclick="giftMemberVoucher(${m.user_id})">＋ 赠送优惠券</button></div>
+        <div class="sub" style="margin-bottom:10px">赠送本俱乐部在「本俱乐部福利」里已生成的券；顾客报名付款时可直接抵扣。</div>
+        ${vouchers.map(v=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(v.title||'')} <span class="tag">${v.benefit_type==='activity_coupon'?`抵扣 ${money(v.cash_value||0)}`:'非现金福利'}</span>${v.points_spent===0?' <span class="tag orange">获赠</span>':''}</div><div class="list-row__sub">${esc(v.voucher_code||'')}${v.gift_note?` · ${esc(v.gift_note)}`:''} · 领取于 ${esc((v.created_at||'').slice(0,10))}</div></div><div class="list-row__end"><span class="tag ${v.status==='issued'?'':'orange'}">${voucherStatusCn[v.status]||esc(v.status)}</span></div></div>`).join('')||'<div class="empty">暂无优惠券</div>'}
+      </div>
+      <div class="card">
+        <div class="panel-title"><h3>积分流水</h3><span class="sub">最近 30 条</span></div>
+        ${[...clubLedger.map(l=>ledRow(l,'活动积分')),...gearLedger.map(l=>ledRow(l,'装备积分'))].join('')||'<div class="empty">暂无积分变动</div>'}
+      </div>
+    </div>`;
+}
 
 async function loadMall(){ try{skel('#clubOrders',4);let [p,o,cs,sett,aftersales,tiers]=await Promise.all([api(`/api/club/${CLUB}/mall/products`),api(`/api/club/${CLUB}/mall/orders`),api(`/api/club/${CLUB}/mall/commission-summary`),api(`/api/club/${CLUB}/mall/settlements`),api(`/api/club/${CLUB}/mall/after-sales`),api(`/api/club/${CLUB}/membership/tiers`)]);const md=bestGearDiscount(tiers);$('#clubCommissionSummary').innerHTML=[['待签收',money(cs.pending)],['售后冻结',money(cs.frozen)],['可结算',money(cs.payableNow)],['已结算',money(cs.settled)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">${cs.carryDebt&&x[0]==='可结算'?`退款待冲抵 ${money(cs.carryDebt)}`:`售后期 ${cs.policy.afterSalesDays} 天`}</div></div>`).join('');$('#clubProducts').innerHTML=p.map(x=>`<div class="product" data-pid="${x.id}" role="button" tabindex="0" onclick="openClubProduct(${x.id})"><div class="ph">🎒</div><h4>${esc(x.name)}</h4><div class="sub">${esc(x.category||'户外装备')}</div>${memberPriceHtml(x.price,md)}<div class="sub">库存 ${x.stock} · 平台统一履约</div></div>`).join('');$('#clubOrders').innerHTML=o.map(x=>`<div class="list-row" role="button" tabindex="0" onclick="openClubOrder(${x.id})"><div class="list-row__main"><div class="list-row__title">订单 #${x.id}</div> · ${money(x.total)} · 佣金 ${money(x.club_commission)}<div class="list-row__sub">${x.status} · ${x.carrier||'待发货'} ${x.tracking_no||''} · 售后 ${x.after_sales_status||'无'}</div></div></div>`).join('')||'<div class="empty">暂无商城订单</div>';$('#clubAfterSales').innerHTML=aftersales.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.case_type)}</div> · 订单 #${x.order_id} <span class="tag">${esc(x.status)}</span><div class="list-row__sub">平台售后处理 · ${esc(x.reason||'')} · 申请退款 ${money(x.requested_refund_amount||0)}</div></div></div>`).join('')||'<div class="empty">暂无商城售后</div>';$('#clubSettlements').innerHTML=sett.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${money(x.net_amount)}</div> · ${esc(x.payment_ref)} <span class="tag">${x.status}</span><div class="list-row__sub">佣金 ${money(x.gross_amount)} · 退款冲抵 ${money(x.deduction_amount)} · ${esc(x.paid_at||x.created_at)}</div></div></div>`).join('')||'<div class="empty">暂无结算记录</div>';await loadInventory()}
 catch(e){loaderError('#clubOrders',e,'商城数据加载失败')}}
