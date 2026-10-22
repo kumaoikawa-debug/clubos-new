@@ -35,6 +35,8 @@ with app.conn() as db:
     l1=dict(db.execute("SELECT * FROM commission_ledger WHERE order_id=? AND ledger_type='earn'",(id1,)).fetchone())
 assert l1['status']=='frozen' and l1['available_at']
 rel=ok('post','/api/platform/commissions/release',json={'clubId':1}).json(); assert rel['released']>=1
+# 2026-10-22 起结算佣金要求俱乐部先提供法人卡/对公账户（无账户 409），建档后再走结算流程。
+ok('post','/api/club/1/settlement-account',json={'accountType':'legal','holder':'测试法人','legalName':'测试法人','legalIdNo':'510100199001010021','bankName':'中国工商银行','cardNo':'6222021234567890123'})
 preview=ok('get','/api/platform/settlements/preview?club_id=1').json()
 assert amount(preview['grossAmount'])==comm1 and amount(preview['deductionAmount'])==0 and amount(preview['netAmount'])==comm1
 

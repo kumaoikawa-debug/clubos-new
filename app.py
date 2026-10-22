@@ -2285,12 +2285,35 @@ def club_mall_visibility_requests(club_id:int):
                                  FROM club_product_visibility_requests r JOIN products p ON p.id=r.product_id
                                  WHERE r.club_id=? ORDER BY r.id DESC""",(club_id,)))
 
+def _date_range(date_from:str|None,date_to:str|None)->tuple[str|None,str|None]:
+    """日期范围过滤参数（YYYY-MM-DD，本地日期）：格式非法一律 400，且 from>to 也拒。
+    返回 (lo,hi)，None 表示不设界。"""
+    def _norm(v,label):
+        v=str(v or '').strip()
+        if not v: return None
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',v): raise HTTPException(400,f'{label} 日期格式应为 YYYY-MM-DD')
+        try: date(int(v[:4]),int(v[5:7]),int(v[8:10]))
+        except ValueError: raise HTTPException(400,f'{label} 不是有效日期')
+        return v
+    lo=_norm(date_from,'开始'); hi=_norm(date_to,'结束')
+    if lo and hi and lo>hi: raise HTTPException(400,'开始日期不能晚于结束日期')
+    return lo,hi
+
 @app.get('/api/club/{club_id}/mall/orders')
-def club_orders(club_id:int):
+def club_orders(club_id:int,date_from:str|None=None,date_to:str|None=None):
     # 带上买家与商品明细：俱乐部端点开订单要能看到「卖了哪几件、各多少」，
     # 只回一行 total 的话「商城订单详情」只能是空壳。
+    # date_from/date_to（YYYY-MM-DD，本地日期）：DB 时间戳是 UTC（SQLite CURRENT_TIMESTAMP
+    # 恒为 UTC，线上服务器还是 GMT），用户按本地日期筛，先 +8 小时再比。
+    lo,hi=_date_range(date_from,date_to)
     with conn() as c:
-        orders=rows(c.execute('SELECT o.id,o.total,o.status,o.tracking_no,o.carrier,o.club_commission,o.after_sales_status,o.created_at,o.shipping_consignee,o.shipping_phone,o.shipping_address,u.name buyer FROM gear_orders o JOIN users u ON u.id=o.user_id WHERE o.source_club_id=? ORDER BY o.id DESC',(club_id,)))
+        sql='''SELECT o.id,o.total,o.status,o.tracking_no,o.carrier,o.club_commission,o.after_sales_status,o.created_at,o.shipping_consignee,o.shipping_phone,o.shipping_address,u.name buyer
+                 FROM gear_orders o JOIN users u ON u.id=o.user_id WHERE o.source_club_id=?'''
+        args=[club_id]
+        if lo: sql+=" AND date(o.created_at,'+8 hours')>=?"; args.append(lo)
+        if hi: sql+=" AND date(o.created_at,'+8 hours')<=?"; args.append(hi)
+        sql+=' ORDER BY o.id DESC'
+        orders=rows(c.execute(sql,args))
         items=rows(c.execute('''SELECT i.order_id,i.product_id,i.variant_name,i.quantity,i.unit_price,i.unit_cost_snapshot,p.name product_name
                                 FROM gear_order_items i LEFT JOIN products p ON p.id=i.product_id
                                 WHERE i.order_id IN (SELECT id FROM gear_orders WHERE source_club_id=?)''',(club_id,)))
@@ -2308,8 +2331,9 @@ def club_commission_summary(club_id:int):
         return summary
 
 @app.get('/api/club/{club_id}/mall/commissions')
-def club_commission_ledger(club_id:int,status:str|None=None):
+def club_commission_ledger(club_id:int,status:str|None=None,date_from:str|None=None,date_to:str|None=None):
     club_or_404(club_id)
+    lo,hi=_date_range(date_from,date_to)
     with conn() as c:
         commission_engine.release_matured(c,club_id=club_id)
         sql='''SELECT l.*,o.status order_status,o.refund_status,o.delivered_at
@@ -2317,6 +2341,8 @@ def club_commission_ledger(club_id:int,status:str|None=None):
         args=[club_id]
         if status:
             sql+=' AND l.status=?'; args.append(status)
+        if lo: sql+=" AND date(l.created_at,'+8 hours')>=?"; args.append(lo)
+        if hi: sql+=" AND date(l.created_at,'+8 hours')<=?"; args.append(hi)
         sql+=' ORDER BY l.id DESC'
         return rows(c.execute(sql,args))
 
@@ -2324,6 +2350,84 @@ def club_commission_ledger(club_id:int,status:str|None=None):
 def club_commission_settlements(club_id:int):
     club_or_404(club_id)
     with conn() as c:return commission_engine.settlements(c,club_id=club_id)
+
+# ── 佣金结算账户（法人卡 / 对公账户，2026-10-22 用户反馈）────────────────────
+# 平台给俱乐部结算佣金的前置条件：没提供账户就不能结算。一个俱乐部一条 active
+# 账户（club_id UNIQUE），可改不可删——打款凭据要留痕。下发一律脱敏。
+_SETTLEMENT_ACCOUNT_TYPES={'legal':'法人银行卡','corporate':'对公账户'}
+
+def _mask_card(no:str)->str:
+    no=str(no or '')
+    return ('*'*(len(no)-4)+no[-4:]) if len(no)>4 else no
+
+def _mask_id(no:str)->str:
+    no=str(no or '')
+    return (no[:6]+'*'*8+no[-4:]) if len(no)>=14 else '*'*len(no)
+
+def _settlement_account_public(a:dict)->dict:
+    return {'exists':True,'accountType':a['account_type'],'accountTypeCn':_SETTLEMENT_ACCOUNT_TYPES.get(a['account_type'],a['account_type']),
+            'holder':a['holder'],'legalName':a['legal_name'],'legalIdNoMasked':_mask_id(a['legal_id_no']),
+            'bankName':a['bank_name'],'bankBranch':a.get('bank_branch') or '','cardNoMasked':_mask_card(a['card_no']),
+            'note':a.get('note') or '','updatedAt':a.get('updated_at') or ''}
+
+@app.get('/api/club/{club_id}/settlement-account')
+def club_get_settlement_account(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        a=row(c.execute("SELECT * FROM club_settlement_accounts WHERE club_id=? AND status='active'",(club_id,)))
+        return _settlement_account_public(a) if a else {'exists':False}
+
+@app.post('/api/club/{club_id}/settlement-account')
+def club_save_settlement_account(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    at=str(payload.get('accountType') or '').strip()
+    if at not in _SETTLEMENT_ACCOUNT_TYPES: raise HTTPException(400,'账户类型只能是「法人银行卡」或「对公账户」')
+    def _txt(key,label,mn,mx):
+        v=str(payload.get(key) or '').strip()
+        if not (mn<=len(v)<=mx): raise HTTPException(400,f'{label}长度应在 {mn}-{mx} 个字符')
+        return v
+    holder=_txt('holder','户名',2,60)
+    legal_name=_txt('legalName','法人姓名',2,30)
+    bank_name=_txt('bankName','开户行',2,60)
+    bank_branch=str(payload.get('bankBranch') or '').strip()[:60]
+    note=str(payload.get('note') or '').strip()[:200]
+    # 卡号/身份证：GET 只回脱敏值，前端修改时这两格留空＝保留原值（防止把 ******** 存回库）。
+    with conn() as c:
+        existing=row(c.execute("SELECT * FROM club_settlement_accounts WHERE club_id=? AND status='active'",(club_id,)))
+    legal_id=str(payload.get('legalIdNo') or '').strip().upper()
+    if not legal_id:
+        if not existing: raise HTTPException(400,'法人身份证号应为 18 位（末位可为 X）')
+        legal_id=existing['legal_id_no']
+    elif not re.fullmatch(r'\d{17}[\dX]',legal_id): raise HTTPException(400,'法人身份证号应为 18 位（末位可为 X）')
+    card_no=re.sub(r'\s+','',str(payload.get('cardNo') or ''))
+    if not card_no:
+        if not existing: raise HTTPException(400,'卡号/账号应为 10-25 位数字')
+        card_no=existing['card_no']
+    elif not re.fullmatch(r'\d{10,25}',card_no): raise HTTPException(400,'卡号/账号应为 10-25 位数字')
+    with conn() as c:
+        c.execute('''INSERT INTO club_settlement_accounts(club_id,account_type,holder,legal_name,legal_id_no,bank_name,bank_branch,card_no,note)
+                     VALUES(?,?,?,?,?,?,?,?,?)
+                     ON CONFLICT(club_id) DO UPDATE SET account_type=excluded.account_type,holder=excluded.holder,
+                       legal_name=excluded.legal_name,legal_id_no=excluded.legal_id_no,bank_name=excluded.bank_name,
+                       bank_branch=excluded.bank_branch,card_no=excluded.card_no,note=excluded.note,status='active',
+                       updated_at=CURRENT_TIMESTAMP''',(club_id,at,holder,legal_name,legal_id,bank_name,bank_branch,card_no,note))
+        a=row(c.execute("SELECT * FROM club_settlement_accounts WHERE club_id=? AND status='active'",(club_id,)))
+    return _settlement_account_public(a)
+
+@app.get('/api/platform/settlement-accounts')
+def platform_settlement_accounts(club_id:int|None=None):
+    """平台侧查看各俱乐部结算账户（脱敏）；不带 club_id 时返回全部俱乐部（含未提供的）。"""
+    with conn() as c:
+        sql='''SELECT cl.id club_id,cl.name club_name,a.* FROM clubs cl
+               LEFT JOIN club_settlement_accounts a ON a.club_id=cl.id AND a.status='active' WHERE 1=1'''
+        args=[]
+        if club_id is not None: sql+=' AND cl.id=?'; args.append(club_id)
+        out=[]
+        for r in rows(c.execute(sql+' ORDER BY cl.id',args)):
+            item={'clubId':r['club_id'],'clubName':r['club_name'],'exists':bool(r.get('id'))}
+            if r.get('id'): item['account']=_settlement_account_public(r)
+            out.append(item)
+        return out
 
 
 @app.get('/api/club/{club_id}/mall/after-sales')
@@ -4560,14 +4664,18 @@ def platform_release_commissions(payload:dict=Body(default={})):
 @app.get('/api/platform/commission-summary')
 def platform_commission_summary(club_id:int|None=None):
     with conn() as c:
+        def _with_account(s:dict)->dict:
+            s['hasAccount']=bool(row(c.execute("SELECT id FROM club_settlement_accounts WHERE club_id=? AND status='active'",(s['clubId'],))))
+            return s
         if club_id is not None:
             if not row(c.execute('SELECT id FROM clubs WHERE id=?',(club_id,))): raise HTTPException(404,'俱乐部不存在')
-            return commission_engine.summary(c,club_id=club_id)
+            return _with_account(commission_engine.summary(c,club_id=club_id))
         clubs=rows(c.execute('SELECT id,name FROM clubs ORDER BY id'))
-        return [{**commission_engine.summary(c,club_id=int(cl['id'])),'clubName':cl['name']} for cl in clubs]
+        return [_with_account({**commission_engine.summary(c,club_id=int(cl['id'])),'clubName':cl['name']}) for cl in clubs]
 
 @app.get('/api/platform/commissions')
-def platform_commissions(club_id:int|None=None,status:str|None=None):
+def platform_commissions(club_id:int|None=None,status:str|None=None,date_from:str|None=None,date_to:str|None=None):
+    lo,hi=_date_range(date_from,date_to)
     with conn() as c:
         commission_engine.release_matured(c,club_id=club_id)
         sql='''SELECT l.*,cl.name club_name,o.status order_status,o.refund_status,o.delivered_at
@@ -4575,18 +4683,31 @@ def platform_commissions(club_id:int|None=None,status:str|None=None):
         args=[]
         if club_id is not None: sql+=' AND l.club_id=?'; args.append(club_id)
         if status: sql+=' AND l.status=?'; args.append(status)
+        if lo: sql+=" AND date(l.created_at,'+8 hours')>=?"; args.append(lo)
+        if hi: sql+=" AND date(l.created_at,'+8 hours')<=?"; args.append(hi)
         sql+=' ORDER BY l.id DESC'
         return rows(c.execute(sql,args))
 
 @app.get('/api/platform/settlements')
 def platform_settlements(club_id:int|None=None):
-    with conn() as c:return commission_engine.settlements(c,club_id=club_id)
+    with conn() as c:
+        out=commission_engine.settlements(c,club_id=club_id)
+        # 回带打款账户摘要（脱敏）：结算记录要能核对「钱打到了哪张卡」。
+        accts={int(a['club_id']):a for a in rows(c.execute("SELECT * FROM club_settlement_accounts WHERE status='active'"))}
+        for s in out:
+            a=accts.get(int(s.get('club_id') or 0))
+            s['payee']=({'holder':a['holder'],'bankName':a['bank_name'],'cardNoMasked':_mask_card(a['card_no']),
+                         'accountTypeCn':_SETTLEMENT_ACCOUNT_TYPES.get(a['account_type'],a['account_type'])} if a else None)
+        return out
 
 @app.get('/api/platform/settlements/preview')
 def platform_settlement_preview(club_id:int):
     with conn() as c:
         if not row(c.execute('SELECT id FROM clubs WHERE id=?',(club_id,))): raise HTTPException(404,'俱乐部不存在')
-        return commission_engine.preview(c,club_id=club_id)
+        p=commission_engine.preview(c,club_id=club_id)
+        acct=row(c.execute("SELECT * FROM club_settlement_accounts WHERE club_id=? AND status='active'",(club_id,)))
+        p['account']=_settlement_account_public(acct) if acct else {'exists':False}
+        return p
 
 @app.post('/api/platform/settlements')
 def platform_create_settlement(payload:dict=Body(...)):
@@ -4594,9 +4715,16 @@ def platform_create_settlement(payload:dict=Body(...)):
     except Exception: raise HTTPException(400,'clubId required')
     with conn() as c:
         if not row(c.execute('SELECT id FROM clubs WHERE id=?',(club_id,))): raise HTTPException(404,'俱乐部不存在')
+        # 2026-10-22 用户反馈：俱乐部结算佣金需要先提供法人卡或对公账户——没有账户一律不准结算。
+        acct=row(c.execute("SELECT id,holder,bank_name,card_no,account_type FROM club_settlement_accounts WHERE club_id=? AND status='active'",(club_id,)))
+        if not acct: raise HTTPException(409,'该俱乐部尚未提供结算账户（法人卡/对公账户）：请通知俱乐部在后台「商城 · 结算账户」补登后再结算')
         try:
-            return commission_engine.settle_available(c,club_id=club_id,payment_ref=str(payload.get('paymentRef') or ''),note=str(payload.get('note') or ''),created_by='platform')
+            r=commission_engine.settle_available(c,club_id=club_id,payment_ref=str(payload.get('paymentRef') or ''),note=str(payload.get('note') or ''),created_by='platform')
         except ValueError as e: raise HTTPException(409,str(e))
+        # 回带脱敏账户摘要，平台结算记录里能核对打到了哪张卡（只留后四位）。
+        r['payee']={'accountTypeCn':_SETTLEMENT_ACCOUNT_TYPES.get(acct['account_type'],acct['account_type']),
+                    'holder':acct['holder'],'bankName':acct['bank_name'],'cardNoMasked':_mask_card(acct['card_no'])}
+        return r
 
 
 

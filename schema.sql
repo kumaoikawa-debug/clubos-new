@@ -437,6 +437,26 @@ CREATE TABLE IF NOT EXISTS commission_settlements (
 );
 CREATE INDEX IF NOT EXISTS idx_commission_settlements_club ON commission_settlements(club_id,created_at DESC);
 
+-- 俱乐部佣金结算账户（2026-10-22 用户反馈「结算佣金需要提供法人卡或对公账户」）：
+-- 一个俱乐部一条 active 账户（club_id UNIQUE），可修改不可删——打款凭据要留痕。
+-- 法人卡(legal)：holder=法人姓名、card_no=借记卡号；对公(corporate)：holder=单位名称、card_no=对公账号。
+CREATE TABLE IF NOT EXISTS club_settlement_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL UNIQUE,
+  account_type TEXT NOT NULL DEFAULT 'legal',
+  holder TEXT NOT NULL,
+  legal_name TEXT NOT NULL,
+  legal_id_no TEXT NOT NULL,
+  bank_name TEXT NOT NULL,
+  bank_branch TEXT,
+  card_no TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (club_id) REFERENCES clubs(id)
+);
+
 CREATE TABLE IF NOT EXISTS platform_settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL

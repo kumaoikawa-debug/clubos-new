@@ -54,3 +54,9 @@ python tests/execution_trip_smoke.py
 # 赠券（零积分、俱乐部承担、库存扣减、售罄/平台券/非会员被拒）、赠券立刻进 C 端可用券。
 # 需要 CLUBOS_TEST_OPEN=1（俱乐部写接口在 demo 模式仍要求登录，由调用方环境提供）。
 python tests/member_manage_smoke.py
+# 商城佣金日期搜索 + 俱乐部结算账户（2026-10-22 用户截图反馈两件事）：
+# 订单/佣金流水 date_from/date_to 过滤（UTC+8 本地日期对齐、from>to 与非法格式 400）；
+# 结算账户法人卡/对公账户建档（脱敏、非法入参 400、upsert），平台无账户结算 409、
+# 有账户才放行并回带打款账户摘要，结算幂等，记录可核对打到了哪张卡。
+# 需要 CLUBOS_TEST_OPEN=1（俱乐部写接口在 demo 模式仍要求登录，由调用方环境提供）。
+python tests/mall_commission_search_settlement_smoke.py

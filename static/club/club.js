@@ -861,8 +861,91 @@ async function renderMemberDetail(ov,userId){
     </div>`;
 }
 
-async function loadMall(){ try{skel('#clubOrders',4);let [p,o,cs,sett,aftersales,tiers]=await Promise.all([api(`/api/club/${CLUB}/mall/products`),api(`/api/club/${CLUB}/mall/orders`),api(`/api/club/${CLUB}/mall/commission-summary`),api(`/api/club/${CLUB}/mall/settlements`),api(`/api/club/${CLUB}/mall/after-sales`),api(`/api/club/${CLUB}/membership/tiers`)]);const md=bestGearDiscount(tiers);$('#clubCommissionSummary').innerHTML=[['待签收',money(cs.pending)],['售后冻结',money(cs.frozen)],['可结算',money(cs.payableNow)],['已结算',money(cs.settled)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">${cs.carryDebt&&x[0]==='可结算'?`退款待冲抵 ${money(cs.carryDebt)}`:`售后期 ${cs.policy.afterSalesDays} 天`}</div></div>`).join('');$('#clubProducts').innerHTML=p.map(x=>`<div class="product" data-pid="${x.id}" role="button" tabindex="0" onclick="openClubProduct(${x.id})"><div class="ph">🎒</div><h4>${esc(x.name)}</h4><div class="sub">${esc(x.category||'户外装备')}</div>${memberPriceHtml(x.price,md)}<div class="sub">库存 ${x.stock} · 平台统一履约</div></div>`).join('');$('#clubOrders').innerHTML=o.map(x=>`<div class="list-row" role="button" tabindex="0" onclick="openClubOrder(${x.id})"><div class="list-row__main"><div class="list-row__title">订单 #${x.id}</div> · ${money(x.total)} · 佣金 ${money(x.club_commission)}<div class="list-row__sub">${x.status} · ${x.carrier||'待发货'} ${x.tracking_no||''} · 售后 ${x.after_sales_status||'无'}</div></div></div>`).join('')||'<div class="empty">暂无商城订单</div>';$('#clubAfterSales').innerHTML=aftersales.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.case_type)}</div> · 订单 #${x.order_id} <span class="tag">${esc(x.status)}</span><div class="list-row__sub">平台售后处理 · ${esc(x.reason||'')} · 申请退款 ${money(x.requested_refund_amount||0)}</div></div></div>`).join('')||'<div class="empty">暂无商城售后</div>';$('#clubSettlements').innerHTML=sett.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${money(x.net_amount)}</div> · ${esc(x.payment_ref)} <span class="tag">${x.status}</span><div class="list-row__sub">佣金 ${money(x.gross_amount)} · 退款冲抵 ${money(x.deduction_amount)} · ${esc(x.paid_at||x.created_at)}</div></div></div>`).join('')||'<div class="empty">暂无结算记录</div>';await loadInventory()}
+async function loadMall(){ try{skel('#clubOrders',4);let [p,cs,sett,aftersales,tiers]=await Promise.all([api(`/api/club/${CLUB}/mall/products`),api(`/api/club/${CLUB}/mall/commission-summary`),api(`/api/club/${CLUB}/mall/settlements`),api(`/api/club/${CLUB}/mall/after-sales`),api(`/api/club/${CLUB}/membership/tiers`)]);const md=bestGearDiscount(tiers);$('#clubCommissionSummary').innerHTML=[['待签收',money(cs.pending)],['售后冻结',money(cs.frozen)],['可结算',money(cs.payableNow)],['已结算',money(cs.settled)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">${cs.carryDebt&&x[0]==='可结算'?`退款待冲抵 ${money(cs.carryDebt)}`:`售后期 ${cs.policy.afterSalesDays} 天`}</div></div>`).join('');$('#clubProducts').innerHTML=p.map(x=>`<div class="product" data-pid="${x.id}" role="button" tabindex="0" onclick="openClubProduct(${x.id})"><div class="ph">🎒</div><h4>${esc(x.name)}</h4><div class="sub">${esc(x.category||'户外装备')}</div>${memberPriceHtml(x.price,md)}<div class="sub">库存 ${x.stock} · 平台统一履约</div></div>`).join('');await loadMallOrders();await loadSettlementAccount();$('#clubAfterSales').innerHTML=aftersales.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.case_type)}</div> · 订单 #${x.order_id} <span class="tag">${esc(x.status)}</span><div class="list-row__sub">平台售后处理 · ${esc(x.reason||'')} · 申请退款 ${money(x.requested_refund_amount||0)}</div></div></div>`).join('')||'<div class="empty">暂无商城售后</div>';$('#clubSettlements').innerHTML=sett.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${money(x.net_amount)}</div> · ${esc(x.payment_ref)} <span class="tag">${x.status}</span><div class="list-row__sub">佣金 ${money(x.gross_amount)} · 退款冲抵 ${money(x.deduction_amount)} · ${esc(x.paid_at||x.created_at)}</div></div></div>`).join('')||'<div class="empty">暂无结算记录</div>';await loadInventory()}
 catch(e){loaderError('#clubOrders',e,'商城数据加载失败')}}
+/* ── 商城订单按日期筛选（2026-10-22 用户反馈「佣金明细太多，要按日期搜索」）────
+   DB 时间戳是 UTC（SQLite CURRENT_TIMESTAMP 恒 UTC，线上服务器还是 GMT），
+   用户按本地日期筛：后端 date(created_at,'+8 hours') 比较，前端显示也 +8。 */
+let mallOrderRange={from:'',to:''};
+function fmtUtc8(ts){ /* DB 存 UTC；时间戳 +8h 后用 UTC 字段读，才是本地(+8)时间。
+   ★不能用 setHours(getHours()+8)：GMT+8 浏览器会先把 UTC 转本地再加 8，双重偏移。 */
+  if(!ts)return '';
+  const d=new Date(String(ts).replace(' ','T')+'Z');
+  if(isNaN(d))return String(ts).slice(0,16);
+  const l=new Date(d.getTime()+8*3600e3);
+  const p=n=>String(n).padStart(2,'0');
+  return `${p(l.getUTCMonth()+1)}-${p(l.getUTCDate())} ${p(l.getUTCHours())}:${p(l.getUTCMinutes())}`;
+}
+function localDay(offsetDays){
+  const d=new Date(Date.now()+(offsetDays||0)*86400e3+8*3600e3);
+  const p=n=>String(n).padStart(2,'0');
+  return `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}`;
+}
+function setOrderRange(preset){
+  const t=localDay(0);
+  if(preset==='today')mallOrderRange={from:t,to:t};
+  else if(preset==='yesterday'){const y=localDay(-1);mallOrderRange={from:y,to:y};}
+  else if(preset==='7d')mallOrderRange={from:localDay(-6),to:t};
+  else if(preset==='month')mallOrderRange={from:t.slice(0,8)+'01',to:t};
+  else if(preset==='lastMonth'){
+    // 本地(+8)视角：时间戳 +8h 后用 UTC 字段回退（setUTCDate(0)=上月最后一天，再来一次=上月更前一天）
+    const base=new Date(Date.now()+8*3600e3);
+    base.setUTCDate(0);
+    const last=`${base.getUTCFullYear()}-${String(base.getUTCMonth()+1).padStart(2,'0')}-${String(base.getUTCDate()).padStart(2,'0')}`;
+    base.setUTCDate(0);
+    mallOrderRange={from:`${base.getUTCFullYear()}-${String(base.getUTCMonth()+1).padStart(2,'0')}-01`,to:last};
+  }
+  else mallOrderRange={from:'',to:''};
+  $('#clubOrderFrom').value=mallOrderRange.from;
+  $('#clubOrderTo').value=mallOrderRange.to;
+  loadMallOrders();
+}
+function applyOrderRange(){ mallOrderRange={from:$('#clubOrderFrom').value||'',to:$('#clubOrderTo').value||''}; loadMallOrders(); }
+async function loadMallOrders(){
+  try{
+    const q=new URLSearchParams();
+    if(mallOrderRange.from)q.set('date_from',mallOrderRange.from);
+    if(mallOrderRange.to)q.set('date_to',mallOrderRange.to);
+    const o=await api(`/api/club/${CLUB}/mall/orders${q.toString()?'?'+q.toString():''}`);
+    const gross=o.reduce((s,x)=>s+Number(x.total||0),0), comm=o.reduce((s,x)=>s+Number(x.club_commission||0),0);
+    const ranged=mallOrderRange.from||mallOrderRange.to;
+    $('#clubOrderStat').innerHTML=`共 <b>${o.length}</b> 单 · 实付合计 <b>${money(gross)}</b> · 佣金合计 <b>${money(comm)}</b> · ${ranged?`${mallOrderRange.from||'最早'} 至 ${mallOrderRange.to||'最新'}`:'全部时间'}`;
+    $('#clubOrders').innerHTML=o.map(x=>`<div class="list-row" role="button" tabindex="0" onclick="openClubOrder(${x.id})"><div class="list-row__main"><div class="list-row__title">订单 #${x.id}</div> · ${money(x.total)} · 佣金 ${money(x.club_commission)}<div class="list-row__sub">${fmtUtc8(x.created_at)} 下单 · ${x.status} · ${x.carrier||'待发货'} ${x.tracking_no||''} · 售后 ${x.after_sales_status||'无'}</div></div></div>`).join('')||`<div class="empty">${ranged?'该日期范围内暂无订单':'暂无商城订单'}</div>`;
+  }catch(e){loaderError('#clubOrders',e,'订单加载失败')}
+}
+/* ── 结算账户（法人卡/对公账户，2026-10-22 用户反馈「结算佣金需要提供法人卡或对公账户」）── */
+async function loadSettlementAccount(){
+  try{
+    const a=await api(`/api/club/${CLUB}/settlement-account`);
+    const box=$('#clubSettlementAccount');
+    if(!a||!a.exists){
+      box.innerHTML=`<div class="notice-bar warn" style="margin-bottom:10px">尚未登记结算账户。平台结算佣金前必须提供<b>法人卡</b>或<b>对公账户</b>，否则无法打款。</div><button class="btn" onclick="saveSettlementAccount()">添加结算账户</button>`;
+      return;
+    }
+    box.innerHTML=`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(a.holder)} <span class="tag info">${esc(a.accountTypeCn)}</span></div><div class="list-row__sub">${esc(a.bankName)}${a.bankBranch?' · '+esc(a.bankBranch):''} · 卡号 ${esc(a.cardNoMasked)} · 法人 ${esc(a.legalName)}（${esc(a.legalIdNoMasked)}）${a.note?' · '+esc(a.note):''}</div></div><div class="list-row__end"><button class="btn ghost" onclick="saveSettlementAccount()">修改</button></div></div><div class="sub" style="margin-top:8px">${a.updatedAt?'更新于 '+esc(a.updatedAt.slice(0,10)):''}</div>`;
+  }catch(e){loaderError('#clubSettlementAccount',e,'结算账户加载失败')}
+}
+async function saveSettlementAccount(){
+  let cur={exists:false};
+  try{cur=await api(`/api/club/${CLUB}/settlement-account`)}catch(e){showAlert({title:'加载失败',message:e.message});return}
+  /* 明文字段（户名/法人/开户行）预填方便改；★卡号与身份证绝不出明文——只提示当前脱敏值，
+     留空即保留原值（后端对空值走保留分支），防止用户把 ********9012 当明文存回库。 */
+  const f=await uxForm({title:cur.exists?'修改结算账户':'添加结算账户',desc:'平台将按此账户打款，请确保信息准确；卡号仅平台核对打款之用，不会对外展示。',submitText:'保存',fields:[
+    {name:'accountType',label:'账户类型',type:'select',required:true,value:cur.exists?cur.accountType:'legal',options:[{value:'legal',label:'法人银行卡'},{value:'corporate',label:'对公账户'}]},
+    {name:'holder',label:'户名',required:true,value:cur.exists?cur.holder:'',placeholder:cur.exists?'':'法人银行卡填法人姓名；对公账户填单位名称'},
+    {name:'legalName',label:'法人姓名',required:true,value:cur.exists?cur.legalName:''},
+    {name:'legalIdNo',label:'法人身份证号',required:!cur.exists,value:'',placeholder:cur.exists?`不修改可留空 · 当前 ${cur.legalIdNoMasked}`:'18 位（末位可为 X）'},
+    {name:'bankName',label:'开户行',required:true,value:cur.exists?cur.bankName:'',placeholder:'如：中国工商银行'},
+    {name:'bankBranch',label:'开户支行（选填）',value:cur.exists?(cur.bankBranch||''):''},
+    {name:'cardNo',label:'卡号 / 账号',required:!cur.exists,value:'',placeholder:cur.exists?`不修改可留空 · 当前 ${cur.cardNoMasked}`:'10-25 位数字'},
+    {name:'note',label:'备注（选填）',full:true,value:cur.exists?(cur.note||''):''}
+  ]});
+  if(!f)return;
+  try{
+    await api(`/api/club/${CLUB}/settlement-account`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(f)});
+    toast('结算账户已保存');await loadSettlementAccount();
+  }catch(e){showAlert({title:'保存失败',message:e.message})}
+}
 /* 装备上下架：俱乐部只能申请，不能自己改 status —— products 表根本没有 club 归属列，
    让俱乐部直接改等于绕过总平台的商品管理。提交申请后由总平台一键处理，
    处理完 products.status 才变，C 端商城的可见性跟着变。 */
@@ -1866,7 +1949,7 @@ async function openClubOrder(id){
     +`<div class="list-row__sub">单价 ${money(i.unit_price)} · 数量 ${i.quantity}${i.unit_cost_snapshot?` · 成本快照 ${money(i.unit_cost_snapshot)}`:''}</div>`
     +`<div class="list-row__end"><strong>${money(Number(i.unit_price||0)*Number(i.quantity||0))}</strong></div></div></div>`).join('')
     ||'<div class="sub">这笔订单没有商品明细。</div>';
-  const body=`<div style="margin-top:6px">${line('订单号','#'+o.id)}${line('买家',o.buyer)}${line('收货人',[o.shipping_consignee,o.shipping_phone].filter(Boolean).join(' ')||'历史订单无地址')}${line('收货地址',o.shipping_address||'历史订单无地址')}${line('下单时间',o.created_at)}`
+  const body=`<div style="margin-top:6px">${line('订单号','#'+o.id)}${line('买家',o.buyer)}${line('收货人',[o.shipping_consignee,o.shipping_phone].filter(Boolean).join(' ')||'历史订单无地址')}${line('收货地址',o.shipping_address||'历史订单无地址')}${line('下单时间',fmtUtc8(o.created_at)+'（本地时间）')}`
     +`${line('订单状态',enumCn(o.status))}${line('订单金额',money(items))}${line('本单佣金',money(o.club_commission))}`
     +`${line('物流',[o.carrier,o.tracking_no].filter(Boolean).join(' ')||'待发货')}${line('售后',o.after_sales_status||'无')}</div>`
     +`<div style="margin-top:14px"><b class="sub">商品明细</b><div style="margin-top:6px">${parts}</div></div>`;

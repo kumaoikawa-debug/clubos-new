@@ -259,6 +259,24 @@ def _run_compat_migrations(c):
     c.execute('CREATE INDEX IF NOT EXISTS idx_commission_ledger_club_status ON commission_ledger(club_id,status,created_at)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_commission_ledger_order ON commission_ledger(order_id,ledger_type)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_commission_settlements_club ON commission_settlements(club_id,created_at DESC)')
+    # 俱乐部佣金结算账户（法人卡/对公账户，2026-10-22 用户反馈）：平台结算佣金的前置条件，
+    # 没提供账户就不能结算（app.py platform_create_settlement 强校验）。
+    c.execute('''CREATE TABLE IF NOT EXISTS club_settlement_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id INTEGER NOT NULL UNIQUE,
+      account_type TEXT NOT NULL DEFAULT 'legal',
+      holder TEXT NOT NULL,
+      legal_name TEXT NOT NULL,
+      legal_id_no TEXT NOT NULL,
+      bank_name TEXT NOT NULL,
+      bank_branch TEXT,
+      card_no TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (club_id) REFERENCES clubs(id)
+    )''')
     # v0.17 normalize legacy pre-settlement refunds: v0.16 wrote an audit reversal row but
     # left the original earn row pending. There were no settlements before v0.17, so these
     # refunded earns are safe to mark reversed during compatibility migration.

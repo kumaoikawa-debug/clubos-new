@@ -527,3 +527,10 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 
 /* 会员行整行可点（会员详情），2026-10-22 用户反馈 */
 .member-row{cursor:pointer}
+
+/* 日期筛选条 + 小按钮 + 提示条（2026-10-22 商城订单按日期搜索 / 结算账户引导） */
+.filter-bar{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.filter-bar input[type=date]{border:1px solid var(--line);border-radius:10px;background:#fff;padding:8px 10px;font-size:12.5px;color:var(--text);min-height:34px}
+.btn.sm{min-height:31px;padding:6px 11px;font-size:12px;border-radius:8px}
+.notice-bar{line-height:1.6;border-radius:12px;padding:10px 13px;font-size:12.5px;border:1px solid var(--line);background:#f7f9f6}
+.notice-bar.warn{background:#fdf6ee;border-color:#f0ddc4;color:#7a4a1d}
