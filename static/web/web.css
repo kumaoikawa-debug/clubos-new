@@ -878,6 +878,18 @@
 .w-pax-row__meta{margin-top:2px;font-size:11px;color:var(--w-muted)}
 .w-pax-row__ops{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
 .w-pax-row__prog{margin-top:5px;font-size:11px;color:var(--w-muted)}
+/* 出行指引（me.js 的 me-trip）：俱乐部执行页的集合信息 / 已发送通知 / 分车，
+   同步给报了名的顾客。与 .me-card2__ref 同一节奏：虚线分隔 + 小字，
+   不抢订单金额的视觉权重。数据只在真有内容时才由后端下发，空则整块不渲染。 */
+.web-shell .me-trip{margin-top:8px;border-top:1px dashed var(--w-line);padding-top:8px}
+.web-shell .me-trip__hd{font-size:12px;font-weight:700;color:var(--w-ink);margin-bottom:6px}
+.web-shell .me-trip__row{display:flex;gap:10px;font-size:12px;line-height:1.75}
+.web-shell .me-trip__row span{flex:0 0 52px;color:var(--w-muted)}
+.web-shell .me-trip__row b{font-weight:600;color:var(--w-ink2)}
+.web-shell .me-trip__notice{margin-top:7px;background:var(--w-brand-soft);border-radius:8px;padding:8px 10px}
+.web-shell .me-trip__notice b{display:block;font-size:12.5px;font-weight:650;color:var(--w-ink)}
+.web-shell .me-trip__notice p{margin:3px 0 0;font-size:12px;color:var(--w-ink2);line-height:1.65;white-space:pre-wrap}
+.web-shell .me-trip__notice i{display:block;margin-top:4px;font-size:10.5px;color:var(--w-muted);font-style:normal}
 
 .w-act{
   border:1px solid var(--w-line);background:#fff;border-radius:9px;padding:7px 12px;

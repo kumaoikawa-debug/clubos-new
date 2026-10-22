@@ -230,6 +230,26 @@ window.wv=function(id,b){
   return _wv?_wv(id,b):undefined;
 };
 
+/* ── 出行指引（2026-10-22 用户反馈「分车、活动通知保存之后能同步到 C 端用户吗」）───
+   集合 / 应急电话 / 带队人 / 本人分车 / 已发送通知。数据来自俱乐部端「活动执行」页的
+   团期执行数据，后端只在真有内容时才下发 trip；一块都没有时整块不渲染 —— 空壳卡片
+   只会让顾客以为页面缺了东西。活动详情页那句「出发前会在订单里给出集合与联络方式」
+   从这里开始才是真话。只给已支付的订单：退款后还印集合信息只会添堵。 */
+function meTrip(o){
+  if(o.status!=='paid')return '';
+  const t=o.trip||{}; const rows=[];
+  if(t.meeting)rows.push(`<div class="me-trip__row"><span>集合</span><b>${esc(t.meeting.time||'时间待定')} · ${esc(t.meeting.location||'地点待定')}</b></div>`);
+  if(t.emergencyPhone)rows.push(`<div class="me-trip__row"><span>应急电话</span><b>${esc(t.emergencyPhone)}</b></div>`);
+  if(t.leaders&&t.leaders.length)rows.push(`<div class="me-trip__row"><span>带队</span><b>${t.leaders.map(l=>esc(l.name)+(l.role&&l.role!=='领队'?'（'+esc(l.role)+'）':'')).join('、')}</b></div>`);
+  /* 分车按参加人逐人显示：同一天报名的一家人可能被分在不同车；已退出的不计。 */
+  const veh=(o.participants||[]).filter(p=>p.status!=='refunded'&&t.vehicles&&t.vehicles[String(p.id)])
+    .map(p=>esc(p.name)+' · '+esc(t.vehicles[String(p.id)]));
+  if(veh.length)rows.push(`<div class="me-trip__row"><span>分车</span><b>${veh.join('；')}</b></div>`);
+  const notices=(t.notices||[]).map(n=>`<div class="me-trip__notice"><b>${esc(n.title)}</b><p>${esc(n.content)}</p>${n.sentAt?`<i>${esc(String(n.sentAt).slice(5,16))}</i>`:''}</div>`).join('');
+  if(!rows.length&&!notices)return '';
+  return `<div class="me-trip"><div class="me-trip__hd">出行指引</div>${rows.join('')}${notices}</div>`;
+}
+
 /* ── 通用订单卡（装备 / 活动）─────────────────────────────────────────── */
 function meOrderCard(o){
   const kind=o._kind||o.orderKind||(o.items?'gear':'activity');
@@ -251,7 +271,8 @@ function meOrderCard(o){
   } else {
     inner=`<div class="me-card2__meta">${esc(o.activity_title||'活动报名')}</div>`+
       `<div class="me-card2__meta">${esc(o.occurrence_label||o.start_at||'团期待定')} · ${o.participantCount||(o.participants||[]).length} 人</div>`+
-      `<div class="me-card2__amt">实付 <b>${money(o.amount||0)}</b></div>`;
+      `<div class="me-card2__amt">实付 <b>${money(o.amount||0)}</b></div>`+
+      meTrip(o);
     if(o.status==='paid' && ['none','rejected'].includes(o.refund_status||'none')){
       const rq=o.refundQuote;
       acts = rq&&rq.eligible?`<button class="me-btn me-btn--danger" onclick="requestActivityRefund(${o.id},${rq.cashRefundAmount||0},${rq.cashRefundPercent||0})">申请退款</button>`:`<span class="me-note">当前不可退款${rq&&rq.reason?' · '+esc(rq.reason):''}</span>`;
@@ -286,6 +307,7 @@ SUB_ME.myregs=function(){
       <div class="me-card2__hd"><b>${esc(o.activity_title||'活动')}</b>${meBadge(meStLabel(o.status),meStTone(o.status))}</div>
       <div class="me-card2__meta">${esc(o.occurrence_label||o.start_at||'团期待定')} · ${o.participantCount||ps.length} 人</div>
       <div class="me-card2__amt">实付 <b>${money(o.amount||0)}</b></div>
+      ${meTrip(o)}
       ${pax?`<div class="me-paxs">${pax}</div>`:''}
       <div class="me-card2__ref">退款：${esc((typeof refundStateText==='function')?refundStateText(o):'')}</div>
       ${act?`<div class="me-card2__ops">${act}</div>`:''}

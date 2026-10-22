@@ -10,11 +10,51 @@ window.editOccurrence=async(aid,oid)=>uxTask(async()=>{const a=await api('/api/c
 /* 删团期：后端有资金护栏（还有未取消报名就 409），前端也要先说清后果再动手。 */
 window.deleteOccurrence=async(aid,oid)=>uxTask(async()=>{const a=await api('/api/club/'+CLUB+'/activities/'+aid);const o=(a.occurrences||[]).find(x=>Number(x.id)===Number(oid));const nm=o?(String(o.label||'').trim()||o.start_at||'该团期'):'该团期';const sold=Number(o&&o.sold||0);if(!await uxConfirm({title:'删除团期',message:'将删除「'+nm+'」（已售 '+sold+' 人）及其执行数据。已有未取消报名的团期无法删除，请改用「停止报名」。',confirmText:'删除团期',danger:true}))return;await api('/api/club/'+CLUB+'/occurrences/'+oid,{method:'DELETE'});toast('团期已删除');openActivity(aid)});
 window.editExecutionSettings=async oid=>uxTask(async()=>{const data=await api('/api/club/'+CLUB+'/occurrences/'+oid+'/execution'),st=data.settings||data.executionSettings||{};const d=await uxForm({title:'集合与应急信息',subtitle:'保存后领队和执行人员查看的是同一份资料。',fields:[{name:'meetingTime',label:'集合时间',value:st.meeting_time||'07:50',required:true},{name:'meetingLocation',label:'集合地点',value:st.meeting_location||'',full:true,required:true},{name:'emergencyPhone',label:'应急联系电话',value:st.emergency_phone||'',required:true},{name:'leaderNote',label:'给领队的执行备注',type:'textarea',value:st.leader_note||'',full:true}],submitText:'保存集合信息'});if(!d)return;await patch('/api/club/'+CLUB+'/occurrences/'+oid+'/execution/settings',d);toast('执行信息已更新');openExecution(oid)});
-window.addExecutionLeader=async oid=>uxTask(async()=>{const d=await uxForm({title:'添加本团期领队',fields:[{name:'name',label:'领队姓名',required:true},{name:'phone',label:'手机号',required:true},{name:'role',label:'执行角色',type:'select',options:[{label:'主领队',value:'领队'},{label:'协作领队',value:'协作领队'},{label:'教练',value:'教练'},{label:'后勤',value:'后勤'}],required:true}],submitText:'添加领队'});if(!d)return;await post('/api/club/'+CLUB+'/occurrences/'+oid+'/leaders',d);toast('领队已添加');openExecution(oid)});
-window.addExecutionGroup=async oid=>uxTask(async()=>{const d=await uxForm({title:'添加活动分组',fields:[{name:'groupType',label:'分组类型',required:true,type:'select',options:[{label:'车辆分组',value:'vehicle'},{label:'领队分组',value:'leader'},{label:'房间分组',value:'room'},{label:'自定义分组',value:'custom'}]},{name:'name',label:'分组名称',required:true,value:'1号车'},{name:'capacity',label:'容量（0 = 不限）',type:'number',min:0,step:1,value:20,required:true}],submitText:'添加分组'});if(!d)return;await post('/api/club/'+CLUB+'/occurrences/'+oid+'/groups',{...d,capacity:d.capacity||null});toast('分组已创建');openExecution(oid)});
+/* 执行页领队：与俱乐部领队资源库（club_leaders）同源。
+   此前这里是「姓名+手机号」手打表单 —— 同一个人每场活动打一遍，occurrence_leaders
+   里躺着一堆对不上名册的野记录：C 端「带队领队」卡片拿不到头像/擅长/常驻城市，
+   累计带队次数永远对不上，自动推荐也无从谈起（用户 2026-10-22 截图反馈：
+   「应该跟俱乐部领队资源库同步，直接在里面选即可，也可以增加」）。
+   现在改成从名册挑人（后端按 leaderId 回填姓名/电话/角色），名册没有时当场建档再排。 */
+window.addExecutionLeader=async oid=>uxTask(async()=>{
+  const [rosterRes,exec]=await Promise.all([
+    api('/api/club/'+CLUB+'/leaders'),
+    api('/api/club/'+CLUB+'/occurrences/'+oid+'/execution')]);
+  const taken=new Set((exec.leaders||[]).map(x=>Number(x.leader_id||0)).filter(Boolean));
+  const avail=(rosterRes.leaders||[]).filter(r=>r.status==='active'&&!taken.has(Number(r.id)));
+  const ROLE_OPTS=[{value:'领队',label:'领队'},{value:'副领队',label:'副领队'},{value:'教练',label:'教练'},{value:'向导',label:'向导'},{value:'随队医护',label:'随队医护'},{value:'后勤',label:'后勤'}];
+  const opts=avail.map(r=>({value:String(r.id),
+    label:r.name+'（'+(r.role||'领队')+((r.specialties||[]).length?' · 擅长'+r.specialties.join('/'):'')+(r.base_city?' · 常驻'+r.base_city:'')+'）'}));
+  opts.push({value:'__new__',label:'＋ 资源库里没有，新增一位领队…'});
+  const d=await uxForm({title:'安排本团期领队',
+    subtitle:avail.length?'从俱乐部领队资源库里挑人；姓名、电话以名册为准，同一个人的带队历史才能累计。':'资源库里暂无可安排的领队（在岗的都排过了或还没建档），可直接新增一位入册。',
+    fields:[
+      {name:'leaderId',label:'选择领队',type:'select',required:true,full:true,options:opts},
+      {name:'role',label:'本团期角色',type:'select',required:true,full:true,value:'领队',options:ROLE_OPTS}],
+    submitText:'安排到本团期'});
+  if(!d)return;
+  if(String(d.leaderId)==='__new__'){
+    const nd=await uxForm({title:'新增领队到资源库',subtitle:'先建档入册，再排进这个团期。之后每场活动都能直接挑他。',
+      fields:[{name:'name',label:'姓名',required:true},{name:'phone',label:'手机号',required:true},
+              {name:'role',label:'名册身份',type:'select',required:true,value:d.role,options:ROLE_OPTS},
+              {name:'baseCity',label:'常驻城市（可选）',full:true}],submitText:'建档并安排'});
+    if(!nd)return;
+    const created=await post('/api/club/'+CLUB+'/leaders',{name:nd.name,phone:nd.phone,role:nd.role,baseCity:(nd.baseCity||'').trim()||null,specialties:[]});
+    await post('/api/club/'+CLUB+'/occurrences/'+oid+'/leaders',{leaderId:created.id,role:d.role});
+    toast('新领队已入册，并安排到本团期');openExecution(oid);return;
+  }
+  await post('/api/club/'+CLUB+'/occurrences/'+oid+'/leaders',{leaderId:Number(d.leaderId),role:d.role});
+  toast('领队已安排');openExecution(oid);
+});
+window.removeExecutionLeader=async(oid,aid)=>uxTask(async()=>{
+  if(!await uxConfirm({title:'撤下领队',message:'确定把这名领队从本团期撤下来吗？撤下后不再计入其带队记录。'}))return;
+  await api(`/api/club/${CLUB}/occurrences/${oid}/leaders/${aid}`,{method:'DELETE'});
+  toast('已撤下');openExecution(oid);
+});
+window.addExecutionGroup=async oid=>uxTask(async()=>{const d=await uxForm({title:'添加活动分组',subtitle:'分车结果会同步到 C 端顾客的订单里（「出行指引 → 分车」），备注会一起展示。',fields:[{name:'groupType',label:'分组类型',required:true,type:'select',options:[{label:'车辆分组',value:'vehicle'},{label:'领队分组',value:'leader'},{label:'房间分组',value:'room'},{label:'自定义分组',value:'custom'}]},{name:'name',label:'分组名称',required:true,value:'1号车'},{name:'capacity',label:'容量（0 = 不限）',type:'number',min:0,step:1,value:20,required:true},{name:'note',label:'备注（可选）',full:true,placeholder:'如：车上发水、准时发车'}],submitText:'添加分组'});if(!d)return;await post('/api/club/'+CLUB+'/occurrences/'+oid+'/groups',{...d,capacity:d.capacity||null});toast('分组已创建');openExecution(oid)});
 window.assignVehicle=async(oid,pid)=>uxTask(async()=>{const r=await api('/api/club/'+CLUB+'/occurrences/'+oid+'/execution'),gs=(r.groups||[]).filter(g=>g.group_type==='vehicle');if(!gs.length){toast('请先创建车辆分组');return}const d=await uxForm({title:'为参加人分配车辆',fields:[{name:'groupId',label:'选择车辆',type:'select',required:true,full:true,options:gs.map(g=>({value:g.id,label:g.name+' · '+(g.assigned_count||0)+'/'+(g.capacity||'不限')}))}],submitText:'确认分车'});if(!d)return;await post('/api/club/'+CLUB+'/execution-groups/'+d.groupId+'/assign',{participantId:pid});toast('已分配车辆');openExecution(oid)});
 window.quickCheckin=async(oid,pid,current)=>uxTask(async()=>{const d=await uxForm({title:'更新参加人签到',fields:[{name:'status',label:'签到状态',type:'select',required:true,full:true,value:current||'pending',options:[{value:'checked_in',label:'已签到'},{value:'no_show',label:'未到场'},{value:'cancelled',label:'取消参加'},{value:'pending',label:'等待签到'}]}],submitText:'保存签到'});if(!d)return;await patch('/api/club/'+CLUB+'/occurrences/'+oid+'/participants/'+pid+'/checkin',d);toast('签到已更新');openExecution(oid)});
-window.addExecutionNotice=async oid=>uxTask(async()=>{const d=await uxForm({title:'活动通知',subtitle:'当前版本记录通知；短信或微信实际发送取决于后续渠道接入。',fields:[{name:'title',label:'通知标题',full:true,required:true,value:'出发前集合通知'},{name:'content',label:'通知内容',type:'textarea',full:true,required:true,value:'请按时到达集合点，并携带活动所需装备。'},{name:'channel',label:'通知渠道',type:'select',required:true,options:[{value:'manual',label:'人工通知记录'},{value:'sms',label:'短信（需渠道接入）'},{value:'wechat',label:'微信（需渠道接入）'}]}],submitText:'创建通知'});if(!d)return;await post('/api/club/'+CLUB+'/occurrences/'+oid+'/notices',{...d,audience:'all'});toast('通知已创建');openExecution(oid)});
+window.addExecutionNotice=async oid=>uxTask(async()=>{const d=await uxForm({title:'活动通知',subtitle:'点「标记发送」后，报了名的顾客会立刻在自己的订单「出行指引」里看到这条通知；短信 / 微信渠道后续接入后才会真正发到手机上。',fields:[{name:'title',label:'通知标题',full:true,required:true,value:'出发前集合通知'},{name:'content',label:'通知内容',type:'textarea',full:true,required:true,value:'请按时到达集合点，并携带活动所需装备。'},{name:'channel',label:'通知渠道',type:'select',required:true,options:[{value:'manual',label:'站内同步（订单内展示）'},{value:'sms',label:'短信（需渠道接入）'},{value:'wechat',label:'微信（需渠道接入）'}]}],submitText:'创建通知'});if(!d)return;await post('/api/club/'+CLUB+'/occurrences/'+oid+'/notices',{...d,audience:'all'});toast('通知已创建');openExecution(oid)});
 window.addTier=async()=>uxTask(async()=>{const d=await uxForm({title:'创建会员等级',subtitle:'等级归属于当前俱乐部，不影响其他俱乐部会员。',fields:[{name:'name',label:'等级名称',required:true,value:'钻石会员'},{name:'rank',label:'等级顺序',type:'number',min:1,step:1,value:30,required:true},{name:'minActivitySpend',label:'累计活动消费（元）',type:'number',min:0,step:1,value:5000,required:true},{name:'minActivityCount',label:'累计活动次数',type:'number',min:0,step:1,value:10,required:true}],submitText:'保存会员等级'});if(!d)return;await post('/api/club/'+CLUB+'/membership/tiers',{...d,qualificationMode:'ANY',benefits:['专属会员权益']});toast('等级已新增');loadMembers()});
 window.addClubBenefit=async()=>uxTask(async()=>{const d=await uxForm({title:'创建俱乐部福利',subtitle:'只使用本俱乐部的 Club Points，成本由本俱乐部承担。',fields:[{name:'title',label:'福利名称',required:true,full:true,value:'活动 ¥30 抵扣券'},{name:'benefitType',label:'福利类型',required:true,type:'select',options:[{value:'activity_coupon',label:'活动现金抵扣券'},{value:'service',label:'非现金服务福利'}]},{name:'pointsCost',label:'兑换所需活动积分',type:'number',min:1,step:1,value:3000,required:true},{name:'cashValue',label:'现金抵扣金额（非抵扣券填 0）',type:'number',min:0,step:.01,value:30,required:true},{name:'stock',label:'可兑换数量',type:'number',min:0,step:1,value:50,required:true},{name:'description',label:'福利说明',full:true,value:'本俱乐部会员专属福利'}],submitText:'创建福利'});if(!d)return;await post('/api/club/'+CLUB+'/benefits',{...d,cashValue:d.benefitType==='activity_coupon'?d.cashValue:0,pointsType:'club'});toast('福利已创建');loadMembers()});
 /* 同意之后状态是 processing（等待支付渠道退回）。渠道侧失败/回调丢失时，这一条会一直挂在那儿，

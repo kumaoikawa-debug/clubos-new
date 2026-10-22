@@ -2403,6 +2403,40 @@ def _public_leaders(c,activity_id:int,club_id:int)->list:
     return out
 
 
+def _public_trip_info(c,order:dict)->dict|None:
+    """C 端订单卡里的「出行指引」：集合信息 + 带队人 + 已发送通知 + 本人分车。
+
+    顾客出发前要问的几件事都在这答：几点在哪集合、临时电话打哪个、这团谁带、
+    我在几号车、俱乐部发了什么新通知。数据全部来自团期执行表
+    （occurrence_execution_settings / occurrence_leaders / activity_notices /
+    execution_groups），俱乐部没填的项就不出现 —— 不拿默认值凑一个看起来很满的卡片。
+
+    两条边界（与 _public_leaders 同一条纪律）：
+    1. 通知只下发 status='sent' 的。草稿是俱乐部还在改的内容，顾客看到半成品比看不到更糟；
+    2. 领队手机号不下发 —— 那是俱乐部内部联络方式，应急电话才是给顾客的那个。
+    给领队的执行备注（leader_note）同样不下发：那是写给内部人的。
+    """
+    occ_id=order.get('occurrence_id')
+    if not occ_id: return None
+    st=row(c.execute('SELECT * FROM occurrence_execution_settings WHERE occurrence_id=?',(occ_id,))) or {}
+    notices=[{'title':str(n['title'] or ''),'content':str(n['content'] or ''),'sentAt':n.get('sent_at')}
+             for n in rows(c.execute("SELECT title,content,sent_at FROM activity_notices WHERE occurrence_id=? AND status='sent' ORDER BY id",(occ_id,)))]
+    leaders=[{'name':str(l['name'] or '').strip() or '领队','role':str(l.get('role') or '').strip() or '领队'}
+             for l in rows(c.execute('SELECT name,role FROM occurrence_leaders WHERE occurrence_id=? ORDER BY id',(occ_id,)))]
+    vehicles={int(r['participant_id']):str(r['name'] or '') for r in rows(c.execute('''SELECT pa.participant_id,g.name FROM participant_group_assignments pa
+        JOIN execution_groups g ON g.id=pa.group_id WHERE pa.occurrence_id=? AND pa.group_type='vehicle' ''',(occ_id,))) if r.get('name')}
+    trip={}
+    if str(st.get('meeting_time') or '').strip() or str(st.get('meeting_location') or '').strip():
+        trip['meeting']={'time':str(st.get('meeting_time') or '').strip() or None,
+                         'location':str(st.get('meeting_location') or '').strip() or None}
+    if str(st.get('emergency_phone') or '').strip():
+        trip['emergencyPhone']=str(st['emergency_phone']).strip()
+    if leaders: trip['leaders']=leaders
+    if notices: trip['notices']=notices
+    if vehicles: trip['vehicles']={str(k):v for k,v in vehicles.items()}
+    return trip or None
+
+
 @app.get('/api/public/leaders/{leader_id}/avatar.{ext}')
 def public_leader_avatar(leader_id:int,ext:str):
     """C 端领队头像。顾客没有 club 角色，走不了俱乐部域那条代理，所以单开一条公开的。
@@ -3489,6 +3523,9 @@ def user_order_center(user_id:int,club_id:int=1):
             ps=participant_service.summary_for_registration(c,int(x['id']))
             x.update(ps)
             _attach_checkin_status(c,x.get('participants') or [])
+            # 出行指引：集合信息 / 带队人 / 已发送通知 / 本人分车（2026-10-22 用户反馈
+            # 「分车、活动通知保存之后能同步到 C 端用户吗」）。俱乐部没填执行数据时返回 None。
+            x['trip']=_public_trip_info(c,x)
             a=row(c.execute('SELECT * FROM activities WHERE id=?',(x['activity_id'],)))
             occ=row(c.execute('SELECT * FROM activity_occurrences WHERE id=?',(x['occurrence_id'],))) if x.get('occurrence_id') else None
             # Full-order refund is available only before any participant-level refund begins.

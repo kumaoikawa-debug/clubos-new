@@ -42,3 +42,10 @@ python tests/longpic_minimal_smoke.py
 # 详情「风格家族」守门（2026-10-22 用户反馈「所有详情长得一样」后引入）：五个家族到底色不同、
 # 题材→家族映射确定、同一场稳定复现、promoHtml 图片封顶 + 用图密度闸门。不联网不调模型。
 python tests/detail_style_smoke.py
+# 执行页领队资源库指派 + C 端「出行指引」同步（2026-10-22 用户反馈两件事）：
+# ①「活动执行里的领队应该跟资源库同步、直接选、也可以增加」——按 leaderId 指派回填名册、
+#    重复/不存在指派被拒、撤下后 C 端带队人清空；
+# ②「分车、活动通知保存之后能同步到 C 端用户吗」——order-center 的 trip 下发
+#    （集合/应急/带队/sent 通知/分车），草稿通知与领队手机号、内部备注不下发。
+# 需要 CLUBOS_TEST_OPEN=1（俱乐部写接口在 demo 模式仍要求登录，由调用方环境提供）。
+python tests/execution_trip_smoke.py
