@@ -35,3 +35,10 @@ python tests/web_act_view_guard.py
 # 于是素材里几十张照片、列表却挂「未设封面」。落版补空 + 手动接口 + 绝不覆盖人工封面。
 # 自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/auto_cover_smoke.py
+# AI 宣传长图/详情的「极简画报」版式（2026-10-21 对照样张定稿）：主题存在性、零圆角零卡片、
+# 满幅照片、用图密度下限 min(N, max(8, round(0.6N)))、提示词占位符接线。
+# 纯函数 + 本地渲染，不联网不调模型。
+python tests/longpic_minimal_smoke.py
+# 详情「风格家族」守门（2026-10-22 用户反馈「所有详情长得一样」后引入）：五个家族到底色不同、
+# 题材→家族映射确定、同一场稳定复现、promoHtml 图片封顶 + 用图密度闸门。不联网不调模型。
+python tests/detail_style_smoke.py

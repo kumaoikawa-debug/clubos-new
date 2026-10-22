@@ -74,9 +74,31 @@ THEMES: dict[str, dict[str, str]] = {
         'hero_fade': 'rgba(11,15,20,',
         'card':      'rgba(255,255,255,.05)',
     },
+    # 「极简画报」（2026-10-21，用户拿《星落彩林间·藏地川西寻秋（极简版）》对照后新增）：
+    # 近黑底（#111312）+ 满幅出血照片 + 零圆角零卡片 + 宋体大标题 + 金棕眉标 + 超大价格数字。
+    # 这套是**默认**：老板明确「学习这版风格」，只要用它就不会难看，别再回退到浅色卡片版。
+    'minimal': {
+        'bg':        '#111312',
+        'ink':       '#F4F1EA',   # 暖白正文
+        'primary':   '#C9A26B',   # 金棕（眉标 / 数字 / 二维码说明）
+        'accent':    '#C9A26B',
+        'muted':     '#B7B2A8',
+        'faint':     '#7C776E',
+        'line':      'rgba(255,255,255,.10)',
+        'line2':     'rgba(255,255,255,.08)',
+        'dark':      '#0A0B0B',
+        'on_dark':   '#F4F1EA',
+        'on_dark2':  '#C9A26B',
+        'on_dark3':  '#7C776E',
+        'chipbg':    'transparent',
+        'chipbd':    'rgba(201,162,107,.32)',
+        'ph':        '#171917',
+        'hero_fade': 'rgba(17,19,18,',
+        'card':      'transparent',
+    },
 }
 
-DEFAULT_THEME = 'paper'
+DEFAULT_THEME = 'minimal'
 
 # ══════════════════════════════════════════════════════════════════════
 # 二、样式表（一份固定 CSS，配色走 CSS 变量 —— 换主题只换变量）
@@ -302,9 +324,198 @@ _SEC_TITLE_MAX = 14      # 45px + 1.4px
 _SIGNUP_TITLE_MAX = 13   # 47px + 2.7px
 
 
+# ══════════════════════════════════════════════════════════════════════
+# 极简画报覆盖层（minimal 主题专用，2026-10-21）
+#
+# 标杆：《星落彩林间 · 藏地川西寻秋（极简版）》—— 老板给的"这版风格"。
+# 与 paper/night 的差别不是换色，而是**减法**：
+#   · 全篇零圆角、零卡片、零边框、零阴影、零胶囊 —— 只剩「照片 + 文字 + 黑」；
+#   · 照片满幅出血（贴到画布两边），不内缩、不并排小图；
+#   · 标题改宋体（衬线）+ 大字距；眉标改金棕小字 + 超大字距；
+#   · 段落之间留白 110px 起，宁可空也不要塞；
+#   · 价格走超大衬线数字（80px+），二维码只保留白底方角。
+# 只在 theme=='minimal' 时追加，paper/night 的旧版面不受影响。
+# ══════════════════════════════════════════════════════════════════════
+_CSS_MINIMAL = """
+/* ---------- 基础 ---------- */
+.rc--minimal{letter-spacing:.2px}
+.rc--minimal .hero h1,
+.rc--minimal .s-title,
+.rc--minimal .signup h2,
+.rc--minimal .step-title,
+.rc--minimal .quote p,
+.rc--minimal .prices .pr .v,
+.rc--minimal .stat .v,
+.rc--minimal .tl .time,
+.rc--minimal .product .txt .price{font-family:"Noto Serif SC","Songti SC","STSong",serif;font-weight:600}
+
+/* ---------- hero：整屏满幅照片 + 底部渐隐 ---------- */
+.rc--minimal .hero{height:1180px}
+.rc--minimal .hero-shade{background:linear-gradient(180deg,
+  rgba(17,19,18,.46) 0%,rgba(17,19,18,.20) 24%,rgba(17,19,18,.12) 44%,
+  rgba(17,19,18,.55) 76%,rgba(17,19,18,.92) 94%,#111312 100%)}
+.rc--minimal .hero-in{padding:54px 46px 78px}
+.rc--minimal .brandrow span{font-size:16px;letter-spacing:6px;color:#F4F1EA;opacity:.86;font-weight:500;
+  text-shadow:0 1px 14px rgba(0,0,0,.55)}
+/* ★ 首屏小字必须自证可读：照片亮的时候金棕会"消失"（实测绿林背景上完全看不见），
+   所以 chip / sub / meta 一律加暗投影，chip 的底线改成白色发丝线。 */
+.rc--minimal .hero-chip{background:none;border:0;border-radius:0;padding:0 0 16px;
+  border-bottom:1px solid rgba(255,255,255,.26);font-size:16px;letter-spacing:5px;color:#EDE7D9;font-weight:500;
+  text-shadow:0 1px 16px rgba(0,0,0,.65)}
+.rc--minimal .hero h1{font-size:76px;line-height:1.26;letter-spacing:4px;color:#fff;font-weight:600;
+  text-shadow:0 2px 30px rgba(0,0,0,.45)}
+.rc--minimal .hero h1 em{font-style:normal;color:#D8B57E}
+.rc--minimal .hero .sub{margin-top:26px;font-size:22px;line-height:1.95;letter-spacing:2px;color:#E3DED4;
+  text-shadow:0 1px 16px rgba(0,0,0,.55)}
+.rc--minimal .hero .meta{margin-top:42px;gap:26px}
+.rc--minimal .hero .date{background:none;border-radius:0;padding:0;font-size:21px;font-weight:500;
+  letter-spacing:4px;color:#E8C98F;text-shadow:0 1px 14px rgba(0,0,0,.6)}
+.rc--minimal .hero .limit{font-size:18px;letter-spacing:2.4px;color:#CFCBC2;text-shadow:0 1px 14px rgba(0,0,0,.6)}
+.rc--minimal .hero .en-loc{margin-top:28px;font-size:13px;letter-spacing:7px;color:#B7B2A8;
+  text-shadow:0 1px 12px rgba(0,0,0,.6)}
+
+/* ---------- 章节：大留白 + 发丝眉标 ---------- */
+.rc--minimal .sec{padding:112px 56px 0}
+.rc--minimal .s-eyebrow{gap:20px;margin-bottom:30px}
+.rc--minimal .s-eyebrow .no{font-size:15px;letter-spacing:6px;color:#C9A26B;font-weight:500}
+.rc--minimal .s-eyebrow .line{background:rgba(255,255,255,.12)}
+.rc--minimal .s-title{font-size:46px;line-height:1.44;letter-spacing:2.6px;color:#F4F1EA}
+.rc--minimal .s-lead{margin-top:26px;font-size:24px;line-height:2.06;letter-spacing:.6px;color:#B7B2A8}
+.rc--minimal .s-lead b{color:#F4F1EA;font-weight:600}
+.rc--minimal .s-note{margin-top:20px;font-size:17px;line-height:1.95;letter-spacing:1.4px;color:#7C776E}
+
+/* ---------- 照片：满幅出血 / 零圆角 ---------- */
+.rc--minimal .ph{border-radius:0}
+.rc--minimal .photo-full,.rc--minimal .photo-tall,.rc--minimal .photo-wide,
+.rc--minimal .duo,.rc--minimal .trio{width:calc(100% + 112px);margin-left:-56px;margin-right:-56px}
+.rc--minimal .photo-full{margin-top:56px;height:560px}
+.rc--minimal .photo-tall{margin-top:56px;height:760px}
+.rc--minimal .photo-wide{margin-top:56px;height:430px}
+.rc--minimal .duo{gap:4px;margin-top:56px}
+.rc--minimal .duo .ph{height:520px}
+.rc--minimal .trio{gap:4px;margin-top:56px}
+.rc--minimal .trio .ph{height:340px}
+.rc--minimal .cap{margin-top:16px;font-size:14px;letter-spacing:4px;color:#7C776E}
+/* 内缩变体在极简版里不内缩：保持满幅 */
+.rc--minimal .photo-full.v-inset,.rc--minimal .photo-tall.v-inset,
+.rc--minimal .duo.v-inset{margin-left:-56px;margin-right:-56px;border-radius:0}
+
+/* ---------- 数字栏 ---------- */
+.rc--minimal .stats{margin-top:48px;flex-wrap:wrap;gap:0}
+.rc--minimal .stat{flex:1 1 30%;min-width:30%}
+.rc--minimal .stat .v{font-size:38px;letter-spacing:2px;color:#F4F1EA;white-space:nowrap}
+.rc--minimal .stat .k{margin-top:10px;font-size:14px;letter-spacing:4px;color:#7C776E;white-space:nowrap}
+.rc--minimal .stats.v-cards{gap:0}
+.rc--minimal .stats.v-cards .stat{background:none;border:0;border-radius:0;padding:0 0 0 28px;
+  border-left:1px solid rgba(255,255,255,.10)}
+.rc--minimal .stats.v-cards .stat:first-child{padding-left:0;border-left:0}
+
+/* ---------- 参数行 ---------- */
+.rc--minimal .params{margin-top:40px}
+.rc--minimal .params .r{padding:28px 0;border-top:1px solid rgba(255,255,255,.08)}
+.rc--minimal .params .d{width:132px;font-size:16px;font-weight:500;letter-spacing:3.4px;color:#C9A26B}
+.rc--minimal .params .p{font-size:22px;line-height:1.9;color:#E4E0D8}
+.rc--minimal .params .p i{font-size:18px;color:#7C776E}
+
+/* ---------- chips：不再画胶囊，改发丝下划线清单 ---------- */
+.rc--minimal .chips{gap:0 34px;margin-top:36px}
+.rc--minimal .chip{background:none;border:0;border-radius:0;padding:0 0 10px;
+  border-bottom:1px solid rgba(255,255,255,.10);font-size:17px;letter-spacing:2.6px;color:#CFCBC2}
+
+/* ---------- 时间线：去掉竖线与圆点，改发丝分隔 ---------- */
+.rc--minimal .tl{padding-left:0;margin-top:42px}
+.rc--minimal .tl::before{display:none}
+.rc--minimal .tl .t{padding:22px 0;gap:30px;border-top:1px solid rgba(255,255,255,.08)}
+.rc--minimal .tl .t::before{display:none}
+.rc--minimal .tl .time{width:132px;font-size:20px;letter-spacing:2px;color:#C9A26B}
+.rc--minimal .tl .what{font-size:22px;line-height:1.85;color:#E4E0D8}
+.rc--minimal .tl .what i{font-size:18px;color:#7C776E}
+
+/* ---------- steps：序号改发丝方框 ---------- */
+.rc--minimal .steps{gap:46px;margin-top:44px}
+.rc--minimal .step{gap:30px}
+.rc--minimal .step-ico{width:54px;height:54px;border-radius:0;background:none;color:#C9A26B;
+  border:1px solid rgba(201,162,107,.36);font-size:17px;font-family:"Noto Serif SC",serif}
+.rc--minimal .step-title{font-size:28px;letter-spacing:1.6px;color:#F4F1EA}
+.rc--minimal .step-desc{margin-top:12px;font-size:21px;line-height:1.95;color:#B7B2A8}
+.rc--minimal .step-tag{border:0;border-radius:0;padding:0;margin-top:14px;
+  font-size:14px;letter-spacing:3px;color:#C9A26B}
+
+/* ---------- 引语 ---------- */
+.rc--minimal .quote{background:none;border-left:2px solid #C9A26B;border-radius:0;
+  padding:6px 0 6px 30px;margin-top:48px}
+.rc--minimal .quote p{font-size:30px;line-height:1.9;letter-spacing:1.8px;color:#F4F1EA}
+
+/* ---------- 费用 / 清单：去卡片，改发丝线 ---------- */
+.rc--minimal .fee{flex-direction:column;gap:0;margin-top:44px}
+.rc--minimal .fee .col{background:none;border:0;border-top:1px solid rgba(255,255,255,.10);
+  border-radius:0;padding:26px 0 0}
+.rc--minimal .fee .col+.col{margin-top:36px}
+.rc--minimal .fee .hd{font-size:15px;font-weight:500;letter-spacing:4px;color:#C9A26B;margin-bottom:16px}
+.rc--minimal .fee .li{font-size:20px;line-height:1.95;color:#B7B2A8;padding:4px 0}
+.rc--minimal .kit{background:none;border:0;border-top:1px solid rgba(255,255,255,.10);
+  border-bottom:1px solid rgba(255,255,255,.10);border-radius:0;padding:30px 0 26px}
+.rc--minimal .kit .hd{font-size:15px;font-weight:500;letter-spacing:4px;color:#C9A26B;margin-bottom:20px}
+.rc--minimal .kit .ul{gap:14px 30px}
+.rc--minimal .kit .ul li{font-size:19px;line-height:1.9;color:#E4E0D8}
+.rc--minimal .kit .ul li::before{width:5px;height:5px;background:#C9A26B;margin-top:13px}
+
+/* ---------- 价格表 ---------- */
+.rc--minimal .prices{margin-top:44px}
+.rc--minimal .prices .row{padding:28px 0;border-bottom:1px solid rgba(255,255,255,.08)}
+.rc--minimal .prices .row:first-child{border-top:1px solid rgba(255,255,255,.08)}
+.rc--minimal .prices .lb .l1{font-size:22px;font-weight:500;letter-spacing:1.6px;color:#F4F1EA}
+.rc--minimal .prices .lb .l2{font-size:15px;letter-spacing:2.6px;color:#7C776E}
+.rc--minimal .prices .pr .v{font-size:54px;letter-spacing:1px;color:#F4F1EA}
+.rc--minimal .prices .pr .v small{font-size:18px;color:#7C776E}
+.rc--minimal .prices .pr .u{font-size:14px;letter-spacing:3px;color:#7C776E}
+
+/* ---------- 收尾：更深的黑 + 超大价格 + 方角白码 ---------- */
+.rc--minimal .signup{margin-top:120px;padding:98px 56px 64px;background:#0A0B0B}
+.rc--minimal .signup .en-roll{font-size:12px;letter-spacing:9px;color:#C9A26B;margin-bottom:30px}
+.rc--minimal .signup h2{font-size:44px;line-height:1.52;letter-spacing:3.4px;color:#F4F1EA}
+.rc--minimal .signup .en2{font-size:13px;letter-spacing:6px;color:#7C776E;margin-top:16px}
+.rc--minimal .form{margin-top:56px}
+.rc--minimal .form .f{padding:26px 0;gap:30px;border-top:1px solid rgba(255,255,255,.10)}
+.rc--minimal .form .k{width:96px;font-size:15px;letter-spacing:4px;color:#C9A26B}
+.rc--minimal .form .v{font-size:21px;line-height:1.9;color:#E4E0D8}
+.rc--minimal .form .v i{font-size:17px;color:#7C776E}
+/* 收尾商品区：两张图并排（4px 缝）+ 价格独占整行 —— 参考图里装备是并排小图，不是竖排大图 */
+.rc--minimal .product{margin-top:58px;display:grid;grid-template-columns:1fr 1fr;gap:4px;align-items:stretch}
+.rc--minimal .product .ph{height:320px;width:100%;border-radius:0}
+.rc--minimal .product .txt{grid-column:1/-1;padding-top:28px}
+.rc--minimal .product .txt .price{font-size:92px;letter-spacing:-1px;line-height:1;color:#F4F1EA;
+  white-space:nowrap}
+/* 「¥」跟在数字基线前、「/ 人」单独落到下一行 —— 92px 的 6800 再跟单位一定溢出（实测换行成
+   「6800 /」+「人」，很难看），所以单位必须自成一行。 */
+.rc--minimal .product .txt .price small{font-size:20px;letter-spacing:2px;color:#9C978E}
+.rc--minimal .product .txt .price small:last-of-type{display:block;margin:14px 0 0;font-size:18px;
+  letter-spacing:4px;color:#9C978E}
+.rc--minimal .product .txt .inc{margin-top:24px;font-size:18px;line-height:2.05;color:#9C978E}
+.rc--minimal .qrwrap{margin-top:74px}
+.rc--minimal .qrcard{width:300px;height:300px;border-radius:0;padding:14px}
+.rc--minimal .qrcard img{border-radius:0}
+.rc--minimal .qrwrap .scan{margin-top:30px;font-size:16px;font-weight:500;letter-spacing:6px;color:#C9A26B}
+.rc--minimal .qrwrap .scan-tip{margin-top:10px;font-size:13px;letter-spacing:3px;color:#7C776E}
+.rc--minimal .foot{margin-top:82px;padding-top:40px;border-top:1px solid rgba(255,255,255,.10);gap:16px}
+.rc--minimal .foot span{font-size:13px;letter-spacing:6px;color:#C9A26B}
+.rc--minimal .foot-en{margin-top:24px;font-size:12px;letter-spacing:7px;color:#7C776E}
+
+/* ---------- hero 变体在极简版下的口径 ---------- */
+.rc--minimal .hero.v-cover .hero-bg{opacity:.52}
+.rc--minimal .hero.v-cover h1{font-size:80px}
+.rc--minimal .hero.v-cover .hero-shade{background:linear-gradient(180deg,
+  rgba(17,19,18,.55) 0%,rgba(17,19,18,.22) 46%,rgba(17,19,18,.68) 100%)}
+.rc--minimal .hero.v-card .hero-bg,.rc--minimal .hero.v-card .hero-shade{border-radius:0}
+"""
+
+
 def build_css(theme: str) -> str:
     v = THEMES.get(theme) or THEMES[DEFAULT_THEME]
-    return _CSS % v
+    css = _CSS % v
+    if theme == 'minimal':
+        css += _CSS_MINIMAL
+    return css
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -852,7 +1063,8 @@ def render(doc: dict, allowed_refs: set[str] | None = None, cover_url: str | Non
 
     html = ''.join(x for x in body if x)
     # 二维码：模板里占位，调用方若无二维码则整块已自带占位图（前端会替换 __QR__ 或按需删）
-    return ('<style>%s</style><div class="rc">%s</div>' % (build_css(theme), html))
+    return ('<style>%s</style><div class="rc rc--%s">%s</div>'
+            % (build_css(theme), theme, html))
 
 
 # ══════════════════════════════════════════════════════════════════════

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import json,re
+import json,re,hashlib
 from pathlib import Path
 from typing import Any
 from ai_gateway import generate_json, record_mock_usage, GatewayResponse
@@ -1544,11 +1544,13 @@ _LAYOUT_CONTRACT = """
    逐日行程时，才允许 timeline 携带 items 充当唯一时刻表。
 以上 9 条是下限，达成后鼓励更丰富。若可用照片不足 N*0.6 张，就以「全部可用照片」为下限（绝不要求超过实际拥有）。"""
 
-# 宣传区 HTML（promoHtml）契约，首次生成与「换一版」共用同一段（2026-10-18 升级：
-# 用户拿一张优秀同业长图对照反馈「同样内容，活动详情生成的内容太差」。旧契约写
-# 「底色建议浅色中性、深色仅作重音块」，等于把「深色摄影画册」这一最出效果的形态禁掉了，
-# 且没有照片密度 / 图注 / 按天分章的要求，成品偏「文字页插几张图」。升级为画报级标准。)
-_PROMOHTML_CONTRACT = """
+# 宣传区 HTML（promoHtml）契约（2026-10-22 重构：**按活动题材分配风格家族**）。
+# 2026-10-21 把详情统一改成「极简画报」后，用户反馈「所有活动详情都长成同一个样子，
+# 逻辑上不同活动应该有不同的风格」。修法不是回到「让模型自由发挥」（那会退回平庸网页），
+# 而是准备 5 套**有明确美术方向**的家族，按题材关键词 + 稳定哈希给每场活动派一套：
+# 同一场活动永远同一套（可复现）；题材强相关的活动一定命中对应家族（观星→电影感、
+# 研学→杂志专题、亲子→暖光日常）；没有强信号时用哈希轮换，保证「不同活动不同样子」。
+_PROMOHTML_BASE = """
 ★★ 宣传区 HTML（promoHtml，与长图同源的更高标准，**必填**）：
 除了上方的 blocks，请**额外**为「图文宣传区」直出一段**自包含 HTML**（promoHtml）。这段会被嵌进详情页
 （在封面大图与下方报名区之间），因此：
@@ -1557,30 +1559,196 @@ _PROMOHTML_CONTRACT = """
 - ★ 只要上面给了可用照片清单、或资料正文足够成文，promoHtml 就是**必填字段**，
   **留空视为不合格**——「blocks 已经够好」不构成留空理由（blocks 是回退方案，不是替代品）。
   只有资料薄到既无照片也无事实时才允许空串。
-- 自己设计一整套视觉系统（配色、字号阶梯、组件口径），**每场都不一样**，但整篇统一；不许套固定模板。
-★★★ 画报级标准（2026-10-18 用户拿优秀样例对照后的硬要求，照片充足时按此执行）：
-- **照片是主角，文字是向导**。可用照片 ≥6 张时，整篇按「摄影画册 / 杂志专题」编排：
-  · 用图密度下限与 blocks 同一标准：至少引用 min(N, max(8, round(N*0.6))) 张不同的照片（N=可用照片数），
-    每张 ref 只出现一次；
-  · **每个内容段落都要被影像锚定**：通栏大图（占满内容宽、高约 360~560px，横竖图按内容定）
-    或双图并排 / 一大一小组合，绝不允许连续两个以上纯文字段落；
-  · **每张图必须带 figcaption 图注**：一句、≤30 字、只写画面里真实存在的时刻 / 地点 / 动作；
-  · 多日活动按「Day 1 / Day 2 / Day 3」分章：每章 = 眉标（小字 + 字距 + 编号）+ 该章代表大图
-    + 2~4 句叙述；章与章之间用通栏图或分隔线换气，形成翻页节奏。
-- **深色画册底优先**：照片 ≥6 张时，整篇用近黑深灰底（--bg 取 #0f1216 一档）+ 高亮度正文
-  （正文 ≈ #e8e6e0、次要信息不低于 #9a9890，对比度必须够读），让照片自己发光；
-  照片不足 5 张时改用浅色画册底。无论深浅，整篇一底到底，不要深浅拼接。
-- **大数字统计条**：海拔 / 里程 / 天数 / 人数 / 爬升做成统计条（数字 40px+ 加粗、单位小字跟随、每格带标签）。
-- **服务保障 / 费用说明**：双列或三列的「名词位 + 一句人话」（如「高原安全服务包｜氧气与应急物资随车」），
-  只写项名与顾客获得，**不写任何金额**（成本铁律不变）；「费用不含」单独一小块列自理项。
-- 只允许这些标签：section div p h1 h2 h3 h4 strong em img figure figcaption ul ol li blockquote hr span small；
-  可以有且只有一个 <style> 放最前面定义 CSS 变量（--ink/--accent/--bg/--card）；字体只用系统字体栈；
-  不要 @import、不要 CSS url() 引外图；图片一律写 <img src="{media:ref}">；深浅两套都要自己声明 body 背景。
-- 排版纪律：统一字号阶梯；区块间 40~56px 呼吸；引言块 / 竖向时间线（≤6 节点）按需穿插。
-- 事实保真铁律同样适用：不编地名 / 数字 / 资质；时刻必须真实（资料有确切 HH:MM 才写，否则一个钟点都不写）；
-  成本 / 毛利 / 内部信息一律不进。
+- **用图密度**：本场可用照片 N 张时，至少引用 min(N, max(8, round(N*0.6))) 张不同的 ref，
+  每张 ref 只出现一次；照片不足 5 张就全用上，把仅有的图放在最关键的两处。
+- **留白只留一处**：相邻两个区块之间合计留白 ≤96px（上一块 padding-bottom + 下一块 padding-top），
+  不要每块上下各 90px 叠成 180px 的黑洞；连续纯色空白任何时候都不要超过 120px。
+- **每段文字都要被影像锚定**：一段文字（≤3 句）后面跟一张满幅或半幅照片，禁止连续两个纯文字段落；
+  每张图配一句 `figcaption`（≤30 字，只写画面里真实存在的时刻 / 地点 / 动作 / 光线，不写形容词堆砌）。
+- **图片高度必须封顶**：单图 `height:300~560px; object-fit:cover`，双图各 260~340px；
+  **禁止**让竖构图按原始比例通栏——实测会撑到 900px 以上，一屏一张图，读起来像相册而不是宣传页。
+- **开场不要整幅大图**：页面顶部已经有封面大图，promoHtml 的第一块用「眉标 + 标题 + 一句引言」开场，
+  第一张图放在这段文字之后（否则等于在封面下面又放了一个首屏）。
+- **只允许这些标签**：section div p h1 h2 h3 h4 strong em img figure figcaption ul ol li blockquote hr span small；
+  可以有且只有一个 `<style>` 放最前面，用 CSS 变量声明配色（`--bg / --ink / --muted / --accent`）；
+  字体只用系统字体栈；不要 @import、不要 CSS `url()` 引外图；图片一律写 `<img src="{media:ref}">`；
+  底色必须写在 `--bg` 变量上（前端会把它提升为页面底色），不要只给 body 上色。
+- **事实保真铁律同样适用**：不编地名 / 数字 / 资质；时刻必须真实（资料有确切 HH:MM 才写，
+  否则一个钟点都不写）；成本 / 毛利 / 内部信息一律不进。
 - 若资料太薄（可用照片 <3 且正文事实少），promoHtml 才允许留空字符串 ""。
 """
+
+# 风格家族。key -> {'name': 显示名, 'fit': 适用题材, 'spec': 美术规范}
+# 五个家族的差别是「底色 / 标题字体 / 图片处理 / 分隔方式」四件事同时不同，
+# 所以顾客一眼就能感觉出「这场和上一场不是同一套模板」。
+_DETAIL_STYLES: dict[str, dict[str, str]] = {
+    'minimal': {
+        'name': '极简画报',
+        'fit': '徒步 / 登山 / 雪山 / 长线纪实',
+        'spec': """
+- **底色**：`--bg: #101211`（收尾可用更深的 `#0A0B0B`）；`--ink: #E9E6DE`；`--muted: #9A958B`；
+  `--accent: #C9A26B`（金棕，全篇唯一强调色）。
+- **字体**：标题宋体 `"Songti SC","Noto Serif SC",serif`，字重 500、字距 2~4px、34~44px；
+  正文系统无衬线 16~17px / 行高 1.8；眉标 12px + 字距 6px + 编号（如 `01 — 抵达`）。
+- **照片**：满幅出血（width:100%，贴齐两边，零圆角），单图高 380~620px；图注紧跟图片 8~12px。
+- **形状归零**：零圆角、零卡片、零边框、零阴影；只用 1px 发丝线 rgba(255,255,255,.08~.12) 分隔。
+- **节奏**：区块 padding 上下 72~96px；图注与下一区块之间不留超过 40px 的纯黑空隙。
+- **数字**：宋体 56~96px，单位 14px 跟在数字基线之后。
+- **禁止**：浅色底、彩色渐变、色块卡片、三列小图墙。
+""",
+    },
+    'paper': {
+        'name': '纸感山野志',
+        'fit': '疗愈 / 瑜伽 / 森林 / 手作 / 慢旅行',
+        'spec': """
+- **底色**：`--bg: #F7F3EA`（米纸）；`--ink: #23211C`；`--muted: #6E695E`；`--accent: #A8663C`（赭石）。
+- **字体**：标题宋体 30~34px、字重 500、字距 0、行高 1.35；正文系统无衬线 16px / 行高 1.9、段间距 18px。
+- **眉标**：短横 + 小字编号，如 `— 01 抵达`，13px、字距 3px、用 accent 色。
+- **照片**：左右各留 24px 纸边（**不出血**）、零圆角，图下 8px 图注（13px、--muted）；
+  一张图单独成行，图与图之间 40~56px。
+- **分隔**：只用留白与 1px 暖灰线 rgba(35,33,28,.12)，不用色块、不用卡片、不用阴影。
+- **节奏**：区块间距 56~72px，整篇像一本纸质小志，读起来轻。
+- **数字**：宋体 40~52px、accent 色，单位 13px 跟随。
+- **禁止**：纯黑底、深色块、超大字号压图、三列小图墙。
+""",
+    },
+    'cinema': {
+        'name': '电影感',
+        'fit': '观星 / 日照金山 / 摄影 / 情绪向短途',
+        'spec': """
+- **底色**：`--bg: #0B0C0D`；`--ink: #F4F3F0`；`--muted: #8E8B85`；`--accent: #D8A15C`。
+- **字体**：标题用**无衬线**（-apple-system / "PingFang SC"，**不是宋体**）34~44px、字重 600、字距 1px；
+  正文 16px / 行高 1.75，颜色略灰（#D6D4CE）。
+- **眉标**：全大写英文 + 中文双行，如 `01 / ARRIVAL` 与下一行 `抵达`，字距 8px、11~12px、--muted。
+- **照片**：满幅宽、固定比例（16:9 或 2.39:1，高 300~420px），像电影剧照；图注居中在图下 10px、12px。
+- **字幕块**：允许 1~2 处，居中、24~30px、字距 4px，上下各留 64~80px，当作转场。
+- **数字**：无衬线 72~96px、字重 300、accent 色。
+- **禁止**：宋体大标题、卡片、彩色块、圆角、多列小图。
+""",
+    },
+    'magazine': {
+        'name': '杂志专题',
+        'fit': '研学 / 人文 / 非遗 / 城市与建筑',
+        'spec': """
+- **底色**：`--bg: #FBF8F2`；`--ink: #1B1B1B`；`--muted: #6B6B6B`；
+  `--accent` 从朱红 `#C0392B` / 靛蓝 `#1F4E79` / 苔绿 `#4C6B4F` 里**挑一个**（整篇只用一个）。
+- **眉标**：反白色块标签——accent 底 + 白字 11px、字距 4px、内边距 6px 12px、**零圆角**。
+- **字体**：标题宋体 34~40px（可两行）、字重 500；正文 17px / 行高 1.8；
+  长段允许双栏 `column-count:2; column-gap:28px`。
+- **照片**：可单图满幅，也可**双图并排**（grid 1fr 1fr、间距 8px、各高 300~380px）；禁止三列；
+  图注 12px 放图下 8px。
+- **引文**：左侧 4px accent 竖条 + 宋体 26~28px 一句。
+- **数字**：衬线 52~64px、accent 色，单位 13px。
+- **禁止**：除 accent 之外的第二块彩色、阴影、圆角卡片、纯黑底。
+""",
+    },
+    'warm': {
+        'name': '暖光日常',
+        'fit': '亲子 / 露营 / 市集 / 团建 / 轻户外',
+        'spec': """
+- **底色**：`--bg: #FDF7F0`（奶油）；`--ink: #2A2320`；`--muted: #7A6A5E`；`--accent: #C4703D`（暖橙）。
+- **字体**：标题系统无衬线 600 / 30~34px、字距 0，语气亲切（可以用第二人称「你」）；
+  正文 16px / 行高 1.85。
+- **眉标**：中文小字 + 分隔点，如 `第一天 · 抵达`，13px、accent 色，不用阿拉伯编号。
+- **照片**：左右各留 20px、**圆角 8px**，图下 8px 图注（13px、--muted）。
+- **允许一处柔和浅色块**：`#F6E9DC` 承载「写给第一次参加的你」，圆角 10px、无边框无阴影；
+  全篇只此一处色块，其余不卡片。
+- **节奏**：区块间距 48~64px，短句为主（每段 ≤2 句）。
+- **数字**：无衬线 44~56px、accent 色。
+- **禁止**：纯黑底、冷灰调、宋体大标题、多列小图墙。
+""",
+    },
+}
+
+_DETAIL_STYLE_ORDER = ['minimal', 'paper', 'cinema', 'magazine', 'warm']
+
+# 题材关键词 → 家族。**顺序即优先级**：越具体的题材越靠前，避免「徒步」把研学团抢走。
+_DETAIL_STYLE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ('magazine', ('研学','人文','历史','文化','非遗','唐卡','博物馆','古城','古镇','建筑','展览','讲堂','讲座','考古')),
+    ('cinema', ('观星','星空','银河','日照金山','金山','日出','日落','云海','摄影','极光','夜景','银河')),
+    ('warm', ('亲子','家庭','儿童','孩子','宝宝','宠物','生日','幼儿园','市集','露营节')),
+    ('paper', ('疗愈','瑜伽','颂钵','冥想','茶','森林','手作','花艺','静心','禅','芳香','音疗')),
+    ('minimal', ('徒步','登山','雪山','穿越','冰川','荒野','登顶','高原','越野','重装','长线')),
+)
+
+
+def _style_title_seed(master: dict | None = None, source: dict | None = None, extra: str = '') -> str:
+    """题材判定的**主种子**：只用标题 / 副标 / 地点 / 标签。
+
+    ★ 不能用整份资料正文当主种子（2026-10-22 实测踩坑）：方案正文里动不动就出现
+    「适合亲子」「可团建」「轻户外」这类通用话术，会把一场颂钵疗愈判成亲子场。
+    标题才是这场活动的编辑身份，正文只在标题没有信号时作兜底。
+    """
+    parts: list[str] = []
+    if isinstance(master, dict):
+        for k in ('title', 'subtitle', 'location'):
+            v = master.get(k)
+            if isinstance(v, str) and v.strip():
+                parts.append(v.strip())
+        tags = master.get('tags')
+        if isinstance(tags, list):
+            parts.extend(str(t) for t in tags[:8] if t)
+    if isinstance(source, dict):
+        for k in ('title', 'name'):
+            v = source.get(k)
+            if isinstance(v, str) and v.strip():
+                parts.append(v.strip()[:120])
+    if extra:
+        parts.append(str(extra)[:120])
+    return ' '.join(parts).strip()
+
+
+def _style_body_seed(source: dict | None = None, master: dict | None = None) -> str:
+    """兜底种子：标题没给出题材信号时，才看资料开头一小段。"""
+    parts: list[str] = []
+    if isinstance(source, dict) and isinstance(source.get('text'), str):
+        parts.append(source['text'][:600])
+    if isinstance(master, dict) and isinstance(master.get('summary'), str):
+        parts.append(master['summary'][:200])
+    return ' '.join(parts).strip()
+
+
+def _match_style(text: str) -> str:
+    if not text:
+        return ''
+    for key, words in _DETAIL_STYLE_RULES:
+        if any(w in text for w in words):
+            return key
+    return ''
+
+
+def pick_detail_style(master: dict | None = None, source: dict | None = None, *,
+                      rotate: int = 0, extra: str = '') -> str:
+    """给一场活动派一个风格家族。
+
+    · 标题命中题材词 → 那个家族（观星永远是电影感，研学永远是杂志专题，颂钵永远是纸感）；
+    · 标题没信号才看资料开头 → 再没有就用 sha1(种子) 轮换（同一场稳定，不同场分散）；
+    · rotate>0 → 在家族序列里往后挪 N 位（「换一版」时用来确保版式真的变了）。
+    """
+    title_seed = _style_title_seed(master, source, extra)
+    body_seed = _style_body_seed(source, master)
+    base = _match_style(title_seed) or _match_style(body_seed)
+    if not base:
+        h = hashlib.sha1((title_seed or body_seed or 'clubos-detail').encode('utf-8')).hexdigest()
+        base = _DETAIL_STYLE_ORDER[int(h[:8], 16) % len(_DETAIL_STYLE_ORDER)]
+    if rotate:
+        i = _DETAIL_STYLE_ORDER.index(base)
+        base = _DETAIL_STYLE_ORDER[(i + rotate) % len(_DETAIL_STYLE_ORDER)]
+    return base
+
+
+def _promohtml_contract(style_key: str) -> str:
+    """拼出本场专用的 promoHtml 契约：公共硬规则 + 这一个家族的美术规范。"""
+    st = _DETAIL_STYLES.get(style_key) or _DETAIL_STYLES['minimal']
+    return (
+        _PROMOHTML_BASE
+        + '\n★★★ 本场风格家族：**' + st['name'] + '**（适用：' + st['fit'] + '）。'
+        + '整篇只用这一套视觉系统——不要掺第二套配色、第二种标题字体、第二种图片处理方式；'
+        + '同一篇文章里的所有区块都按这一套排。\n'
+        + st['spec'].strip('\n')
+        + '\n'
+    )
+
 
 # info（出发前知道）的语义契约（2026-10-11 用户截图实锤：模型把逐日行程原样写进了 info 块，
 # 标题还写着「详细行程 ITINERARY」，前端按 info 模板渲染 → 顾客在「GOOD TO KNOW / 出发前知道」
@@ -1905,7 +2073,11 @@ import re as _re
 _PROMO_BAD_TAGS=_re.compile(r'<\s*/?\s*(script|link|iframe|object|embed|form|input|button|video|audio|base|meta)\b[^>]*>',_re.I)
 _PROMO_EVENT=_re.compile(r'\son[a-z]+\s*=\s*"[^"]*"|\son[a-z]+\s*=\s*\'[^\']*\'|\son[a-z]+\s*=\s*[^\s>]+',_re.I)
 _PROMO_JS=_re.compile(r'(?:href|src)\s*=\s*"\s*(?:javascript|data|vbscript):[^"]*"\s*',_re.I)
-_PROMO_PH=_re.compile(r'\{\{\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}\}',_re.I)
+# ★ 单/双花括号都要认（与前端 shared.js resolveMediaRefsHtml 完全同一口径）：契约让模型写
+#   <img src="{media:ref}"> 单花括号，旧正则只认 {{media:ref}} → _drop_unknown_promo_refs
+#   漏删未知单花括号 ref、密度闸门把真稿全判成「0 图」直接回退 blocks（2026-10-22 实坑：
+#   act49 重生成日志 thin: refs=0/12，而模型其实铺了图的 4335 字符成稿）。
+_PROMO_PH=_re.compile(r'\{\{?\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}?\}',_re.I)
 _PROMO_IMG_EMPTY=_re.compile(r'<img\b[^>]*src=["\']\s*["\'][^>]*>')
 def _sanitize_promo_html(html:str)->str:
     t=str(html or '')
@@ -1920,12 +2092,30 @@ def _drop_unknown_promo_refs(html:str,allowed:set[str])->tuple[str,list[str]]:
     html=_PROMO_PH.sub(repl,html)
     html=_PROMO_IMG_EMPTY.sub('',html)   # 漏网空 src 的 <img> 整标签删，不留裂图
     return html,dropped
-def _promo_html_ok(html:str)->bool:
-    """闸门：只有模型真正「设计了」的 HTML 才采用，否则回退 blocks。"""
+def _promo_html_ok(html:str,allowed:set[str]|None=None)->bool:
+    """闸门：只有模型真正「设计了」的 HTML 才采用，否则回退 blocks。
+
+    用图密度也在这里守（2026-10-22 实测：同一条重生成指令，一次给 10 张图、下一次只给 1 张图
+    的「标题 + 一张图 + 两段字」敷衍稿，长度照样过 600 字符）。可用照片 ≥6 张时，
+    至少要用到 6 张不同 ref，否则判不合格、回退 blocks —— 一图流比回退更难看得多。
+    """
     if not html or len(html)<600: return False
     if '<style' not in html: return False          # 没上设计系统多半是敷衍输出
     if not _PROMO_PH.search(html) and '<img' not in html: return False  # 一张图都没有
+    n_avail=len(allowed or [])
+    if n_avail>=6:
+        refs=set(_PROMO_PH.findall(html))
+        if len(refs)<min(n_avail,6):
+            print('[promo] thin: refs=%d/%d'%(len(refs),n_avail))
+            return False
     return True
+# 出口硬闸（2026-10-22）：竖构图照片一旦通栏就会撑到 1000px+，一屏一张图。
+# 提示词只是提醒，这里再确定性压一道：所有图最高 620px，超出的用 cover 裁掉而不是拉扁。
+_PROMO_IMG_CAP=('<style>/*clubos-img-cap*/img{max-height:620px!important;object-fit:cover}'
+                'figure img,section img,div img{max-height:620px!important;object-fit:cover}</style>')
+def _cap_promo_imgs(html:str)->str:
+    if '<img' not in html or 'clubos-img-cap' in html: return html
+    return html+_PROMO_IMG_CAP
 def _finalize_promo_html(detail:dict,allowed:set[str])->None:
     """取出 detail.promoHtml，清洗 + 闸门；就地写回（不达标则清空回退 blocks）。"""
     if not isinstance(detail,dict): return
@@ -1934,7 +2124,13 @@ def _finalize_promo_html(detail:dict,allowed:set[str])->None:
         detail['promoHtml']=''; return
     clean=_sanitize_promo_html(raw)
     clean,_=_drop_unknown_promo_refs(clean,allowed)
-    detail['promoHtml']=clean if _promo_html_ok(clean) else ''
+    clean=_cap_promo_imgs(clean)
+    if _promo_html_ok(clean,allowed):
+        detail['promoHtml']=clean
+    else:
+        print('[promo] dropped: len=%d style=%s img=%s'%(
+            len(clean),('<style' in clean),('<img' in clean)))
+        detail['promoHtml']=''
 
 
 async def generate_activity(club_id:int,source:dict[str,Any],*,direction:str='',
@@ -1944,6 +2140,9 @@ async def generate_activity(club_id:int,source:dict[str,Any],*,direction:str='',
     # 视觉打标：让模型「看得见图里是什么」。不做这一步，选图就等于随机抽（2026-10-09 图文错配的根因）。
     pick=await _prepare_photo_picker(club_id,source,catalog)
     photo_block=_photo_block(pick,json.dumps(source.get('media_manifest',[]),ensure_ascii=False))
+    # 风格家族（2026-10-22）：按题材派版式，不再全场一套极简画报
+    _style_key=pick_detail_style(source=source)
+    print('[detail] style=',_style_key)
     prompt=f"""你收到的是老板/领队提供的完整活动原始资料。直接完成两件事：
 A. 提取 Activity Master（事实与业务真相）；
 B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
@@ -2050,7 +2249,7 @@ hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言�
    避免从头到尾都是同一套「标题 + 正文 + 图」。照片多时优先做视觉编排，照片少时用文字与卡片把吸引力撑起来。
 {_LAYOUT_CONTRACT}
 
-{_PROMOHTML_CONTRACT}
+{_promohtml_contract(_style_key)}
 
 如果没有真正事实冲突，blocking_conflicts 必须为空，直接完成成品。"""
     # 打标成功时不再把几十张原图塞进请求：清单里已经有「画面里是什么」，
@@ -2107,6 +2306,14 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
     # 老活动第一次换版时 master 里没有 desc，这里会补一次打标。
     pick=await _prepare_photo_picker(club_id,source,catalog,master)
     photo_block=_photo_block(pick,json.dumps(source.get('media_manifest',[]),ensure_ascii=False))
+    # 风格家族（2026-10-22）：同题材沿用同一家族；用户点名要「换风格/换版式」或没给方向时，
+    # 往后挪一个家族，保证「换一版」真的看得出来是另一套版式。
+    _dir=(direction or '').strip()
+    # 只有用户**明确要求换风格**时才轮换家族：没写方向的「换一版」保持同一套版式
+    # （否则同一场活动点两次就会从纸感跳到极简，运营会以为风格随机漂移）。
+    _rotate=1 if re.search(r'风格|版式|样式|排版|配色|不一样|换个版|换个风格',_dir) else 0
+    _style_key=pick_detail_style(master=master,source=source,rotate=_rotate)
+    print('[detail] style=',_style_key,'rotate=',_rotate)
     # ★ master.media 里那一串 img_01…img_38 **不能**原样进提示词（2026-10-09 实测踩坑）：
     #   换一版时模型看见这串 ref，就会绕开「可用照片清单」自己挑，实测把一张没有画面描述、
     #   根本不在清单里的图（img_09）塞进了唐卡段落。事实只读 ≠ 媒体清单可读，媒体只能走 photo_block。
@@ -2115,7 +2322,8 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
     prompt=f"""Activity Master（事实，只读；不要重新提取，也不要修改其中任何一项）：
 {json.dumps(master_facts,ensure_ascii=False)}
 {_revision_block(direction,previous_detail,version_no)}
-你的任务：只重新创作 C 端招募详情的 block 方案（页面叙事、图片节奏、区块顺序）。
+你的任务：只重新创作 C 端招募详情的内容与版面——**blocks 与 promoHtml 两件都必须重出**
+（页面叙事、图片节奏、区块顺序；promoHtml 是主视觉，留空视为这次换版失败）。
 不得新增事实：日期、地点、价格、人数、行程、费用、出行清单、领队、资质一律以 Activity Master 与原始资料为准。
 
 原始资料（只用于取用真实细节，不是重新提取事实）：
@@ -2155,7 +2363,7 @@ hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短�
 任何 block 都可省略、重复、自由排序。不要为了「结构完整」机械凑章节。
 {_LAYOUT_CONTRACT}
 
-{_PROMOHTML_CONTRACT}
+{_promohtml_contract(_style_key)}
 
 （密度下限优先于「照片少时不要硬凑」：只要资料里有可用照片就按下限铺满，只有真的没有可用照片时才用文字撑。）"""
     gw=await generate_json(club_id=club_id,task_type='detail',system_prompt=SYSTEM,user_prompt=prompt,
