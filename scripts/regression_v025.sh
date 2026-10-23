@@ -87,3 +87,10 @@ python tests/cprofile_smoke.py
 # ③ 「N 件装备」与「商城可配 X 项」口径可对、平替 chip 只挂小徽标、自备区是 soft pills。
 # node 真实执行 shared.js 渲染函数（只读），python 侧用推荐引擎算真实匹配，不碰业务库。
 python tests/pack_ui_smoke.py
+# 总平台端三件事（2026-10-23 用户截图反馈）：
+# ①「俱乐部入驻」显示俱乐部 logo（平台专属代理，只有平台角色能取）+ 手动增减 AI Credits；
+# ②「分配套餐」由下拉改卡片平铺（前端形态断言，后端契约不变）；
+# ③ AI 套餐可增删（被订阅占用的套餐必须拒绝硬删）。
+# 附带守住「套餐/账单列表 DOM 少一个 </div> 导致文字竖排」的渲染 bug。
+# 自带临时库与临时 uploads 隔离（app.UPLOAD 改写），不碰项目真库与真 uploads。
+python tests/platform_plans_smoke.py

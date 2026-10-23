@@ -246,6 +246,35 @@ class AICreditEngine:
             )
         return dict(c.execute("SELECT * FROM ai_credit_plans WHERE code=?", (code,)).fetchone())
 
+    def delete_plan(self, c, code: str) -> dict[str, Any]:
+        """删除套餐。
+
+        安全约束（2026-10-23 用户要求「套餐可以增删」时补上）：
+        · 有俱乐部订阅中的套餐 **绝不硬删** —— 订阅表 plan_code 指向它，硬删会
+          让「俱乐部 Credits 账户」页的套餐列变成空指针（LEFT JOIN 兜底成 NULL，
+          顾客端也可能取不到套餐名）。这种情况直接拒绝，让平台先改绑再删。
+        · 没有订阅的套餐可以真删；已下架（status='inactive'）的套餐也允许删
+          （下架本身就是「不再售卖」的意思，留着只是垃圾数据）。
+        """
+        code = str(code or "").strip().lower()
+        if not code:
+            raise ValueError("套餐 code 必填")
+        row_ = c.execute("SELECT * FROM ai_credit_plans WHERE code=?", (code,)).fetchone()
+        if not row_:
+            raise ValueError("套餐不存在")
+        used = c.execute(
+            """SELECT COUNT(*) FROM club_ai_subscriptions
+               WHERE plan_code=? AND (status='active' OR status='paused')""",
+            (code,),
+        ).fetchone()[0]
+        if used:
+            raise ValueError(
+                f"还有 {used} 个俱乐部在用这个套餐，不能直接删除；"
+                "请先把这些俱乐部改绑到其它套餐，或把本套餐下架（inactive）。"
+            )
+        c.execute("DELETE FROM ai_credit_plans WHERE code=?", (code,))
+        return {"code": code, "deleted": True}
+
     def plan_gear_rate(self, c, club_id: int) -> tuple[float, str, str]:
         """该俱乐部当前生效套餐的装备折扣。返回 (折扣率, 套餐名, 套餐code)。
 

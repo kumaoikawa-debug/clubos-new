@@ -1,0 +1,80 @@
+/* ============================================================================
+ * platform.css — 总平台管理端专属样式
+ *
+ * 只被 /platform 加载（见 static/platform/index.html），不参与其它三端。
+ * 命名一律 plat- 前缀，避免和 shared.css / clubos-ux.css 的类撞车。
+ *
+ * 2026-10-23 一轮改造（用户截图反馈）：
+ *   1. 俱乐部入驻表格加 logo 头像 + AI Credits 快捷增减；
+ *   2. 「分配套餐」弹窗改卡片平铺（三个套餐一次摊开再选）；
+ *   3. AI Credits 页的套餐区改卡片网格，支持增删改 / 上下架。
+ * ==========================================================================*/
+
+/* ---- 1. 俱乐部入驻：logo 头像 + Credits 快捷操作 ---------------------------- */
+.plat-club-cell{display:flex;align-items:center;gap:10px}
+/* 真 logo 与占位块同尺寸：有没有 logo 都不该让表格行高跳动 */
+.plat-club-logo__img,.plat-club-logo__ph{
+  width:38px;height:38px;flex:0 0 38px;border-radius:12px;object-fit:cover;
+  border:1px solid var(--line);background:#eef4f1;
+}
+.plat-club-logo__ph{
+  display:grid;place-items:center;font-weight:850;font-size:15px;color:var(--brand);
+  background:linear-gradient(140deg,#e6f0e9,#f3f8f4);
+}
+.plat-credits-cell{display:flex;flex-direction:column;align-items:flex-start;gap:5px}
+.plat-credits-cell strong{font-size:15px;font-weight:850;line-height:1.1}
+/* 快捷 +100 / −100 / 调整：运营最高频动作，不再为补一点额度开一次表单 */
+.plat-credits-ops{display:flex;gap:5px;flex-wrap:wrap}
+.plat-credits-ops .btn{min-height:26px;padding:3px 9px;font-size:11.5px;border-radius:8px;font-weight:750}
+
+/* ---- 2. 分配套餐：卡片平铺 --------------------------------------------------
+   旧版是一个 <select>：三个套餐挤成一行文字，看不出档位差别。
+   现在三张卡并排，点一下即选中（.is-on 高亮），底部统一提交。 */
+.plat-pick-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.plat-pick{
+  display:flex;flex-direction:column;gap:7px;text-align:left;
+  background:#fff;border:1.5px solid var(--line);border-radius:16px;padding:15px;
+  cursor:pointer;transition:border-color .16s,box-shadow .16s,transform .16s;
+}
+.plat-pick:hover{border-color:#9fc4ae;box-shadow:0 6px 20px rgba(20,50,36,.08)}
+/* 选中态：描边加粗 + 品牌底色，扫一眼就知道选了哪张 */
+.plat-pick.is-on{border-color:var(--brand);background:#f2f8f3;box-shadow:0 0 0 3px rgba(31,122,77,.13)}
+/* 当前已订阅的套餐：即使不选也要标出来，运营才知道这是"维持原样"还是"真换" */
+.plat-pick.is-current{border-style:dashed}
+.plat-pick__head{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.plat-pick__head b{font-size:15px;font-weight:850;letter-spacing:-.2px}
+.plat-pick__credits{font-size:12.5px;color:var(--muted);display:flex;align-items:baseline;gap:4px}
+.plat-pick__credits{color:var(--brand);font-weight:800;font-size:21px}
+.plat-pick__credits em{font-style:normal;font-size:11.5px;color:var(--muted);font-weight:650}
+.plat-pick__fee{font-size:13px;font-weight:780;color:var(--text)}
+.plat-pick__fee i{font-style:normal;font-weight:500;color:var(--muted);font-size:11.5px}
+.plat-pick__desc{font-size:11.5px;color:var(--muted);line-height:1.55}
+
+/* ---- 3. 套餐 / 充值包：卡片网格 --------------------------------------------
+   套餐区与充值包区各占整行（不再挤在 g2 半栏里），这样 3~4 个档位能横排平铺，
+   运营一眼比得出额度/价格/折扣差别，而不是纵向拖三条。 */
+.plat-plan-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:12px}
+.plat-plan{
+  background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px;
+  display:flex;flex-direction:column;gap:6px;position:relative;
+}
+.plat-plan.is-off{background:#fafbfa;opacity:.72}
+.plat-plan__head{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.plat-plan__head b{font-size:14.5px;font-weight:850;letter-spacing:-.2px}
+.plat-plan__credits{font-size:11.5px;color:var(--muted)}
+.plat-plan__credits b{font-size:20px;font-weight:850;color:var(--brand);margin-right:4px;letter-spacing:-.4px}
+.plat-plan__meta{font-size:12px;color:var(--muted)}
+.plat-plan__desc{font-size:11.5px;color:var(--muted);line-height:1.55;
+  padding-top:6px;border-top:1px dashed var(--line);margin-top:2px}
+.plat-plan__ops{display:flex;gap:5px;flex-wrap:wrap;margin-top:auto;padding-top:9px}
+.plat-plan__ops .btn{min-height:28px;padding:4px 10px;font-size:11.5px;border-radius:9px;font-weight:750}
+/* 删除是危险动作：文字压成暗红，hover 才实心 —— 避免误点 */
+.plat-plan__del{color:#a44435}
+.plat-plan__del:hover{background:#fff0ed;border-color:#e8bdb6;color:#8e3327}
+/* 充值包卡：额度数字更大，没有底部操作条，卡片高度由内容决定 */
+.plat-plan--pack .plat-plan__credits b{font-size:22px}
+
+@media(max-width:650px){
+  .plat-pick-grid,.plat-plan-grid{grid-template-columns:1fr}
+  .plat-credits-ops .btn{flex:1}
+}

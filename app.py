@@ -4039,11 +4039,28 @@ def platform_dashboard():
 @app.get('/api/platform/clubs')
 def platform_clubs():
     with conn() as c:
-        return rows(c.execute('''SELECT cl.*,COALESCE(ac.balance,0) ai_credits,COALESCE(ac.monthly_quota,0) monthly_quota,
+        data=rows(c.execute('''SELECT cl.*,COALESCE(ac.balance,0) ai_credits,COALESCE(ac.monthly_quota,0) monthly_quota,
           s.plan_code subscription_plan,s.status subscription_status,s.current_period_end,
           COALESCE((SELECT SUM(d.amount-d.resolved_amount) FROM ai_credit_adjustment_debt d WHERE d.club_id=cl.id AND d.resolved=0),0) ai_credit_debt
           FROM clubs cl LEFT JOIN ai_credit_accounts ac ON ac.club_id=cl.id
           LEFT JOIN club_ai_subscriptions s ON s.club_id=cl.id ORDER BY cl.id DESC'''))
+    # 总平台要看到俱乐部 logo：clubs.logo_url 存的是登录态代理地址
+    # （/api/club/{id}/settings/logo.png），那是「某个俱乐部自己的」路由，
+    # 平台管理员访问会被归属校验挡下。这里改用平台专属代理（见
+    # platform_club_logo：/api/platform/ 前缀在 security_v025 里已要求
+    # platform 角色，且它不看 status —— 待审核俱乐部的 logo 也要看得见，
+    # 否则审核时看到的是一片占位色块）。没有 logo 显式写空串，
+    # 前端据此画首字母占位而不是裂图。
+    for x in data:
+        m=_LOGO_URL_RE.match(str(x.get('logo_url') or ''))
+        x['logoUrl']=f'/api/platform/clubs/{x["id"]}/logo{m.group(2)}' if m else ''
+    return data
+
+
+@app.get('/api/platform/clubs/{club_id}/logo.{ext}')
+def platform_club_logo(club_id:int,ext:str):
+    """总平台查看任意俱乐部 logo（含待审核/已停用）—— 仅平台角色可访问。"""
+    return _serve_club_logo(club_id,ext)
 
 @app.post('/api/platform/clubs')
 def platform_add_club(payload:dict=Body(...)):
@@ -4095,6 +4112,13 @@ def platform_ai_credit_plans():
 def platform_ai_credit_plan_upsert(payload:dict=Body(...)):
     with conn() as c:
         try:return ai_credit_engine.upsert_plan(c,payload)
+        except ValueError as e: raise HTTPException(400,str(e))
+
+@app.delete('/api/platform/ai-credit/plans/{code}')
+def platform_ai_credit_plan_delete(code:str):
+    """删除套餐。仍被俱乐部订阅占用的套餐会被拒绝（引擎里判定）。"""
+    with conn() as c:
+        try:return ai_credit_engine.delete_plan(c,code)
         except ValueError as e: raise HTTPException(400,str(e))
 
 @app.get('/api/platform/ai-credit/topup-packages')
