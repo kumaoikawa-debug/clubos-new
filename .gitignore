@@ -12,3 +12,4 @@ services/medusa/.medusa/
 static/uploads/*/*/
 # 本地版本快照（改动前备份，仅供本机回滚）
 versions/
+outputs/
