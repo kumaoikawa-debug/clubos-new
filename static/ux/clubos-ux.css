@@ -536,3 +536,82 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .btn.sm{min-height:31px;padding:6px 11px;font-size:12px;border-radius:8px}
 .notice-bar{line-height:1.6;border-radius:12px;padding:10px 13px;font-size:12.5px;border:1px solid var(--line);background:#f7f9f6}
 .notice-bar.warn{background:#fdf6ee;border-color:#f0ddc4;color:#7a4a1d}
+
+/* ===== 明细账本：Credits 流水 / AI 用量明细（2026-10-23 重做）=================
+   两块明细共用一套：筛选条（.led-bar）+ 区间汇总（.led-sum）+ 按日分组（.led-day）
+   + 紧凑行（.led-row）+ 加载更多（.led-more）。
+   设计取向：金额/时间做成右对齐等宽数字列，其余信息压成灰阶副行；分组头做成
+   一条轻分隔带，长列表滑动时有明确的位置感——而不是原来那种「每行都长一样」的平铺。 */
+.led-card{padding-bottom:8px}
+.led-bar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:4px 0 12px}
+.led-chips{display:flex;flex-wrap:wrap;gap:6px}
+.led-chip{font-family:inherit;font-size:12px;font-weight:650;color:var(--muted);
+  background:#f3f6f2;border:1px solid transparent;border-radius:999px;padding:6px 12px;
+  cursor:pointer;line-height:1.35;transition:background .16s,color .16s,box-shadow .16s,transform .16s}
+.led-chip:hover{background:#e9f0e7;color:var(--brand)}
+.led-chip.on{background:linear-gradient(135deg,var(--brand2),var(--brand));color:#fff;
+  box-shadow:0 6px 16px rgba(36,87,67,.22)}
+.led-chip:active{transform:scale(.98)}
+.led-dates{display:flex;align-items:center;gap:6px;margin-left:auto}
+.led-dates input[type=date]{border:1px solid var(--line);border-radius:10px;background:#fff;
+  padding:6px 9px;font-family:inherit;font-size:12px;color:var(--text);min-height:32px}
+.led-dates__sep{color:var(--muted);font-size:12px}
+.led-sum{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;font-size:12px;
+  color:var(--muted);background:#f7faf6;border:1px solid var(--line);border-radius:12px;
+  padding:9px 13px;margin-bottom:8px}
+.led-sum b{color:var(--text);font-weight:800;font-variant-numeric:tabular-nums}
+.led-sum .in,.led-row__amt.in,.led-day__sum.in{color:#2f7d54}
+.led-sum .out,.led-row__amt.out,.led-day__sum.out{color:var(--danger)}
+.led-sum .bad{color:var(--danger)}
+/* 任务分布 pills：独占汇总条第二行（把 flex-basis 拉满），否则会和指标挤在同一行。 */
+.led-sum .led-pills{flex-basis:100%;display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
+.led-pill{font-size:11.5px;color:var(--brand);background:#edf4ea;border-radius:999px;padding:3px 9px;
+  display:inline-flex;align-items:baseline;gap:5px}
+.led-pill b{font-variant-numeric:tabular-nums;color:var(--brand)}
+.led-pill i{font-style:normal;font-variant-numeric:tabular-nums;color:var(--orange);font-weight:700}
+/* 指标之间用极细分隔线分开，扫读时能一眼分段，而不是一串连续灰字。 */
+.led-sum>span+span:not(.led-pills){padding-left:14px;border-left:1px solid #e8eee7}
+.led-list{display:block;margin-top:2px}
+.led-day{display:flex;align-items:center;gap:10px;padding:12px 2px 7px;margin-top:2px;
+  border-bottom:1px solid var(--line)}
+.led-day__label{font-size:11.5px;font-weight:800;letter-spacing:.4px;color:var(--brand)}
+.led-day__sum{margin-left:auto;font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums}
+.led-row{display:flex;align-items:flex-start;gap:10px;padding:10px 2px;
+  border-bottom:1px solid #f1f4f0;animation:ledIn .26s ease both}
+.led-list>.led-row:last-child,.led-row:last-child{border-bottom:0}
+@keyframes ledIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.led-row{animation:none}}
+.led-dot{width:7px;height:7px;border-radius:50%;margin-top:7px;flex:none;background:#c9d6cd}
+.led-dot.in{background:#2f7d54;box-shadow:0 0 0 3px rgba(47,125,84,.09)}
+.led-dot.out{background:#c07f4a;box-shadow:0 0 0 3px rgba(192,127,74,.10)}
+.led-row__main{flex:1;min-width:0}
+.led-row__title{font-size:13px;font-weight:700;color:var(--text);line-height:1.5;
+  display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.led-row__note{font-weight:500;color:var(--muted);font-size:12px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.led-row__note::before{content:'·';margin:0 5px;color:#c6d2ca;font-weight:400}
+.led-row__sub{font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.6}
+.led-row__time{font-variant-numeric:tabular-nums}
+.led-mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:11px;color:#5d6f66}
+.led-row__amt{margin-left:auto;flex:none;font-size:13.5px;font-weight:800;color:var(--text);
+  font-variant-numeric:tabular-nums;display:flex;align-items:baseline;gap:3px}
+.led-row__amt.flat{color:#9aa8a0}
+.led-row__amt i{font-style:normal;font-size:10px;font-weight:600;color:var(--muted)}
+.led-badge{font-size:10.5px;font-weight:700;border-radius:999px;padding:1px 7px;letter-spacing:.2px}
+.led-badge.ok{background:#e4f1e6;color:#2f7d54}
+.led-badge.bad{background:#fbeaea;color:var(--danger)}
+.led-foot{display:flex;justify-content:center;padding:14px 0 4px}
+.led-foot--end{color:var(--muted);font-size:11.5px}
+.led-more{font-family:inherit;font-size:12.5px;font-weight:700;color:var(--brand);background:#f2f7f1;
+  border:1px solid var(--line);border-radius:999px;padding:8px 20px;cursor:pointer;
+  display:inline-flex;align-items:center;gap:7px;transition:background .16s,transform .16s}
+.led-more:hover{background:#e8f1e4}
+.led-more:active{transform:scale(.99)}
+.led-more i{font-style:normal;font-weight:600;color:var(--muted);font-size:11px}
+.led-empty{text-align:center;padding:26px 8px;color:var(--muted);font-size:12.5px}
+.led-empty__ico{font-size:22px;opacity:.45;margin-bottom:6px;line-height:1}
+@media (max-width:760px){
+  .led-dates{margin-left:0;width:100%}
+  .led-dates input[type=date]{flex:1;min-width:0}
+  .led-row__note{white-space:normal}
+}

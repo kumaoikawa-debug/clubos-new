@@ -1057,7 +1057,7 @@ async function editActivityPoints(id){
     await loadPointsPolicy();
   }catch(e){showAlert({title:'保存积分规则失败',message:e.message})}
 }
-async function loadCredits(){ try{skel('#creditLedger',5);let d=await api(`/api/club/${CLUB}/credits`),sub=d.subscription||{};$('#creditAccount').innerHTML=`<div class="grid g4"><div class="stat-tile"><div class="k">当前可用</div><div class="v">${d.account?.balance||0}</div><div class="hint">AI Credits</div></div><div class="stat-tile"><div class="k">当前套餐</div><div class="v" style="font-size:22px">${esc(sub.plan_name||sub.plan_code||'未开通')}</div><div class="hint">月额度 ${d.account?.monthly_quota||0}</div></div><div class="stat-tile"><div class="k">本月已用</div><div class="v">${d.creditsConsumed||0}</div><div class="hint">成功调用 ${d.successfulCalls||0} 次</div></div><div class="stat-tile"><div class="k">待偿欠账</div><div class="v">${d.unresolvedDebt||0}</div><div class="hint">后续获得 Credits 自动优先抵扣</div></div></div><div class="notice section">大模型由<b>总平台统一接入并结算</b>，俱乐部不需要也无法配置模型或密钥；Credits 只决定计费，不决定模型质量——平台不会因为余额或套餐降低模型、减少图片或截断资料。</div>`;$('#creditTopups').innerHTML=(d.topupPackages||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}</div><div class="list-row__sub">${money(x.amount)} · 共 ${x.credits} Credits · 单价 ${unitCreditPrice(x.amount,x.credits)}</div><button class="btn secondary" style="margin-top:6px" onclick="buyCredits('${x.code}')">创建充值订单</button></div></div>`).join('')||'<div class="empty">暂无充值包</div>';$('#creditPendingOrders').innerHTML=(d.pendingOrders||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.order_type==='subscription'?'套餐':'充值'} ${x.credits} Credits</div><div class="list-row__sub">${money(x.amount)} · 待付款确认 · ${esc(x.period_key||x.package_code||'')}</div></div></div>`).join('')||'<div class="empty">暂无待付款账单</div>';$('#creditLedger').innerHTML=d.ledger.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.amount>0?'+':''}${x.amount}</div> · ${esc(x.note||x.type)}<div class="list-row__sub">${esc(x.type)} · ${x.created_at}</div></div></div>`).join('')}
+async function loadCredits(){ try{skel('#creditLedger',5);let d=await api(`/api/club/${CLUB}/credits`),sub=d.subscription||{};$('#creditAccount').innerHTML=`<div class="grid g4"><div class="stat-tile"><div class="k">当前可用</div><div class="v">${d.account?.balance||0}</div><div class="hint">AI Credits</div></div><div class="stat-tile"><div class="k">当前套餐</div><div class="v" style="font-size:22px">${esc(sub.plan_name||sub.plan_code||'未开通')}</div><div class="hint">月额度 ${d.account?.monthly_quota||0}</div></div><div class="stat-tile"><div class="k">本月已用</div><div class="v">${d.creditsConsumed||0}</div><div class="hint">成功调用 ${d.successfulCalls||0} 次</div></div><div class="stat-tile"><div class="k">待偿欠账</div><div class="v">${d.unresolvedDebt||0}</div><div class="hint">后续获得 Credits 自动优先抵扣</div></div></div><div class="notice section">大模型由<b>总平台统一接入并结算</b>，俱乐部不需要也无法配置模型或密钥；Credits 只决定计费，不决定模型质量——平台不会因为余额或套餐降低模型、减少图片或截断资料。</div>`;$('#creditTopups').innerHTML=(d.topupPackages||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}</div><div class="list-row__sub">${money(x.amount)} · 共 ${x.credits} Credits · 单价 ${unitCreditPrice(x.amount,x.credits)}</div><button class="btn secondary" style="margin-top:6px" onclick="buyCredits('${x.code}')">创建充值订单</button></div></div>`).join('')||'<div class="empty">暂无充值包</div>';$('#creditPendingOrders').innerHTML=(d.pendingOrders||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.order_type==='subscription'?'套餐':'充值'} ${x.credits} Credits</div><div class="list-row__sub">${money(x.amount)} · 待付款确认 · ${esc(x.period_key||x.package_code||'')}</div></div></div>`).join('')||'<div class="empty">暂无待付款账单</div>';await loadCreditLedger('reset')}
 catch(e){loaderError('#creditLedger',e,'Credits 数据加载失败')}}
 async function buyCredits(code){let r=await api(`/api/club/${CLUB}/credits/topups`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageCode:code})});toast(`充值订单已创建：${r.credits} Credits / ${money(r.amount)}，等待平台/支付确认`);loadCredits()}
 async function startClub(){
@@ -2012,23 +2012,199 @@ async function editPayAccount(){
   }catch(e){ showAlert({title:'保存失败',message:e.message}) }
 }
 
-/* AI 用量明细：Credits 余额看得出「花了多少」，但看不出「花在哪一步」。
-   这张表把每次调用的类型、模型、token 与扣费摊开，超额时才知道该调哪类用法的额度。 */
-async function loadAIUsage(){
-  const box=$('#aiUsage'); if(!box)return;
-  skel('#aiUsage',6);
+/* ===== Credits 流水 / AI 用量明细（2026-10-23 重做）=========================
+   原来两块明细都是「一拉到底」的平铺：流水被 /credits 截成当月前 60 条，
+   用量固定最近 100 条 —— 既翻不到更早的账，也看不出某一天/某一段时间到底花了多少。
+   现在统一成「日期区间 + 区间汇总 + 按日分组 + 加载更多」：
+     · 区间走服务端过滤（date_from/date_to=YYYY-MM-DD，按 +8 本地日历日，和商城订单同口径）
+     · 汇总由服务端聚合（用量还按任务类型拆开，回答「花在哪一步」）
+     · 默认近 7 天、每页 20 条，点「加载更多」续翻，不再一屏几百行
+   两块共用 .led-* 组件（样式在 clubos-ux.css），筛选状态各自独立：
+   切 tab、刷新余额都不会把用户已经选好的区间冲掉。 */
+const LED_PAGE=20;
+const LED_QUICK=[{k:'today',label:'今天'},{k:'7d',label:'近 7 天'},{k:'30d',label:'近 30 天'},{k:'month',label:'本月'},{k:'all',label:'全部'}];
+/* 任务名与 channel-render.js 的 LABEL 对齐：渠道生成时 task_type 直接就是渠道 id
+   （wechat/xhs/poster/recap），只认 detail 会把英文 id 直接甩给用户。 */
+const LED_TASK={detail:'活动详情生成',wechat:'微信公众号图文',xhs:'小红书图文',poster:'活动招募海报',recap:'活动回顾'};
+const LED_TYPE={subscription:'套餐额度',topup:'充值',consume:'AI 消耗',mall_reward:'商城奖励',
+  mall_reward_reverse:'奖励冲回',debt_recovery:'欠账抵扣',adjustment:'平台调整',refund:'退款'};
+const LED_WD=['周日','周一','周二','周三','周四','周五','周六'];
+const LED_STATE={ledger:{key:'ledger',quick:'7d',from:'',to:'',offset:0,items:[],total:0,sum:null,ready:false},
+                 usage:{key:'usage',quick:'7d',from:'',to:'',offset:0,items:[],total:0,sum:null,ready:false}};
+function ledRangeOf(k){
+  const t=localDay(0);                       // localDay 已按 +8 取本地日历日
+  if(k==='today')return{from:t,to:t};
+  if(k==='7d')return{from:localDay(-6),to:t};
+  if(k==='30d')return{from:localDay(-29),to:t};
+  if(k==='month')return{from:t.slice(0,8)+'01',to:t};
+  return{from:'',to:''};
+}
+/* 懒初始化默认区间：第一次进 tab 就有界（近 7 天），不会一进页就拉全量。 */
+function ledSt(key){
+  const st=LED_STATE[key];
+  if(!st.ready){const r=ledRangeOf(st.quick);st.from=r.from;st.to=r.to;st.ready=true}
+  return st;
+}
+/* created_at 是 UTC 'YYYY-MM-DD HH:MM:SS'；+8h 后按 UTC 字段读才是本地日期。 */
+function ledStamp(ts){
+  const d=new Date(String(ts||'').replace(' ','T')+'Z');
+  if(isNaN(d))return{key:String(ts||'').slice(0,10),label:'未知日期',time:'—'};
+  const l=new Date(d.getTime()+8*3600e3),p=n=>String(n).padStart(2,'0');
+  const key=`${l.getUTCFullYear()}-${p(l.getUTCMonth()+1)}-${p(l.getUTCDate())}`;
+  const label=key===localDay(0)?'今天':key===localDay(-1)?'昨天':`${l.getUTCMonth()+1}月${l.getUTCDate()}日 · ${LED_WD[l.getUTCDay()]}`;
+  return{key,label,time:`${p(l.getUTCHours())}:${p(l.getUTCMinutes())}`};
+}
+function ledGroups(items,amtOf){
+  const out=[],byKey=new Map();
+  (items||[]).forEach(x=>{
+    const s=ledStamp(x.created_at);
+    let g=byKey.get(s.key);
+    if(!g){g={key:s.key,label:s.label,rows:[],sum:0};byKey.set(s.key,g);out.push(g)}
+    g.rows.push({x,s});g.sum+=Number(amtOf(x)||0);
+  });
+  return out;
+}
+function ledRangeText(st){
+  if(!st.from&&!st.to)return '全部时间';
+  return (st.from||'最早')+' 至 '+(st.to||'至今');
+}
+function ledBarHtml(key){
+  const st=ledSt(key);
+  const chips=LED_QUICK.map(q=>`<button type="button" class="led-chip${st.quick===q.k?' on':''}" onclick="ledQuick('${key}','${q.k}')">${q.label}</button>`).join('');
+  return `<div class="led-chips">${chips}</div>`
+    +`<div class="led-dates"><input type="date" data-led-from="${key}" value="${st.from}" aria-label="开始日期">`
+    +`<span class="led-dates__sep">至</span><input type="date" data-led-to="${key}" value="${st.to}" aria-label="结束日期">`
+    +`<button type="button" class="btn ghost sm" onclick="ledApply('${key}')">应用</button></div>`;
+}
+function ledgerSumHtml(st){
+  const s=st.sum||{income:0,expense:0,net:0,count:0};
+  const netCls=s.net>0?'in':(s.net<0?'out':'');
+  return `<span>${ledRangeText(st)}</span><span>共 <b>${s.count}</b> 笔</span>`
+    +`<span class="in">入账 +${Number(s.income).toLocaleString('zh-CN')}</span>`
+    +`<span class="out">消耗 −${Number(s.expense).toLocaleString('zh-CN')}</span>`
+    +`<span>净变化 <b class="${netCls}">${s.net>0?'+':''}${Number(s.net).toLocaleString('zh-CN')}</b></span>`;
+}
+function usageSumHtml(st){
+  const s=st.sum||{calls:0,success:0,failed:0,inputTokens:0,outputTokens:0,credits:0,byTask:[]};
+  const rate=s.calls?Math.round(s.success/s.calls*100):0;
+  const top=(s.byTask||[]).slice(0,3).map(b=>`<span class="led-pill">${esc(LED_TASK[b.task]||b.task)} <b>×${b.calls}</b>${b.credits?'<i>−'+b.credits+'</i>':''}</span>`).join('');
+  return `<span>${ledRangeText(st)}</span>`
+    +`<span>调用 <b>${s.calls}</b> 次 · 成功 <b>${s.success}</b>${s.failed?' / 失败 <b class="bad">'+s.failed+'</b>':''} · 成功率 ${rate}%</span>`
+    +`<span>tokens ${Number(s.inputTokens+s.outputTokens).toLocaleString('zh-CN')}</span>`
+    +`<span class="out">扣费 −${Number(s.credits).toLocaleString('zh-CN')}</span>`
+    +(top?`<span class="led-pills">${top}</span>`:'');
+}
+function ledRowLedger(x,s){
+  const amt=Number(x.amount||0),pos=amt>0;
+  const typeCn=LED_TYPE[x.type]||x.type||'账务';
+  const note=(x.note&&String(x.note)!==typeCn)?String(x.note):'';
+  return `<div class="led-row"><span class="led-dot ${pos?'in':'out'}" aria-hidden="true"></span>`
+    +`<div class="led-row__main"><div class="led-row__title">${esc(typeCn)}${note?`<span class="led-row__note">${esc(note)}</span>`:''}</div>`
+    +`<div class="led-row__sub"><span class="led-row__time">${s.time}</span>${x.source_type?' · '+esc(x.source_type):''}</div></div>`
+    +`<div class="led-row__amt ${pos?'in':'out'}">${pos?'+':'−'}${Math.abs(amt).toLocaleString('zh-CN')}</div></div>`;
+}
+function ledRowUsage(x,s){
+  const ok=String(x.status||'')==='success',cred=Number(x.credits_charged||0);
+  const tok=Number(x.input_tokens||0).toLocaleString('zh-CN')+' in / '+Number(x.output_tokens||0).toLocaleString('zh-CN')+' out';
+  return `<div class="led-row"><span class="led-dot ${ok?'in':'out'}" aria-hidden="true"></span>`
+    +`<div class="led-row__main"><div class="led-row__title">${esc(LED_TASK[x.task_type]||x.task_type||'AI 调用')}`
+    +`<span class="led-badge ${ok?'ok':'bad'}">${ok?'成功':esc(x.status||'—')}</span></div>`
+    +`<div class="led-row__sub"><span class="led-mono">${esc(x.model||'—')}</span>${x.provider?' · '+esc(x.provider):''} · <span class="led-mono">${tok}</span> · <span class="led-row__time">${s.time}</span></div></div>`
+    +`<div class="led-row__amt ${cred>0?'out':'flat'}">${cred>0?'−'+cred:'0'}<i>Credits</i></div></div>`;
+}
+function ledListHtml(key,st,rowFn,amtOf,emptyText,spent){
+  /* spent=true 表示这一列的正数代表「消耗」（AI 用量），配色与符号要和账本相反，
+     否则一天的扣费会被画成绿色 +30，看起来像收入。 */
+  if(!st.items.length){
+    return `<div class="led-empty"><div class="led-empty__ico">◷</div><div>${emptyText}</div>`
+      +`<div style="margin-top:10px"><button type="button" class="btn ghost sm" onclick="ledQuick('${key}','all')">看全部时间</button></div></div>`;
+  }
+  const html=ledGroups(st.items,amtOf).map(g=>{
+    const cls=spent?(g.sum>0?'out':'in'):(g.sum>0?'in':'out');
+    const sign=spent?'−':(g.sum>0?'+':'−');
+    const sum=g.sum?`<span class="led-day__sum ${cls}">${sign}${Math.abs(g.sum).toLocaleString('zh-CN')}</span>`:'';
+    return `<div class="led-day"><span class="led-day__label">${g.label}</span>${sum}</div>`
+      +g.rows.map(r=>rowFn(r.x,r.s)).join('');
+  }).join('');
+  const rest=Math.max(0,Number(st.total||0)-st.items.length);
+  const foot=rest
+    ? `<div class="led-foot"><button type="button" class="led-more" onclick="ledMore('${key}')">加载更多 <i>还有 ${rest} 条</i></button></div>`
+    : `<div class="led-foot led-foot--end">已显示全部 ${st.total} 条</div>`;
+  return html+foot;
+}
+function renderLedgerPanel(){
+  const st=ledSt('ledger');
+  const bar=$('#ledgerBar');if(bar)bar.innerHTML=ledBarHtml('ledger');
+  const sum=$('#ledgerSum');if(sum)sum.innerHTML=ledgerSumHtml(st);
+  const box=$('#creditLedger');if(!box)return;
+  box.innerHTML=ledListHtml('ledger',st,ledRowLedger,x=>x.amount,
+    (st.from||st.to)?'这个时间范围内没有 Credits 变动':'还没有 Credits 变动',false);
+}
+function renderUsagePanel(){
+  const st=ledSt('usage');
+  const bar=$('#usageBar');if(bar)bar.innerHTML=ledBarHtml('usage');
+  const sum=$('#usageSum');if(sum)sum.innerHTML=usageSumHtml(st);
+  const box=$('#aiUsage');if(!box)return;
+  box.innerHTML=ledListHtml('usage',st,ledRowUsage,x=>x.credits_charged,
+    (st.from||st.to)?'这个时间范围内没有 AI 调用记录':'还没有 AI 调用记录',true);
+}
+async function loadCreditLedger(mode){
+  const st=ledSt('ledger'),box=$('#creditLedger');if(!box)return;
+  if(mode!=='more'){st.offset=0;skel('#creditLedger',5)}
+  const q=new URLSearchParams();
+  if(st.from)q.set('date_from',st.from);
+  if(st.to)q.set('date_to',st.to);
+  q.set('limit',LED_PAGE);q.set('offset',mode==='more'?st.items.length:0);
   try{
-    const list=await api('/api/club/'+CLUB+'/ai/usage')||[];
-    /* 任务名与 channel-render.js 的 LABEL 对齐：渠道生成时 task_type 直接就是渠道 id，
-   表里有 wechat/xhs/poster/recap（见 static/channel-render.js）。之前只认了 detail 一类，
-   其余直接把英文 id 显示给用户。 */
-    const task={detail:'活动详情生成',wechat:'微信公众号图文',xhs:'小红书图文',poster:'活动招募海报',recap:'活动回顾'};
-    box.innerHTML=list.slice(0,60).map(u=>`<div class="list-row"><div class="list-row__main">`
-      +`<div class="list-row__title">${esc(task[u.task_type]||u.task_type||'AI 调用')} <span class="tag">${esc(u.status||'—')}</span></div>`
-      +`<div class="list-row__sub">${esc(u.model||'—')} · ${esc(u.provider||'—')} · ${u.input_tokens||0} in / ${u.output_tokens||0} out · ${esc(u.created_at||'')}</div>`
-      +`<div class="list-row__end"><strong>${u.credits_charged!=null?('-'+u.credits_charged+' Credits'):(u.provider_cost!=null?money(u.provider_cost):'—')}</strong></div>`
-      +`</div></div>`).join('')||'<div class="empty">还没有 AI 调用记录</div>';
-  }catch(e){ box.innerHTML='<div class="empty">读取失败：'+esc(e.message)+'</div>' }
+    const r=await api(`/api/club/${CLUB}/credits/ledger?${q.toString()}`)||{};
+    st.items=mode==='more'?st.items.concat(r.items||[]):(r.items||[]);
+    st.total=Number(r.total||0);st.sum=r.summary||null;st.offset=st.items.length;
+    renderLedgerPanel();
+  }catch(e){
+    if(mode==='more')toast('加载更多失败：'+(e.message||'请重试'));
+    else box.innerHTML='<div class="empty">读取失败：'+esc(e.message||'')+'</div>';
+  }
+}
+async function loadUsage(mode){
+  const st=ledSt('usage'),box=$('#aiUsage');if(!box)return;
+  if(mode!=='more'){st.offset=0;skel('#aiUsage',5)}
+  const base=new URLSearchParams();
+  if(st.from)base.set('date_from',st.from);
+  if(st.to)base.set('date_to',st.to);
+  const page=new URLSearchParams(base);
+  page.set('limit',LED_PAGE);page.set('offset',mode==='more'?st.items.length:0);
+  try{
+    /* 明细与汇总各一个请求，都按同一区间；并行拿，别串行等两次往返。 */
+    const [list,sum]=await Promise.all([
+      api(`/api/club/${CLUB}/ai/usage?${page.toString()}`),
+      api(`/api/club/${CLUB}/ai/usage/summary?${base.toString()}`)
+    ]);
+    st.items=mode==='more'?st.items.concat(list||[]):(list||[]);
+    st.sum=sum||null;st.total=Number((sum&&sum.calls)||0);st.offset=st.items.length;
+    renderUsagePanel();
+  }catch(e){
+    if(mode==='more')toast('加载更多失败：'+(e.message||'请重试'));
+    else box.innerHTML='<div class="empty">读取失败：'+esc(e.message||'')+'</div>';
+  }
+}
+/* 旧名字保留：设置页 tab 与外部调用都还按 loadAIUsage 走。 */
+async function loadAIUsage(){return loadUsage('reset')}
+function ledRefresh(key){return key==='ledger'?loadCreditLedger('reset'):loadUsage('reset')}
+function ledQuick(key,k){
+  const st=ledSt(key),r=ledRangeOf(k);
+  st.quick=k;st.from=r.from;st.to=r.to;st.offset=0;
+  ledRefresh(key);
+}
+function ledApply(key){
+  const st=ledSt(key);
+  const f=document.querySelector(`[data-led-from="${key}"]`),t=document.querySelector(`[data-led-to="${key}"]`);
+  st.from=(f&&f.value)||'';st.to=(t&&t.value)||'';
+  if(st.from&&st.to&&st.from>st.to){toast('开始日期不能晚于结束日期');return}
+  st.quick='custom';st.offset=0;
+  ledRefresh(key);
+}
+function ledMore(key){
+  if(key==='ledger')loadCreditLedger('more');else loadUsage('more');
 }
 
 

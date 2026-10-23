@@ -2205,9 +2205,78 @@ def club_credit_topup(club_id:int,payload:dict=Body(...)):
         except ValueError as e: raise HTTPException(400,str(e))
 
 @app.get('/api/club/{club_id}/ai/usage')
-def club_ai_usage(club_id:int):
+def club_ai_usage(club_id:int,date_from:str|None=None,date_to:str|None=None,limit:int=100,offset:int=0):
+    """AI 用量明细。2026-10-23 用户反馈：原来固定最近 100 条、不能按日期筛，
+    历史翻不到、页面只能一直往下拉。这里加 date_from/date_to（YYYY-MM-DD，
+    本地 +8 日历日，口径与商城订单/佣金完全一致）+ 分页。
+    默认 limit=100/offset=0，旧调用方（含冒烟测试）行为不变。"""
     club_or_404(club_id)
-    with conn() as c:return rows(c.execute('SELECT id,task_type,provider,model,status,input_tokens,output_tokens,provider_cost,credits_charged,created_at FROM ai_usage_records WHERE club_id=? ORDER BY id DESC LIMIT 100',(club_id,)))
+    lo,hi=_date_range(date_from,date_to)
+    lim=max(1,min(int(limit or 100),200)); off=max(0,int(offset or 0))
+    sql=('SELECT id,task_type,provider,model,status,input_tokens,output_tokens,provider_cost,'
+         'credits_charged,created_at FROM ai_usage_records WHERE club_id=?')
+    args=[club_id]
+    if lo: sql+=" AND date(created_at,'+8 hours')>=?"; args.append(lo)
+    if hi: sql+=" AND date(created_at,'+8 hours')<=?"; args.append(hi)
+    # 按发生时间倒序（同秒再按 id），前端「按日分组」后组内才是最新在上；
+    # 只按 id 排的话，赶时间插入的历史数据会出现在今天那一组的中间。
+    sql+=' ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?'; args+= [lim,off]
+    with conn() as c: return rows(c.execute(sql,args))
+
+@app.get('/api/club/{club_id}/ai/usage/summary')
+def club_ai_usage_summary(club_id:int,date_from:str|None=None,date_to:str|None=None):
+    """同一日期区间的用量汇总：调用次数/成功率/token/扣费，并按任务类型拆开。
+    只给明细的话，用户看得出「花了多少」却看不出「花在哪一步」，超额时不知道该调哪类用量。"""
+    club_or_404(club_id)
+    lo,hi=_date_range(date_from,date_to)
+    sql=('SELECT task_type,status,input_tokens,output_tokens,provider_cost,credits_charged '
+         'FROM ai_usage_records WHERE club_id=?')
+    args=[club_id]
+    if lo: sql+=" AND date(created_at,'+8 hours')>=?"; args.append(lo)
+    if hi: sql+=" AND date(created_at,'+8 hours')<=?"; args.append(hi)
+    with conn() as c: recs=rows(c.execute(sql,args))
+    tasks={}
+    for x in recs:
+        k=str(x.get('task_type') or 'other')
+        b=tasks.setdefault(k,{'task':k,'calls':0,'success':0,'inputTokens':0,
+                              'outputTokens':0,'credits':0,'providerCost':0.0})
+        b['calls']+=1
+        if str(x.get('status') or '')=='success': b['success']+=1
+        b['inputTokens']+=int(x.get('input_tokens') or 0)
+        b['outputTokens']+=int(x.get('output_tokens') or 0)
+        b['credits']+=int(x.get('credits_charged') or 0)
+        b['providerCost']=round(b['providerCost']+float(x.get('provider_cost') or 0),8)
+    calls=len(recs); success=sum(1 for x in recs if str(x.get('status') or '')=='success')
+    return {'calls':calls,'success':success,'failed':calls-success,
+            'inputTokens':sum(int(x.get('input_tokens') or 0) for x in recs),
+            'outputTokens':sum(int(x.get('output_tokens') or 0) for x in recs),
+            'credits':sum(int(x.get('credits_charged') or 0) for x in recs),
+            'providerCost':round(sum(float(x.get('provider_cost') or 0) for x in recs
+                                     if str(x.get('status') or '')=='success'),8),
+            'byTask':sorted(tasks.values(),key=lambda b:(-b['calls'],-b['credits']))}
+
+@app.get('/api/club/{club_id}/credits/ledger')
+def club_credit_ledger(club_id:int,date_from:str|None=None,date_to:str|None=None,limit:int=50,offset:int=0):
+    """Credits 流水（2026-10-23 用户反馈）。旧的 GET /credits 是「当月账本前 60 条」：
+    跨月翻不到、也不能按日期筛，条目一多就退化成无限下拉。这条独立端点按任意区间
+    分页，并回带区间汇总（入账/消耗/净变化/笔数）——前端据此做「按日分组 + 加载更多」。
+    旧端点保持原样，避免影响余额/套餐/待付款账单那一套。"""
+    club_or_404(club_id)
+    lo,hi=_date_range(date_from,date_to)
+    lim=max(1,min(int(limit or 50),200)); off=max(0,int(offset or 0))
+    where=' WHERE club_id=?'; args=[club_id]
+    if lo: where+=" AND date(created_at,'+8 hours')>=?"; args.append(lo)
+    if hi: where+=" AND date(created_at,'+8 hours')<=?"; args.append(hi)
+    with conn() as c:
+        total=int(c.execute('SELECT COUNT(*) FROM ai_credit_ledger'+where,args).fetchone()[0] or 0)
+        agg=c.execute('SELECT COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0),'
+                      'COALESCE(SUM(CASE WHEN amount<0 THEN -amount ELSE 0 END),0),'
+                      'COALESCE(SUM(amount),0) FROM ai_credit_ledger'+where,args).fetchone()
+        items=rows(c.execute('SELECT * FROM ai_credit_ledger'+where+
+                             ' ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?',args+[lim,off]))
+    return {'items':items,'total':total,'limit':lim,'offset':off,
+            'summary':{'income':int(agg[0] or 0),'expense':int(agg[1] or 0),
+                       'net':int(agg[2] or 0),'count':total}}
 
 def _product_extras(c, ids:list[int]):
     """批量取商品的规格与图集，一次查完再按 product_id 分组。

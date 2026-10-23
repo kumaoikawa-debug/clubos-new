@@ -64,3 +64,8 @@ python tests/mall_commission_search_settlement_smoke.py
 # 手工新建/编辑写入 city、俱乐部与公开活动列表带 city、老活动（无 city）兜底为空；
 # 另含 node 校验 clubos-cities.js 的 location 兜底推导与定位最近城市。自带临时库隔离。
 python tests/city_dimension_smoke.py
+# AI Credits 账本 / 用量明细的日期筛选 + 区间汇总 + 分页（2026-10-23 用户反馈）：
+# /credits/ledger 与 /ai/usage 支持 date_from/date_to/limit/offset，
+# /ai/usage/summary 按 task_type 拆分；旧 /credits 端点与 /ai/usage 旧 list 契约保留。
+# 自带临时库隔离（CLUBOS_DB_PATH 指到 clubos_ledger_test.db），不需要外部传入。
+python tests/ledger_date_filter_smoke.py
