@@ -174,12 +174,14 @@ const ACT_THEMES=[
 function actThemesOf(x){return ACT_THEMES.filter(t=>t.re.test(String(x.title||''))).map(t=>t.k)}
 /* 城市筛选（2026-10-23 用户反馈：SaaS 面向全国，前端按城市筛选、定位默认当前城市）。
    城市来源优先级：活动显式 city 字段 > 老数据按 location 文本兜底推导（clubos-cities.js）。
-   ACT_CITY='all' 表示全部；定位命中的城市若有活动，进入活动页默认跳到该市（见 renderActivityList 里的 maybeLocate）。 */
+   ACT_CITY='all' 表示全部；定位命中的城市若有活动，进入活动页默认跳到该市（见 renderActivityList 里的 locateCity）。 */
 function actCityOf(x){return window.clubosCityOf?window.clubosCityOf(x):(x.city||'')}
 function actCityLabel(c){return c==='all'?'全部':(c==='other'?'其它地区':c)}
 let ACT_GEO_TRIED=false;
-function maybeLocate(){
-  if(ACT_GEO_TRIED)return;ACT_GEO_TRIED=true;
+/* 浏览器定位 → 最近城市。进入活动页自动触发一次（force=false）；
+   用户点「📍 定位我的城市」可手动重触发（force=true）。 */
+function locateCity(force){
+  if(!force&&ACT_GEO_TRIED)return;ACT_GEO_TRIED=true;
   if(!navigator.geolocation||!window.clubosNearestCity)return;
   try{navigator.geolocation.getCurrentPosition(pos=>{
     const c=window.clubosNearestCity(pos.coords.latitude,pos.coords.longitude);
@@ -251,7 +253,9 @@ function renderActivityRegions(){
     if(ACT_CITY_LOCATED){if(a===ACT_CITY_LOCATED)return -1;if(b===ACT_CITY_LOCATED)return 1;}
     return (counts[b]||0)-(counts[a]||0);
   });
-  let html=`<button class="w-chip${ACT_CITY==='all'?' on':''}" type="button" data-city="all">全部<i>${ACT_ALL.length}</i></button>`;
+  let html='';
+  if(!ACT_CITY_LOCATED)html+=`<button class="w-chip w-chip--loc" type="button" data-city="locate">📍 定位我的城市</button>`;
+  html+=`<button class="w-chip${ACT_CITY==='all'?' on':''}" type="button" data-city="all">全部<i>${ACT_ALL.length}</i></button>`;
   for(const c of cities){
     const loc=ACT_CITY_LOCATED===c?' <span class="w-chip__loc" title="已定位到当前城市">📍</span>':'';
     html+=`<button class="w-chip${ACT_CITY===c?' on':''}" type="button" data-city="${esc(c)}">${esc(c)}${loc}<i>${counts[c]}</i></button>`;
@@ -264,7 +268,7 @@ function renderActivityList(){
   const box=$('#publicActivities');if(!box)return;
   /* 进入活动页主动按浏览器定位的城市预筛（仅一次）：命中且该市有活动就默认跳到该市；
      不命中或用户拒绝定位则保持「全部」。 */
-  maybeLocate();
+  locateCity();
   /* 磁贴 / chips / 列表都必须在这里渲染：从首页进活动页时 ACT_ALL 已经由
      loadHome 填好，wv() 会走「已有数据 → 直接渲染」的快路径、根本不经过
      loadActivities()，挂在 loadActivities 里的东西会被整个跳过。
@@ -1417,7 +1421,7 @@ function bindWebEvents(){
   /* 活动页两道筛选：分类磁贴（主题，data-c）与城市 chips（data-city）。
      点击后只重画「选项自身 + 列表」，不重新拉数据（ACT_ALL 已在内存里）。 */
   $('#actCats')?.addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b||b.disabled)return;ACT_CAT=b.dataset.c;renderActivityCats();renderActivityList()});
-  $('#activityChips')?.addEventListener('click',e=>{const b=e.target.closest('[data-city]');if(!b||b.disabled)return;ACT_CITY=b.dataset.city;renderActivityRegions();renderActivityList()});
+  $('#activityChips')?.addEventListener('click',e=>{const b=e.target.closest('[data-city]');if(!b||b.disabled)return;const c=b.dataset.city;if(c==='locate'){locateCity(true);return;}ACT_CITY=c;renderActivityRegions();renderActivityList()});
   $('#mallCats')?.addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b)return;MALL_CAT=b.dataset.c;renderMallCats();renderMall()});
   $('#mallTabs')?.addEventListener('click',e=>{const b=e.target.closest('[data-s]');if(!b)return;MALL_SORT=b.dataset.s;renderMallTabs();renderMall()});
   $('#gearSearch')?.addEventListener('input',()=>renderMall());

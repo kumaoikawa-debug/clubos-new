@@ -210,6 +210,10 @@
 }
 .w-chip.on{background:var(--w-ink);border-color:var(--w-ink);color:#fff}
 .w-chip:disabled{opacity:.4;cursor:not-allowed}
+/* 城市选择：未定位时给一个虚线「定位」入口；已定位城市带 📍 强调。 */
+.w-chip--loc{background:#eef4ea;border:1px dashed #9cc0a3;color:#2f6a47}
+.w-chip--loc:hover{background:#e3eedd}
+.w-chip__loc{font-style:normal;margin-left:3px}
 
 /* ── 全站白卡统一（订单 / 福利 / 详情） ───────────────────────────────── */
 .web-shell .web-card{

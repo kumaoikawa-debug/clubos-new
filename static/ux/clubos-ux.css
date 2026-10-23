@@ -126,6 +126,8 @@ button.is-busy::after,.btn.is-busy::after{content:'';position:absolute;top:0;bot
 .act-search:focus-within{outline:2px solid #9ec5a7;outline-offset:1px}
 .act-rail__meta{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:11px;color:#708074}
 .act-rail__meta select{border:1px solid var(--line);background:#fff;border-radius:9px;padding:6px 8px;font-size:11.5px;color:var(--text);max-width:62%}
+/* 后台 AI 发活动弹窗里的「活动城市」下拉：与既有 .field 表单控件视觉一致。 */
+#createForm select{width:100%;padding:11px 13px;background:#fff;border:1px solid #d7e0d9;border-radius:10px;color:var(--text);font-size:14px;font-family:inherit}
 .act-rail__list{display:grid;gap:9px;overflow:auto;padding:2px;min-height:60px}
 .act-mini{display:grid;grid-template-columns:78px minmax(0,1fr);gap:11px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:9px;cursor:pointer;text-align:left;transition:border-color .16s,box-shadow .16s,transform .16s}
 .act-mini:hover{border-color:#a7c9a9;box-shadow:0 8px 22px #10251712;transform:translateY(-1px)}

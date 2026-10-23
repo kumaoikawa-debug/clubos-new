@@ -66,9 +66,16 @@ aid2=r.json().get('activityId')
 r=ok('get',f'/api/club/1/activities/{aid2}')
 check('legacy activity city empty',r.json().get('city') in ('',None),repr(r.json().get('city')))
 
+# ── 7) AI 生成活动（mock）带 city：验证后台 createModal 表单的 city 字段被后端接收并落库 ──
+r=ok('post','/api/club/1/activities/ai-generate',data={'prompt':'2026年11月5日 甘孜 稻城亚丁 3 日徒步，20人，899元/人。','city':'甘孜'})
+gaid=r.json().get('activityId')
+check('ai-generate returns activityId',isinstance(gaid,int) and gaid>0,repr(r.json()))
+r=ok('get',f'/api/club/1/activities/{gaid}')
+check('ai-generate city persisted == 甘孜',r.json().get('city')=='甘孜',repr(r.json().get('city')))
+
 print('PYTHON CHECKS:',len(PASS),'passed')
 
-# ── 7) node 校验 clubos-cities.js 推导逻辑 ──
+# ── 8) node 校验 clubos-cities.js 推导逻辑 ──
 NODE=os.environ.get('CLUBOS_NODE','/Users/jckuma/.workbuddy/binaries/node/versions/22.22.2-6/bin/node')
 JS=str(ROOT/'static'/'ux'/'clubos-cities.js')
 node_src=r'''

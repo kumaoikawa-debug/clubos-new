@@ -2283,3 +2283,13 @@ async function deleteBizItem(i){
   bizCfg.items.splice(Number(i),1);
   await persistBiz();
 }
+/* 后台 AI 发活动弹窗（createModal #createForm）补「活动城市」下拉：
+   与手工新建 / 编辑共用同一份 CLUBOS_CITIES，AI 生成路径（ai-generate 已接收 city）也能落 city。 */
+function populateCreateCity(){
+  const sel=document.getElementById('createCity');if(!sel)return;
+  if(sel.dataset.filled)return;
+  const cities=window.CLUBOS_CITIES||[];
+  sel.insertAdjacentHTML('beforeend',cities.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join(''));
+  sel.dataset.filled='1';
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',populateCreateCity);else populateCreateCity();
