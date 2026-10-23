@@ -1915,6 +1915,10 @@ const WABILITY_KEYS=[['徒步',/徒步|越野|walk|trail/i],['登山',/登山|�
   ['露营',/露营|营地|帐篷|宿营/i],['滑雪',/滑雪|雪场|单板|双板/i],['皮划艇',/皮划艇|皮艇|舟/i],
   ['桨板',/桨板|SUP|冲浪/i],['骑行',/骑行|自行车|单车/i],['跑步',/跑|马拉松|越野跑/i],['航海',/帆|船/i]];
 async function loadWability(){
+  /* 「户外能力」这个 tab 现在渲染的是业务介绍（#bizIntro，来自 web-biz.js），
+     下面这些 #wabilityRoutes/#wabilitySummary/... 容器已经不在了。
+     留个前置守卫：哪天真有人把这个函数挂回调用点，也不会在半路 null.innerHTML 抛错。 */
+  if(!$('#wabilityRoutes'))return;
   skel('#wabilityRoutes',4);try{const box=$('#wabilityRoutes');
   if(box&&!box.children.length)box.innerHTML='<div class="w-sk"><div style="height:52px;border-radius:10px;background:#eef2ef"></div>'.repeat(2)+'</div>';
   let d=await api(`/api/public/clubs/${CLUB}/member-center?user_id=${USER}`);

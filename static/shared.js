@@ -14,6 +14,23 @@ function uxPage(){
   return 'other';
 }
 function clubosCookie(name){return document.cookie.split('; ').find(x=>x.startsWith(name+'='))?.split('=').slice(1).join('=')||''}
+/* ===== 图片加载兜底（四端共用，一处覆盖全部 <img>）=====================
+   模板里手写 onerror 必然有漏网的：web.js 的瀑布流卡片（feedCard）就是
+   「有 cover 就只输出 <img>」——图 404 时整块留白，既不显示占位、也不打
+   is-fallback，线上只要有一张图被删/换名，C 端首页与活动页就是一片空白。
+   同文件 .w-cat__pic 那处是补过 onerror 的，两套写法并存说明靠人记靠不住。
+   error 事件不冒泡、但在捕获阶段能看到 —— 所以在 document 上挂捕获监听器：
+   给父容器打 is-fallback（露出模板本来就有的底层占位），再把坏图摘掉。
+   已有 onerror 的模板不受影响（它们先执行，这里只兜没人管的那些）。 */
+document.addEventListener('error',e=>{
+  const el=e.target;
+  if(!(el instanceof HTMLImageElement))return;
+  if(el.dataset.imgFallback)return;
+  el.dataset.imgFallback='1';
+  const box=el.parentElement;
+  if(box)box.classList.add('is-fallback');
+  if(el.parentNode)el.remove();
+},true);
 /* ===== 写操作防重复提交（在 api() 层统一兜底，覆盖全部调用点，无需改调用方）=====
    - 在途去重：同一写请求（方法+URL+body）在途时复用同一 Promise，不会向服务端发第二次。
    - 成功重放：成功后 WRITE_REPLAY_MS 内再次发起相同请求，直接返回上次结果 → 拦「快速连击」。
@@ -1230,6 +1247,10 @@ function enumCn(v,fallback){
 // Logout must revoke the session on the server, not just hide the current UI.
 document.addEventListener('DOMContentLoaded',()=>{
   if(!clubosCookie('clubos_csrf')||location.pathname==='/login')return;
+  /* C 端「我的」已经有列表内的退出入口（index.html 的 .wme-li--out）。
+     再浮一个按钮等于同一件事给两个入口，而且它 fixed 在右下角会压住
+     「远拓户外 · MEMBER」那行页脚 —— 页面里有这个入口就不再注入。 */
+  if(document.querySelector('.wme-li--out'))return;
   const button=document.createElement('button');button.type='button';button.textContent='退出登录';
   /* 定位交给 CSS（.logout-fab）：C 端底部有一条固定 tab bar，按钮浮在右下角会把
      第 4 个 tab「订单」整块盖住、那个入口点不到。有 tab bar 时按钮上移，并给页面留出底部空间。 */
