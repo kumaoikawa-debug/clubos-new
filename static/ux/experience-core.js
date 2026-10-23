@@ -9,7 +9,10 @@
  const text=(s)=>String(s??'');
  function empty(message='没有符合条件的记录') {const el=document.createElement('div');el.className='ux-state ux-empty';el.innerHTML='<div aria-hidden="true" class="ux-state-icon">⌁</div><strong></strong><p>可调整筛选条件或稍后刷新。</p>';el.querySelector('strong').textContent=message;return el;}
  function enrichTable(table){
-  if(table.dataset.uxEnhanced)return;
+  /* data-ux-skip：表格自带搜索/计数时退出通用增强。
+     通用增强把筛选条插在容器外层，表格一旦重渲染（换日期范围、翻页）就只剩一条
+     带着旧计数的死筛选条，所以这种表格必须自己拥有一整套工具条。 */
+  if(table.dataset.uxEnhanced||table.dataset.uxSkip)return;
   const body=table.tBodies[0];if(!body)return;
   table.dataset.uxEnhanced='1';
   table.setAttribute('role','table');

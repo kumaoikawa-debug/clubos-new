@@ -149,6 +149,20 @@ function platFmtUtc8(ts){ /* DB 存 UTC；时间戳 +8h 后用 UTC 字段读（�
   return `${p(l.getUTCMonth()+1)}-${p(l.getUTCDate())} ${p(l.getUTCHours())}:${p(l.getUTCMinutes())}`;
 }
 function platLocalDay(off){const d=new Date(Date.now()+(off||0)*86400e3+8*3600e3);const p=n=>String(n).padStart(2,'0');return `${d.getUTCFullYear()}-${p(d.getUTCMonth()+1)}-${p(d.getUTCDate())}`;}
+/* 快捷时间段的选中态：只有点了「自选日期」或手动改日期时才清空，
+   否则用户看不出当前到底筛了哪一段（原生 date 输入空值时也会显示灰色 YYYY/MM/DD，很容易误读成"已筛选"）。 */
+function platSyncRangeBtns(active){
+  document.querySelectorAll('#platRangeBtns .plat-range__btn[data-range]').forEach(b=>{
+    b.classList.toggle('is-on', b.getAttribute('data-range')===active);
+  });
+}
+function toggleCommissionCustom(){
+  const box=$('#platCommCustom'); if(!box)return;
+  const open=box.hasAttribute('hidden');
+  if(open)box.removeAttribute('hidden'); else box.setAttribute('hidden','');
+  const tg=$('#platRangeToggle'); if(tg)tg.classList.toggle('is-on',open);
+  if(open)$('#platCommFrom').focus();
+}
 function setCommissionRange(preset){
   const t=platLocalDay(0);
   if(preset==='today')platformCommissionRange={from:t,to:t};
@@ -156,17 +170,75 @@ function setCommissionRange(preset){
   else if(preset==='month')platformCommissionRange={from:t.slice(0,8)+'01',to:t};
   else platformCommissionRange={from:'',to:''};
   $('#platCommFrom').value=platformCommissionRange.from;$('#platCommTo').value=platformCommissionRange.to;
+  platSyncRangeBtns(preset);
+  const tg=$('#platRangeToggle'); if(tg)tg.classList.remove('is-on');
   loadCommissions();
 }
-function applyCommissionRange(){platformCommissionRange={from:$('#platCommFrom').value||'',to:$('#platCommTo').value||''};loadCommissions();}
+function applyCommissionRange(){
+  platformCommissionRange={from:$('#platCommFrom').value||'',to:$('#platCommTo').value||''};
+  platSyncRangeBtns('');
+  const tg=$('#platRangeToggle'); if(tg)tg.classList.add('is-on');
+  loadCommissions();
+}
+function clearCommissionRange(){
+  $('#platCommFrom').value='';$('#platCommTo').value='';
+  const box=$('#platCommCustom'); if(box)box.setAttribute('hidden','');
+  const tg=$('#platRangeToggle'); if(tg)tg.classList.remove('is-on');
+  setCommissionRange('all');
+}
+/* 佣金状态：pending 在通用枚举里叫「待处理」，放到结算语境下太含糊 ——
+   运营要一眼分清「还没到可结算」「冻结中」「现在能打款」「已经打过款」。 */
+function platLedgerStatus(st){
+  const m={pending:'待结算',frozen:'冻结中',available:'可结算',settled:'已结算'};
+  return m[String(st||'').toLowerCase()]||enumCn(st);
+}
+function platLedgerRow(x){
+  const rev=String(x.ledger_type||'')==='refund_reverse';
+  const st=String(x.status||'').toLowerCase();
+  const stCls=(st==='pending'||st==='frozen')?'orange':(st==='available'?'blue':'');
+  const abs=Math.abs(Number(x.amount||0));
+  return `<tr>`+
+    `<td class="plat-ledger__time">${platFmtUtc8(x.created_at)||'—'}</td>`+
+    `<td class="plat-ledger__club">${esc(x.club_name||('俱乐部 '+x.club_id))}</td>`+
+    `<td class="plat-ledger__order">#${esc(String(x.order_id==null?'':x.order_id))}</td>`+
+    `<td><span class="tag ${rev?'red':''}">${rev?'退款冲回':'销售佣金'}</span></td>`+
+    `<td class="plat-ledger__amt ${rev?'is-rev':'is-earn'}">${rev?'−':'+'}${money(abs)}</td>`+
+    `<td><span class="tag ${stCls}">${platLedgerStatus(st)}</span></td>`+
+    `<td class="plat-ledger__time">${x.available_at?platFmtUtc8(x.available_at):'—'}${x.settlement_id?` · ${esc(x.settlement_id)}`:''}</td>`+
+  `</tr>`;
+}
+let platCommRows=[];
+/* 这张表自己管搜索与计数（表格带 data-ux-skip，退出 experience-core 的通用增强）：
+   通用增强把筛选条插在表格容器外面，一换日期范围表格重渲染，筛选条就变成
+   一条带着旧计数、点了没反应的死控件。 */
+function platRenderComm(){
+  const box=$('#commissionList'); if(!box)return;
+  const input=$('#platCommSearch');
+  const q=(input&&input.value||'').trim().toLowerCase();
+  const all=platCommRows;
+  const list=q?all.filter(x=>[x.club_name,'#'+x.order_id,'销售佣金','退款冲回',platLedgerStatus(x.status),String(x.amount),platFmtUtc8(x.created_at)].join(' ').toLowerCase().includes(q)):all;
+  const hit=$('#platCommHit');
+  if(hit)hit.textContent=q?`匹配 ${list.length} / ${all.length} 笔`:`共 ${all.length} 笔`;
+  if(!list.length){
+    const ranged=!!(platformCommissionRange.from||platformCommissionRange.to);
+    box.innerHTML=`<div class="plat-ledger__empty"><b>${q?'没有匹配的记录':(ranged?'这个时间段没有佣金流水':'还没有佣金流水')}</b><span>${q?'换个关键词试试，或清空搜索框。':(ranged?'换个时间段试试，或直接看全部记录。':'成交后系统自动入账，不需要手工录入。')}</span>${q?'<button type="button" class="btn ghost sm" onclick="clearCommissionSearch()">清空搜索</button>':(ranged?'<button type="button" class="btn ghost sm" onclick="setCommissionRange(\'all\')">查看全部</button>':'')}</div>`;
+    return;
+  }
+  box.innerHTML=`<table class="table plat-ledger" data-ux-skip="1"><thead><tr><th>时间</th><th>俱乐部</th><th>订单</th><th>类型</th><th class="plat-ledger__thnum">佣金金额</th><th>状态</th><th>可结算 / 结算单</th></tr></thead><tbody>${list.map(platLedgerRow).join('')}</tbody></table>`;
+}
+function filterCommissionRows(){platRenderComm()}
+function clearCommissionSearch(){const el=$('#platCommSearch');if(el){el.value='';platRenderComm();el.focus()}}
 async function loadCommissions(){try{skel('#commissionList',4);
   const q=new URLSearchParams();
   if(platformCommissionRange.from)q.set('date_from',platformCommissionRange.from);
   if(platformCommissionRange.to)q.set('date_to',platformCommissionRange.to);
   let [a,sum,sett,policy]=await Promise.all([api('/api/platform/commissions'+(q.toString()?'?'+q.toString():'')),api('/api/platform/commission-summary'),api('/api/platform/settlements'),api('/api/platform/commission-policy')]);
   const ranged=platformCommissionRange.from||platformCommissionRange.to;$('#commissionSummary').innerHTML=sum.map(x=>`<div class="stat-tile"><div class="k">${esc(x.clubName||('俱乐部 '+x.clubId))}</div><div class="v">${money(x.payableNow)}</div><div class="hint">可打款 · 冻结 ${money(x.frozen)}${x.carryDebt?` · 待冲抵 ${money(x.carryDebt)}`:''}${x.hasAccount?'':' · <b style="color:var(--orange)">未提供结算账户</b>'}</div><div style="margin-top:10px"><button class="btn secondary" onclick="settleClub(${x.clubId})">结算</button></div></div>`).join('')+`<div class="stat-tile"><div class="k">当前售后冻结期</div><div class="v">${policy.afterSalesDays} 天</div><div class="hint">签收后开始计算</div></div>`;const commSum=a.reduce((s,x)=>s+Number(x.amount||0),0);
-  $('#commissionStat').innerHTML=`共 <b>${a.length}</b> 条 · 金额合计 <b>${money(commSum)}</b> · ${ranged?`${platformCommissionRange.from||'最早'} 至 ${platformCommissionRange.to||'最新'}`:'全部时间'}`;
-  $('#commissionList').innerHTML=a.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.club_name)}</div> · 订单 #${x.order_id} · ${money(x.amount)} <div class="list-row__sub">${platFmtUtc8(x.created_at)} · ${x.ledger_type==='refund_reverse'?'退款冲回':'销售佣金'}${x.available_at?` · 可结算 ${esc(x.available_at)}`:''}${x.settlement_id?` · ${esc(x.settlement_id)}`:''}</div><div class="list-row__end"><span class="tag">${esc(enumCn(x.status))}</span></div></div>`).join('')||`<div class="empty">${ranged?'该日期范围内暂无佣金流水':'暂无佣金'}</div>`;$('#settlementList').innerHTML=sett.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.club_name)}</div> · 实付 ${money(x.net_amount)} <span class="tag ${x.status==='requested'?'orange':''}">${x.status==='requested'?'俱乐部已申请 · 待打款':esc(enumCn(x.status))}</span><div class="list-row__sub">销售佣金 ${money(x.gross_amount)} · 退款冲抵 ${money(x.deduction_amount)} · ${x.entry_count} 笔 · ${x.payment_ref&&!String(x.payment_ref).startsWith('pending:')?`凭证 ${esc(x.payment_ref)}`:'待打款'}${x.payee?` · 打款至 ${esc(x.payee.holder)} ${esc(x.payee.accountTypeCn)}（${esc(x.payee.cardNoMasked)}）`:' · <b style="color:var(--orange)">俱乐部未登记结算账户</b>'}${x.status==='requested'?` · 申请于 ${esc(String(x.created_at||'').slice(0,16).replace('T',' '))}`:''}</div></div><div class="list-row__end">${x.status==='requested'?`<button class="btn secondary sm" onclick="payoutSettlement('${x.id}')">确认打款</button>`:''}</div></div>`).join('')||'<div class="empty">暂无结算</div>'}catch(e){loaderError('#commissionList',e,'loadCommissions 加载失败')}}async function payoutSettlement(sid){
+  const earnSum=a.filter(x=>String(x.ledger_type||'')!=='refund_reverse').reduce((s2,x)=>s2+Number(x.amount||0),0);
+  const revSum=a.filter(x=>String(x.ledger_type||'')==='refund_reverse').reduce((s2,x)=>s2+Math.abs(Number(x.amount||0)),0);
+  const pendCnt=a.filter(x=>String(x.status||'').toLowerCase()==='pending').length;
+  $('#commissionStat').innerHTML=`<span>销售佣金 <b>${money(earnSum)}</b></span>${revSum?`<span>退款冲回 <b class="is-rev">−${money(revSum)}</b></span>`:''}<span>净额 <b>${money(commSum)}</b></span><span class="is-mut">${ranged?`${platformCommissionRange.from||'最早'} 至 ${platformCommissionRange.to||'最新'}`:'全部时间'}${pendCnt?` · ${pendCnt} 笔待结算`:''}</span>`;
+  platCommRows=a;platRenderComm();$('#settlementList').innerHTML=sett.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.club_name)}</div> · 实付 ${money(x.net_amount)} <span class="tag ${x.status==='requested'?'orange':''}">${x.status==='requested'?'俱乐部已申请 · 待打款':esc(enumCn(x.status))}</span><div class="list-row__sub">销售佣金 ${money(x.gross_amount)} · 退款冲抵 ${money(x.deduction_amount)} · ${x.entry_count} 笔 · ${x.payment_ref&&!String(x.payment_ref).startsWith('pending:')?`凭证 ${esc(x.payment_ref)}`:'待打款'}${x.payee?` · 打款至 ${esc(x.payee.holder)} ${esc(x.payee.accountTypeCn)}（${esc(x.payee.cardNoMasked)}）`:' · <b style="color:var(--orange)">俱乐部未登记结算账户</b>'}${x.status==='requested'?` · 申请于 ${esc(String(x.created_at||'').slice(0,16).replace('T',' '))}`:''}</div></div><div class="list-row__end">${x.status==='requested'?`<button class="btn secondary sm" onclick="payoutSettlement('${x.id}')">确认打款</button>`:''}</div></div>`).join('')||'<div class="empty">暂无结算</div>'}catch(e){loaderError('#commissionList',e,'loadCommissions 加载失败')}}async function payoutSettlement(sid){
   const r=await showForm({title:'确认佣金打款',submitText:'确认已打款',desc:'请先按结算单申请金额向俱乐部登记的结算账户完成打款，再填写银行/支付凭证号。确认后该结算单转为已打款，预留佣金转为已结算。',fields:[{name:'ref',label:'银行/支付凭证号',required:true}]});
   if(!r||!String(r.ref).trim())return;
   try{await api(`/api/platform/settlements/${sid}/payout`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paymentRef:String(r.ref).trim()})});toast('打款已确认，结算完成');loadCommissions()}

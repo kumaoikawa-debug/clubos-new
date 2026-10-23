@@ -291,8 +291,16 @@ for cls in ('.plat-pick-grid', '.plat-pick', '.plat-plan-grid', '.plat-plan', '.
 check('index.html 引入 platform.css', '/static/platform/platform.css' in INDEX_HTML)
 check('platform.css 在共享样式之后加载（样式优先级：后加载胜）',
       INDEX_HTML.index('/static/platform/platform.css') > INDEX_HTML.index('/static/ux/clubos-polish.css'))
+# 版本号不能写死：它每次发版都变，写死等于让测试在每次正常发布后必红一次。
+# 这里守的是「同一批发版的脚本必须同版本」——两者不同步就会出现一个旧缓存、一个新代码。
+import re as _re
+def _asset_ver(asset):
+    m=_re.search(_re.escape(asset)+r'\?v=([0-9A-Za-z]+)', INDEX_HTML)
+    return m.group(1) if m else None
+_v_platform=_asset_ver('/static/platform/platform.js')
+_v_more=_asset_ver('/static/ux/workflows-platform-more.js')
 check('platform.js 与 workflows-platform-more.js 引用同一个新版本号',
-      'platform.js?v=20261023b' in INDEX_HTML and 'workflows-platform-more.js?v=20261023b' in INDEX_HTML)
+      bool(_v_platform) and _v_platform==_v_more)
 check('平台端仍引用共享样式（未被误删）', '/static/shared.css' in INDEX_HTML)
 # 套餐区必须占整行：挤在 g2 半栏里时 3 个档位只能纵向排 3 行，正是「操作不方便」的观感来源
 check('订阅套餐区占整行（不挤在半栏）',
@@ -301,5 +309,34 @@ check('充值包区占整行', '<h3>充值包</h3>' in INDEX_HTML)
 check('套餐区不再被 grid g2 包裹',
       'grid g2' not in INDEX_HTML[INDEX_HTML.index('id="aiPlanList"') - 1200:INDEX_HTML.index('id="aiPlanList"')],
       'aiPlanList 前 1200 字符内仍有 grid g2')
+
+# ---------------------------------------------------------------------------
+# ⑤ 佣金流水（2026-10-24 用户截图）：整块文字压成竖排单字。
+#    根因不是 CSS，是模板少一个 </div> —— 每行被塞进上一行的 flex 容器，
+#    .list-row__main 的 flex:1 + min-width:0 把宽度压到 1 个字。
+#    现已改为真表格，这里同时守住「结构平衡」和「不再是 list-row」两件事。
+# ---------------------------------------------------------------------------
+PLATFORM_JS = (ROOT / 'static/platform/platform.js').read_text(encoding='utf-8')
+_ci = PLATFORM_JS.find("function platRenderComm(")
+_ce = PLATFORM_JS.find("function filterCommissionRows(")
+check('佣金流水渲染函数存在', _ci > 0 and _ce > _ci)
+_comm_src = PLATFORM_JS[_ci:_ce] if _ci > 0 and _ce > _ci else ''
+check('佣金流水用 table 渲染（不再用 list-row 拼行）', '<table class="table plat-ledger"' in _comm_src)
+check('佣金流水表头 7 列齐全',
+      all(h in _comm_src for h in ('<th>时间</th>', '<th>俱乐部</th>', '<th>订单</th>', '<th>类型</th>',
+                                   '佣金金额', '<th>状态</th>', '可结算 / 结算单')))
+# 模板里 <div 与 </div> 必须相等：这是「竖排单字」这类 bug 的唯一硬判据
+check('佣金流水模板 div 开闭平衡', _comm_src.count('<div') == _comm_src.count('</div>'),
+      '开 %d / 闭 %d' % (_comm_src.count('<div'), _comm_src.count('</div>')))
+check('佣金流水退出通用表格增强（data-ux-skip，避免重渲染后残留死筛选条）',
+      'data-ux-skip' in _comm_src)
+check('experience-core 支持 data-ux-skip 退出口', 'table.dataset.uxSkip' in
+      (ROOT / 'static/ux/experience-core.js').read_text(encoding='utf-8'))
+check('佣金状态用结算语境文案（不是笼统的"待处理"）',
+      "pending:'待结算'" in PLATFORM_JS and "available:'可结算'" in PLATFORM_JS
+      and "settled:'已结算'" in PLATFORM_JS)
+check('index.html 有佣金流水搜索框与计数位',
+      'id="platCommSearch"' in INDEX_HTML and 'id="platCommHit"' in INDEX_HTML)
+check('平台端引入的 experience-core 也带了版本号', _asset_ver('/static/ux/experience-core.js') is not None)
 
 print('\nPLATFORM PLANS SMOKE: %d checks passed' % len(PASS))

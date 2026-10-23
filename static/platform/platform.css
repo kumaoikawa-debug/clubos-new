@@ -92,3 +92,60 @@
 }
 .plat-rate-edit__check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2)}
 .plat-rate-edit__reset{align-self:flex-start;margin-top:6px}
+
+/* ---- 4. 佣金流水（2026-10-24）----------------------------------------------
+   旧版用 list-row 模板，但模板漏了一个 </div>：每一行被嵌进上一行，
+   .list-row__main 的 flex:1 + min-width:0 把文字压成 1 字宽 → 整块竖排单字。
+   这里改成真表格：列宽语义清楚、金额右对齐、表头吸顶，42 行也能扫。 */
+.plat-range{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.plat-range__btn{
+  background:#fff;border:1px solid var(--line);border-radius:9px;
+  padding:6px 11px;font-size:12px;font-weight:700;color:#4b5d52;
+  cursor:pointer;min-height:32px;transition:border-color .15s,background .15s;
+}
+.plat-range__btn:hover{border-color:#9fc4ae;background:#f6faf6}
+/* 选中态必须显眼：原生 date 空值也显示灰色占位，光看输入框判断不出筛了哪一段 */
+.plat-range__btn.is-on{background:#e9f3ea;border-color:var(--brand);color:#1f5c3d;box-shadow:0 0 0 2px rgba(31,122,77,.10)}
+.plat-range__btn--more{border-style:dashed}
+.plat-range-custom{
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  margin:2px 0 12px;padding:10px 12px;background:#f7faf7;
+  border:1px dashed var(--line);border-radius:12px;
+}
+.plat-range-custom[hidden]{display:none}
+.plat-range-custom input[type=date]{
+  border:1px solid var(--line);border-radius:9px;padding:7px 9px;
+  font-size:12.5px;background:#fff;color:var(--text);
+}
+.plat-ledger__meta{display:flex;gap:16px;flex-wrap:wrap;align-items:baseline;font-size:12px;color:var(--muted);margin:12px 0 10px}
+.plat-ledger__meta b{font-size:13.5px;color:var(--text);font-variant-numeric:tabular-nums}
+.plat-ledger__meta .is-rev{color:#b4482f}
+.plat-ledger__meta .is-mut{margin-left:auto}
+.plat-ledger__tools{display:flex;align-items:center;gap:10px;margin:0 0 10px;flex-wrap:wrap}
+.plat-ledger__search{
+  display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:10px;
+  background:#fff;padding:7px 10px;color:#77857b;min-width:250px;
+}
+.plat-ledger__search input{border:0;outline:0;min-width:0;width:100%;font-size:12.5px;color:var(--text);background:transparent}
+.plat-ledger__hit{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.plat-tablewrap{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:14px}
+.plat-ledger{width:100%;border-collapse:separate;border-spacing:0}
+.plat-ledger thead th{position:sticky;top:0;z-index:1;background:#f4f8f4;border-bottom:1px solid var(--line);text-align:left;font-weight:750}
+.plat-ledger td{border-bottom:1px solid #eef2ec;background:#fff}
+.plat-ledger tbody tr:last-child td{border-bottom:0}
+.plat-ledger tbody tr:hover td{background:#fafbf9}
+.plat-ledger__time{white-space:nowrap;color:#5d6f63;font-variant-numeric:tabular-nums;font-size:11.5px}
+.plat-ledger__order{white-space:nowrap;font-variant-numeric:tabular-nums;color:#3b4c41}
+.plat-ledger__club{font-weight:700}
+.plat-ledger__thnum,.plat-ledger__amt{text-align:right}
+.plat-ledger__amt{font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap;font-size:13px}
+.plat-ledger__amt.is-earn{color:#1f5c3d}
+.plat-ledger__amt.is-rev{color:#b4482f}
+.plat-ledger__empty{display:flex;flex-direction:column;align-items:center;gap:9px;padding:40px 16px;text-align:center}
+.plat-ledger__empty b{font-size:14px;color:var(--text)}
+.plat-ledger__empty span{font-size:12.5px;color:var(--muted);line-height:1.6}
+@media(max-width:760px){
+  .plat-range{justify-content:flex-start}
+  .plat-tablewrap{max-height:none}
+  .plat-ledger__meta .is-mut{margin-left:0;width:100%}
+}
