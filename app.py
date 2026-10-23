@@ -23,6 +23,7 @@ from clubos_domain.club_analytics import ClubBusinessIntelligence
 from clubos_domain import club_biz
 from clubos_domain import c_profile
 from clubos_domain.gear_points_policy import GearPointsPolicyService
+from clubos_domain.commission_rate import ClubCommissionRateService
 from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine, GearRecommendService, LeaderRecommendService
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
@@ -160,6 +161,8 @@ benefit_engine=BenefitEngine(wallet_snapshot)
 participant_service=ParticipantService()
 execution_service=ActivityExecutionService()
 commission_engine=CommissionSettlementEngine(setting)
+# 俱乐部佣金率（2026-10-24）：总平台按俱乐部单独设定；商品费率是默认基准。
+commission_rate_service=ClubCommissionRateService(setting)
 warehouse_engine=WarehouseEngine()
 finance_engine=MerchandiseFinanceEngine()
 analytics_engine=CommerceAnalyticsEngine(finance_engine,warehouse_engine)
@@ -169,7 +172,7 @@ leader_recommend=LeaderRecommendService()
 club_bi=ClubBusinessIntelligence()
 inventory_engine=ProcurementEngine(warehouse_engine,finance_engine)
 booking_engine=BookingEngine(points_engine,wallet_snapshot,activity_points_policy,membership_engine,benefit_engine,participant_service,gear_points_policy)
-checkout_engine=CheckoutEngine(points_engine,wallet_snapshot,setting,activity_points_policy,membership_engine,benefit_engine,participant_service,inventory_engine,ai_credit_engine,gear_points_policy)
+checkout_engine=CheckoutEngine(points_engine,wallet_snapshot,setting,activity_points_policy,membership_engine,benefit_engine,participant_service,inventory_engine,ai_credit_engine,gear_points_policy,commission_rate_service)
 commerce_refund_engine=CommerceRefundEngine(points_engine,benefit_engine,commission_engine,inventory_engine)
 payment_lifecycle=PaymentLifecycleEngine()
 payment_accounts=PaymentAccountService()
@@ -2463,6 +2466,16 @@ def club_commission_summary(club_id:int):
         summary=commission_engine.summary(c,club_id=club_id)
         summary['recentSettlements']=commission_engine.settlements(c,club_id=club_id)[:10]
         summary['months']=commission_engine.monthly(c,club_id=club_id)
+        # 当前生效佣金率（2026-10-24）：佣金率由总平台按俱乐部设定，俱乐部只读。
+        # 俱乐部必须知道自己拿多少比例 —— 结算单上写「佣金 ¥X」但不知道比例是多少，
+        # 对不上账时会怀疑平台算错。费率在成交时快照，改费率不追溯历史订单。
+        _mode=c.execute("SELECT commission_rate,COUNT(*) n FROM products GROUP BY commission_rate ORDER BY n DESC LIMIT 1").fetchone()
+        _prod_rate=float(_mode['commission_rate']) if _mode else 0.08
+        _rate=commission_rate_service.resolve(c,club_id,_prod_rate)
+        summary['commissionRate']=round(_rate.rate,6)
+        summary['commissionRatePercent']=round(_rate.rate*100,2)
+        summary['commissionRateSource']=_rate.source
+        summary['commissionRateReason']=_rate.reason
         # 参考「推广费结算」模式：把起结门槛与「现在能不能申请」一并下发，
         # 前端据此渲染申请按钮的可点性，而不是让俱乐部点了才吃 400。
         threshold=float(summary['policy'].get('minSettlement',100) or 0)
@@ -3727,10 +3740,15 @@ def create_gear_order(club_id:int,payload:dict=Body(...)):
             if not p:raise HTTPException(400,'商品不可售')
             q=max(1,int(it.get('quantity',1)))
             if p['stock']<q:raise HTTPException(400,f"{p['name']} 库存不足")
-            total+=p['price']*q;commission+=p['price']*q*p['commission_rate'];resolved.append((p,q))
+            # 佣金率按俱乐部设定（2026-10-24）：与 checkout._finalize_gear 同一口径。
+            prate=float(p['commission_rate'])
+            if commission_rate_service is not None:
+                prate=commission_rate_service.rate_for_product(c,int(club_id),prate)
+            p['_commissionRate']=prate
+            total+=p['price']*q;commission+=p['price']*q*prate;resolved.append((p,q))
         c.execute('INSERT INTO gear_orders(user_id,source_club_id,total,cash_paid,platform_point_subsidy,status,club_commission) VALUES(?,?,?,?,?,?,?)',(user_id,club_id,total,total,0,'paid',commission));oid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         for p,q in resolved:
-            c.execute('INSERT INTO gear_order_items(order_id,product_id,quantity,unit_price,unit_cost_snapshot) VALUES(?,?,?,?,?)',(oid,p['id'],q,p['price'],float(p.get('average_cost') or 0)));inventory_engine.sale_outbound(c,product_id=int(p['id']),quantity=q,order_id=oid,actor_type='legacy_direct_order')
+            c.execute('INSERT INTO gear_order_items(order_id,product_id,quantity,unit_price,unit_cost_snapshot,commission_rate_snapshot) VALUES(?,?,?,?,?,?)',(oid,p['id'],q,p['price'],float(p.get('average_cost') or 0),float(p.get('_commissionRate') or 0)));inventory_engine.sale_outbound(c,product_id=int(p['id']),quantity=q,order_id=oid,actor_type='legacy_direct_order')
         c.execute('INSERT INTO commission_ledger(club_id,order_id,amount,status) VALUES(?,?,?,?)',(club_id,oid,commission,'pending'))
         pts=points_engine.earn_gear_points(c,user_id=user_id,gear_order_id=oid,cash_paid=total)
         reward=int(total/1000*int(setting('mall_ai_reward_per_1000_gmv',20)))
@@ -4889,6 +4907,60 @@ def commerce_order_refunded(payload:dict=Body(...), x_clubos_commerce_secret:str
         c.execute('INSERT INTO commerce_events(event_key,provider,event_type,commerce_order_id,payload_json) VALUES(?,?,?,?,?)',
                   (event_key,str(payload.get('provider') or commerce_provider()),'order.refunded',str(payload.get('orderId') or ''),jdump(payload)))
     return {'ok':True,'eventKey':event_key,'result':result}
+
+@app.get('/api/platform/commission-rates')
+def platform_commission_rates():
+    """总平台按俱乐部设定的佣金率一览（2026-10-24）。
+
+    生效口径 = 俱乐部专属费率（若单独设定）否则商品默认费率。
+    商品默认费率取当前商品的常见值（众数），用于让平台看清「基准是多少」。
+    """
+    with conn() as c:
+        clubs=rows(c.execute('SELECT id,name,status FROM clubs ORDER BY id'))
+        # 商品默认费率取众数；没有商品时用 8% 这一库默认值
+        mode=c.execute("SELECT commission_rate,COUNT(*) n FROM products GROUP BY commission_rate ORDER BY n DESC LIMIT 1").fetchone()
+        product_default=float(mode['commission_rate']) if mode else 0.08
+        out=[]
+        for cl in clubs:
+            r=commission_rate_service.resolve(c,int(cl['id']),product_default)
+            d=r.as_dict()
+            d.update({'clubId':int(cl['id']),'clubName':str(cl['name'] or ''),'clubStatus':str(cl['status'] or '')})
+            out.append(d)
+        return {'enabled':commission_rate_service.platform_enabled(),
+                'productDefaultRate':round(product_default,6),
+                'productDefaultRatePercent':round(product_default*100,2),
+                'clubs':out}
+
+
+@app.patch('/api/platform/commission-rates/{club_id}')
+def platform_set_commission_rate(club_id:int,payload:dict=Body(...)):
+    """设定 / 清除某个俱乐部的专属佣金率。
+
+    clearOverride=true → 清除单独设定，回到商品默认费率。
+    rate 以百分数传入（如 12 表示 12%），避免 0.12 这类小数被误读。
+    """
+    with conn() as c:
+        if not c.execute('SELECT 1 FROM clubs WHERE id=?',(club_id,)).fetchone():
+            raise HTTPException(404,'俱乐部不存在')
+        try:
+            if bool(payload.get('clearOverride')):
+                commission_rate_service.clear_club_rate(c,club_id)
+            else:
+                raw=payload.get('ratePercent',payload.get('rate'))
+                if raw is None or raw=='':
+                    raise HTTPException(400,'ratePercent 必填')
+                rate=float(raw)
+                # 兼容两种入参：传 12 视为 12%，传 0.12 视为 12%
+                if rate>1: rate=rate/100.0
+                commission_rate_service.set_club_rate(
+                    c,club_id,rate=rate,
+                    enabled=bool(payload.get('enabled',True)),
+                    note=str(payload.get('note') or ''))
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+        r=commission_rate_service.resolve(c,club_id)
+        return {'ok':True,**r.as_dict()}
+
 
 @app.get('/api/platform/commission-policy')
 def platform_commission_policy():

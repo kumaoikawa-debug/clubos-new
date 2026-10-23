@@ -27,7 +27,12 @@ class CommerceRefundEngine:
         marker=c.execute("SELECT 1 FROM gear_point_ledger WHERE type='after_sales_marker' AND source_type='gear_after_sales' AND source_id=? LIMIT 1",(case_id,)).fetchone()
         if marker:
             return {'ok':True,'orderId':order['id'],'afterSalesCaseId':case_id,'status':'partial_refunded','idempotent':True}
-        items=[dict(x) for x in c.execute('''SELECT ai.*,goi.product_id,goi.unit_price,p.commission_rate
+        # 佣金冲回要用「成交当时的费率」（gear_order_items.commission_rate_snapshot），
+        # 不能重读商品当前费率 —— 佣金率按俱乐部设定后是会变的，
+        # 重读当前值会让历史订单的冲回金额漂移。历史订单没有快照（=0）时
+        # 才回落到商品当前费率。
+        items=[dict(x) for x in c.execute('''SELECT ai.*,goi.product_id,goi.unit_price,
+                   goi.commission_rate_snapshot,p.commission_rate
                    FROM after_sales_items ai JOIN gear_order_items goi ON goi.id=ai.order_item_id
                    JOIN products p ON p.id=goi.product_id WHERE ai.case_id=?''',(case_id,)).fetchall()]
         goods=round(sum(float(x.get('requested_amount') or 0) for x in items),2)
@@ -62,7 +67,9 @@ class CommerceRefundEngine:
                 c.execute('INSERT INTO point_adjustment_debt(user_id,club_id,point_type,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?,?)',
                           (user_id,None,'gear',gear_debt,'gear_after_sales',case_id,'部分装备退款时已赚积分不足以冲回，形成积分欠账'))
 
-        comm=round(sum(float(x['unit_price'] or 0)*int(x['quantity'] or 0)*float(x['commission_rate'] or 0) for x in items),2)
+        comm=round(sum(float(x['unit_price'] or 0)*int(x['quantity'] or 0)
+                       *float(x['commission_rate_snapshot'] if float(x.get('commission_rate_snapshot') or 0)>0
+                              else (x.get('commission_rate') or 0)) for x in items),2)
         settled=float(c.execute("SELECT COALESCE(SUM(amount),0) FROM commission_ledger WHERE order_id=? AND ledger_type='earn' AND status='settled'",(oid,)).fetchone()[0] or 0)
         total_earn=float(c.execute("SELECT COALESCE(SUM(amount),0) FROM commission_ledger WHERE order_id=? AND ledger_type='earn'",(oid,)).fetchone()[0] or 0)
         prev_reverse=abs(float(c.execute("SELECT COALESCE(SUM(amount),0) FROM commission_ledger WHERE order_id=? AND ledger_type IN ('refund_reverse','after_sales_reverse')",(oid,)).fetchone()[0] or 0))

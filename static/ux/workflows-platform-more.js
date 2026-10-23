@@ -82,5 +82,45 @@
  });
  window.editTopupPackage=async()=>uxTask(async()=>{const d=await uxForm({title:'编辑 Credits 充值包',fields:[{name:'code',label:'充值包 Code',required:true,value:'T1000'},{name:'name',label:'显示名称',required:true,value:'1,000 Credits'},{name:'amount',label:'售价（元）',type:'number',min:0,step:.01,required:true,value:99},{name:'credits',label:'Credits 数量',type:'number',min:1,step:1,required:true,value:1000}],submitText:'保存充值包'});if(!d)return;await post('/api/platform/ai-credit/topup-packages',{...d,status:'active'});toast('充值包已保存');loadCredits()});
  window.approveAS=async id=>uxTask(async()=>{const d=await uxForm({title:'审核通过售后 · #'+id,subtitle:'仅退款/退货退款可设置批准金额；换货无需填写金额。',fields:[{name:'refundAmount',label:'批准退款金额（元，可留空）',type:'number',min:0,step:.01,placeholder:'换货可留空'}],submitText:'审核同意'});if(!d)return;const body={};if(d.refundAmount!=='')body.refundAmount=d.refundAmount;await post('/api/platform/after-sales/'+id+'/approve',body);toast('售后已审核');loadAfterSales()});
+ /* 俱乐部佣金率（2026-10-24 用户反馈「每个俱乐部的佣金不一样，需要在俱乐部管理那里可以调整」）：
+    佣金率原先只有商品级一个维度（products.commission_rate，默认 8%），所有俱乐部同比例。
+    现在总平台可以按俱乐部单独设定：俱乐部专属费率优先，没有单独设定才沿用商品默认费率。
+    成交当时的费率会快照进 gear_order_items.commission_rate_snapshot ——
+    所以改费率不影响历史订单，退款冲回也不会漂移。
+    弹窗用 uxDialog 自定义 body：数值输入 + 实时提示「当前生效多少」，比 showForm 的裸数字框清楚。 */
+ window.setClubCommissionRate=async id=>uxTask(async()=>{
+   let data=null;try{data=await api('/api/platform/commission-rates')}catch(e){}
+   if(!data){toast('佣金率数据加载失败');return}
+   const cur=(data.clubs||[]).find(x=>Number(x.clubId)===Number(id));
+   if(!cur){toast('未找到该俱乐部');return}
+   const def=Number(data.productDefaultRatePercent||8);
+   const isOwn=!!cur.hasClubOverride;
+   const body='<div class="plat-rate-edit">'
+     +'<div class="plat-rate-edit__hint">商品默认佣金率 <b>'+def+'%</b>；单独设定后本俱乐部按自己的比例计算佣金，未设定则沿用商品默认。</div>'
+     +'<label class="plat-rate-edit__label">本俱乐部佣金率（%）</label>'
+     +'<input id="platRateInput" class="plat-rate-edit__input" type="number" min="0" max="100" step="0.1" value="'+(isOwn?Number(cur.clubRatePercent||0):def)+'">'
+     +'<div class="plat-rate-edit__hint">0 表示不发佣金；上限 100%。</div>'
+     +'<label class="plat-rate-edit__check"><input type="checkbox" id="platRateEnabled"'+(cur.enabled===false?'':' checked')+'> 启用佣金发放</label>'
+     +'<label class="plat-rate-edit__label">备注（可选）</label>'
+     +'<input id="platRateNote" class="plat-rate-edit__input" value="'+esc(cur.note||'')+'" placeholder="如：年度合作协议 2026">'
+     +(isOwn?'<button type="button" class="btn ghost sm plat-rate-edit__reset" data-act="reset">恢复商品默认 '+def+'%</button>':'')
+     +'</div>';
+   const dlg=uxDialog({title:'调整俱乐部佣金率',desc:cur.clubName+' · 结算佣金按此比例计算',body,
+     foot:'<button class="btn ghost" type="button" data-act="cancel">取消</button><button class="btn" type="button" data-act="ok">保存</button>'});
+   const input=dlg.querySelector('#platRateInput');
+   dlg.querySelector('[data-act="cancel"]').onclick=()=>dlg.uxClose();
+   const resetBtn=dlg.querySelector('[data-act="reset"]');
+   if(resetBtn)resetBtn.onclick=async()=>{try{await patch('/api/platform/commission-rates/'+id,{clearOverride:true});dlg.uxClose();toast('已恢复商品默认佣金率');loadClubs();if(typeof loadCommissions==='function')loadCommissions()}catch(e){toast((e&&e.message)||'恢复失败')}};
+   dlg.querySelector('[data-act="ok"]').onclick=async()=>{
+     const v=Number(input.value);
+     if(input.value===''||isNaN(v)){toast('请输入佣金率');return}
+     if(v<0||v>100){toast('佣金率必须在 0 与 100 之间');return}
+     const enabled=dlg.querySelector('#platRateEnabled').checked;
+     if(enabled&&v<=0){toast('启用佣金时佣金率必须大于 0');return}
+     const note=dlg.querySelector('#platRateNote').value;
+     try{const r=await patch('/api/platform/commission-rates/'+id,{ratePercent:v,enabled,note});
+       dlg.uxClose();toast('佣金率已设为 '+Number(r.ratePercent||v)+'%');loadClubs();if(typeof loadCommissions==='function')loadCommissions()}
+     catch(e){toast((e&&e.message)||'保存失败')}};
+ });
  window.rejectAS=async id=>uxTask(async()=>{const d=await uxForm({title:'拒绝售后 · #'+id,fields:[{name:'note',label:'拒绝原因',type:'textarea',full:true,required:true,value:'不符合售后条件'}],submitText:'确认拒绝'});if(!d)return;await post('/api/platform/after-sales/'+id+'/reject',d);toast('已拒绝');loadAfterSales()});
 })();

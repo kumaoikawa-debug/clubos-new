@@ -243,6 +243,10 @@ def _run_compat_migrations(c):
     # 都可空 —— 无规格商品（以及 v0.27 之前的历史流水）variant_id 为 NULL 仍然合法。
     _ensure_column(c,'inventory_movements','variant_id','variant_id INTEGER')
     _ensure_column(c,'gear_order_items','variant_id','variant_id INTEGER')
+    # 成交时佣金率快照（2026-10-24）：佣金率按俱乐部设定后会变动，
+    # 退款冲回必须用成交当时的费率。历史订单用商品当前费率回填一次（近似值，
+    # 因为历史数据本来就没有独立快照），之后新订单一律写真实费率。
+    _ensure_column(c,'gear_order_items','commission_rate_snapshot','commission_rate_snapshot REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'gear_order_items','variant_name','variant_name TEXT')
     c.execute('''CREATE TABLE IF NOT EXISTS after_sales_cases (
       id TEXT PRIMARY KEY, order_id INTEGER NOT NULL, user_id INTEGER NOT NULL, source_club_id INTEGER NOT NULL,
@@ -434,6 +438,7 @@ def _run_compat_migrations(c):
               VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(rd['id'],pr['id'],parts['original'][i],parts['cash'][i],parts['cp'][i],parts['cpd'][i],parts['gp'][i],parts['gps'][i],parts['cbd'][i],parts['pbs'][i],parts['earned'][i]))
     c.execute('INSERT OR IGNORE INTO platform_settings(key,value) VALUES(?,?)',('gear_points_activity_redeem_enabled','1'))
     c.execute('INSERT OR IGNORE INTO platform_settings(key,value) VALUES(?,?)',('commission_after_sales_days','7'))
+    c.execute('INSERT OR IGNORE INTO platform_settings(key,value) VALUES(?,?)',('commission_enabled','1'))
     # 活动详情的「重新生成 / 换一版」需要两样东西：生成时的原始资料（没有它就无法重做），
     # 以及当前指向的版本（用于回退）。原始资料只存库内，任何对外接口都必须 pop 掉。
     _ensure_column(c,'activities','source_json','source_json TEXT')

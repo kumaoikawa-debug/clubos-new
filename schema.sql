@@ -348,6 +348,10 @@ CREATE TABLE IF NOT EXISTS gear_order_items (
   quantity INTEGER NOT NULL,
   unit_price REAL NOT NULL,
   unit_cost_snapshot REAL NOT NULL DEFAULT 0,
+  -- 成交时的佣金率快照（2026-10-24）。佣金率是「总平台按俱乐部设定」的，
+  -- 会随谈判结果变动；退款冲回必须用成交当时的费率，不能重读商品当前费率，
+  -- 否则平台改一次费率，历史订单的退款冲回金额就会漂移。
+  commission_rate_snapshot REAL NOT NULL DEFAULT 0,
   FOREIGN KEY (order_id) REFERENCES gear_orders(id),
   FOREIGN KEY (product_id) REFERENCES products(id)
 );
@@ -402,6 +406,18 @@ CREATE TABLE IF NOT EXISTS after_sales_items (
   FOREIGN KEY(order_item_id) REFERENCES gear_order_items(id)
 );
 CREATE INDEX IF NOT EXISTS idx_after_sales_items_case ON after_sales_items(case_id);
+
+-- 总平台按俱乐部单独设定的佣金率（2026-10-24）。
+-- 商品级 commission_rate 仍是「默认佣金率」；这里存的是「该俱乐部的谈判结果」，
+-- 优先级更高。rate 为 0 且 enabled=1 视为未设定 → 回落到商品默认费率。
+CREATE TABLE IF NOT EXISTS club_commission_rates (
+  club_id INTEGER PRIMARY KEY,
+  rate REAL NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  note TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
 
 CREATE TABLE IF NOT EXISTS commission_ledger (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

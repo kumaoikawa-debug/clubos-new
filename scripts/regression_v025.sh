@@ -101,3 +101,11 @@ python tests/platform_plans_smoke.py
 # C 端 / 俱乐部端 / 平台端三处下发的比例必须同源。
 # 自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/gear_points_plan_policy_smoke.py
+
+# 俱乐部佣金率（2026-10-24 用户反馈「每个俱乐部的佣金不一样，需要在俱乐部管理那里可以调整」）：
+# 佣金率原先只有商品级一个维度（products.commission_rate，默认 8%），所有俱乐部同比例。
+# 现在总平台按俱乐部单独设定：俱乐部专属费率优先，没有单独设定才沿用商品默认费率。
+# 成交当时的费率快照进 gear_order_items.commission_rate_snapshot ——
+# 改费率不追溯历史订单，退款冲回也不会漂移。
+# 自带临时库隔离，不需要 CLUBOS_DB_PATH。
+python tests/club_commission_rate_smoke.py

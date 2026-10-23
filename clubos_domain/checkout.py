@@ -59,7 +59,7 @@ class CheckoutEngine:
     """
     def __init__(self, points_engine, wallet_snapshot, setting_getter, activity_points_policy,
                  membership_engine=None, benefit_engine=None, participant_service=None, inventory_engine=None, ai_credit_engine=None,
-                 gear_points_policy=None):
+                 gear_points_policy=None, commission_rate=None):
         self.points = points_engine
         self.wallet_snapshot = wallet_snapshot
         self.setting = setting_getter
@@ -71,6 +71,9 @@ class CheckoutEngine:
         self.ai_credits = ai_credit_engine
         #: 总平台的装备积分规则服务（GearPointsPolicyService）。没有它 → 装备积分一律不可用。
         self.gear_points_policy = gear_points_policy
+        #: 总平台按俱乐部设定的佣金率服务（ClubCommissionRateService，2026-10-24）。
+        #: 没有它 → 退回商品默认费率（老行为）。
+        self.commission_rate = commission_rate
 
     def _new_id(self):
         return "chk_" + uuid.uuid4().hex
@@ -333,7 +336,14 @@ class CheckoutEngine:
             else:
                 stock=int(p['stock'] or 0)
             if stock<q: raise OverflowError(f"{p['name']}{(' · '+p['_variantName']) if p.get('_variantName') else ''} 库存不足")
-            commission += float(p['price'])*q*float(p['commission_rate'])
+            # 佣金率是「总平台按俱乐部设定」的（2026-10-24）：俱乐部专属费率优先，
+            # 没有单独设定才沿用商品默认费率。费率按件记进快照，
+            # 退款冲回时用成交当时的费率，不能重读商品当前值。
+            prate=float(p['commission_rate'])
+            if self.commission_rate is not None:
+                prate=self.commission_rate.rate_for_product(c,int(intent['club_id']),prate)
+            p['_commissionRate']=prate
+            commission += float(p['price'])*q*prate
             resolved.append((p,q))
         addr=payload.get('address') or {}
         c.execute('''INSERT INTO gear_orders(user_id,source_club_id,total,cash_paid,platform_point_subsidy,
@@ -347,7 +357,7 @@ class CheckoutEngine:
                    ' '.join([str(addr.get(k) or '') for k in ('province','city','district','detail') if addr.get(k)]) or None))
         oid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         for p,q in resolved:
-            c.execute('INSERT INTO gear_order_items(order_id,product_id,variant_id,variant_name,quantity,unit_price,unit_cost_snapshot) VALUES(?,?,?,?,?,?,?)',(oid,p['id'],p.get('_variantId'),p.get('_variantName'),q,p['price'],float(p.get('average_cost') or 0)))
+            c.execute('INSERT INTO gear_order_items(order_id,product_id,variant_id,variant_name,quantity,unit_price,unit_cost_snapshot,commission_rate_snapshot) VALUES(?,?,?,?,?,?,?,?)',(oid,p['id'],p.get('_variantId'),p.get('_variantName'),q,p['price'],float(p.get('average_cost') or 0),float(p.get('_commissionRate') or 0)))
             if self.inventory:
                 self.inventory.sale_outbound(c,product_id=int(p['id']),quantity=q,order_id=oid,actor_type='checkout',variant_id=p.get('_variantId'))
             else:
