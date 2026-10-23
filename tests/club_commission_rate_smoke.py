@@ -266,6 +266,36 @@ check('平台端 JS 有 setClubCommissionRate 入口',
       'setClubCommissionRate' in more_js and 'commission-rates' in more_js)
 check('佣金率单元格显示「已单独设定」标记', '已单独设定' in plat_js)
 
+print('\n== 12. 存量库升级：老库启动不能炸 ==')
+# 2026-10-24 事故复盘：上一轮装备积分改造给 ai_credit_plans 加了
+# gear_points_redeem_percent 列，但补列的迁移排在 seed_defaults 之后，
+# 而 seed_defaults 的 INSERT 恰恰要写这一列 —— 线上老库启动直接
+# OperationalError: table ai_credit_plans has no column named gear_points_redeem_percent。
+# 存量库升级路径必须能跑通，且不丢数据。
+# 模拟老库：把新列/新表删掉（SQLite 3.35+ 支持 DROP COLUMN），再跑一次 init_db
+with db.conn() as c:
+    try:
+        c.execute("ALTER TABLE ai_credit_plans DROP COLUMN gear_points_redeem_percent")
+        c.execute("ALTER TABLE gear_order_items DROP COLUMN commission_rate_snapshot")
+        c.execute("DROP TABLE IF EXISTS club_commission_rates")
+    except Exception as e:
+        print('    [跳过] 当前 SQLite 不支持 DROP COLUMN:', e)
+try:
+    db.init_db()
+    check('老库升级后 init_db 不报错', True)
+except Exception as e:
+    check('老库升级后 init_db 不报错', False, str(e)[:200])
+else:
+    with db.conn() as c:
+        cols = [r[1] for r in c.execute('PRAGMA table_info(ai_credit_plans)')]
+        has_tbl = bool(c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='club_commission_rates'").fetchone())
+        snap = [r[1] for r in c.execute('PRAGMA table_info(gear_order_items)')]
+    check('老库升级后补上了 gear_points_redeem_percent 列',
+          'gear_points_redeem_percent' in cols, str(cols[:12]))
+    check('老库升级后建出了 club_commission_rates 表', has_tbl)
+    check('老库升级后补上了 commission_rate_snapshot 列',
+          'commission_rate_snapshot' in snap)
+
 print('\n' + '=' * 62)
 print(f'检查项 {len(PASS) + len(FAILS)}  通过 {len(PASS)}  失败 {len(FAILS)}')
 if FAILS:

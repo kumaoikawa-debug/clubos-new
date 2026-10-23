@@ -103,6 +103,12 @@ def _backfill_v023_ai_credits(c):
     # seed_defaults 会写 gear_discount 列（装备折扣随套餐，2026-10-23）——
     # 存量库必须先补列再播种，否则 INSERT 直接炸。
     _ensure_column(c,'ai_credit_plans','gear_discount','gear_discount REAL NOT NULL DEFAULT 1.0')
+    # seed_defaults 的 INSERT 会写 gear_points_redeem_percent 列（装备积分抵用资格，
+    # 2026-10-24）。补列必须排在 seed_defaults 之前 —— 排在后面的话存量库上
+    # 直接 OperationalError: table ai_credit_plans has no column named
+    # gear_points_redeem_percent，线上启动即 500。
+    _ensure_column(c,'ai_credit_plans','gear_points_redeem_percent',
+                   'gear_points_redeem_percent REAL NOT NULL DEFAULT 0')
     eng=AICreditEngine(); eng.seed_defaults(c)
     c.execute("INSERT OR IGNORE INTO platform_settings(key,value) VALUES('ai_usd_cny_rate','7.2')")
     # Preserve legacy club plan labels by mapping known plan codes. Existing balances are untouched.
