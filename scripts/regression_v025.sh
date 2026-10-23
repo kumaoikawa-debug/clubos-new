@@ -80,3 +80,10 @@ python tests/commission_request_smoke.py
 # 没填的字段不下发（不编造营业时间）、局部更新不清空另一块、脏输入清洗、内部列不泄漏。
 # 自带临时库隔离（clubos_cprofile_test.db），不需要外部传入。
 python tests/cprofile_smoke.py
+
+# 出行清单两区 UI + 费用极性（2026-10-23 用户截图反馈三件事）：
+# ① notIncluded 负向键不再裸奔/不再被打成 ✓（含 "includ" 的否定式先判负向）；
+# ② 装备卡上商城真实产品图（imageUrl）与商城介绍（description），裂图退 emoji 有 parentNode 守卫；
+# ③ 「N 件装备」与「商城可配 X 项」口径可对、平替 chip 只挂小徽标、自备区是 soft pills。
+# node 真实执行 shared.js 渲染函数（只读），python 侧用推荐引擎算真实匹配，不碰业务库。
+python tests/pack_ui_smoke.py

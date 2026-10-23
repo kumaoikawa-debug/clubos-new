@@ -314,10 +314,18 @@
 .gear-row{position:relative;display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px 12px;color:inherit;font:inherit}
 .gear-row.buyable{cursor:pointer;transition:border-color .15s ease,transform .15s ease}
 .gear-row.buyable:hover{border-color:#a9c6bb;transform:translateY(-1px)}
+/* 产品图（2026-10-23 用户反馈「要以商城为准的实际产品图片」）：有图上商城真实商品图，
+   无图/裂图退到品类 emoji 方块（gearImgFallback 在 onerror 里换，与无图同款呈现）。 */
+.gear-img{width:64px;height:64px;flex:0 0 64px;border-radius:10px;overflow:hidden;background:#f2f5f3;display:grid;place-items:center}
+.gear-img img{width:100%;height:100%;object-fit:cover;display:block}
+.gear-img .gear-emoji{width:42px;height:42px;flex:0 0 42px;border-radius:999px;background:#e9efeb;font-size:20px}
 .gear-emoji{width:34px;height:34px;flex:0 0 34px;border-radius:10px;background:#f2f5f3;display:grid;place-items:center;font-size:17px}
 .gear-main{display:flex;flex-direction:column;min-width:0;flex:1}
 .gear-main b{font-size:13.5px;font-weight:800;line-height:1.35}
 .gear-main small{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;font-size:11px;color:var(--muted);margin-top:3px}
+/* 商品介绍（以商城上架资料为准）：两行截断，卡片高度不失控。
+   特异性 .gear-main .gear-desc(0,2,0) 压过 .gear-main small(0,1,1)，display 才能从 flex 换成 line-clamp。 */
+.gear-main .gear-desc{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;font-size:11.5px;line-height:1.55;color:#7d887f;margin-top:4px}
 .gear-price{font-style:normal;font-weight:850;font-size:13px;color:var(--text);white-space:nowrap}
 .gear-go{position:absolute;right:11px;top:50%;transform:translateY(-50%);color:#b3c2bc;font-size:17px;line-height:1}
 .gear-none{font-size:12px;color:var(--muted);padding:8px 11px;border:1px dashed var(--line);border-radius:10px;background:#fbfcfa}
@@ -382,18 +390,19 @@
 .pack-good .gear-row--sub{background:#fffdf6;border-bottom:1px dashed #efe6d2}
 .pack-needs{display:flex;flex-wrap:wrap;gap:5px;padding:8px 12px 11px;border-top:1px dashed #eef1ee}
 .pack-needs span{font-size:10.5px;line-height:1;color:#5b6b63;background:#f2f5f3;border-radius:6px;padding:4px 7px}
-/* 平替项：与精确匹配的实心标签区分开（虚线米色），顾客一眼知道这不是清单里那件 */
-.pack-needs .pack-needs__sub{background:#fdf7e8;color:#8a6d2f;border:1px dashed #ecd9ae;padding:3px 6px}
+/* 平替项：与精确匹配的实心标签区分开（虚线米色），顾客一眼知道这不是清单里那件。
+   「替」是小徽标不占文字位（2026-10-23 用户反馈：旧版把「平替 · 」焊进 chip 文字，
+   登山杖卡挂「平替 · 防水防滑徒步鞋」像挂错标签），含义由 chip 上的 tooltip 说清。 */
+.pack-needs .pack-needs__sub{background:#fdf7e8;color:#8a6d2f;border:1px dashed #ecd9ae;padding:3px 6px;display:inline-flex;align-items:center;gap:4px}
+.pack-needs .pack-needs__sub i{font-style:normal;font-size:9px;font-weight:800;line-height:1;padding:2px 4px;border-radius:4px;background:#f0dfb8;color:#8a6d2f;letter-spacing:.5px}
 .pack-needs .pack-needs__more{background:#eef1ee;color:#8b978f}
-/* 「这些请自己准备」改成一整张清单面板（2026-10-09 用户反馈「需要给顾客呈现出最美的页面」）：
-   旧版是虚线框两列网格、一格一句散着摆，和上面「商城可以配齐」的实线商品卡完全不是一个质感，
-   看着像没做完的草稿。现在用同一套语言：整块米色面板 + 图标方块 + 一行说明 + 发丝分隔线。 */
-/* 自备清单模块化（2026-10-10 用户反馈「太乱了…可以多行模块化，不用占这么多地方」）：
-   旧版一条通栏一行、最多拖出一屏半；改成自适应多列 chip 网格——
-   每项一张白色小圆角卡，列数随容器宽度自动增加，高度直接砍半以上。 */
-.pack-own{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:8px;background:#fbf8f1;border:1px solid #efe7d8;border-radius:14px;padding:12px}
-.pack-own__item{display:flex;align-items:center;gap:9px;padding:8px 11px;background:#fff;border:1px solid #f1ead9;border-radius:11px}
-.pack-own__ico{flex:0 0 28px;width:28px;height:28px;border-radius:9px;background:#f4efe3;display:grid;place-items:center;font-size:14px;line-height:1}
-.pack-own__txt{font-size:13px;line-height:1.5;color:#48554d}
+/* 「这些请自己准备」soft pills（2026-10-23 用户反馈「emoji 平铺观感差」）：
+   旧版是米色大面板里嵌白色小卡（卡叠卡、两道框、一行最多三项还半行空白）；
+   现在是一组暖色胶囊——去掉外层重面板与内层白卡，每项只剩自己一道浅边，
+   数量再多也只是一行行软 pill，不再像没做完的草稿网格。 */
+.pack-own{display:flex;flex-wrap:wrap;gap:8px}
+.pack-own__item{display:inline-flex;align-items:center;gap:8px;padding:6px 12px 6px 7px;background:#faf7f1;border:1px solid #efe7d8;border-radius:999px}
+.pack-own__ico{flex:0 0 auto;width:22px;height:22px;border-radius:999px;background:#f3ecdc;display:grid;place-items:center;font-size:12px;line-height:1;font-style:normal}
+.pack-own__txt{font-size:12.5px;line-height:1.4;color:#5c564c}
 @media(max-width:680px){.pack-goods{grid-template-columns:1fr}}
 

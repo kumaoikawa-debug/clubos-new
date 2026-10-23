@@ -474,7 +474,7 @@ def _gear_plan_for(c,master:dict,club_id:int)->dict:
     会员价按本俱乐部订阅套餐的装备折扣计算并随商品一起下发（折扣由总平台按套餐控制，
     会员等级不参与），让「加入会员更便宜」这件事在出行清单上直接看得见，而不是藏在会员中心里。
     """
-    prods=rows(c.execute('SELECT id,name,price,stock,category,image_url FROM products WHERE status="active" ORDER BY id'))
+    prods=rows(c.execute('SELECT id,name,price,stock,category,image_url,description FROM products WHERE status="active" ORDER BY id'))
     plan=gear_recommend.plan(prods,master).as_dict()
     rate,plan_name,_=ai_credit_engine.plan_gear_rate(c,club_id)
     if rate<1:

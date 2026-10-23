@@ -143,6 +143,7 @@ class GearPick:
     image_url: str
     emoji: str
     reason: str
+    description: str = ""
     tags: tuple[str, ...] = ()
     score: float = 0.0
     substitute: bool = False
@@ -158,6 +159,7 @@ class GearPick:
             "imageUrl": self.image_url,
             "emoji": self.emoji,
             "reason": self.reason,
+            "description": self.description,
             "tags": list(self.tags),
             "substitute": self.substitute,
         }
@@ -285,6 +287,7 @@ class GearRecommendService:
             image_url=str(row.get("image_url") or ""),
             emoji=emoji,
             reason=reason,
+            description=str(row.get("description") or "").strip(),
             tags=tags,
             score=cls._score(need or (), tags, name) if need else 0.0,
         )

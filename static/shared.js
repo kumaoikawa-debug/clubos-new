@@ -733,12 +733,23 @@ function gearRow(p,opts,sub){
   const memberNote=hasMember
     ? ' · '+esc(p.memberTierName||'会员')+'价 省 '+esc(fmt(p.memberSavings||0))
     : '';
-  // 平替徽标放在最前面：顾客第一眼就要知道「这不是清单里那件东西」，
-  // 理由文案（为什么拿它顶上）由引擎写在 p.reason 里，一起放进第二行。
+  /* 产品图以商城为准（2026-10-23 用户反馈「商城有的产品图处这些都要是以商城为准的
+     实际产品图片及介绍」）：有图先上真实商品图；裂图/无图退到品类 emoji 方块，
+     由 gearImgFallback 在 onerror 里换（同一张坏图会连发两次 error，函数内有 parentNode 守卫）。 */
+  const emo=esc(p.emoji||'🧰');
+  const imgHtml=p.imageUrl
+    ? '<span class="gear-img"><img src="'+esc(p.imageUrl)+'" alt="" loading="lazy" data-emoji="'+emo+'" onerror="gearImgFallback(this)"></span>'
+    : '<span class="gear-img gear-img--none"><span class="gear-emoji">'+emo+'</span></span>';
+  /* 介绍同样以商城为准：description 是平台上架时写的真实商品介绍；
+     老商品没填介绍时退到引擎写的「契合某品类」理由，不留空行也不编话。 */
+  const desc=String(p.description||'').trim()||String(p.reason||'').trim();
+  // 平替徽标放在最前面：顾客第一眼就要知道「这不是清单里那件东西」
   const badge=sub?'<span class="gear-badge">平替</span>':'';
-  const inner=badge+'<span class="gear-emoji">'+esc(p.emoji||'🧰')+'</span>'
+  const inner=badge+imgHtml
     +'<span class="gear-main"><b>'+esc(p.name)+'</b>'
-    +'<small>'+priceHtml+esc(p.reason||'')+(p.inStock?'':' · 暂时缺货')+memberNote+'</small></span>'
+    +'<small class="gear-meta">'+priceHtml+(p.inStock?'':' · 暂时缺货')+memberNote+'</small>'
+    +(desc?'<small class="gear-desc">'+esc(desc)+'</small>':'')
+    +'</span>'
     +'<span class="gear-go">›</span>';
   /* 点清单里的装备 = **先看这件商品**，不是直接下单（用户 2026-10-06 明确要求）。
      之前 C 端（canBuy 分支）绑的是 buy(id) —— 一碰就弹「确认装备订单」，
@@ -757,6 +768,14 @@ function gearRow(p,opts,sub){
   /* 连详情页都没有的端（理论上不会发生）：退回只读行，绝不退化成「一点就下单」。 */
   return '<div class="gear-row'+(sub?' gear-row--sub':'')+'" title="查看装备详情">'+inner+'</div>';
 }
+/* 装备卡产品图裂图兜底：换成与无图商品同一款品类 emoji 方块。
+   同一张坏图会连发两次 error，remove 后先判 parentNode（与 web.js 图片兜底同一套路）。 */
+window.gearImgFallback=function(el){
+  const box=el&&el.parentNode;
+  if(!box||!box.classList||!box.classList.contains('gear-img'))return;
+  box.classList.add('gear-img--fb');
+  box.innerHTML='<span class="gear-emoji">'+esc(el.getAttribute('data-emoji')||'🧰')+'</span>';
+};
 /* 旧 gearRowDup（同一件装备第二次出现时收成「已在上方列出」的只读行）已在 2026-10-09
    随 renderPacking 重构删除：现在按装备聚合、一件装备全局只出现一次，不再需要补丁行。 */
 function renderPacking(master,opts){
@@ -813,30 +832,40 @@ function renderPacking(master,opts){
     if(t&&!okTexts.has(t)&&miss.indexOf(t)<0)miss.push(t);
   });
   /* 卡上写清它满足了哪几项清单要求；平替的那一项单独标出来——
-     顾客得知道「这不是清单里那件，是商城目前最接近的同类」（引擎给的理由在卡片行里）。 */
+     顾客得知道「这不是清单里那件，是商城目前最接近的同类」。
+     chip 文本只留清单项名（2026-10-23 用户反馈：旧版把「平替 · 」前缀直接焊进文字，
+     登山杖卡挂着「平替 · 防水防滑徒步鞋」像挂错了标签）；「替」改成小徽标，
+     含义由 tooltip 说清，不再占文字位。 */
   const needTags=r=>r.needs.length
-    ? '<div class="pack-needs">'+r.needs.slice(0,4).map(n=>'<span'+(n.sub?' class="pack-needs__sub" title="商城没有清单里那件，这是最接近的同类"':'')+'>'+(n.sub?'平替 · ':'')+esc(n.t)+'</span>').join('')
+    ? '<div class="pack-needs">'+r.needs.slice(0,4).map(n=>'<span'+(n.sub?' class="pack-needs__sub" title="商城没有清单里那件，这是最接近的同类"':'')+'>'+(n.sub?'<i>替</i>':'')+esc(n.t)+'</span>').join('')
       +(r.needs.length>4?'<span class="pack-needs__more">+'+(r.needs.length-4)+'</span>':'')+'</div>'
     : '';
+  /* 「商城可配」口径 = 精确匹配 + 平替（2026-10-23 用户反馈：分区头写「4 件」、
+     总览写「商城可配 6 项」，两个数对不上像 bug）。件数与项数是两回事——
+     一件装备常覆盖多项清单，所以分区头补一句「覆盖清单 X 项」把两个数焊死。 */
+  const cov=g.coverage||{};
+  const md=g.memberDiscount||null;
+  const subCount=Number(cov.substituted||0);
+  const cover=Number(cov.matched||0)+subCount;
   const ownHtml=goods.length
     ? '<div class="pack-sec pack-sec--own"><div class="pack-sec__head"><b>商城可以配齐</b>'
       +'<span class="pack-sec__count">'+goods.length+' 件</span>'
-      +'<span class="pack-sec__hint">点开看规格与会员价</span></div>'
+      +'<span class="pack-sec__hint">'+(cover>goods.length?('覆盖清单 '+cover+' 项 · '):'')+'点开看规格与会员价</span></div>'
       +'<div class="pack-goods'+(goods.length===1?' pack-goods--1':'')+'">'
       +goods.map(r=>'<div class="pack-good">'+gearRow(r.p,o,r.sub)+needTags(r)+'</div>').join('')
       +'</div></div>'
     : '';
+  /* 「这些请自己准备」：2026-10-23 用户反馈「emoji 平铺观感差」。
+     从「米色大面板里嵌白色小卡」（卡叠卡、两道框）改成一组暖色胶囊 pills——
+     外层重面板和内层白卡都去掉，每项只剩自己一道浅边，轻一个量级。 */
   const missHtml=miss.length
     ? '<div class="pack-sec pack-sec--miss"><div class="pack-sec__head"><b>这些请自己准备</b>'
       +'<span class="pack-sec__count">商城暂无</span>'
       +'<span class="pack-sec__hint">'+(o.manage?'可在商城上架补全':'按自己的习惯带去就好')+'</span></div>'
-      +'<div class="pack-own">'+miss.map(t=>'<div class="pack-own__item"><span class="pack-own__ico">'+esc(packEmoji(t))+'</span><span class="pack-own__txt">'+esc(t)+'</span></div>').join('')+'</div></div>'
+      +'<div class="pack-own">'+miss.map(t=>'<span class="pack-own__item"><i class="pack-own__ico">'+esc(packEmoji(t))+'</i><span class="pack-own__txt">'+esc(t)+'</span></span>').join('')+'</div></div>'
     : '';
-  const cov=g.coverage||{};
-  const md=g.memberDiscount||null;
-  const subCount=Number(cov.substituted||0);
   const head='<div class="gear-head"><span class="eyebrow">按清单搭配</span><span class="gear-summary">清单 '
-    +Number(cov.needs||0)+' 项 · 商城可配 '+Number(cov.matched||0)+' 项'
+    +Number(cov.needs||0)+' 项 · 商城可配 '+cover+' 项'
     +(subCount?' · 平替 '+subCount+' 项':'')
     +(md?' · <b>'+esc(md.tierName)+' '+esc(String(md.discountZhe))+' 折</b>':'')
     +'</span></div>';
@@ -867,6 +896,11 @@ const FEE_CN={
   deposit:'定金',balance:'尾款',remaining:'尾款',
   note:'说明',notes:'说明',remark:'说明',description:'说明',
   includes:'包含',included:'包含',excludes:'不包含',excluded:'不包含',
+  /* 2026-10-23 用户截图实锤：AI 爱写 notIncluded（不包含），① FEE_CN 里没有这个键 →
+     标签裸露成英文；② 极性判据 /include/i 会命中它 → 整行被打成 ✓ 绿 chip，
+     「个人消费」被读成「已包含」。键与极性两处都补。 */
+  notIncluded:'不包含',notincluded:'不包含',notInclude:'不包含',notinclude:'不包含',
+  doesNotInclude:'不包含',doesnotinclude:'不包含',
   extra:'额外费用',extras:'额外费用',optional:'可选费用',
   gear:'装备租赁',rental:'装备租赁',insurance:'保险费',transport:'交通费',
   meal:'餐费',meals:'餐费',accommodation:'住宿费',ticket:'门票费',guide:'领队费',
@@ -958,9 +992,12 @@ function feeListHtml(fees){
     const label=k?(FEE_CN[String(k)]||FEE_CN[String(k).replace(/[_\-\s]/g,'').toLowerCase()]||k):'';
     /* 「费用包含 / 费用不含」是资料里本来就分栏写给顾客的两组（✅ 含 / ❌ 不含）。
        在这里给整行打一个极性类，chips 的 ✓/✗ 由 CSS 按谱系统一下发 ——
-       不往 feeValueHtml 里穿参数，嵌套多深的数组都能吃到同一个标记。 */
-    const pol=/不含|不包含|未含|自理|自费|exclude/i.test(String(k||''))?'is-no'
-             :(/包含|含|include/i.test(String(k||''))?'is-ok':'');
+       不往 feeValueHtml 里穿参数，嵌套多深的数组都能吃到同一个标记。
+       ★ 必须先判负向：负向键（不含/notIncluded/excluded…）自身含 "includ"，
+       正向判据写在前面会把「不包含」误判成 ✓（2026-10-23 用户截图实锤：
+       notIncluded 整行绿 chip + ✓）。负向判据也要覆盖英文否定式 not…includ。 */
+    const pol=/不含|不包含|未含|自理|自费|exclud|not[\s_-]*includ/i.test(String(k||''))?'is-no'
+             :(/包含|含|includ/i.test(String(k||''))?'is-ok':'');
     // 顶层值传 depth=1：这样 feeValueHtml 展开出的子行才会带 `.sub`（缩进 + 76px 标签列）
     let inner=feeValueHtml(v,1);
     if(!inner)return '';
