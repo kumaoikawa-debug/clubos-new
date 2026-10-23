@@ -155,6 +155,35 @@ def _backfill_v028_leader_avatar(c):
     """
     _ensure_column(c,'club_leaders','avatar_url','avatar_url TEXT')
 
+def _backfill_v030_catalog(c):
+    """把 products.category 的自由文本收敛成真正的品类字典（2026-10-24）。
+
+    多品牌上架要求「品牌 / 品类 / 人群」是结构化的。存量商品只有 category 文本
+    （"服装" / "徒步装备" / "背包"），这里一次性把它们建成一级品类并回填
+    category_id —— 不删原文本列：老接口、C 端副标题、Medusa 同步都还在读它，
+    贸然清空会让存量商品在列表里品类变空白。
+
+    品牌不回填：库里从来没有品牌这个概念，凭商品名猜品牌等于编造数据，
+    一律留空由运营认领。
+    """
+    done = c.execute("SELECT value FROM platform_settings WHERE key='catalog_backfilled_v030'").fetchone()
+    for p in c.execute('SELECT id,category FROM products').fetchall():
+        name = str(p['category'] or '').strip()
+        if not name:
+            continue
+        ct = c.execute('SELECT id FROM product_categories WHERE name=? AND IFNULL(parent_id,0)=0', (name,)).fetchone()
+        if not ct:
+            c.execute('INSERT INTO product_categories(name,slug,parent_id,sort,status) VALUES(?,?,?,?,?)',
+                      (name, name.upper()[:12], None, 0, 'active'))
+            cid = int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        else:
+            cid = int(ct['id'])
+        c.execute('UPDATE products SET category_id=? WHERE id=? AND category_id IS NULL', (cid, int(p['id'])))
+    if not done:
+        c.execute("INSERT INTO platform_settings(key,value) VALUES('catalog_backfilled_v030','1') "
+                  "ON CONFLICT(key) DO UPDATE SET value='1'")
+
+
 def _run_compat_migrations(c):
     # v0.29 俱乐部设置：品牌 DIY（logo / slogan），名字本列就有
     _ensure_column(c,'clubs','logo_url','logo_url TEXT')
@@ -231,6 +260,22 @@ def _run_compat_migrations(c):
     _ensure_column(c,'gear_orders','shipping_consignee','shipping_consignee TEXT')
     _ensure_column(c,'gear_orders','shipping_phone','shipping_phone TEXT')
     _ensure_column(c,'gear_orders','shipping_address','shipping_address TEXT')
+    # v0.30 商品目录（多品牌 / 服饰标准模式）：品牌与品类是独立字典，商品只存外键。
+    # 人群（gender）默认 unisex 而不是 NULL：登山杖、背包这类根本不分男女的装备
+    # 不该为了必填被硬塞一个性别，而 NULL 会让「按人群筛选」多出一个说不清的第四态。
+    _ensure_column(c,'products','brand_id','brand_id INTEGER')
+    _ensure_column(c,'products','category_id','category_id INTEGER')
+    _ensure_column(c,'products','gender',"gender TEXT NOT NULL DEFAULT 'unisex'")
+    _ensure_column(c,'products','season','season TEXT')
+    _ensure_column(c,'products','series','series TEXT')
+    _ensure_column(c,'products','material','material TEXT')
+    # 颜色 × 尺码：规格从「一维的 name」升级成「颜色 + 尺码两个维度」，
+    # 2 色 × 3 码要生成 6 个 SKU，而不是 6 个混在一维里的名字。
+    # 存量规格的颜色尺码留空（不猜），C 端按老的一维 name 显示，功能不受影响。
+    _ensure_column(c,'product_variants','color','color TEXT')
+    _ensure_column(c,'product_variants','color_hex','color_hex TEXT')
+    _ensure_column(c,'product_variants','size','size TEXT')
+    _ensure_column(c,'product_variants','barcode','barcode TEXT')
     c.execute('''CREATE TABLE IF NOT EXISTS user_addresses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
@@ -654,6 +699,9 @@ def init_db():
             # 必须挂在这个 return 之前：init_db 只要发现库里已经有 clubs
             # 就会提前返回，挂在后面等于给存量库迁移不到新列。
             _backfill_v028_leader_avatar(c)
+            # 商品目录迁移要读 products.category，必须在补列之后 ——
+            # 补列走 _run_compat_migrations（上面第一个调用），顺序天然成立。
+            _backfill_v030_catalog(c)
             return
         if os.getenv('CLUBOS_SECURITY_MODE','demo')=='production':
             # Never provision sample clubs, consumers, catalog, payments or credits in production.

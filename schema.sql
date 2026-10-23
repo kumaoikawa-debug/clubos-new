@@ -1275,3 +1275,32 @@ CREATE TABLE IF NOT EXISTS ai_generate_jobs (
   FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_jobs_club ON ai_generate_jobs(club_id,status,id DESC);
+
+-- 商品目录：品牌 / 品类（2026-10-24）
+-- 多品牌上架的前提是「品牌」与「品类」必须是独立字典：商品只存外键。
+-- 若沿用 products.category 自由文本，同一个品牌会被写成多个写法
+-- （"ARC'TERYX" / "始祖鸟" / "Arcteryx"），按品牌筛选就永远筛不全。
+CREATE TABLE IF NOT EXISTS product_brands (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  slug TEXT,
+  logo_url TEXT,
+  sort INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',   -- active / inactive
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_product_brands_name ON product_brands(name);
+
+-- 品类只做两层（服装 → 冲锋衣）：户外 SKU 规模下两层足够，
+-- 再深就要递归查询，而列表渲染、C 端筛选都是按一层铺开的。
+CREATE TABLE IF NOT EXISTS product_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  slug TEXT,
+  parent_id INTEGER,
+  sort INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(parent_id) REFERENCES product_categories(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_product_categories_parent ON product_categories(parent_id,sort,id);

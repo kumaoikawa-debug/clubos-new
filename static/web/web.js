@@ -317,6 +317,33 @@ const MALL_SORTS=[
    只给**库里真实存在**的分类配英文；配不到的分类改印在售件数 —— 不硬编一个英文别名凑版式。 */
 const MALL_EN={'全部':'ALL','服装':'APPAREL','背包':'PACKS','徒步装备':'TREKKING','露营装备':'CAMPING',
   '鞋履':'FOOTWEAR','配件':'ACCESSORIES','装备':'GEAR','睡袋':'SLEEPING','炊具':'COOKWARE'};
+/* ── 品牌 / 人群筛选（2026-10-24 多品牌化）────────────────────────────────
+   左侧竖栏留给「品类」（顾客认这个），品牌和人群是横排 chip 放在搜索框上方。
+   ★ 只有一个品牌时整行不画：一个选项的筛选器只是噪音。
+   ★ 筛选在已加载的 MALL_ALL 上做（和 MALL_CAT 同一套），不再回源拉一次 ——
+     商城本来就把整个在售池拉下来了，按品牌回源只是多一次往返。 */
+const MALL_GENDERS=[{v:'male',label:'男款'},{v:'female',label:'女款'},{v:'unisex',label:'中性'},{v:'kids',label:'儿童'}];
+let MALL_BRAND='',MALL_GENDER='';
+function mallBrands(){return Array.from(new Set((MALL_ALL||[]).map(x=>x.brand_name).filter(Boolean)))}
+function renderMallFilters(){
+  const box=$('#mallFilters');if(!box)return;
+  const brands=mallBrands();
+  const hasGender=(MALL_ALL||[]).some(x=>x.gender&&x.gender!=='unisex');
+  if(brands.length<2&&!hasGender){box.innerHTML='';box.hidden=true;return}
+  box.hidden=false;
+  const chips=[];
+  if(brands.length>=2){
+    chips.push('<span class="w-shop__flabel">品牌</span>');
+    chips.push(`<button class="${MALL_BRAND===''?'on':''}" type="button" data-b="">全部</button>`);
+    brands.forEach(b=>chips.push(`<button class="${MALL_BRAND===b?'on':''}" type="button" data-b="${esc(b)}">${esc(b)}</button>`));
+  }
+  if(hasGender){
+    chips.push('<span class="w-shop__flabel">人群</span>');
+    chips.push(`<button class="${MALL_GENDER===''?'on':''}" type="button" data-g="">全部</button>`);
+    MALL_GENDERS.forEach(g=>chips.push(`<button class="${MALL_GENDER===g.v?'on':''}" type="button" data-g="${g.v}">${g.label}</button>`));
+  }
+  box.innerHTML=chips.join('');
+}
 function mallCats(){return ['全部'].concat(Array.from(new Set(MALL_ALL.map(x=>x.category).filter(Boolean))))}
 function renderMallCats(){
   const box=$('#mallCats');if(!box)return;
@@ -454,7 +481,7 @@ function renderMall(){
   /* 和 renderActivityList 同一个坑：MALL_ALL 可能已由首页 loadHome 填好，
      wv() 走快路径直接进这里，左侧分类栏 / 排序 tab 就不会渲染。
      分类与 tab 只依赖 MALL_ALL，放在这里等价于「每次重渲染前先校正一次」。 */
-  renderMallCats();renderMallTabs();renderMallHero();
+  renderMallCats();renderMallTabs();renderMallFilters();renderMallHero();
   /* 收掉 experience-consumer.js 注入的 #uxGearFilter：它自带一个装备搜索框，
      而本页已有自己的搜索框，两个框同时出现是明显的功能重复。
      它给卡片加的 ux-gear-card 类名不受影响。
@@ -463,6 +490,8 @@ function renderMall(){
   document.getElementById('uxGearFilter')?.remove();
   let list=MALL_ALL.slice();
   if(MALL_CAT!=='全部')list=list.filter(x=>x.category===MALL_CAT);
+  if(MALL_BRAND)list=list.filter(x=>x.brand_name===MALL_BRAND);
+  if(MALL_GENDER)list=list.filter(x=>x.gender===MALL_GENDER);
   const q=(($('#gearSearch')&&$('#gearSearch').value)||'').trim().toLowerCase();
   if(q)list=list.filter(x=>((x.name||'')+' '+(x.category||'')).toLowerCase().includes(q));
   const s=MALL_SORTS.find(x=>x.k===MALL_SORT);
@@ -474,11 +503,12 @@ function renderMall(){
   const catTitle=MALL_CAT==='全部'?'全部商品':MALL_CAT;
   if(ttl)ttl.textContent=catTitle;
   if(en)en.textContent=MALL_EN[MALL_CAT]||(MALL_CAT==='全部'?'ALL':'');
-  if(sub)sub.textContent=q
+  const filt=[MALL_BRAND,MALL_GENDER?MALL_GENDERS.find(g=>g.v===MALL_GENDER)?.label:''].filter(Boolean).join(' · ');
+  if(sub)sub.textContent=(filt?`${filt} · `:'')+(q
     ? `「${q}」匹配 ${list.length} 件 · 共 ${MALL_ALL.length} 件在售`
     : (MALL_CAT==='全部'
         ? `${window.__clubName||'俱乐部'} · 共 ${MALL_ALL.length} 件在售`
-        : `${MALL_CAT} · 共 ${list.length} 件在售`);
+        : `${MALL_CAT} · 共 ${list.length} 件在售`));
 }
 /* 商品卡必须带 .web-card 类：experience-consumer.js 是按 `#publicProducts .web-card` 数商品张数的，
    卡片换类名它就会判定「0 件在售」并把整个容器换成空态文案。外观由 .w-product 覆盖。
@@ -497,7 +527,7 @@ function productCard(x){
     </div>
     <div class="w-product__inner">
       <div class="w-product__name">${esc(x.name)}</div>
-      <div class="w-product__meta">${esc(cat)}${out?' · 暂时缺货':''}</div>
+      <div class="w-product__meta">${x.brand_name?esc(x.brand_name)+' · ':''}${esc(cat)}${out?' · 暂时缺货':''}</div>
       <div class="w-product__price">${money(x.price)}</div>
     </div>
   </div>`;
@@ -694,7 +724,7 @@ function showProductPane(){
   const d=$('#productDetail');if(d)d.style.display='block';
 }
 function showMallList(){
-  P_CUR=null;P_VID=null;P_QTY=1;
+  P_CUR=null;P_VID=null;P_QTY=1;PD_COLOR=null;
   const d=$('#productDetail');if(d){d.innerHTML='';d.style.display='none'}
   const k=$('#gearCheckout');if(k){k.innerHTML='';k.style.display='none'}
   const cv=$('#cartView');if(cv){cv.innerHTML='';cv.style.display='none'}
@@ -736,6 +766,9 @@ async function openProduct(id){
      会被后端拒，还看不出为什么。全缺货时留第一个，由按钮的 disabled 说明。 */
   const first=vs.find(v=>Number(v.stock||0)>0)||vs[0]||null;
   P_VID=first?first.id:null;P_QTY=1;
+  /* 选中规格自带颜色时，颜色行跟着落到那一色 —— 否则顾客看到的是「颜色一个没选、
+     尺码却已经选中了」的半状态，不知道自己是基于哪一色在看价。 */
+  PD_COLOR=(first&&first.color)||null;
   box.innerHTML=productDetailHtml();
   window.scrollTo({top:0,behavior:'instant'});
   bindProductGallery();pdBindScroll();
@@ -785,6 +818,15 @@ function productDetailHtml(){
   /* 只有一个规格时也给出一个「默认规格」行：规格选择层与规格表都要有东西可显示，
      但**不显示尺码选择**（productVariants 已按约定在 ≤1 个规格时返回空）。 */
   const sizes=vs.length?vs:[{id:null,name:'默认规格',price:null,stock:stock}];
+  /* 2026-10-24：颜色 / 尺码是两个维度。有颜色时选择层画两级（先色后码），
+     规格表多一列颜色；只有颜色没有尺码时，颜色行本身就是选择器，尺码行不画。 */
+  const colors=pdColorList();
+  const hasSize=vs.some(v=>v.size);
+  /* 尺码按钮一次画全（所有颜色都进 DOM），显隐交给 pdPaintSheet 按当前颜色切 ——
+     下面第 926 行的 hidden 计算就是按这个前提写的。只画当前色的话，换色后另一色的
+     按钮从没渲染过，尺码行会整行消失（2026-10-24 验收实锤：选烈日橙后无可点尺码）。
+     没有尺码维度（只有颜色）时不画尺码行；没有真实规格时给一个默认行。 */
+  const sizeRow=vs.length?(hasSize?vs:[]):[{id:null,name:'默认规格',price:null,stock:Number(p.stock||0)}];
   const sameCat=(MALL_ALL||[]).filter(x=>x.category===cat).length;
   const bullets=pdBullets(p);
   return `<div class="w-pd">
@@ -841,15 +883,15 @@ function productDetailHtml(){
     </div>
   </section>
   <section class="w-pd__sec" id="pdSecSize">
-    <button class="w-pd__sechd" type="button" onclick="pdToggleSec(this)" aria-expanded="false">${vs.length?'尺码对照表':'规格与价格'}<i>+</i></button>
+    <button class="w-pd__sechd" type="button" onclick="pdToggleSec(this)" aria-expanded="false">${vs.length?(hasSize?'尺码对照表':'颜色'):'规格与价格'}<i>+</i></button>
     <div class="w-pd__secbody" hidden>
       <table class="w-pd__sizetab">
-        <thead><tr><th>${vs.length?'尺码':'规格'}</th><th>价格</th></tr></thead>
+        <thead><tr>${colors.length&&hasSize?'<th>颜色</th>':''}<th>${vs.length?(hasSize?'尺码':'颜色'):'规格'}</th><th>价格</th></tr></thead>
         <tbody>${sizes.map(s=>{
           const so=Number(s.stock||0)<=0;
           const sp=s.price!=null?Number(s.price):price;
           const smp=(s.price!=null&&isMem)?mp:sp;
-          return `<tr${so?' class="is-out"':''}><td>${esc(s.name)}${so?'<i class="w-pd__soldout">缺货</i>':''}</td><td>${money(smp)}</td></tr>`;
+          return `<tr${so?' class="is-out"':''}>${colors.length&&hasSize?`<td>${s.color?esc(s.color):'<span class="sub">—</span>'}</td>`:''}<td>${esc(s.name)}${so?'<i class="w-pd__soldout">缺货</i>':''}</td><td>${money(smp)}</td></tr>`;
         }).join('')}</tbody>
       </table>
       <p class="w-pd__tabnote">${vs.length?'价格为实时数据，以下单瞬间的结算结果为准。':'该商品当前只有一个规格；后台新增规格后，这里会出现尺码对照表。'}</p>
@@ -877,13 +919,18 @@ function productDetailHtml(){
       <div class="w-pd__sheethd__txt"><b>${esc(p.name)}</b><span id="pdSheetPrice">${money(mp)}</span></div>
       <button class="w-pd__sheetclose" type="button" aria-label="关闭" onclick="pdCloseSheet()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </div>
-    <div class="w-pd__sheetsec">
-      <div class="w-pd__sheetlabel">${vs.length?'尺码':'规格'}<em>最多购买 <b id="pdSheetMax">5</b> 件</em></div>
-      <div class="w-pd__sizes" id="pdSheetSizes">${sizes.map(s=>{
+    ${colors.length?`<div class="w-pd__sheetsec">
+      <div class="w-pd__sheetlabel" id="pdSheetColorLabel">颜色${PD_COLOR?`<em>已选 ${esc(PD_COLOR)}</em>`:''}</div>
+      <div class="w-pd__colors" id="pdSheetColors">${colors.map((c,i)=>`<button class="w-pd__color${String(c.name)===String(PD_COLOR||'')?' on':''}" type="button" data-color="${esc(c.name)}" aria-label="选择颜色 ${esc(c.name)}" onclick="pdPickColorByIdx(${i})"><span class="w-pd__swatch" style="background:${esc(c.hex||'#dfe5e0')}"></span><i>${esc(c.name)}</i></button>`).join('')}</div>
+    </div>`:''}
+    ${sizeRow.length?`<div class="w-pd__sheetsec">
+      <div class="w-pd__sheetlabel">${vs.length?(hasSize?'尺码':'颜色'):'规格'}<em>最多购买 <b id="pdSheetMax">5</b> 件</em></div>
+      <div class="w-pd__sizes" id="pdSheetSizes">${sizeRow.map(s=>{
         const so=Number(s.stock||0)<=0;
-        return `<button class="w-pd__size${so?' is-out':''}" type="button"${so?' disabled':''} data-size="${s.id==null?'':s.id}" onclick="pdPickSize(${s.id==null?'null':s.id})">${esc(s.name)}</button>`;
+        const hidden=PD_COLOR&&s.color&&s.color!==PD_COLOR;
+        return `<button class="w-pd__size${so?' is-out':''}" type="button"${so?' disabled':''}${hidden?' hidden':''} data-size="${s.id==null?'':s.id}" data-color="${esc(s.color||'')}" onclick="pdPickSize(${s.id==null?'null':s.id})">${esc(s.name)}</button>`;
       }).join('')}</div>
-    </div>
+    </div>`:''}
     <div class="w-pd__sheetsec">
       <div class="w-pd__sheetlabel">数量</div>
       <div class="w-pd__stepper">
@@ -897,16 +944,56 @@ function productDetailHtml(){
 }
 /* ── 规格 / 数量选择层 ───────────────────────────────────────────────────
    页面只负责「看」，选择是明确的一次动作：点加入购物车或立即购买才弹出。
-   弹层里改规格要同步刷新三处 —— 价格、数量上限、CTA 文案，所以走局部重绘。 */
-let PD_MODE='cart',PD_SIZE=null,PD_QTY=1;
+   弹层里改规格要同步刷新三处 —— 价格、数量上限、CTA 文案，所以走局部重绘。
+   ★ 2026-10-24 起规格是两级：先颜色、后尺码（服饰电商标准模式）。
+     没有颜色的商品只画尺码一行，跟改造前完全一样。 */
+let PD_MODE='cart',PD_SIZE=null,PD_QTY=1,PD_COLOR=null;
+/* 颜色清单优先用后端下发的 colorOptions（带色值）；老商品没有这个字段时从
+   variants 里推一份，可能推空 —— 推空就不画颜色行，不画假色块。 */
+function pdColorList(){
+  const p=P_CUR;if(!p)return [];
+  const opts=Array.isArray(p.colorOptions)?p.colorOptions:[];
+  if(opts.length)return opts.filter(o=>o&&o.name);
+  const seen=[];
+  productVariants(p).forEach(v=>{if(v.color&&!seen.some(x=>x.name===v.color))seen.push({name:v.color,hex:v.colorHex||null})});
+  return seen;
+}
 function pdSizeList(){
   const p=P_CUR;if(!p)return [];
   const vs=productVariants(p);            /* 只有一个规格时按约定不显示规格选择 */
-  return vs.length?vs:[{id:null,name:'默认规格',price:null,stock:Number(p.stock||0)}];
+  if(!vs.length)return [{id:null,name:'默认规格',price:null,stock:Number(p.stock||0)}];
+  /* 只有颜色一个维度（没有任何规格带尺码）时，颜色行本身就是选择器，
+     尺码行不画 —— 画一排跟颜色行重复的按钮没有意义。 */
+  if(!vs.some(v=>v.size))return [];
+  if(!PD_COLOR)return vs;
+  const f=vs.filter(v=>v.color===PD_COLOR);
+  return f.length?f:vs;
 }
 function pdCurSize(){
+  const p=P_CUR;if(!p)return null;
+  const all=productVariants(p);
+  /* 没有真实规格（迁移建的「默认」场景）时返回默认行：pdMaxQty 靠它拿库存上限，
+     返回 null 会让单规格商品的「最多购买」掉成 1。 */
+  if(!all.length)return {id:null,name:'默认规格',price:null,stock:Number(p.stock||0)};
+  const byId=all.find(v=>String(v.id)===String(PD_SIZE));
+  if(byId)return byId;
+  /* 没选中、或选中的那一项被换色换掉了：落到当前颜色第一个有货的。 */
+  const inColor=PD_COLOR?all.filter(v=>v.color===PD_COLOR):all;
+  return inColor.find(v=>Number(v.stock||0)>0)||inColor[0]||all[0]||null;
+}
+/* 换颜色：尺码行要跟着换成这一色的组合，已选规格若不属于这一色就落到该色第一个有货的。
+   不这么做的话，选完颜色价格还是上一色的，C 端会显示一个不存在的「颜色×尺码」价。
+   颜色名可能带引号，所以按索引取，不把名字塞进 onclick 属性。 */
+function pdPickColor(name){
+  if(PD_COLOR===name)return;
+  PD_COLOR=name;PD_QTY=1;
   const l=pdSizeList();
-  return l.find(x=>String(x.id)===String(PD_SIZE))||l.find(x=>Number(x.stock||0)>0)||l[0]||null;
+  PD_SIZE=(l.find(x=>String(x.id)===String(PD_SIZE))||l.find(x=>Number(x.stock||0)>0)||l[0]||{}).id??null;
+  pdPaintSheet();
+}
+function pdPickColorByIdx(i){
+  const c=pdColorList()[i];
+  if(c)pdPickColor(c.name);
 }
 function pdSheetStock(){const s=pdCurSize();return s?Number(s.stock||0):0}
 function pdMaxQty(){return Math.max(1,Math.min(5,pdSheetStock()))}
@@ -914,6 +1001,12 @@ function pdOpenSheet(mode){
   if(!P_CUR)return;
   PD_MODE=mode==='buy'?'buy':'cart';
   PD_SIZE=P_VID!=null?P_VID:null;
+  /* 颜色跟着已选规格走：详情页默认选中第一个有货规格时 PD_COLOR 已经设过，
+     这里再兜一次（直接刷新进详情、或 P_VID 被外部改过的路径）。 */
+  if(!PD_COLOR){
+    const v=productVariants(P_CUR).find(x=>String(x.id)===String(PD_SIZE));
+    if(v&&v.color)PD_COLOR=v.color;
+  }
   PD_QTY=1;
   const mask=$('#pdMask'),sheet=$('#pdSheet');
   if(!mask||!sheet)return;
@@ -941,7 +1034,17 @@ function pdPaintSheet(){
   const v=productVariants(p).length?pdCurSize():null;
   const pr=$('#pdSheetPrice');if(pr)pr.textContent=money(memberPriceOf(p,v));
   const mx=$('#pdSheetMax');if(mx)mx.textContent=pdMaxQty();
-  $$('#pdSheetSizes .w-pd__size').forEach(b=>b.classList.toggle('on',String(b.dataset.size)===String(PD_SIZE==null?'':PD_SIZE)));
+  /* 尺码按钮按当前颜色显隐：换色后不该还能点到另一色的尺码 —— 那会拼出一个
+     根本不存在的「颜色×尺码」组合。 */
+  $$('#pdSheetSizes .w-pd__size').forEach(b=>{
+    const mine=!PD_COLOR||!b.dataset.color||b.dataset.color===PD_COLOR;
+    b.hidden=!mine;
+    b.classList.toggle('on',String(b.dataset.size)===String(PD_SIZE==null?'':PD_SIZE));
+  });
+  /* 颜色按钮的选中态：只按颜色名比，不按规格 id —— 换色后规格会整批换掉。 */
+  $$('#pdSheetColors .w-pd__color').forEach(b=>b.classList.toggle('on',b.dataset.color===String(PD_COLOR||'')));
+  const cl=$('#pdSheetColorLabel');
+  if(cl)cl.innerHTML='颜色'+(PD_COLOR?'<em>已选 '+esc(PD_COLOR)+'</em>':'');
   const q=$('#pdSheetQty');if(q)q.textContent=PD_QTY;
   const dec=$('#pdSheet [data-sqty="-1"]'),inc=$('#pdSheet [data-sqty="1"]');
   if(dec)dec.disabled=PD_QTY<=1;
@@ -1013,6 +1116,9 @@ function pdGotoSec(which){
 }
 function pdJumpCat(cat){
   MALL_CAT=cat;
+  /* 从详情页跳某个分类时，把品牌/人群筛选一起清掉：留着旧筛选跳回去，
+     看到的可能是「这个分类下没有该品牌」的空列表，顾客会以为商品没了。 */
+  MALL_BRAND='';MALL_GENDER='';
   showMallList();
 }
 /* 顶部条：压在图上时是透明的（图标直接压在照片上，与参考稿同一个做法），
@@ -1424,6 +1530,15 @@ function bindWebEvents(){
   $('#activityChips')?.addEventListener('click',e=>{const b=e.target.closest('[data-city]');if(!b||b.disabled)return;const c=b.dataset.city;if(c==='locate'){locateCity(true);return;}ACT_CITY=c;renderActivityRegions();renderActivityList()});
   $('#mallCats')?.addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b)return;MALL_CAT=b.dataset.c;renderMallCats();renderMall()});
   $('#mallTabs')?.addEventListener('click',e=>{const b=e.target.closest('[data-s]');if(!b)return;MALL_SORT=b.dataset.s;renderMallTabs();renderMall()});
+  /* 品牌 / 人群 chip：同一个容器里两种 data-*，按点的那个改对应状态，然后整行重画
+     （「全部」要跟着回选中态）。renderMallFilters 只在有 ≥2 个品牌或有人群差异时
+     才输出内容，所以这两个监听在单选商场里等于空转，不会误伤。 */
+  $('#mallFilters')?.addEventListener('click',e=>{
+    const b=e.target.closest('button[data-b],button[data-g]');if(!b)return;
+    if(b.dataset.b!==undefined)MALL_BRAND=b.dataset.b;
+    if(b.dataset.g!==undefined)MALL_GENDER=b.dataset.g;
+    renderMallFilters();renderMall();
+  });
   $('#gearSearch')?.addEventListener('input',()=>renderMall());
   /* 商品卡是 `<div onclick tabindex="0">` —— on 属性只绑 click，键盘按 Enter/空格不会触发，
      少了这段读屏和键盘用户就完全点不进详情页。用委托绑在容器上，重渲染也不用重新绑。

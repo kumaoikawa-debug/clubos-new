@@ -2143,3 +2143,28 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 .web-shell .me-mc__bar i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#2fa06d,#7fd0a4)}
 .web-shell .me-mc__up{margin:8px 0 14px;font-size:12.5px;color:var(--w-ink2)}
 .web-shell .me-mc__rows{border-top:1px solid var(--w-line)}
+
+/* ── 装备商城：品牌 / 人群筛选 chip（2026-10-24 多品牌化）─────────────────
+   放在搜索框上方一行；只有一个品牌且无人群差异时整行不渲染（JS 里 hidden）。 */
+.w-shop__filters{display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding:2px 0 8px}
+.w-shop__filters[hidden]{display:none}
+.w-shop__flabel{font-size:11px;font-weight:700;color:#8b968f;margin-right:2px;letter-spacing:.4px}
+.w-shop__filters button{
+  flex:0 0 auto;min-height:28px;padding:4px 11px;border:1px solid var(--w-line);border-radius:99px;
+  background:#fff;font-size:12px;font-weight:650;color:#5d6f63;cursor:pointer;
+  transition:border-color .18s,background .18s,color .18s;-webkit-tap-highlight-color:transparent;
+}
+.w-shop__filters button:hover{border-color:#b9c9bd}
+.w-shop__filters button.on{border-color:var(--w-ink);background:var(--w-ink);color:#fff}
+
+/* ── 商品详情：颜色选择（先选颜色、再选尺码）───────────────────────────── */
+.w-pd__colors{display:flex;gap:9px;flex-wrap:wrap}
+.w-pd__color{
+  display:flex;flex-direction:column;align-items:center;gap:5px;min-width:52px;padding:7px 8px 6px;
+  border:1px solid var(--w-line);border-radius:12px;background:#fff;cursor:pointer;
+  transition:border-color .18s,background .18s;-webkit-tap-highlight-color:transparent;
+}
+.w-pd__color:hover{border-color:#b9c9bd}
+.w-pd__color.on{border-color:var(--w-ink);background:#f4f8f5;box-shadow:0 0 0 1px var(--w-ink)}
+.w-pd__swatch{width:26px;height:26px;border-radius:50%;border:1px solid rgba(0,0,0,.12);flex:none}
+.w-pd__color i{font-style:normal;font-size:11.5px;font-weight:650;color:var(--w-ink);white-space:nowrap}

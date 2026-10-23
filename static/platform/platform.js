@@ -125,11 +125,187 @@ async function resetClubGearPercent(clubId){await api(`/api/platform/points-poli
 
 async function loadPlatformBenefits(){try{skel('#platformBenefits',3);let a=await api('/api/platform/benefits');$('#platformBenefits').innerHTML=a.map(x=>`<div class="card"><div class="panel-title"><strong>${esc(x.title)}</strong><span class="tag">Gear Points</span></div><div class="sub">${esc(x.description||'')}<br>${x.points_cost} 装备积分 · ${x.benefit_type==='activity_coupon'?'活动报名补贴':'装备商城抵扣'} · 平台承担成本${x.cash_value?` · 权益价值 ${money(x.cash_value)}`:''} · ${x.target_club_id?`仅俱乐部 #${x.target_club_id}`:'全部俱乐部'}</div><div style="margin-top:10px"><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></div></div>`).join('')||'<div class="empty">暂无平台福利</div>'}catch(e){loaderError('#platformBenefits',e,'loadPlatformBenefits 加载失败')}}
 async function addPlatformBenefit(){const v=await showForm({title:'新增平台福利',submitText:'创建福利',fields:[{name:'kind',label:'福利用途',type:'select',value:'gear',options:[{value:'gear',label:'装备商城抵扣'},{value:'activity',label:'活动报名补贴'}]},{name:'title',label:'平台福利名称',value:'装备商城 ¥30 抵扣福利',required:true},{name:'cost',label:'需要多少装备积分',type:'number',value:3000,min:0},{name:'value',label:'权益价值（元）',type:'number',value:30,min:0}]});if(!v||!v.title)return;const kind=v.kind;await api('/api/platform/benefits',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:v.title,description:'ClubOS 平台会员福利',pointsType:'gear',pointsCost:Number(v.cost||0),cashValue:Number(v.value||0),benefitType:kind==='gear'?'gear_coupon':'activity_coupon',stock:200})});toast('平台福利已创建');loadPlatformBenefits()}
-async function loadProducts(){try{skel('#productRows',4);let a=await api('/api/platform/products');$('#productRows').innerHTML=a.map(x=>`<tr><td><strong>${esc(x.name)}</strong><div class="sub">${esc(x.category||'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0} · ${x.description?'有介绍':'无介绍'}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.stock}</td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="editProduct(${x.id})">编辑</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`).join('')}catch(e){loaderError('#productRows',e,'loadProducts 加载失败')}}
-async function addProduct(){const v=await showForm({title:'新增商品',submitText:'上架商品',fields:[{name:'name',label:'商品名',required:true},{name:'price',label:'价格',type:'number',value:399,min:0,required:true},{name:'category',label:'分类',value:'户外装备'},{name:'description',label:'商品介绍',type:'textarea',full:true,placeholder:'C 端详情页展示的图文介绍；留空则详情页不显示该区块'}]});if(!v||!v.name)return;let sku='GEAR-'+Date.now();await api('/api/platform/products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v.name,price:Number(v.price||0),sku,stock:30,category:v.category||'户外装备',description:v.description||'',commission_rate:.08})});loadProducts();toast('商品已上架')}
+/* ── 装备商品中心（2026-10-24 多品牌化）───────────────────────────────────
+   维度进字典表：品牌 / 品类是 product_brands / product_categories，商品存外键；
+   颜色 / 尺码下沉到规格层（product_variants）。SKU 由后端按
+   「品牌-品类-商品-颜色-尺码」自动生成，前端不手拼 —— 手填在多品牌下必然撞号，
+   而撞号在采购入库和库存流水里是查不出的数据事故。 */
+const PROD_GENDERS=[{value:'male',label:'男款'},{value:'female',label:'女款'},{value:'unisex',label:'中性'},{value:'kids',label:'儿童'}];
+let PROD_DICTS={brands:[],categories:[],loaded:false};
+async function loadProductDicts(force){
+  if(PROD_DICTS.loaded&&!force)return PROD_DICTS;
+  const [bs,cs]=await Promise.all([api('/api/platform/brands'),api('/api/platform/product-categories')]);
+  PROD_DICTS={brands:bs||[],categories:cs||[],loaded:true};
+  paintProductFilters();
+  return PROD_DICTS;
+}
+/* 品类下拉压平显示（父 / 子）：showForm/uxForm 的 select 只吃扁平 options，
+   层级用文字前缀表达，比为了一个下拉去改表单组件小得多。 */
+function prodCatLabel(c){const p=(PROD_DICTS.categories||[]).find(x=>Number(x.id)===Number(c.parent_id||c.parentId));return p?p.name+' / '+c.name:c.name}
+function prodCatOptions(sel){return (PROD_DICTS.categories||[]).filter(c=>c.status!=='inactive'||Number(c.id)===Number(sel)).map(c=>({value:c.id,label:prodCatLabel(c)}))}
+function prodBrandOptions(sel){return (PROD_DICTS.brands||[]).filter(b=>b.status!=='inactive'||Number(b.id)===Number(sel)).map(b=>({value:b.id,label:b.name}))}
+function paintProductFilters(){
+  const bs=$('#prodFilterBrand');
+  if(bs){const keep=bs.value;bs.innerHTML='<option value="">全部品牌</option>'+prodBrandOptions().map(b=>`<option value="${b.value}">${esc(b.label)}</option>`).join('');if(keep)bs.value=keep}
+  const cs=$('#prodFilterCat');
+  if(cs){const keep=cs.value;cs.innerHTML='<option value="">全部品类</option>'+prodCatOptions().map(c=>`<option value="${c.value}">${esc(c.label)}</option>`).join('');if(keep)cs.value=keep}
+}
+/* 筛选走后端 SQL：商品池是全局的，多品牌之后会有几百个 SKU，
+   全量拉回来再筛等于每次进商城都把整个商品池拖到浏览器里。 */
+async function applyProductFilter(){
+  const qs=new URLSearchParams();
+  const b=$('#prodFilterBrand')?.value||'',c=$('#prodFilterCat')?.value||'',g=$('#prodFilterGender')?.value||'',kw=($('#prodFilterQ')?.value||'').trim();
+  if(b)qs.set('brand_id',b);
+  if(c)qs.set('category_id',c);
+  if(g)qs.set('gender',g);
+  if(kw)qs.set('q',kw);
+  const q=qs.toString();
+  try{
+    skel('#productRows',4);
+    const a=await api('/api/platform/products'+(q?'?'+q:''));
+    $('#productRows').innerHTML=a.map(prodRowHtml).join('')||'<tr><td colspan="10" class="empty">没有符合筛选条件的商品</td></tr>';
+    const hit=$('#prodFilterHit');if(hit)hit.textContent=a.length?a.length+' 件商品':'';
+  }catch(e){loaderError('#productRows',e,'商品筛选失败')}
+}
+function clearProductFilter(){['#prodFilterBrand','#prodFilterCat','#prodFilterGender','#prodFilterQ'].forEach(s=>{const el=$(s);if(el)el.value=''});applyProductFilter()}
+function prodRowHtml(x){
+  const brand=x.brand_name?esc(x.brand_name):'<span class="sub">未设品牌</span>';
+  const cat=x.category_name?esc(x.category_name)+(x.parent_category_name?`<div class="sub">${esc(x.parent_category_name)}</div>`:''):'<span class="sub">未分类</span>';
+  return `<tr><td><strong>${esc(x.name)}</strong><div class="sub">${esc(x.gender?PROD_GENDERS.find(g=>g.value===x.gender)?.label||x.gender:'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0} · ${x.description?'有介绍':'无介绍'}</div></td><td>${brand}<div class="sub">${cat}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.stock}</td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="editProduct(${x.id})">编辑</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`;
+}
+async function loadProducts(){try{await loadProductDicts()}catch(e){/* 字典拉不到也要让列表自己报错，别静默 */}applyProductFilter()}
+async function addProduct(){return platformAddProduct()}
+/* 新商品上架：六维 + 颜色×尺码矩阵，分两步 —— 先填商品信息，再配规格矩阵。
+   ★ 真身叫 platformAddProduct 而不是 addProduct：workflows-platform.js 后加载，
+     它的 window.addProduct 会覆盖本函数；那个覆盖壳要能无损调到这里，
+     两个名字必须分开，否则覆盖壳调 addProduct 就是调它自己（无限递归）。
+   ★ 矩阵弹层用 uxDialog 不用 uxForm：uxForm 只认 text/number/select/textarea/datetime，
+     没有「可增删的颜色行」这种卡片式 body（memory 雷区 ⑧）。
+   ★ 款号留空时系统生成 GEAR-<时间戳>：它是 CSV 导入的归组键，运营认自己的款号。 */
+async function platformAddProduct(){
+  await loadProductDicts();
+  const v=await uxForm({title:'新建装备商品',subtitle:'统一商品池由平台持有；品牌 / 品类 / 人群 / 季节 / 系列 / 面料在这里一次配好，SKU 由系统自动生成。',hint:'不配矩阵则只建一个「默认」规格承接期初库存，C 端照常可买。',submitText:'下一步：配规格',wide:true,fields:[
+    {name:'name',label:'商品名称',full:true,required:true,placeholder:'例如：Beta LT 冲锋衣'},
+    {name:'styleNo',label:'款号 / 货号',placeholder:'留空自动生成（GEAR-…）',help:'CSV 导入按货号归组，建议填品牌方给的款号'},
+    {name:'brandId',label:'品牌',type:'select',options:[{value:'',label:'不设品牌'},...prodBrandOptions()]},
+    {name:'categoryId',label:'品类',type:'select',options:[{value:'',label:'不分类'},...prodCatOptions()]},
+    {name:'gender',label:'人群',type:'select',value:'unisex',options:PROD_GENDERS},
+    {name:'season',label:'季节',placeholder:'例如 2026 秋冬',help:'留空表示常年款'},
+    {name:'series',label:'系列',placeholder:'例如 Beta 系列'},
+    {name:'material',label:'面料 / 材质',placeholder:'例如 GORE-TEX 3L'},
+    {name:'price',label:'零售价（元）',type:'number',min:0,step:0.01,required:true},
+    {name:'commissionRatePct',label:'来源俱乐部佣金率（%）',type:'number',min:0,max:100,step:0.1,value:8,required:true},
+    {name:'stock',label:'期初可售库存',type:'number',min:0,step:1,value:0,required:true,help:'落在第一个颜色×尺码组合上；后续补货请走采购入库，不要直接改库存'},
+    {name:'description',label:'商品介绍',type:'textarea',full:true,placeholder:'C 端详情页展示的图文介绍；留空则详情页不显示该区块'}
+  ]});
+  if(!v||!v.name)return;
+  const mx=await prodMatrixDialog({});
+  if(mx===null)return;
+  const body={name:v.name,sku:(v.styleNo||'').trim()||('GEAR-'+Date.now()),price:Number(v.price||0),
+    stock:Number(v.stock||0),commission_rate:Number(v.commissionRatePct||8)/100,
+    gender:v.gender||'unisex',description:v.description||''};
+  if(v.brandId)body.brandId=Number(v.brandId);
+  if(v.categoryId)body.categoryId=Number(v.categoryId);
+  if((v.season||'').trim())body.season=v.season.trim();
+  if((v.series||'').trim())body.series=v.series.trim();
+  if((v.material||'').trim())body.material=v.material.trim();
+  if(mx&&(mx.colors.length||mx.sizes.length)){body.colors=mx.colors;body.sizes=mx.sizes}
+  try{
+    const r=await api('/api/platform/products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    toast('商品已上架'+(r&&r.variantsCreated?` · ${r.variantsCreated} 个规格`:''));
+    loadProducts();
+  }catch(e){showAlert({title:'上架失败',message:e.message})}
+}
+/* ── 规格矩阵弹层 ─────────────────────────────────────────────────────────
+   返回 {colors:[{name,hex}],sizes:[…]}（确定）/ {colors:[],sizes:[]}（跳过矩阵）/ null（取消）。
+   颜色是动态行（名称 + 色值 + 删除），尺码是逗号分隔单行 —— 尺码本来就是
+   S/M/L 这种短词，做成动态行的交互成本远高于收益。 */
+async function prodMatrixDialog(initial){
+  initial=initial||{};
+  let colors=(initial.colors||[]).map(c=>({name:c.name||'',hex:c.hex||''}));
+  /* resolve 提到外层：onClose（× / Esc / 点遮罩）在弹窗创建时就要能调到它。 */
+  let _resolve=null;
+  const dlg=uxDialog({title:initial.title||'规格矩阵',desc:initial.desc||'按 颜色 × 尺码 一次生成所有 SKU 组合；已存在的组合会跳过，不会重置已调好的库存与条码。',wide:true,
+    onClose:()=>_resolve&&_resolve(null),
+    body:'<div class="plat-mx">'
+      +'<div><div class="plat-mx__label">颜色 <em>可留空；色值用于 C 端色块</em></div><div class="plat-mx__chips" id="mxColors"></div>'
+      +'<div style="margin-top:8px"><button class="btn ghost plat-mx__add" type="button" id="mxAddColor">＋ 添加颜色</button></div></div>'
+      +'<div><div class="plat-mx__label">尺码 <em>逗号分隔，例如 S,M,L,XL 或 38,39,40,41</em></div>'
+      +'<input class="plat-mx__sizes" id="mxSizes" placeholder="S, M, L, XL" value="'+esc((initial.sizes||[]).join(', '))+'"></div>'
+      +'<div class="plat-mx__preview" id="mxPreview"></div>'
+      +'<div class="plat-mx__hint">库存真源在规格层：每个组合都是独立 SKU，期初库存落在第一个组合上。<br>不配任何颜色 / 尺码时，系统只建一个「默认」规格，C 端照常可买。</div>'
+      +'</div>',
+    foot:'<button class="btn ghost" type="button" data-skip>不配矩阵</button><button class="btn" type="button" data-ok>生成矩阵</button>'});
+  const chip=i=>'<span class="plat-mx__chip" data-i="'+i+'"><span class="plat-mx__swatch" style="background:'+(colors[i].hex||'#dfe5e0')+'"></span>'
+    +'<input class="plat-mx__chipname" type="text" value="'+esc(colors[i].name)+'" placeholder="颜色名" style="width:88px;border:0;background:none;font-size:12.5px;font-weight:700">'
+    +'<input type="color" value="'+(colors[i].hex||'#dfe5e0')+'" aria-label="色值">'
+    +'<button type="button" aria-label="删除该颜色">×</button></span>';
+  const paint=()=>{
+    dlg.querySelector('#mxColors').innerHTML=colors.map((_,i)=>chip(i)).join('');
+    const sizes=parseSizes();
+    const n=Math.max(1,colors.length)*Math.max(1,sizes.length);
+    dlg.querySelector('#mxPreview').textContent=colors.length&&sizes.length
+      ?('将生成 '+colors.length+' 色 × '+sizes.length+' 码 = '+n+' 个 SKU：'+colors.slice(0,3).map(c=>c.name||'未命名').join(' / ')+(colors.length>3?' 等':'')+' × '+sizes.slice(0,6).join(',')+(sizes.length>6?' 等':''))
+      :(colors.length||sizes.length)?'将生成 '+n+' 个 SKU':'未配置矩阵：只建一个「默认」规格';
+  };
+  const parseSizes=()=>(dlg.querySelector('#mxSizes').value||'').split(/[,，]/).map(s=>s.trim()).filter(Boolean);
+  dlg.querySelector('#mxColors').addEventListener('click',e=>{
+    const del=e.target.closest('button[aria-label="删除该颜色"]');
+    if(del){const i=Number(del.closest('.plat-mx__chip').dataset.i);colors.splice(i,1);paint();return}
+  });
+  dlg.querySelector('#mxColors').addEventListener('input',e=>{
+    const chipEl=e.target.closest('.plat-mx__chip');if(!chipEl)return;
+    const i=Number(chipEl.dataset.i);
+    if(e.target.classList.contains('plat-mx__chipname'))colors[i].name=e.target.value.trim();
+    if(e.target.type==='color')colors[i].hex=e.target.value;
+    paint();
+  });
+  dlg.querySelector('#mxAddColor').onclick=()=>{colors.push({name:'',hex:''});paint();dlg.querySelector('#mxColors').lastElementChild?.querySelector('.plat-mx__chipname')?.focus()};
+  dlg.querySelector('#mxSizes').addEventListener('input',paint);
+  paint();
+  return await new Promise(resolve=>{
+    _resolve=resolve;
+    let done=false;
+    const fin=v=>{if(done)return;done=true;resolve(v)};
+    dlg.querySelector('[data-skip]').onclick=()=>{fin({colors:[],sizes:[]});dlg.uxClose()};
+    dlg.querySelector('[data-ok]').onclick=()=>{
+      const sizes=parseSizes();
+      const named=colors.filter(c=>c.name);
+      if(!named.length&&!sizes.length){fin({colors:[],sizes:[]});dlg.uxClose();return}
+      if(colors.length&&!named.length){toast('颜色还没有填名称');return}
+      fin({colors:named.map(c=>({name:c.name,hex:c.hex||''})),sizes});
+      dlg.uxClose();
+    };
+  });
+}
 /* 商品描述单独可改：C 端详情页的「商品介绍」读的就是 products.description，
-   上架后补文案不需要动价格库存，也不该触发 commerce 重同步以外的噪音。 */
-async function editProduct(id){let ps=await api('/api/platform/products');const p=(ps||[]).find(x=>Number(x.id)===Number(id));if(!p)return;const v=await showForm({title:'编辑商品',desc:'商品由总平台统一上架、定价与库存；改描述不影响在售状态。',submitText:'保存',fields:[{name:'name',label:'商品名',value:p.name,required:true},{name:'price',label:'价格',type:'number',value:p.price,min:0,required:true},{name:'category',label:'分类',value:p.category||''},{name:'description',label:'商品介绍',type:'textarea',full:true,value:p.description||'',placeholder:'留空则 C 端详情页不显示「商品介绍」区块'}]});if(!v)return;await api('/api/platform/products/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v.name,price:Number(v.price||0),category:v.category||'',description:v.description||''})});loadProducts();toast('商品已更新')}
+   上架后补文案不需要动价格库存，也不该触发 commerce 重同步以外的噪音。
+   六维（品牌 / 品类 / 人群 / 季节 / 系列 / 面料）在这里一起改：品类同时回写
+   category 文本列，C 端副标题、Medusa 同步、老统计都还在读它。 */
+async function editProduct(id){
+  await loadProductDicts();
+  const ps=await api('/api/platform/products');
+  const p=(ps||[]).find(x=>Number(x.id)===Number(id));if(!p)return;
+  const v=await uxForm({title:'编辑商品',subtitle:'商品由总平台统一上架、定价与库存；改描述不影响在售状态。颜色与尺码请在「规格」里维护。',submitText:'保存',wide:true,fields:[
+    {name:'name',label:'商品名',value:p.name,required:true},
+    {name:'price',label:'价格',type:'number',value:p.price,min:0,required:true},
+    {name:'brandId',label:'品牌',type:'select',value:p.brand_id||'',options:[{value:'',label:'不设品牌'},...prodBrandOptions(p.brand_id)]},
+    {name:'categoryId',label:'品类',type:'select',value:p.category_id||'',options:[{value:'',label:'不分类'},...prodCatOptions(p.category_id)]},
+    {name:'gender',label:'人群',type:'select',value:p.gender||'unisex',options:PROD_GENDERS},
+    {name:'season',label:'季节',value:p.season||'',placeholder:'例如 2026 秋冬',help:'留空表示常年款'},
+    {name:'series',label:'系列',value:p.series||'',placeholder:'例如 Beta 系列'},
+    {name:'material',label:'面料 / 材质',value:p.material||'',placeholder:'例如 GORE-TEX 3L'},
+    {name:'description',label:'商品介绍',type:'textarea',full:true,value:p.description||'',placeholder:'留空则 C 端详情页不显示「商品介绍」区块'}
+  ]});
+  if(!v)return;
+  /* category 文本列不从前端发：后端在收到 category_id 时会按所选品类自动回写，
+     两边永远一致，不需要前端再算一份（也算不对 —— 前端只有压平标签）。 */
+  const body={name:v.name,price:Number(v.price||0),description:v.description||'',gender:v.gender||'unisex',
+    brand_id:v.brandId?Number(v.brandId):null,category_id:v.categoryId?Number(v.categoryId):null,
+    season:(v.season||'').trim()||null,series:(v.series||'').trim()||null,material:(v.material||'').trim()||null};
+  await api('/api/platform/products/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  loadProducts();toast('商品已更新');
+}
 async function toggleProduct(id,status){await api(`/api/platform/products/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:status==='active'?'inactive':'active'})});loadProducts()}
 /* 俱乐部提交的上下架申请。平台自己有 toggleProduct 直接改，但俱乐部没有这个权限，
    只能走申请；批准即写 products.status，C 端商城的可见性才跟着变。 */
@@ -348,30 +524,153 @@ async function createReplenishmentPO(productId,qty){const v=await showForm({titl
    库存真源已经下沉到规格（product_variants.stock），所以后台必须能维护规格，
    否则多规格商品永远补不了货 —— 采购入库是按商品走的，规格库存只能在这里调。
    图集同理：C 端详情页只读 product_images，不再读 products.image_url 单图。 */
+
+/* ── 品牌 / 品类字典管理（2026-10-24 多品牌化）─────────────────────────────
+   两个弹窗结构完全同构，只是端点不同，所以合成一个工厂函数。
+   ★ 删除品牌会把商品的 brand_id 置空（不删商品）；删品类同理，但有子品类的
+     父品类不让删（后端 400）—— 悬空外键比「删不掉」危险得多。 */
+function prodDictDialog(kind){
+  const isBrand=kind==='brand';
+  const base=isBrand?'/api/platform/brands':'/api/platform/product-categories';
+  const label=isBrand?'品牌':'品类';
+  const paint=async dlg=>{
+    const list=await api(base);
+    dlg.querySelector('.pd-list').innerHTML=list.length?list.map(x=>{
+      const sub=isBrand?(x.logo_url?'<div class="list-row__sub" style="word-break:break-all">'+esc(x.logo_url)+'</div>':'')
+        :(x.parent_id?'<div class="list-row__sub">上级：'+esc((list.find(p=>Number(p.id)===Number(x.parent_id))||{}).name||'—')+'</div>':'<div class="list-row__sub">一级品类</div>');
+      return `<div class="list-row" data-id="${x.id}"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}${x.status!=='active'?' <span class="tag orange">已停用</span>':''}</div>${sub}</div>
+        <div class="list-row__end"><button class="btn ghost" data-act="edit">编辑</button> <button class="btn ghost" data-act="del" style="color:#a44435">删除</button></div></div>`;
+    }).join(''):'<div class="empty">还没有'+label+'。新建商品时可以直接在表单里选，或导入 CSV 时自动创建。</div>';
+  };
+  const dlg=uxDialog({title:label+'管理',desc:isBrand?'商品可归属品牌；删除品牌只会把商品的品牌置空，不会删除商品。':'支持两级品类；有下级品类的父品类不能删除。',wide:true,
+    body:'<div class="pd-list"></div>',
+    foot:'<button class="btn" data-act="add">＋ 新增'+label+'</button>'});
+  paint(dlg);
+  dlg.querySelector('[data-act="add"]').onclick=async()=>{
+    const fields=isBrand?[{name:'name',label:'品牌名',required:true,placeholder:'例如 Arc\'teryx'},{name:'logoUrl',label:'Logo 地址',placeholder:'/static/uploads/… 或 https://…',help:'可留空'}]
+      :[{name:'name',label:'品类名',required:true,placeholder:'例如 冲锋衣 / 软壳'},{name:'parentId',label:'上级品类',type:'select',value:'',options:[{value:'',label:'无（一级品类）'},...(await api(base)).filter(x=>!x.parent_id).map(x=>({value:x.id,label:x.name}))]}];
+    const v=await uxForm({title:'新增'+label,submitText:'创建',fields});
+    if(!v||!v.name)return;
+    try{
+      const body=isBrand?{name:v.name,logoUrl:v.logoUrl||''}:{name:v.name,parentId:v.parentId?Number(v.parentId):null};
+      await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      await loadProductDicts(true);await paint(dlg);toast(label+'已创建');
+    }catch(e){showAlert({title:'创建失败',message:e.message})}
+  };
+  dlg.querySelector('.pd-list').onclick=async e=>{
+    const row=e.target.closest('.list-row[data-id]');if(!row)return;
+    const id=Number(row.dataset.id),act=e.target.dataset.act;
+    if(act==='del'){
+      const ok=await showConfirm({title:'删除这个'+label+'？',message:isBrand?'引用该品牌的商品会变成「未设品牌」，商品本身不受影响。':'引用该品类的商品会变成「未分类」，商品本身不受影响。',confirmText:'删除',danger:true});
+      if(!ok)return;
+      try{await api(base+'/'+id,{method:'DELETE'});await loadProductDicts(true);await paint(dlg);loadProducts();toast(label+'已删除')}
+      catch(err){showAlert({title:'删除失败',message:err.message})}
+    }
+    if(act==='edit'){
+      const list=await api(base),cur=list.find(x=>Number(x.id)===id);if(!cur)return;
+      const fields=isBrand?[{name:'name',label:'品牌名',value:cur.name,required:true},{name:'logoUrl',label:'Logo 地址',value:cur.logo_url||'',placeholder:'/static/uploads/… 或 https://…'}]
+        :[{name:'name',label:'品类名',value:cur.name,required:true},{name:'parentId',label:'上级品类',type:'select',value:cur.parent_id||'',options:[{value:'',label:'无（一级品类）'},...list.filter(x=>!x.parent_id&&Number(x.id)!==id).map(x=>({value:x.id,label:x.name}))]}];
+      const v=await uxForm({title:'编辑'+label,submitText:'保存',fields});
+      if(!v||!v.name)return;
+      try{
+        const body=isBrand?{name:v.name,logoUrl:v.logoUrl||''}:{name:v.name,parentId:v.parentId?Number(v.parentId):null};
+        await api(base+'/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        await loadProductDicts(true);await paint(dlg);loadProducts();toast('已保存');
+      }catch(e){showAlert({title:'保存失败',message:e.message})}
+    }
+  };
+}
+function manageBrands(){prodDictDialog('brand')}
+function manageCategories(){prodDictDialog('category')}
+
+/* ── CSV 批量导入 / 导出（P3）─────────────────────────────────────────────
+   一行 = 一个 SKU：运营手里的表本来就是「采购明细」式的（一色一码一行），
+   让他先 pivot 成商品维度再导入，等于把工具的成本转嫁给人。 */
+function exportProducts(){
+  const qs=new URLSearchParams();
+  const b=$('#prodFilterBrand')?.value||'',c=$('#prodFilterCat')?.value||'';
+  if(b)qs.set('brand_id',b);
+  if(c)qs.set('category_id',c);
+  const q=qs.toString();
+  /* 直接走浏览器下载：导出可能几百行，经 api() 再拼 Blob 只是多绕一圈。 */
+  const a=document.createElement('a');
+  a.href='/api/platform/products/export'+(q?'?'+q:'');
+  a.download='products.csv';
+  document.body.appendChild(a);a.click();a.remove();
+  toast('已开始导出'+(q?'（含当前筛选）':'全部商品'));
+}
+async function importProducts(){
+  const dlg=uxDialog({title:'CSV 批量导入',desc:'一行 = 一个 SKU，按「货号 + 商品名」归组；单行出错只跳过该行，不影响其它行。表里写了库里没有的品牌 / 品类会自动创建。',wide:true,
+    body:'<div class="plat-csvimp"><textarea id="csvText" class="plat-csvimp__ta" placeholder="从 Excel 直接复制粘贴到这里（含表头行）&#10;商品名,货号,品牌,品类,人群,季节,系列,面料,零售价,佣金率%,补货点,颜色,色值,尺码,条码,库存,规格价,介绍" spellcheck="false"></textarea>'
+      +'<div class="plat-csvimp__hint">列名：'+['商品名','货号','品牌','品类','人群','季节','系列','面料','零售价','佣金率%','补货点','颜色','色值','尺码','条码','库存','规格价','介绍'].join(' / ')+'。人群可填 男款 / 女款 / 中性 / 儿童。</div>'
+      +'<div class="plat-csvimp__result" id="csvResult" hidden></div></div>',
+    foot:'<button class="btn ghost" type="button" data-ok>取消</button><button class="btn" type="button" id="csvGo">开始导入</button>'});
+  dlg.querySelector('#csvGo').onclick=async()=>{
+    const text=(dlg.querySelector('#csvText').value||'').trim();
+    if(!text){toast('请先粘贴 CSV 内容');return}
+    const btn=dlg.querySelector('#csvGo');btn.disabled=true;btn.textContent='导入中…';
+    try{
+      const r=await api('/api/platform/products/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({csv:text,createMissing:true})});
+      const box=dlg.querySelector('#csvResult');box.hidden=false;
+      const errs=(r.errors||[]);
+      box.innerHTML='<b>导入完成</b>：新建商品 '+r.createdProducts+' · 更新商品 '+r.updatedProducts+' · 新建规格 '+r.createdVariants
+        +((r.newBrands||[]).length?'<br>自动创建品牌：'+r.newBrands.map(esc).join('、'):'')
+        +((r.newCategories||[]).length?'<br>自动创建品类：'+r.newCategories.map(esc).join('、'):'')
+        +(errs.length?'<br><span style="color:#b4482f">'+r.errorCount+' 行出错（已跳过）：</span><ul style="margin:6px 0 0;padding-left:18px;font-size:12px;line-height:1.7">'+errs.slice(0,12).map(e=>'<li>第 '+e.row+' 行：'+esc(e.msg||'')+'</li>').join('')+(errs.length>12?'<li>… 其余 '+(errs.length-12)+' 行略</li>':'')+'</ul>':'');
+      await loadProductDicts(true);loadProducts();
+    }catch(e){
+      const box=dlg.querySelector('#csvResult');box.hidden=false;
+      box.innerHTML='<span style="color:#b4482f">导入失败：'+esc(e.message||'')+'</span>';
+    }
+    btn.disabled=false;btn.textContent='重新导入';
+  };
+}
 async function manageVariants(pid){
   const list=async()=>await api(`/api/platform/products/${pid}/variants`);
   const paint=async(dlg)=>{
     const vs=await list();
     dlg.querySelector('.pv-list').innerHTML=vs.length?vs.map(v=>`<div class="list-row" data-id="${v.id}">
-        <div class="list-row__main"><div class="list-row__title">${esc(v.name)}${v.is_default?' <span class="tag">占位</span>':''}</div>
-          <div class="list-row__sub">${v.price!=null?money(v.price):'跟随商品价'} · 库存 ${v.stock}${v.status!=='active'?' · 已停用':''}</div></div>
+        <div class="list-row__main"><div class="list-row__title">${v.color_hex?`<span class="plat-mx__swatch" style="background:${esc(v.color_hex)};display:inline-block;vertical-align:-4px;margin-right:6px"></span>`:''}${esc(v.name)}${v.is_default?' <span class="tag">占位</span>':''}</div>
+          <div class="list-row__sub">${esc(v.sku||'')}${v.barcode?' · 条码 '+esc(v.barcode):''}<br>${v.price!=null?money(v.price):'跟随商品价'} · 库存 ${v.stock}${v.status!=='active'?' · 已停用':''}</div></div>
         <div class="list-row__end"><button class="btn ghost" data-act="edit">编辑</button> <button class="btn ghost" data-act="del">删除</button></div>
       </div>`).join(''):'<div class="empty">还没有规格。没有规格的商品在 C 端不显示规格选择。</div>';
   };
   const dlg=uxDialog({title:'商品规格',
-    desc:'库存已下沉到规格：这里的数量就是 C 端能买到的真实数量，改完商品汇总会自动重算。',
+    desc:'库存已下沉到规格：这里的数量就是 C 端能买到的真实数量，改完商品汇总会自动重算。颜色 / 尺码 / 条码是 SKU 的两个维度，C 端按它们画选择器。',
     body:'<div class="pv-list"></div>',wide:true,
-    foot:'<button class="btn" data-act="add">新增规格</button>'});
+    foot:'<button class="btn ghost" data-act="matrix">按颜色×尺码批量生成</button><button class="btn" data-act="add">新增规格</button>'});
   await paint(dlg);
+  /* 批量矩阵：2 色 × 4 码逐个加要填 8 遍，运营一定会漏。
+     期初库存给一个明确落点（第一个组合），均分会让每个 SKU 都只有几件。 */
+  dlg.querySelector('[data-act="matrix"]').onclick=async()=>{
+    const vs=await list();
+    const colors=[],seen=new Set();
+    vs.forEach(v=>{if(v.color&&!seen.has(v.color)){seen.add(v.color);colors.push({name:v.color,hex:v.color_hex||''})}});
+    const mx=await prodMatrixDialog({title:'批量生成规格',desc:'按 颜色 × 尺码 一次生成所有组合；已存在的组合会跳过，不会重置已调好的库存与条码。',colors,sizes:vs.map(v=>v.size).filter(Boolean)});
+    if(mx===null)return;
+    if(!mx.colors.length&&!mx.sizes.length){toast('没有配置颜色或尺码');return}
+    try{
+      const r=await api(`/api/platform/products/${pid}/variants/matrix`,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({colors:mx.colors,sizes:mx.sizes})});
+      toast(`已生成 ${r.created} 个规格`+(r.skipped?`，跳过已存在 ${r.skipped} 个`:'')+(r.movedStock?`（占位规格 ${r.movedStock} 件库存已转入）`:''));
+      await paint(dlg);loadProducts();
+    }catch(e){showAlert({title:'生成失败',message:e.message})}
+  };
   dlg.querySelector('[data-act="add"]').onclick=async()=>{
     const v=await showForm({title:'新增规格',submitText:'保存',fields:[
-      {name:'name',label:'规格名',required:true,help:'例如 S / M / L，或 炭灰 / 深蓝'},
+      {name:'name',label:'规格名',help:'颜色 / 尺码都填了可留空，自动拼成「炭灰 / M」'},
+      {name:'color',label:'颜色',placeholder:'例如 炭灰'},
+      {name:'colorHex',label:'色值',type:'color',help:'C 端色块用；不填用默认灰'},
+      {name:'size',label:'尺码',placeholder:'例如 M'},
+      {name:'barcode',label:'条码',placeholder:'可留空'},
       {name:'price',label:'规格价',type:'number',value:'',min:0,help:'留空则跟随商品价格'},
       {name:'stock',label:'该规格库存',type:'number',value:0,min:0,required:true}]});
-    if(!v||!v.name)return;
+    if(!v)return;
+    if(!v.name&&!v.color&&!v.size){showAlert({title:'保存失败',message:'规格名、颜色、尺码至少要填一个'});return}
     try{
       const r=await api(`/api/platform/products/${pid}/variants`,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({name:v.name,price:(v.price===''||v.price==null)?null:Number(v.price),stock:Number(v.stock||0)})});
+        body:JSON.stringify({name:v.name||'',color:v.color||'',colorHex:v.colorHex||'',size:v.size||'',barcode:v.barcode||'',
+          price:(v.price===''||v.price==null)?null:Number(v.price),stock:Number(v.stock||0)})});
       toast(r.movedStock?`规格已新增（占位规格的 ${r.movedStock} 件库存已转入）`:'规格已新增');
       await paint(dlg);loadProducts();
     }catch(e){showAlert({title:'新增失败',message:e.message})}
@@ -380,7 +679,7 @@ async function manageVariants(pid){
     const row=e.target.closest('.list-row[data-id]');if(!row)return;
     const id=Number(row.dataset.id),act=e.target.dataset.act;
     if(act==='del'){
-      const ok=await showConfirm({title:'删除这个规格？',message:'该规格的库存会从商品汇总里扣掉，已下单的订单不受影响。',confirmText:'删除',danger:true});
+      const ok=await showConfirm({title:'删除这个规格？',message:'该规格的库存会从商品汇总里扣掉，已下单的订单不受影响。删到只剩 0 个规格时，系统会补回一个「默认」规格，避免商品在 C 端直接变缺货。',confirmText:'删除',danger:true});
       if(!ok)return;
       try{await api(`/api/platform/products/${pid}/variants/${id}`,{method:'DELETE'});await paint(dlg);loadProducts();toast('规格已删除')}
       catch(err){showAlert({title:'删除失败',message:err.message})}
@@ -389,11 +688,16 @@ async function manageVariants(pid){
       const cur=(await list()).find(x=>x.id===id);if(!cur)return;
       const v=await showForm({title:'编辑规格',submitText:'保存',fields:[
         {name:'name',label:'规格名',value:cur.name,required:true},
+        {name:'color',label:'颜色',value:cur.color||'',placeholder:'例如 炭灰'},
+        {name:'colorHex',label:'色值',type:'color',value:cur.color_hex||'#dfe5e0',help:'C 端色块用'},
+        {name:'size',label:'尺码',value:cur.size||'',placeholder:'例如 M'},
+        {name:'barcode',label:'条码',value:cur.barcode||'',placeholder:'可留空'},
         {name:'price',label:'规格价',type:'number',value:cur.price==null?'':cur.price,min:0,help:'留空则跟随商品价格'},
         {name:'stock',label:'库存',type:'number',value:cur.stock,min:0,required:true}]});
       if(!v)return;
       try{await api(`/api/platform/products/${pid}/variants/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({name:v.name,price:(v.price===''||v.price==null)?null:Number(v.price),stock:Number(v.stock||0)})});
+        body:JSON.stringify({name:v.name,color:v.color||'',colorHex:v.colorHex||'',size:v.size||'',barcode:v.barcode||'',
+          price:(v.price===''||v.price==null)?null:Number(v.price),stock:Number(v.stock||0)})});
         await paint(dlg);loadProducts();toast('已保存')}
       catch(err){showAlert({title:'保存失败',message:err.message})}
     }

@@ -24,6 +24,7 @@ from clubos_domain import club_biz
 from clubos_domain import c_profile
 from clubos_domain.gear_points_policy import GearPointsPolicyService
 from clubos_domain.commission_rate import ClubCommissionRateService
+from clubos_domain.product_catalog import ProductCatalogService
 from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine, GearRecommendService, LeaderRecommendService
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
@@ -163,6 +164,7 @@ execution_service=ActivityExecutionService()
 commission_engine=CommissionSettlementEngine(setting)
 # 俱乐部佣金率（2026-10-24）：总平台按俱乐部单独设定；商品费率是默认基准。
 commission_rate_service=ClubCommissionRateService(setting)
+catalog_service=ProductCatalogService()
 warehouse_engine=WarehouseEngine()
 finance_engine=MerchandiseFinanceEngine()
 analytics_engine=CommerceAnalyticsEngine(finance_engine,warehouse_engine)
@@ -2339,6 +2341,14 @@ def club_credit_ledger(club_id:int,date_from:str|None=None,date_to:str|None=None
             'summary':{'income':int(agg[0] or 0),'expense':int(agg[1] or 0),
                        'net':int(agg[2] or 0),'count':total}}
 
+# 商品列表/详情共用的列：品牌与品类用子查询带出名字，避免每个调用点各写一遍 JOIN。
+# 保留 category 文本列是因为老接口（列表副标题、Medusa 同步）还在读它 ——
+# 迁移只回填 category_id，不删文本，两边同时可用。
+PROD_COLS = """id,name,sku,price,stock,status,image_url,category,brand_id,category_id,gender,season,series,material,
+               (SELECT name FROM product_brands b WHERE b.id=products.brand_id) brand_name,
+               (SELECT name FROM product_categories ct WHERE ct.id=products.category_id) category_name"""
+
+
 def _product_extras(c, ids:list[int]):
     """批量取商品的规格与图集，一次查完再按 product_id 分组。
 
@@ -2352,11 +2362,13 @@ def _product_extras(c, ids:list[int]):
     ph=','.join('?'*len(ids))
     for r in c.execute(f'SELECT id,product_id,url FROM product_images WHERE product_id IN ({ph}) ORDER BY product_id,sort,id',ids).fetchall():
         images.setdefault(int(r['product_id']),[]).append({'url':r['url']})
-    for r in c.execute(f"SELECT id,product_id,name,sku,price,stock,sort,is_default FROM product_variants WHERE product_id IN ({ph}) AND status='active' ORDER BY product_id,sort,id",ids).fetchall():
+    for r in c.execute(f"SELECT id,product_id,name,sku,price,stock,sort,is_default,color,color_hex,size,barcode FROM product_variants WHERE product_id IN ({ph}) AND status='active' ORDER BY product_id,sort,id",ids).fetchall():
         variants.setdefault(int(r['product_id']),[]).append({
             'id':int(r['id']),'name':r['name'],'sku':r['sku'],
             'price':float(r['price']) if r['price'] is not None else None,
-            'stock':int(r['stock'] or 0),'isDefault':int(r['is_default'] or 0)})
+            'stock':int(r['stock'] or 0),'isDefault':int(r['is_default'] or 0),
+            # 颜色尺码是 SKU 的两个维度（存量规格可能都为空 —— 那时 C 端仍按 name 一维显示）
+            'color':r['color'],'colorHex':r['color_hex'],'size':r['size'],'barcode':r['barcode']})
     return images,variants
 
 def _with_extras(c, product_list:list[dict]):
@@ -2371,10 +2383,19 @@ def _with_extras(c, product_list:list[dict]):
     return out
 
 @app.get('/api/club/{club_id}/mall/products')
-def club_products(club_id:int):
+def club_products(club_id:int, *, brand_id:int|None=None, category_id:int|None=None, gender:str|None=None):
+    """C 端商城列表。
+
+    三个筛选项走 SQL 而不是前端过滤：商品池是全局的（不按俱乐部切分），
+    传全量再在前端筛，等于每次进商城都把整个商品池拉到手机上。
+    """
     club_or_404(club_id)
+    where=['status="active"']; args=[]
+    if brand_id: where.append('brand_id=?'); args.append(int(brand_id))
+    if category_id: where.append('category_id=?'); args.append(int(category_id))
+    if gender: where.append('gender=?'); args.append(catalog_service.normalize_gender(gender))
     with conn() as c:
-        items=rows(c.execute('SELECT id,name,sku,price,stock,status,image_url,category FROM products WHERE status="active" ORDER BY id DESC'))
+        items=rows(c.execute('SELECT %s FROM products WHERE %s ORDER BY id DESC' % (PROD_COLS,' AND '.join(where)),args))
         return _with_extras(c,items)
 
 @app.get('/api/club/{club_id}/mall/inventory')
@@ -3704,18 +3725,27 @@ def club_reject_refund(club_id:int,refund_id:str,payload:dict=Body(default={})):
         except ValueError as e: raise HTTPException(409,str(e))
 
 @app.get('/api/public/clubs/{club_id}/mall/products')
-def public_products(club_id:int):
+def public_products(club_id:int, brand_id:int|None=None, category_id:int|None=None, gender:str|None=None):
     if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
-    return club_products(club_id)
+    return club_products(club_id, brand_id=brand_id, category_id=category_id, gender=gender)
 
 @app.get('/api/public/clubs/{club_id}/mall/products/{product_id}')
 def public_product(club_id:int, product_id:int, user_id:int|None=None):
     # 详情页要能被单独打开（刷新、分享出去的链接），所以不能只靠列表缓存。
     if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
     with conn() as c:
-        p=row(c.execute('SELECT id,name,sku,price,stock,status,image_url,category,description FROM products WHERE id=? AND status="active"',(product_id,)))
+        p=row(c.execute('SELECT %s,description FROM products WHERE id=? AND status="active"' % PROD_COLS,(product_id,)))
         if not p: raise HTTPException(404,'商品不存在')
         out=_with_extras(c,[p])[0]
+        # 颜色 / 尺码两个维度单独下发：C 端要用它们画「先选颜色、再选尺码」的两级选择器。
+        # 只有一维有值时就不下发（老商品只有 name），前端按老的一维列表画，不至于开天窗。
+        vs=out.get('variants') or []
+        colors=[];sizes=[]
+        for v in vs:
+            if v.get('color') and v['color'] not in colors: colors.append(v['color'])
+            if v.get('size') and v['size'] not in sizes: sizes.append(v['size'])
+        out['colorOptions']=[{'name':n,'hex':next((v.get('colorHex') for v in vs if v.get('color')==n),None)} for n in colors]
+        out['sizeOptions']=sizes
         # 会员价要能被看见：会员中心写着「装备商城 X 折 —— 在装备商城里直接看到会员价」，
         # 商品页却只显示原价，等于承诺了一个看不见的价格。带 user_id 时把会员价一并回传。
         if user_id:
@@ -4293,13 +4323,29 @@ def platform_commerce_status():
     return {'provider':st.provider,'configured':st.configured,'reachable':st.reachable,'url':st.url,'note':st.note}
 
 @app.get('/api/platform/products')
-def platform_products():
+def platform_products(brand_id:int|None=None, category_id:int|None=None,
+                      gender:str|None=None, q:str|None=None):
     # 规格数与图数一起带出来：后台列表要能一眼看出哪些商品还没维护多图/规格，
     # 逐个商品回查会退化成 N+1。
-    with conn() as c:return rows(c.execute('''SELECT p.*,
+    where=['1=1']; args=[]
+    # 筛选走 SQL：商品池是全局的，多品牌之后一定会有几百个 SKU，
+    # 全量拉到后台再筛会把页面拖死，也让「按品牌看货」这个最常用动作变得不可用。
+    if brand_id: where.append('p.brand_id=?'); args.append(int(brand_id))
+    if category_id: where.append('p.category_id=?'); args.append(int(category_id))
+    if gender: where.append('p.gender=?'); args.append(catalog_service.normalize_gender(gender))
+    if q:
+        kw=str(q).strip()
+        if kw:
+            where.append("(p.name LIKE ? OR p.sku LIKE ? OR IFNULL(p.series,'') LIKE ?)")
+            args += ['%'+kw+'%','%'+kw+'%','%'+kw+'%']
+    sql='''SELECT p.*,
+        (SELECT name FROM product_brands b WHERE b.id=p.brand_id) brand_name,
+        (SELECT name FROM product_categories ct WHERE ct.id=p.category_id) category_name,
+        (SELECT name FROM product_categories pc WHERE pc.id=(SELECT parent_id FROM product_categories ct WHERE ct.id=p.category_id)) parent_category_name,
         (SELECT COUNT(*) FROM product_variants v WHERE v.product_id=p.id AND v.status='active') variants_count,
         (SELECT COUNT(*) FROM product_images i WHERE i.product_id=p.id) images_count
-      FROM products p ORDER BY p.id DESC'''))
+      FROM products p WHERE %s ORDER BY p.id DESC''' % ' AND '.join(where)
+    with conn() as c: return rows(c.execute(sql,args))
 
 
 def _resync_product_stock(c, product_id:int):
@@ -4315,17 +4361,29 @@ def _resync_product_stock(c, product_id:int):
 @app.get('/api/platform/products/{product_id}/variants')
 def platform_variants(product_id:int):
     with conn() as c:
-        return rows(c.execute("SELECT id,product_id,name,sku,price,stock,status,sort,is_default FROM product_variants WHERE product_id=? ORDER BY sort,id",(product_id,)))
+        return rows(c.execute("SELECT id,product_id,name,sku,price,stock,status,sort,is_default,color,color_hex,size,barcode FROM product_variants WHERE product_id=? ORDER BY sort,id",(product_id,)))
 
 @app.post('/api/platform/products/{product_id}/variants')
 def add_product_variant(product_id:int, payload:dict=Body(...)):
     name=str(payload.get('name') or '').strip()
-    if not name: raise HTTPException(400,'规格名不能为空，例如 S / M / L')
+    # 颜色 × 尺码都给了就自动拼显示名（"炭灰 / M"）：只要求手填 name 的话，
+    # 运营填的颜色和 name 迟早对不上，而 C 端按钮显示的是 name。
+    color=catalog_service.normalize_dimension(payload.get('color'))
+    size=catalog_service.normalize_dimension(payload.get('size'))
+    if not name and (color or size): name=' / '.join([x for x in (color,size) if x])
+    if not name: raise HTTPException(400,'规格名不能为空，例如 S / M / L、炭灰')
     with conn() as c:
-        if not c.execute('SELECT id FROM products WHERE id=?',(product_id,)).fetchone():
-            raise HTTPException(404,'商品不存在')
+        p=c.execute('SELECT id,brand_id,category_id FROM products WHERE id=?',(product_id,)).fetchone()
+        if not p: raise HTTPException(404,'商品不存在')
         price=payload.get('price'); price=float(price) if price not in (None,'') else None
         stock=max(0,int(payload.get('stock') or 0))
+        barcode=catalog_service.normalize_dimension(payload.get('barcode'))
+        color_hex=catalog_service.normalize_color_hex(payload.get('colorHex'))
+        # SKU 自动生成（品牌-品类-商品-颜色-尺码）。手填在多品牌下必然撞号，
+        # 撞号在采购入库和库存流水里是查不出的数据事故。
+        sku=catalog_service.ensure_unique_sku(c,
+            catalog_service.build_sku(c,product_id=int(product_id),brand_id=p['brand_id'],
+                                      category_id=p['category_id'],color=color or '',size=size or ''))
         # 商品原本只有迁移时生成的那个「默认」规格：加了真实规格后它就该退场，
         # 否则 C 端会把它和 S/M/L 并排显示成四个规格。它的库存转给第一个新规格，
         # 不让库存凭空消失 —— 运营随后再按规格分配。
@@ -4337,8 +4395,8 @@ def add_product_variant(product_id:int, payload:dict=Body(...)):
             c.execute("UPDATE product_variants SET status='inactive',stock=0 WHERE id=?",(dflt['id'],))
             stock=stock or moved
         mx=c.execute("SELECT COALESCE(MAX(sort),0) m FROM product_variants WHERE product_id=?",(product_id,)).fetchone()['m']
-        c.execute('INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status) VALUES(?,?,?,?,?,?,?)',
-                  (product_id,name,(payload.get('sku') or None),price,stock,int(mx)+1,'active'))
+        c.execute('INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status,color,color_hex,size,barcode) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                  (product_id,name,sku,price,stock,int(mx)+1,'active',color,color_hex,size,barcode))
         vid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         _resync_product_stock(c,product_id)
         return {'ok':True,'id':vid,'movedStock':moved}
@@ -4351,6 +4409,10 @@ def patch_product_variant(product_id:int, variant_id:int, payload:dict=Body(...)
         sets=[];vals=[]
         for k,col in (('name','name'),('sku','sku'),('sort','sort'),('status','status')):
             if payload.get(k) is not None: sets.append(col+'=?');vals.append(payload[k])
+        for k,col in (('color','color'),('size','size'),('barcode','barcode')):
+            if payload.get(k) is not None: sets.append(col+'=?');vals.append(catalog_service.normalize_dimension(payload[k]))
+        if payload.get('colorHex') is not None:
+            sets.append('color_hex=?');vals.append(catalog_service.normalize_color_hex(payload['colorHex']))
         if payload.get('price') is not None:
             raw=payload['price']; sets.append('price=?');vals.append(float(raw) if raw!='' else None)
         if payload.get('stock') is not None:
@@ -4406,6 +4468,315 @@ def delete_product_image(product_id:int, image_id:int):
         return {'ok':True}
 
 
+# ==========================================================================
+# 商品目录：品牌 / 品类（2026-10-24）
+# 多品牌上架要求品牌与品类是字典而不是自由文本 —— 否则同一个品牌会被写成
+# 好几种写法，按品牌筛选永远筛不全。字典的增删改集中在这里，商品只存外键。
+# ==========================================================================
+@app.get('/api/platform/brands')
+def platform_brands():
+    with conn() as c: return catalog_service.list_brands(c, include_inactive=True)
+
+@app.post('/api/platform/brands')
+def platform_add_brand(payload:dict=Body(...)):
+    with conn() as c:
+        try:
+            bid=catalog_service.create_brand(c,name=str(payload.get('name') or ''),
+                                             logo_url=payload.get('logoUrl'),
+                                             sort=payload.get('sort') or 0)
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'id':bid}
+
+@app.patch('/api/platform/brands/{brand_id}')
+def platform_patch_brand(brand_id:int, payload:dict=Body(...)):
+    with conn() as c:
+        try:
+            catalog_service.update_brand(c,brand_id,name=payload.get('name'),
+                                         logo_url=payload.get('logoUrl'),
+                                         sort=payload.get('sort'),status=payload.get('status'))
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True}
+
+@app.delete('/api/platform/brands/{brand_id}')
+def platform_delete_brand(brand_id:int):
+    """删品牌会把引用它的商品的 brand_id 置空（不删商品）。
+
+    悬空外键比「删不掉」危险得多：列表品牌列一片空白、筛选也筛不到，
+    而商品本身看起来一切正常。
+    """
+    with conn() as c:
+        try: out=catalog_service.delete_brand(c,brand_id)
+        except LookupError as e: raise HTTPException(404,str(e))
+    return {'ok':True,**out}
+
+@app.get('/api/platform/product-categories')
+def platform_product_categories():
+    with conn() as c: return catalog_service.list_categories(c, include_inactive=True)
+
+@app.post('/api/platform/product-categories')
+def platform_add_category(payload:dict=Body(...)):
+    with conn() as c:
+        try:
+            cid=catalog_service.create_category(c,name=str(payload.get('name') or ''),
+                                                parent_id=payload.get('parentId'),
+                                                sort=payload.get('sort') or 0)
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'id':cid}
+
+@app.patch('/api/platform/product-categories/{category_id}')
+def platform_patch_category(category_id:int, payload:dict=Body(...)):
+    with conn() as c:
+        try:
+            catalog_service.update_category(c,category_id,name=payload.get('name'),
+                                            parent_id=payload.get('parentId'),
+                                            sort=payload.get('sort'),status=payload.get('status'))
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True}
+
+@app.delete('/api/platform/product-categories/{category_id}')
+def platform_delete_category(category_id:int):
+    with conn() as c:
+        try: out=catalog_service.delete_category(c,category_id)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True,**out}
+
+
+# ==========================================================================
+# CSV 批量导入 / 导出（P3）
+#
+# 一行 = 一个 SKU。为什么不是一行一个商品：运营手里的表本来就是「采购明细」式
+# 的（一色一码一行），让他先把表 pivot 成商品维度再导入，等于把工具的成本转嫁给人。
+# 导入按「货号 + 商品名」归组，同组的多行自动并成同一商品的多个规格。
+#
+# ★ 导入是「逐个商品独立提交」：单行出错只跳过那一行并记进 errors，
+#   不能因为第 30 行写错就让前 29 行白干 —— 一张几百行的表，全有或全无是没法用的。
+# ==========================================================================
+CSV_HEADER = ['商品名','货号','品牌','品类','人群','季节','系列','面料','零售价','佣金率%','补货点',
+              '颜色','色值','尺码','条码','库存','规格价','介绍']
+
+
+@app.get('/api/platform/products/export')
+def platform_export_products(brand_id:int|None=None, category_id:int|None=None):
+    import csv as _csv, io as _io
+    where=['1=1']; args=[]
+    if brand_id: where.append('p.brand_id=?'); args.append(int(brand_id))
+    if category_id: where.append('p.category_id=?'); args.append(int(category_id))
+    buf=_io.StringIO(); w=_csv.writer(buf)
+    w.writerow(CSV_HEADER)
+    with conn() as c:
+        for p in c.execute(("""SELECT p.*,(SELECT name FROM product_brands b WHERE b.id=p.brand_id) brand_name,
+                               (SELECT name FROM product_categories ct WHERE ct.id=p.category_id) category_name
+                               FROM products p WHERE %s ORDER BY p.id""" % ' AND '.join(where)),args).fetchall():
+            vs=c.execute("SELECT * FROM product_variants WHERE product_id=? ORDER BY sort,id",(int(p['id']),)).fetchall()
+            for v in vs or [None]:
+                w.writerow([p['name'],p['sku'],p['brand_name'] or '',p['category_name'] or '',
+                            p['gender'] or 'unisex',p['season'] or '',p['series'] or '',p['material'] or '',
+                            p['price'],round(float(p['commission_rate'] or 0)*100,2),p['reorder_point'] or 0,
+                            (v['color'] if v else '') or '',(v['color_hex'] if v else '') or '',
+                            (v['size'] if v else '') or '',(v['barcode'] if v else '') or '',
+                            (v['stock'] if v else 0),(v['price'] if v and v['price'] is not None else ''),
+                            p['description'] or ''])
+    from fastapi.responses import Response as _Response
+    return _Response(content=buf.getvalue(), media_type='text/csv; charset=utf-8',
+                     headers={'Content-Disposition':'attachment; filename="products.csv"'})
+
+
+@app.post('/api/platform/products/import')
+def platform_import_products(payload:dict=Body(...)):
+    """CSV 批量导入。
+
+    createMissing 控制「表里写了库里没有的品牌/品类」时是否自动创建。默认开 ——
+    要运营先去另一个页面把 20 个品牌建好再回来导入，这个流程根本跑不起来；
+    但新建的字典项会如实回传，让运营知道库里多了什么。
+    """
+    import csv as _csv, io as _io
+    text=str(payload.get('csv') or '')
+    create_missing=bool(payload.get('createMissing',True))
+    if not text.strip(): raise HTTPException(400,'CSV 内容为空')
+    try:
+        rd=_csv.DictReader(_io.StringIO(text))
+        raw=[r for r in rd if any((v or '').strip() for v in r.values())]
+    except Exception as e:
+        raise HTTPException(400,'CSV 解析失败：%s' % str(e)[:120])
+    if not raw: raise HTTPException(400,'没有解析出有效数据行')
+    if '商品名' not in (rd.fieldnames or []): raise HTTPException(400,'缺少「商品名」列')
+
+    created_products=0; updated_products=0; created_variants=0; errors=[]; new_dict={'brands':[], 'categories':[]}
+    with conn() as c:
+        # 先按货号归组：货号为空的按商品名归组（同名的合并成一个商品）
+        groups={}
+        for i,r in enumerate(raw,2):   # 行号从 2 起（第 1 行是表头），报错要对得上 Excel
+            name=str(r.get('商品名') or '').strip()
+            if not name:
+                errors.append({'row':i,'msg':'商品名为空'}); continue
+            key=(str(r.get('货号') or '').strip() or '\u0001'+name)
+            groups.setdefault(key,[]).append((i,r,name))
+
+        for key,rows in groups.items():
+            head_i,head,name=rows[0]
+            try:
+                price=None
+                for _i,r,_n in rows:   # rows 里是 (行号, 行数据, 商品名) 三元组
+                    pv=str(r.get('零售价') or '').strip()
+                    if pv:
+                        price=float(pv); break
+                if price is None:
+                    errors.append({'row':head_i,'msg':'零售价为空'}); continue
+
+                brand_name=str(head.get('品牌') or '').strip()
+                cat_name=str(head.get('品类') or '').strip()
+                brand_id=cat_id=None
+                if brand_name:
+                    b=c.execute('SELECT id FROM product_brands WHERE name=?',(brand_name,)).fetchone()
+                    if b: brand_id=int(b['id'])
+                    elif create_missing:
+                        brand_id=catalog_service.create_brand(c,name=brand_name); new_dict['brands'].append(brand_name)
+                    else:
+                        errors.append({'row':head_i,'msg':'品牌「%s」不存在' % brand_name}); continue
+                if cat_name:
+                    ct=c.execute('SELECT id FROM product_categories WHERE name=? AND IFNULL(parent_id,0)=0',(cat_name,)).fetchone()
+                    if ct: cat_id=int(ct['id'])
+                    elif create_missing:
+                        cat_id=catalog_service.create_category(c,name=cat_name); new_dict['categories'].append(cat_name)
+                    else:
+                        errors.append({'row':head_i,'msg':'品类「%s」不存在' % cat_name}); continue
+
+                sku=str(head.get('货号') or '').strip()
+                existing=c.execute('SELECT id FROM products WHERE sku=?',(sku,)).fetchone() if sku else None
+                if existing:
+                    pid=int(existing['id']); updated_products+=1
+                    c.execute("""UPDATE products SET name=?,price=?,brand_id=?,category_id=?,category=?,gender=?,season=?,series=?,material=?,description=? WHERE id=?""",
+                              (name,price,brand_id,cat_id,cat_name or None,
+                               catalog_service.normalize_gender(head.get('人群')),
+                               catalog_service.normalize_season(head.get('季节')),
+                               catalog_service.normalize_series(head.get('系列')),
+                               catalog_service.normalize_material(head.get('面料')),
+                               str(head.get('介绍') or ''),pid))
+                else:
+                    sku=sku or ('GEAR-%d' % int(__import__('time').time()))
+                    c.execute("""INSERT INTO products(name,sku,price,stock,status,category,commission_rate,reorder_point,description,
+                                 brand_id,category_id,gender,season,series,material)
+                                 VALUES(?,?,?,?,'active',?,?,?,?,?,?,?,?,?,?)""",
+                              (name,sku,price,0,cat_name or None,
+                               (float(head.get('佣金率%') or 8)/100) if str(head.get('佣金率%') or '').strip() else 0.08,
+                               int(head.get('补货点') or 5) if str(head.get('补货点') or '').strip() else 5,
+                               str(head.get('介绍') or ''),
+                               brand_id,cat_id,
+                               catalog_service.normalize_gender(head.get('人群')),
+                               catalog_service.normalize_season(head.get('季节')),
+                               catalog_service.normalize_series(head.get('系列')),
+                               catalog_service.normalize_material(head.get('面料'))))
+                    pid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0]); created_products+=1
+
+                mx=c.execute("SELECT COALESCE(MAX(sort),0) m FROM product_variants WHERE product_id=?",(pid,)).fetchone()['m']
+                for _i,r,_n in rows:   # rows 里是 (行号, 行数据, 商品名) 三元组
+                    color=catalog_service.normalize_dimension(r.get('颜色'))
+                    size=catalog_service.normalize_dimension(r.get('尺码'))
+                    if not color and not size: continue
+                    exist=c.execute("""SELECT id FROM product_variants WHERE product_id=?
+                                       AND IFNULL(color,'')=? AND IFNULL(size,'')=?""",(pid,color or '',size or '')).fetchone()
+                    stock=int(float(r.get('库存') or 0))
+                    vp=str(r.get('规格价') or '').strip()
+                    vp=float(vp) if vp else None
+                    if exist:
+                        c.execute("UPDATE product_variants SET stock=?,price=COALESCE(?,price),color_hex=COALESCE(?,color_hex),barcode=COALESCE(?,barcode) WHERE id=?",
+                                  (stock,vp,catalog_service.normalize_color_hex(r.get('色值')),
+                                   catalog_service.normalize_dimension(r.get('条码')),int(exist['id'])))
+                        continue
+                    mx+=1
+                    vsku=catalog_service.ensure_unique_sku(c,
+                        catalog_service.build_sku(c,product_id=pid,brand_id=brand_id,category_id=cat_id,
+                                                  color=color or '',size=size or ''))
+                    c.execute("""INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status,color,color_hex,size,barcode)
+                                 VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+                              (pid,' / '.join([x for x in (color,size) if x]),vsku,vp,stock,mx,'active',
+                               color,catalog_service.normalize_color_hex(r.get('色值')),size,
+                               catalog_service.normalize_dimension(r.get('条码'))))
+                    created_variants+=1
+                # 导入进来的真实规格要顶掉迁移生成的「默认」占位规格，
+                # 否则 C 端会把「默认」和真实颜色尺码并排显示
+                if created_variants:
+                    d=c.execute("SELECT id FROM product_variants WHERE product_id=? AND is_default=1 AND status='active'",(pid,)).fetchone()
+                    if d:
+                        c.execute("UPDATE product_variants SET status='inactive',stock=0 WHERE id=?",(int(d['id']),))
+                _resync_product_stock(c,pid)
+            except Exception as e:
+                errors.append({'row':head_i,'msg':str(e)[:120]})
+    return {'ok':True,'createdProducts':created_products,'updatedProducts':updated_products,
+            'createdVariants':created_variants,'errors':errors[:50],'errorCount':len(errors),
+            'newBrands':new_dict['brands'],'newCategories':new_dict['categories']}
+
+
+# ==========================================================================
+# SKU 矩阵：颜色 × 尺码 一次生成所有组合
+# ==========================================================================
+@app.post('/api/platform/products/{product_id}/variants/matrix')
+def generate_variant_matrix(product_id:int, payload:dict=Body(...)):
+    """按 颜色 × 尺码 批量建规格。
+
+    逐个加规格在 2 色 × 4 码上就要点 8 次、填 8 遍价格，运营一定会漏。
+    矩阵一次生成，随后再逐个微调价格/库存/条码。
+
+    已存在的组合（同色同码）跳过而不是覆盖 —— 重复提交不该把已经调好的
+    库存和条码重置回默认值。
+    """
+    colors=payload.get('colors') or []
+    sizes=payload.get('sizes') or []
+    if not colors and not sizes: raise HTTPException(400,'至少给一个颜色或一个尺码')
+    price=payload.get('price'); price=float(price) if price not in (None,'') else None
+    stock=max(0,int(payload.get('stock') or 0))
+    with conn() as c:
+        p=c.execute('SELECT id,brand_id,category_id FROM products WHERE id=?',(product_id,)).fetchone()
+        if not p: raise HTTPException(404,'商品不存在')
+        color_list=[]
+        for x in colors:
+            if isinstance(x,dict):
+                nm=catalog_service.normalize_dimension(x.get('name'))
+                hx=catalog_service.normalize_color_hex(x.get('hex'))
+            else:
+                nm=catalog_service.normalize_dimension(x); hx=None
+            if nm: color_list.append((nm,hx))
+        size_list=[sz for sz in (catalog_service.normalize_dimension(x) for x in sizes) if sz]
+        if not color_list: color_list=[(None,None)]
+        if not size_list: size_list=[None]
+        mx=c.execute("SELECT COALESCE(MAX(sort),0) m FROM product_variants WHERE product_id=?",(product_id,)).fetchone()['m']
+        # 商品原本只有迁移生成的那个「默认」规格，加真实矩阵后它就该退场，
+        # 否则 C 端会把「默认」和「炭灰/M」并排显示成 9 个规格。
+        dflt=c.execute("SELECT id,stock FROM product_variants WHERE product_id=? AND is_default=1 AND status='active'",(product_id,)).fetchone()
+        others=c.execute("SELECT COUNT(*) n FROM product_variants WHERE product_id=? AND status='active' AND is_default=0",(product_id,)).fetchone()['n']
+        moved=0
+        if dflt and others==0:
+            moved=int(dflt['stock'] or 0)
+            c.execute("UPDATE product_variants SET status='inactive',stock=0 WHERE id=?",(dflt['id'],))
+        created,skipped=0,0
+        for cn,ch in color_list:
+            for sz in size_list:
+                exist=c.execute("""SELECT id FROM product_variants WHERE product_id=?
+                                   AND IFNULL(color,'')=? AND IFNULL(size,'')=?""",
+                                (product_id,cn or '',sz or '')).fetchone()
+                if exist: skipped+=1; continue
+                name=' / '.join([x for x in (cn,sz) if x]) or '默认'
+                sku=catalog_service.ensure_unique_sku(c,
+                    catalog_service.build_sku(c,product_id=int(product_id),brand_id=p['brand_id'],
+                                              category_id=p['category_id'],color=cn or '',size=sz or ''))
+                mx+=1
+                c.execute("""INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status,color,color_hex,size)
+                             VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                          (product_id,name,sku,price,stock,mx,'active',cn,ch,sz))
+                created+=1
+        # 占位规格的库存转给第一个新建的规格，不让库存凭空消失
+        if moved and created:
+            first=c.execute("""SELECT id FROM product_variants WHERE product_id=? AND status='active'
+                               ORDER BY sort,id LIMIT 1""",(product_id,)).fetchone()
+            if first:
+                c.execute('UPDATE product_variants SET stock=? WHERE id=?',(moved,int(first['id'])))
+        _resync_product_stock(c,product_id)
+    return {'ok':True,'created':created,'skipped':skipped,'movedStock':moved}
+
+
 def _sync_product_to_medusa(product_id:int, *, create_if_missing:bool=True):
     if commerce_provider()!='medusa':
         return {'ok':False,'skipped':True,'reason':'COMMERCE_PROVIDER is not medusa'}
@@ -4454,17 +4825,88 @@ def _safe_sync_inventory_products(product_ids:list[int]|set[int]):
 
 @app.post('/api/platform/products')
 def platform_add_product(payload:dict=Body(...)):
+    """新建商品（可一次带上颜色 × 尺码矩阵）。
+
+    维度（品牌 / 品类 / 人群 / 季节 / 系列 / 面料）与 SKU 矩阵在同一个事务里落库：
+    先建商品再补规格的话，中途失败会留下一个「没有 SKU、C 端显示缺货」的半成品商品。
+    """
     initial_stock=max(0,int(payload.get('stock',0) or 0))
+    brand_id=payload.get('brandId') or payload.get('brand_id')
+    category_id=payload.get('categoryId') or payload.get('category_id')
+    gender=catalog_service.normalize_gender(payload.get('gender'))
+    # 品类已结构化，但 category 文本列不能丢：C 端副标题、Medusa 同步、老统计都还在读它。
+    # 建商品时按所选品类把它填上，两边永远一致，不需要人工维护第二份。
     with conn() as c:
-        c.execute("INSERT INTO products(name,sku,price,stock,status,image_url,category,commission_rate,reorder_point,description,commerce_sync_status) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                  (payload['name'],payload['sku'],payload['price'],0,payload.get('status','active'),payload.get('image_url'),payload.get('category'),payload.get('commission_rate',0.08),max(0,int(payload.get('reorder_point',payload.get('reorderPoint',5)) or 0)),str(payload.get('description') or ''),'pending' if commerce_provider()=='medusa' else 'local'))
+        cat_name=None
+        if category_id:
+            r=c.execute('SELECT name FROM product_categories WHERE id=?',(int(category_id),)).fetchone()
+            cat_name=r['name'] if r else None
+        category=str(payload.get('category') or cat_name or '').strip() or None
+        c.execute("""INSERT INTO products(name,sku,price,stock,status,image_url,category,commission_rate,reorder_point,description,
+                     brand_id,category_id,gender,season,series,material,commerce_sync_status)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (payload['name'],payload['sku'],payload['price'],0,payload.get('status','active'),payload.get('image_url'),
+                   category,payload.get('commission_rate',0.08),
+                   max(0,int(payload.get('reorder_point',payload.get('reorderPoint',5)) or 0)),
+                   str(payload.get('description') or ''),
+                   int(brand_id) if brand_id else None,
+                   int(category_id) if category_id else None,
+                   gender,
+                   catalog_service.normalize_season(payload.get('season')),
+                   catalog_service.normalize_series(payload.get('series')),
+                   catalog_service.normalize_material(payload.get('material')),
+                   'pending' if commerce_provider()=='medusa' else 'local'))
         pid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         if initial_stock:
             inventory_engine.adjust_stock(c,product_id=pid,quantity_delta=initial_stock,reason='新商品期初库存',actor_type='platform',reference_type='product_opening',reference_id=str(pid))
-    out={'id':pid}
+        created=_build_variant_matrix(c,pid,brand_id=brand_id,category_id=category_id,payload=payload,initial_stock=initial_stock)
+    out={'id':pid,'variantsCreated':created}
     if commerce_provider()=='medusa':
         out['commerce']=_sync_product_to_medusa(pid)
     return out
+
+
+def _build_variant_matrix(c, pid:int, *, brand_id, category_id, payload:dict, initial_stock:int=0) -> int:
+    """按 colors × sizes 建规格；没给矩阵就退回建一个「默认」规格承接库存。
+
+    库存真源在规格层，没有规格的商品在 C 端读不到库存、直接显示缺货 ——
+    所以「不填矩阵」不等于「不建规格」。
+    """
+    colors=payload.get('colors') or []
+    sizes=payload.get('sizes') or []
+    if not colors and not sizes:
+        sku=catalog_service.ensure_unique_sku(c,
+            catalog_service.build_sku(c,product_id=int(pid),brand_id=brand_id,category_id=category_id))
+        c.execute("INSERT INTO product_variants(product_id,name,sku,stock,sort,status,is_default) VALUES(?,?,?,?,?,'active',1)",
+                  (pid,'默认',sku,initial_stock,0))
+        return 1
+    color_list=[]
+    for x in colors:
+        if isinstance(x,dict):
+            nm=catalog_service.normalize_dimension(x.get('name')); hx=catalog_service.normalize_color_hex(x.get('hex'))
+        else:
+            nm=catalog_service.normalize_dimension(x); hx=None
+        if nm: color_list.append((nm,hx))
+    size_list=[sz for sz in (catalog_service.normalize_dimension(x) for x in sizes) if sz]
+    if not color_list: color_list=[(None,None)]
+    if not size_list: size_list=[None]
+    price=payload.get('price')
+    n=0; sort=0
+    for cn,ch in color_list:
+        for sz in size_list:
+            name=' / '.join([x for x in (cn,sz) if x]) or '默认'
+            sku=catalog_service.ensure_unique_sku(c,
+                catalog_service.build_sku(c,product_id=int(pid),brand_id=brand_id,category_id=category_id,
+                                          color=cn or '',size=sz or ''))
+            sort+=1
+            # 期初库存全部落在第一个组合上：均分会让每个 SKU 都只有几件，
+            # 运营还要再手工并回来。给一个明确落点更好发现、更好调。
+            c.execute("""INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status,color,color_hex,size)
+                         VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                      (pid,name,sku,float(price) if price is not None else None,
+                       initial_stock if n==0 else 0,sort,'active',cn,ch,sz))
+            n+=1
+    return n
 
 @app.post('/api/platform/products/{product_id}/commerce-link')
 def platform_link_product(product_id:int,payload:dict=Body(...)):
@@ -4512,7 +4954,8 @@ def platform_decide_product_visibility(request_id:int,payload:dict=Body(...)):
 
 @app.patch('/api/platform/products/{product_id}')
 def platform_update_product(product_id:int,payload:dict=Body(...)):
-    allowed=['name','price','status','image_url','category','commission_rate','reorder_point','description'];sets=[];vals=[]
+    allowed=['name','price','status','image_url','category','commission_rate','reorder_point','description',
+             'brand_id','category_id','gender','season','series','material'];sets=[];vals=[]
     if 'reorderPoint' in payload and 'reorder_point' not in payload: payload={**payload,'reorder_point':payload.get('reorderPoint')}
     with conn() as c:
         p=row(c.execute('SELECT * FROM products WHERE id=?',(product_id,)))
@@ -4520,8 +4963,28 @@ def platform_update_product(product_id:int,payload:dict=Body(...)):
         if 'stock' in payload:
             try: inventory_engine.set_absolute_stock(c,product_id=product_id,new_stock=max(0,int(payload.get('stock') or 0)),reason=str(payload.get('stockReason') or '平台手工修改库存'))
             except ValueError as e: raise HTTPException(409,str(e))
+        # 前端传的是 brandId / categoryId（驼峰），这里统一成列名再进 allowed 循环
+        if 'brandId' in payload and 'brand_id' not in payload: payload={**payload,'brand_id':payload.get('brandId')}
+        if 'categoryId' in payload and 'category_id' not in payload: payload={**payload,'category_id':payload.get('categoryId')}
         for k in allowed:
-            if k in payload:sets.append(f'{k}=?');vals.append(payload[k])
+            if k in payload:
+                v=payload[k]
+                # 空字符串代表「清空这个维度」，必须落成 NULL ——
+                # 外键列写空字符串在 SQLite 里不会报错，但永远 JOIN 不到任何品牌。
+                if k in ('brand_id','category_id'): v=int(v) if v not in (None,'',0) else None
+                if k=='gender': v=catalog_service.normalize_gender(v)
+                if k=='season': v=catalog_service.normalize_season(v)
+                if k=='series': v=catalog_service.normalize_series(v)
+                if k=='material': v=catalog_service.normalize_material(v)
+                sets.append(f'{k}=?');vals.append(v)
+        # 品类换了就把 category 文本列一起改：两边不一致会让后台筛选和 C 端副标题打架
+        if 'category_id' in payload:
+            cn=None
+            if payload.get('category_id'):
+                r=c.execute('SELECT name FROM product_categories WHERE id=?',(int(payload['category_id']),)).fetchone()
+                cn=r['name'] if r else None
+            if 'category' not in payload:
+                sets.append('category=?');vals.append(cn)
         if sets:
             sync='pending' if commerce_provider()=='medusa' else p.get('commerce_sync_status','local')
             c.execute(f'UPDATE products SET {", ".join(sets)},commerce_sync_status=? WHERE id=?',vals+[sync,product_id])

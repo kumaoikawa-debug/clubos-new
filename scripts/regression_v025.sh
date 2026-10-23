@@ -109,3 +109,12 @@ python tests/gear_points_plan_policy_smoke.py
 # 改费率不追溯历史订单，退款冲回也不会漂移。
 # 自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/club_commission_rate_smoke.py
+
+# 商品域多品牌化（2026-10-24 用户需求：后台商品管理要考虑多品牌，展示
+# 品牌 / 品类 / 尺码 / 颜色 / 男/女款 等服饰电商标准模式）：
+# 维度进字典表 + 老数据回填；SKU 按「品牌-品类-商品-颜色-尺码」自动生成；
+# 库存真源在规格层（汇总随动）；「默认」占位规格的退场/补回与库存转移；
+# 三维筛选走后端 SQL；CSV 一行一个 SKU 按货号归组、单行容错；
+# 前端形态（筛选条 / 字典管理 / 矩阵弹层 / C 端两级选择器 / 版本号同批）。
+# 自带临时库隔离，不需要 CLUBOS_DB_PATH。
+python tests/product_catalog_smoke.py
