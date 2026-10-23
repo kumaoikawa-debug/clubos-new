@@ -73,16 +73,23 @@ gc=ok('post','/api/public/clubs/1/gear-checkout',json={'userId':1,'items':[{'pro
 gp=ok('post',f"/api/public/checkouts/{gc['checkoutId']}/confirm",json={'commerceOrderId':'ord_smoke_gear'}).json(); assert gp['kind']=='gear'
 print('SMOKE OK · CHECKOUT INTENT / POINT HOLDS / IDEMPOTENT PAYMENT EVENT')
 
-# v0.7 per-activity points policy: club owner controls earn/redeem; platform gates Gear Points subsidy.
+# v0.7 per-activity points policy: club owner controls earn/redeem.
+# 装备积分（Gear Points）的准入权与抵扣上限已归总平台（2026-10-24 设计纠正）：
+# 套餐决定有没有权益，比例由总平台按俱乐部设定，活动级开关与金额上限不再参与判定。
+# 所以这里的 payload 里虽然还带着 acceptGearPoints / gearPointsMaxDiscountAmount
+# （老前端的形状），后端会忽略它们 —— 断言改为按平台下发的生效比例算上限。
 pol=ok('patch',f'/api/club/1/activities/{aid}/points-policy',json={
     'enabled':True,'earnClubPoints':True,'acceptClubPoints':True,
     'clubPointsMaxDiscountPercent':1,'acceptGearPoints':True,'gearPointsMaxDiscountAmount':3
 }).json()
 assert pol['effective']['acceptClubPoints'] is True and pol['effective']['acceptGearPoints'] is True
+_gp_pct=float(pol.get('gearPointsRule',{}).get('redeemPercent') or 0)
+assert _gp_pct>0,'装备积分的生效比例应由总平台规则给出'
 act=ok('get',f'/api/public/activities/{aid}').json(); occ=act['occurrences'][0]
 q=ok('get',f"/api/public/activities/{aid}/price-quote?occurrence_id={occ['id']}&user_id=1&club_points=999999&gear_points=999999").json()
 assert q['clubPointDiscount'] <= round(q['original']*0.01,2)+0.01
-assert q['platformPointSubsidy'] <= 3.001
+# 装备积分补贴上限 = 订单金额 × 平台为该俱乐部设定的比例（不再是活动里的 3 元）
+assert q['platformPointSubsidy'] <= round(q['original']*_gp_pct/100,2)+0.01,(q['platformPointSubsidy'],_gp_pct)
 
 # The checkout snapshots policy. Later edits cannot rewrite an already-created bill.
 co3=ok('post',f'/api/public/activities/{aid}/checkout',json={

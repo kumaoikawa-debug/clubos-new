@@ -58,7 +58,8 @@ class CheckoutEngine:
     commission attribution and AI-credit rewards.
     """
     def __init__(self, points_engine, wallet_snapshot, setting_getter, activity_points_policy,
-                 membership_engine=None, benefit_engine=None, participant_service=None, inventory_engine=None, ai_credit_engine=None):
+                 membership_engine=None, benefit_engine=None, participant_service=None, inventory_engine=None, ai_credit_engine=None,
+                 gear_points_policy=None):
         self.points = points_engine
         self.wallet_snapshot = wallet_snapshot
         self.setting = setting_getter
@@ -68,6 +69,8 @@ class CheckoutEngine:
         self.participants = participant_service
         self.inventory = inventory_engine
         self.ai_credits = ai_credit_engine
+        #: 总平台的装备积分规则服务（GearPointsPolicyService）。没有它 → 装备积分一律不可用。
+        self.gear_points_policy = gear_points_policy
 
     def _new_id(self):
         return "chk_" + uuid.uuid4().hex
@@ -102,7 +105,15 @@ class CheckoutEngine:
         if int(occurrence['sold']) + participant_count > int(occurrence['capacity']):
             raise OverflowError(f"该团期剩余名额不足，当前需要 {participant_count} 个名额")
         wallet = self.wallet_snapshot(c, user_id, int(activity['club_id']))
-        policy = self.activity_points_policy.from_activity(activity)
+        # 装备积分的准入与上限由总平台按「套餐资格 + 按俱乐部的比例」决定（2026-10-24）。
+        # 活动自己那份开关不再参与 —— 同一套权益在不同俱乐部不能一个能抵一个不能抵。
+        gp = None
+        if self.gear_points_policy is not None:
+            try:
+                gp = self.gear_points_policy.resolve(c, int(activity['club_id']))
+            except Exception:
+                gp = None
+        policy = self.activity_points_policy.from_activity(activity, gp)
         original_amount = float(occurrence['price']) * participant_count
         quote = self.points.quote(
             amount=original_amount,
@@ -113,7 +124,7 @@ class CheckoutEngine:
             allow_club_points=policy.effective_accept_club_points,
             club_points_max_discount_percent=policy.club_points_max_discount_percent,
             allow_gear_points=policy.effective_accept_gear_points,
-            gear_points_max_discount_amount=policy.gear_points_max_discount_amount,
+            gear_points_max_discount_percent=policy.effective_gear_points_percent,
         )
         intent_id=self._new_id()
         benefit_quote={'clubDiscount':0.0,'platformSubsidy':0.0,'totalDiscount':0.0,'applied':[]}

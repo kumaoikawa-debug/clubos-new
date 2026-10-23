@@ -19,22 +19,34 @@ class BookingEngine:
     primitives. ClubOS owns: occurrence identity, club ownership, point funding rules,
     registration records, and the business mapping between them.
     """
-    def __init__(self, points_engine, wallet_snapshot: Callable, activity_points_policy, membership_engine=None, benefit_engine=None, participant_service=None):
+    def __init__(self, points_engine, wallet_snapshot: Callable, activity_points_policy, membership_engine=None, benefit_engine=None, participant_service=None, gear_points_policy=None):
         self.points = points_engine
         self.wallet_snapshot = wallet_snapshot
         self.activity_points_policy = activity_points_policy
         self.membership = membership_engine
         self.benefits = benefit_engine
         self.participants = participant_service
+        #: 总平台的装备积分规则服务（GearPointsPolicyService）。没有它 → 装备积分一律不可用。
+        self.gear_points_policy = gear_points_policy
 
-    def _quote_with_policy(self, *, activity: dict, amount: float, wallet: dict,
+    def _resolve_gear_policy(self, c, club_id: int):
+        if self.gear_points_policy is None:
+            return None
+        try:
+            return self.gear_points_policy.resolve(c, int(club_id))
+        except Exception:
+            return None
+
+    def _quote_with_policy(self, *, c, activity: dict, amount: float, wallet: dict,
                            requested_club_points: int, requested_gear_points: int):
-        policy = self.activity_points_policy.from_activity(activity)
+        gp = self._resolve_gear_policy(c, int(activity.get('club_id') or 0))
+        policy = self.activity_points_policy.from_activity(activity, gp)
         caps = dict(
             allow_club_points=policy.effective_accept_club_points,
             club_points_max_discount_percent=policy.club_points_max_discount_percent,
             allow_gear_points=policy.effective_accept_gear_points,
-            gear_points_max_discount_amount=policy.gear_points_max_discount_amount,
+            # 装备积分上限走**百分比**口径（订单金额的 %），由总平台按套餐 + 按俱乐部决定。
+            gear_points_max_discount_percent=policy.effective_gear_points_percent,
         )
         q = self.points.quote(
             amount=amount,
@@ -68,6 +80,7 @@ class BookingEngine:
             raise ValueError('该团期剩余名额不足')
         wallet=self.wallet_snapshot(c,user_id,int(occ['club_id']))
         q, policy, max_redeemable = self._quote_with_policy(
+            c=c,
             activity=activity,
             amount=float(occ['price'])*participant_count,
             wallet=wallet,
@@ -88,6 +101,7 @@ class BookingEngine:
             raise OverflowError('该团期剩余名额不足')
         wallet=self.wallet_snapshot(c,user_id,int(activity['club_id']))
         q, policy, _ = self._quote_with_policy(
+            c=c,
             activity=activity,
             amount=float(occurrence['price'])*participant_count,
             wallet=wallet,

@@ -58,6 +58,23 @@ def set_policy(percent=None, gear_cap=None, accept_club=None, accept_gear=None):
         c.execute(f'UPDATE activities SET {", ".join(sets)} WHERE id=?', vals + [ACT])
 
 
+def set_platform_gear_percent(pct, club_id=None, enabled=1):
+    """总平台按俱乐部设定的装备积分抵用比例（2026-10-24 起的真正来源）。"""
+    cid = club_id or int(act['club_id'])
+    with db.conn() as c:
+        c.execute('''INSERT INTO club_gear_points_policies(club_id,redeem_percent,enabled,note,updated_at)
+                     VALUES(?,?,?,'',CURRENT_TIMESTAMP)
+                     ON CONFLICT(club_id) DO UPDATE SET redeem_percent=excluded.redeem_percent,
+                       enabled=excluded.enabled,updated_at=CURRENT_TIMESTAMP''',
+                  (cid, float(pct), int(enabled)))
+
+
+def clear_platform_gear_percent(club_id=None):
+    cid = club_id or int(act['club_id'])
+    with db.conn() as c:
+        c.execute('DELETE FROM club_gear_points_policies WHERE club_id=?', (cid,))
+
+
 def set_balance(club=None, gear=None):
     with db.conn() as c:
         if club is not None:
@@ -104,16 +121,19 @@ check('cashFromPoints = 两侧折扣之和',
       mx['cashFromPoints'])
 
 print('\n== 3. 政策上限 < 余额时，上限必须来自政策而不是余额 ==')
-set_balance(club=99999, gear=99999)          # 钱足够多 → 封顶只能来自活动策略
-set_policy(percent=1, gear_cap=5)
+set_balance(club=99999, gear=99999)          # 钱足够多 → 封顶只能来自策略
+set_policy(percent=1)
+# 装备积分上限现在由**总平台按俱乐部设定的比例**决定（2026-10-24）：
+# 比例口径＝订单金额的 %，活动自己那份开关/金额上限不再参与判定。
+set_platform_gear_percent(1)                 # 1% → 498 × 1% ≈ ¥4.98
 q1 = quote(club_points=0, gear_points=0)
 m1 = q1['maxRedeemable']
 check('活动积分上限 = 金额 × 1%（而非 99999 余额）',
       m1['club']['limiter'] == 'policy' and abs(m1['club']['points'] - int(PRICE * 0.01 * 100)) <= 1,
       f"上限 {m1['club']['points']} 期望≈{int(PRICE * 0.01 * 100)}")
-check('装备积分上限 = 补贴额 ¥5（而非 99999 余额）',
-      m1['gear']['limiter'] == 'policy' and abs(m1['gear']['cash'] - 5.0) < 0.01,
-      f"上限 ¥{m1['gear']['cash']}")
+check('装备积分上限 = 订单金额 × 平台设定比例（而非 99999 余额）',
+      m1['gear']['limiter'] == 'policy' and abs(m1['gear']['cash'] - PRICE * 0.01) < 0.02,
+      f"上限 ¥{m1['gear']['cash']} 期望≈¥{PRICE * 0.01:.2f}")
 check('上限严格小于余额 → 不可能把 99999 全抵掉',
       m1['club']['points'] < 99999 and m1['gear']['points'] < 99999)
 
@@ -130,7 +150,8 @@ set_policy(accept_club=True)
 
 print('\n== 5. 装备积分在「扣除活动积分后的剩余额」上封顶 ==')
 set_balance(club=99999, gear=99999)
-set_policy(percent=100, gear_cap=PRICE + 999)   # 活动积分可抵全额、装备补贴远超订单金额
+set_policy(percent=100)                         # 活动积分可抵全额
+set_platform_gear_percent(100)                  # 装备积分比例 100% → 远超订单金额的需求
 q3 = quote(club_points=10 ** 9, gear_points=10 ** 9)
 m3 = q3['maxRedeemable']
 check('活动积分吃满全额后，装备侧上限被剩余金额夹住',
@@ -140,7 +161,8 @@ check('合计抵扣不超过订单金额', m3['cashFromPoints'] <= PRICE + 0.01,
 
 print('\n== 6. 下单实扣 = 报价承诺的抵扣（端到端） ==')
 set_balance(club=860, gear=1280)
-set_policy(percent=10, gear_cap=30)
+set_policy(percent=10)
+set_platform_gear_percent(10)
 q4 = quote(club_points=0, gear_points=0)
 m4 = q4['maxRedeemable']
 r = client.post(f'/api/public/activities/{ACT}/checkout', json={
@@ -161,7 +183,35 @@ if r.status_code == 200:
           abs(float(o['payable']) - float(m4['cashAfterPoints'])) < 0.01,
           f"{o['payable']} vs {m4['cashAfterPoints']}")
 
-print('\n== 7. 报价是只读的：连打两次不能改变任何账 ==')
+print('\n== 7. 活动级开关不再参与装备积分判定（准入权归总平台） ==')
+set_balance(club=99999, gear=99999)
+set_platform_gear_percent(10)
+set_policy(accept_gear=False)                  # 活动自己关掉「允许装备积分抵扣」
+q_g = quote(club_points=0, gear_points=0)
+check('活动关闭开关后装备积分仍然可用（由平台规则决定）',
+      q_g['maxRedeemable']['gear']['allowed'] is True
+      and q_g['maxRedeemable']['gear']['cash'] > 0,
+      q_g['maxRedeemable']['gear'])
+set_policy(gear_cap=0)                         # 活动把金额上限设成 0
+q_g2 = quote(club_points=0, gear_points=0)
+check('活动把装备积分金额上限设成 0 也不影响（比例口径由平台定）',
+      q_g2['maxRedeemable']['gear']['cash'] > 0,
+      q_g2['maxRedeemable']['gear'])
+set_policy(accept_gear=True, gear_cap=None)
+
+print('\n== 7b. 平台关闭某俱乐部 → 该俱乐部装备积分立即不可用 ==')
+set_platform_gear_percent(0, enabled=0)
+q_off = quote(club_points=0, gear_points=0)
+check('平台单独关闭后 limiter=off / 不可抵',
+      q_off['maxRedeemable']['gear']['allowed'] is False
+      and q_off['maxRedeemable']['gear']['limiter'] == 'off',
+      q_off['maxRedeemable']['gear'])
+check('强行请求也不产生活动积分折扣（装备侧）',
+      quote(club_points=0, gear_points=10 ** 9)['gearPointsUsed'] == 0)
+clear_platform_gear_percent()
+set_platform_gear_percent(10)
+
+print('\n== 8. 报价是只读的：连打两次不能改变任何账 ==')
 set_balance(club=500, gear=500)   # 上一节下单已把余额扣空，这里先充上再看报价有没有副作用
 def balance():
     with db.conn() as c:

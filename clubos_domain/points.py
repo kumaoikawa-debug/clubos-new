@@ -45,11 +45,16 @@ class ClubOSPointsEngine:
     def quote(self, *, amount: float, club_points_balance: int, gear_points_balance: int,
               requested_club_points: int = 0, requested_gear_points: int = 0,
               allow_club_points: bool = True, club_points_max_discount_percent: float = 100.0,
-              allow_gear_points: bool = True, gear_points_max_discount_amount: float | None = None) -> PointQuote:
+              allow_gear_points: bool = True, gear_points_max_discount_amount: float | None = None,
+              gear_points_max_discount_percent: float | None = None) -> PointQuote:
         """Quote cash payable while respecting ClubOS activity-specific point rules.
 
         Balances alone never grant permission to redeem. The caller supplies the effective
         Activity Points Policy (including the platform Gear Points gate).
+
+        装备积分抵用上限现在走**百分比**口径（2026-10-24）：比例由「俱乐部订阅的套餐」
+        决定资格与默认值，总平台再按俱乐部单独设定，比例基数是**订单金额**。
+        `gear_points_max_discount_amount` 仍保留给装备商城等其它场景，两者同时给出时取更严的。
         """
         amount = max(0.0, float(amount))
         cp_req = max(0, int(requested_club_points or 0))
@@ -69,7 +74,14 @@ class ClubOSPointsEngine:
 
         remaining = max(0.0, amount - club_discount)
         if allow_gear_points:
-            gp_cap_cash = remaining if gear_points_max_discount_amount is None else min(remaining, max(0.0, float(gear_points_max_discount_amount)))
+            gp_cap_cash = remaining
+            if gear_points_max_discount_amount is not None:
+                gp_cap_cash = min(gp_cap_cash, max(0.0, float(gear_points_max_discount_amount)))
+            if gear_points_max_discount_percent is not None:
+                # 比例基数是订单金额（与「Club Points 抵扣上限 %」同一口径），
+                # 但绝不越过活动积分抵扣后的剩余额。
+                pct_cap = max(0.0, float(gear_points_max_discount_percent)) / 100.0 * amount
+                gp_cap_cash = min(gp_cap_cash, pct_cap)
             gp_cap_points = max(0, int(gp_cap_cash * gear_rate + 1e-9))
             gp = min(gp_req, max(0, int(gear_points_balance or 0)), gp_cap_points)
         else:
@@ -92,7 +104,8 @@ class ClubOSPointsEngine:
 
     def max_redeemable(self, *, amount: float, club_points_balance: int, gear_points_balance: int,
                        allow_club_points: bool = True, club_points_max_discount_percent: float = 100.0,
-                       allow_gear_points: bool = True, gear_points_max_discount_amount: float | None = None) -> dict:
+                       allow_gear_points: bool = True, gear_points_max_discount_amount: float | None = None,
+                       gear_points_max_discount_percent: float | None = None) -> dict:
         """What this wallet can actually deduct on this order, without the user typing anything.
 
         Implemented by asking the very same `quote()` with an unbounded request. The capping
@@ -112,6 +125,7 @@ class ClubOSPointsEngine:
             club_points_max_discount_percent=club_points_max_discount_percent,
             allow_gear_points=allow_gear_points,
             gear_points_max_discount_amount=gear_points_max_discount_amount,
+            gear_points_max_discount_percent=gear_points_max_discount_percent,
         )
         club_rate = max(1, int(self.setting('club_points_redeem_rate', 100)))
         gear_rate = max(1, int(self.setting('gear_points_redeem_rate', 100)))

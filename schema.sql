@@ -1114,6 +1114,10 @@ CREATE TABLE IF NOT EXISTS ai_credit_plans (
   -- 装备商城会员折扣率：由总平台按套餐统一控制（2026-10-23 起不再配在俱乐部会员等级上）。
   -- 1.0 = 无折扣，0.95 = 九五折。该套餐下俱乐部的所有会员共用这一个折扣。
   gear_discount REAL NOT NULL DEFAULT 1.0,
+  -- 装备积分抵用资格 + 平台默认比例（2026-10-24 用户明确：装备积分抵用不是俱乐部
+  -- 自己决定，而是由该俱乐部订阅的套餐决定；基础套餐无此项权益，Pro/Enterprise 具备。
+  -- 0 = 该套餐不具备装备积分抵用资格；>0 = 具备，且这是总平台未按俱乐部单独设定时的默认比例。
+  gear_points_redeem_percent REAL NOT NULL DEFAULT 0,
   description TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'active',
   sort_order INTEGER NOT NULL DEFAULT 100,
@@ -1130,6 +1134,19 @@ CREATE TABLE IF NOT EXISTS ai_credit_topup_packages (
   sort_order INTEGER NOT NULL DEFAULT 100,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 总平台按俱乐部单独设定的「装备积分抵用比例」（2026-10-24）。
+-- 套餐决定资格（gear_points_redeem_percent > 0），这张表决定该俱乐部实际生效的比例：
+-- 有记录且 enabled=1 → 用这里的 redeem_percent；无记录 → 回落到套餐默认比例。
+-- redeem_percent=0 或 enabled=0 → 该俱乐部在本平台规则下不可用装备积分抵用。
+CREATE TABLE IF NOT EXISTS club_gear_points_policies (
+  club_id INTEGER PRIMARY KEY,
+  redeem_percent REAL NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  note TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
 );
 
 CREATE TABLE IF NOT EXISTS club_ai_subscriptions (

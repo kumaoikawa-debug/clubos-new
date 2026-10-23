@@ -94,3 +94,10 @@ python tests/pack_ui_smoke.py
 # 附带守住「套餐/账单列表 DOM 少一个 </div> 导致文字竖排」的渲染 bug。
 # 自带临时库与临时 uploads 隔离（app.UPLOAD 改写），不碰项目真库与真 uploads。
 python tests/platform_plans_smoke.py
+
+# 装备积分抵用资格与比例（2026-10-24 用户设计纠正）：准入权归总平台 —— 套餐决定有没有权益
+# （Starter 无 / Pro / Enterprise 有），比例由总平台按俱乐部单独设定（套餐自带比例是权益上限，
+# 平台不能凭空放大）；活动级 accept_gear_points 与金额上限彻底退出判定；
+# C 端 / 俱乐部端 / 平台端三处下发的比例必须同源。
+# 自带临时库隔离，不需要 CLUBOS_DB_PATH。
+python tests/gear_points_plan_policy_smoke.py

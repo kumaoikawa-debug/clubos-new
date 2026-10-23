@@ -71,6 +71,7 @@ async function loadCredits(){try{skel('#creditRows',4);let [a,plans,packs,sum,or
       <div class="plat-plan__head"><b>${esc(x.name)}</b><span class="tag">${esc(x.code)}</span>${x.status==='active'?'':'<span class="tag orange">已下架</span>'}</div>
       <div class="plat-plan__credits"><b>${Number(x.monthly_credits||0).toLocaleString()}</b> Credits / 月</div>
       <div class="plat-plan__meta">${Number(x.monthly_fee)>0?money(x.monthly_fee):'定制报价'} · 装备折扣 ${(Number(x.gear_discount||1)*10).toFixed(Number(x.gear_discount||1)*10%1?1:0)} 折</div>
+      <div class="plat-plan__meta">${Number(x.gear_points_redeem_percent||0)>0?`装备积分抵用 上限 ${Number(x.gear_points_redeem_percent)}%`:'装备积分抵用 无权益'}</div>
       ${String(x.description||'').trim()?`<div class="plat-plan__desc">${esc(x.description)}</div>`:''}
       <div class="plat-plan__ops"><button class="btn ghost sm" onclick="editPlan('${esc(x.code)}')">编辑</button><button class="btn ghost sm" onclick="togglePlan('${esc(x.code)}','${x.status==='active'?'inactive':'active'}')">${x.status==='active'?'下架':'上架'}</button><button class="btn ghost sm plat-plan__del" onclick="deletePlan('${esc(x.code)}')">删除</button></div>
     </div>`).join('')||'<div class="empty">还没有套餐，点右上角「＋ 新增套餐」。</div>';$('#aiTopupList').innerHTML=packs.map(x=>`<div class="plat-plan plat-plan--pack${x.status==='active'?'':' is-off'}">
@@ -83,8 +84,39 @@ async function confirmAIBill(id){const v=await showForm({title:'确认 AI 账单
 async function monthlyRoll(){let r=await api('/api/platform/ai-credit/monthly-roll',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});toast(`已生成/确认 ${r.orders.length} 个本月套餐账单`);loadCredits()}
 async function editTopupPackage(){const v=await showForm({title:'编辑充值包',submitText:'保存充值包',fields:[{name:'code',label:'充值包 code（已有 code 会更新）',value:'T1000',required:true},{name:'name',label:'充值包名称',value:'1,000 Credits'},{name:'amount',label:'售价（元）',type:'number',value:99,min:0},{name:'credits',label:'Credits 数量',type:'number',value:1000,min:0}]});if(!v||!String(v.code).trim())return;await api('/api/platform/ai-credit/topup-packages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:String(v.code).trim(),name:v.name||String(v.code).trim(),amount:Number(v.amount||0),credits:Number(v.credits||0),status:'active'})});toast('充值包已保存');loadCredits()}
 async function editTaskPricing(){let p=await api('/api/platform/ai-credit/task-pricing');const keys=Object.keys(p);const v=await showForm({title:'AI 任务计费',desc:'设置每类任务每次消耗的 Credits。',submitText:'保存计费',fields:keys.map(k=>({name:k,label:k+' 每次消耗 Credits',type:'number',value:Number(p[k]),min:0}))});if(!v)return;const body={};for(const k of keys)body[k]=Number(v[k]||0);await api('/api/platform/ai-credit/task-pricing',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('AI任务计费已更新');loadCredits()}
-async function loadPointPolicy(){try{skel('#platformPointPolicy',3);let d=await api('/api/platform/points-policy');$('#platformPointPolicy').innerHTML=`<label style="display:flex;align-items:center;gap:10px"><input id="platformGearActivity" type="checkbox" ${d.gearPointsActivityRedeemEnabled?'checked':''}> <strong>允许 Gear Points 用于活动报名抵扣</strong></label><div class="notice" style="margin-top:12px">开启后也不会自动让所有活动可用；仍需俱乐部在具体活动里开启“允许装备积分抵扣”。</div><button class="btn secondary" style="margin-top:12px" onclick="savePointPolicy()">保存平台规则</button>`}catch(e){loaderError('#platformPointPolicy',e,'loadPointPolicy 加载失败')}}
+async function loadPointPolicy(){try{skel('#platformPointPolicy',2);skel('#gearPolicyTable',4);let d=await api('/api/platform/points-policy');
+$('#platformPointPolicy').innerHTML=`<label style="display:flex;align-items:center;gap:10px"><input id="platformGearActivity" type="checkbox" ${d.gearPointsActivityRedeemEnabled?'checked':''}> <strong>允许 Gear Points 用于活动报名抵扣</strong></label><div class="notice" style="margin-top:12px">装备积分是<strong>总平台出钱</strong>，所以准入权与比例都在平台：俱乐部订阅的套餐决定「有没有这项权益」，下方按俱乐部设定「最多能抵订单金额的百分之几」。俱乐部在活动里不再能自行开关。</div><button class="btn secondary" style="margin-top:12px" onclick="savePointPolicy()">保存平台规则</button>`;
+const rows=d.clubs||[];
+/* 表格列：俱乐部 / 套餐 / 是否可抵 / 生效比例 / 生效状态 / 操作 ——
+   「是否可抵」与「生效比例」分开，是为了让「不可抵」和「0%」在视觉上不混淆：
+   前者是资格问题（套餐/平台没给），后者是比例问题（可以抵但比例是 0）。 */
+$('#gearPolicyTable').innerHTML=rows.map(x=>{
+  const planPct=Number(x.planPercent||0), pct=Number(x.redeemPercent||0);
+  const capped=planPct>0&&pct>planPct;
+  const canSet=planPct>0;
+  return `<tr>
+  <td><strong>${esc(x.clubName)}</strong>${x.clubStatus!=='active'?` <span class="tag orange">${esc(x.clubStatus)}</span>`:''}</td>
+  <td>${esc(x.planName||x.planCode||'—')}<div class="sub">上限 ${planPct}%</div></td>
+  <td>${x.allowed?'<span class="tag">可抵</span>':'<span class="tag orange">不可抵</span>'}</td>
+  <td>${x.allowed?`<strong>${pct}%</strong>`:'—'}</td>
+  <td>${x.hasClubOverride?'<span class="tag">已单独设定</span>':'<span class="sub">套餐默认</span>'}${capped?`<div class="sub">已达套餐上限 ${planPct}%</div>`:''}${x.reason?`<div class="sub">${esc(x.reason)}</div>`:''}</td>
+  <td>${canSet?`<button class="btn ghost" onclick="setClubGearPercent(${x.clubId},${pct},${planPct})">设定比例</button>`:'<span class="sub">套餐无此权益</span>'}${x.hasClubOverride?` <button class="btn ghost" onclick="resetClubGearPercent(${x.clubId})">恢复套餐默认</button>`:''}</td>
+  </tr>`;
+}).join('')||'<tr><td colspan="6"><div class="empty">还没有俱乐部</div></td></tr>';
+}catch(e){loaderError('#platformPointPolicy',e,'loadPointPolicy 加载失败');loaderError('#gearPolicyTable',e,'loadPointPolicy 加载失败')}}
 async function savePointPolicy(){let enabled=$('#platformGearActivity').checked;await api('/api/platform/points-policy',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({gearPointsActivityRedeemEnabled:enabled})});toast('平台 Gear Points 活动补贴规则已保存');loadPointPolicy()}
+/* 按俱乐部设定装备积分抵用比例。套餐自带比例是权益上限，
+   这里只能在这个额度内分配 —— 超过会被自动夹到套餐上限（后端 min 处理）。 */
+async function setClubGearPercent(clubId,current,planPercent){
+  const cap=Number(planPercent||0);
+  if(cap<=0){showAlert({title:'无法设定',message:'该俱乐部的套餐不包含装备积分抵用权益，平台不能凭空发放。请先给它配置具备该权益的套餐。'});return}
+  const v=await showForm({title:'设定装备积分抵用比例',desc:`比例口径：单笔最多可抵订单金额的百分之几。该俱乐部套餐上限 ${cap}%（实际生效取两者较小值）。填 0 表示关闭该俱乐部的装备积分抵用。`,submitText:'保存',fields:[{name:'percent',label:'抵扣比例（%）',type:'number',value:Number(current||0),min:0,max:cap,required:true},{name:'note',label:'备注（仅平台内部可见）',value:''}]});
+  if(!v||v.percent===undefined||v.percent===null)return;
+  const r=await api(`/api/platform/points-policy/clubs/${clubId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({redeemPercent:Number(v.percent),enabled:Number(v.percent)>0,note:v.note||''})});
+  toast(Number(v.percent)>0?`已设定为 ${r.redeemPercent}%`:'已关闭该俱乐部的装备积分抵用');
+  loadPointPolicy();
+}
+async function resetClubGearPercent(clubId){await api(`/api/platform/points-policy/clubs/${clubId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({clearOverride:true})});toast('已恢复为套餐默认比例');loadPointPolicy()}
 
 async function loadPlatformBenefits(){try{skel('#platformBenefits',3);let a=await api('/api/platform/benefits');$('#platformBenefits').innerHTML=a.map(x=>`<div class="card"><div class="panel-title"><strong>${esc(x.title)}</strong><span class="tag">Gear Points</span></div><div class="sub">${esc(x.description||'')}<br>${x.points_cost} 装备积分 · ${x.benefit_type==='activity_coupon'?'活动报名补贴':'装备商城抵扣'} · 平台承担成本${x.cash_value?` · 权益价值 ${money(x.cash_value)}`:''} · ${x.target_club_id?`仅俱乐部 #${x.target_club_id}`:'全部俱乐部'}</div><div style="margin-top:10px"><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></div></div>`).join('')||'<div class="empty">暂无平台福利</div>'}catch(e){loaderError('#platformBenefits',e,'loadPlatformBenefits 加载失败')}}
 async function addPlatformBenefit(){const v=await showForm({title:'新增平台福利',submitText:'创建福利',fields:[{name:'kind',label:'福利用途',type:'select',value:'gear',options:[{value:'gear',label:'装备商城抵扣'},{value:'activity',label:'活动报名补贴'}]},{name:'title',label:'平台福利名称',value:'装备商城 ¥30 抵扣福利',required:true},{name:'cost',label:'需要多少装备积分',type:'number',value:3000,min:0},{name:'value',label:'权益价值（元）',type:'number',value:30,min:0}]});if(!v||!v.title)return;const kind=v.kind;await api('/api/platform/benefits',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:v.title,description:'ClubOS 平台会员福利',pointsType:'gear',pointsCost:Number(v.cost||0),cashValue:Number(v.value||0),benefitType:kind==='gear'?'gear_coupon':'activity_coupon',stock:200})});toast('平台福利已创建');loadPlatformBenefits()}

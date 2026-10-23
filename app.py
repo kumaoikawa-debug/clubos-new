@@ -22,6 +22,7 @@ from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config
 from clubos_domain.club_analytics import ClubBusinessIntelligence
 from clubos_domain import club_biz
 from clubos_domain import c_profile
+from clubos_domain.gear_points_policy import GearPointsPolicyService
 from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine, GearRecommendService, LeaderRecommendService
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
@@ -151,6 +152,8 @@ def wallet_snapshot(c,user_id:int,club_id:int):
 
 points_engine=ClubOSPointsEngine(setting)
 activity_points_policy=ActivityPointsPolicyService(setting)
+# 装备积分抵用规则（2026-10-24）：套餐决定资格，总平台按俱乐部设定比例。
+gear_points_policy=GearPointsPolicyService(setting)
 activity_refund_policy=ActivityRefundPolicyService()
 membership_engine=MembershipEngine()
 benefit_engine=BenefitEngine(wallet_snapshot)
@@ -165,8 +168,8 @@ gear_recommend=GearRecommendService()
 leader_recommend=LeaderRecommendService()
 club_bi=ClubBusinessIntelligence()
 inventory_engine=ProcurementEngine(warehouse_engine,finance_engine)
-booking_engine=BookingEngine(points_engine,wallet_snapshot,activity_points_policy,membership_engine,benefit_engine,participant_service)
-checkout_engine=CheckoutEngine(points_engine,wallet_snapshot,setting,activity_points_policy,membership_engine,benefit_engine,participant_service,inventory_engine,ai_credit_engine)
+booking_engine=BookingEngine(points_engine,wallet_snapshot,activity_points_policy,membership_engine,benefit_engine,participant_service,gear_points_policy)
+checkout_engine=CheckoutEngine(points_engine,wallet_snapshot,setting,activity_points_policy,membership_engine,benefit_engine,participant_service,inventory_engine,ai_credit_engine,gear_points_policy)
 commerce_refund_engine=CommerceRefundEngine(points_engine,benefit_engine,commission_engine,inventory_engine)
 payment_lifecycle=PaymentLifecycleEngine()
 payment_accounts=PaymentAccountService()
@@ -801,7 +804,10 @@ def get_activity(club_id:int,activity_id:int):
         'latestNo':versions[0]['version_no'] if versions else 0,'createdAt':(cur or {}).get('created_at'),
         'origin':(cur or {}).get('origin'),'versions':versions,'canRegenerate':has_source,
         'cost':credit_cost('detail'),'gatewayMode':effective_gateway_mode()[0]}
-    a['pointsPolicy']=activity_points_policy.from_activity(a).as_dict()
+    # 装备积分规则由总平台解析（套餐资格 + 按俱乐部的比例），俱乐部端只读展示。
+    with conn() as _gpc:
+        _gp=gear_points_policy.resolve(_gpc,int(a.get('club_id') or 0))
+    a['pointsPolicy']=activity_points_policy.from_activity(a,_gp).as_dict()
     a['refundPolicy']=activity_refund_policy.from_activity(a).as_dict()
     a['participantPolicy']=participant_service.from_activity(a).as_dict()
     return a
@@ -981,15 +987,20 @@ def activity_detail_version_restore(club_id:int,activity_id:int,version_id:int):
 def get_activity_points_policy(club_id:int,activity_id:int):
     with conn() as c:
         a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
-    if not a: raise HTTPException(404,'活动不存在')
-    return activity_points_policy.from_activity(a).as_dict()
+        if not a: raise HTTPException(404,'活动不存在')
+        # 装备积分规则由总平台解析（套餐资格 + 按俱乐部的比例），俱乐部端只读展示。
+        _gp=gear_points_policy.resolve(c,int(club_id))
+    return activity_points_policy.from_activity(a,_gp).as_dict()
 
 @app.patch('/api/club/{club_id}/activities/{activity_id}/points-policy')
 def update_activity_points_policy(club_id:int,activity_id:int,payload:dict=Body(...)):
     with conn() as c:
         a=row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
         if not a: raise HTTPException(404,'活动不存在')
-        current=activity_points_policy.from_activity(a)
+        # 同上：注入平台规则，保存后返回的「C 端实际生效」才与真实判定一致
+        # （否则俱乐部保存完看到的是「装备积分抵扣：否」，会以为平台把它关了）。
+        _gp=gear_points_policy.resolve(c,int(club_id))
+        current=activity_points_policy.from_activity(a,_gp)
         policy=activity_points_policy.normalize_update(payload,current)
         activity_points_policy.persist(c,activity_id,club_id,policy)
     return policy.as_dict()
@@ -2848,7 +2859,9 @@ def public_activity(activity_id:int):
     cov=a.get('cover')
     if cov and str(cov).startswith('/static/'):
         a['cover']='/api/public/activities/%d/media/%s'%(activity_id,quote(str(cov)[len('/static/'):],safe='/'))
-    a['pointsPolicy']=activity_points_policy.from_activity(a).as_dict()
+    with conn() as _gpc:
+        _gp=gear_points_policy.resolve(_gpc,int(a.get('club_id') or 0))
+    a['pointsPolicy']=activity_points_policy.from_activity(a,_gp).as_dict()
     a['refundPolicy']=activity_refund_policy.from_activity(a).as_dict()
     a['participantPolicy']=participant_service.from_activity(a).as_dict()
     # 品牌 logo / 字标 / 空白底图属俱乐部内部素材；无论 PROD 还是 demo，C 端公开接口一律不曝光。
@@ -3992,12 +4005,39 @@ def request_gear_refund(order_id:int,payload:dict=Body(default={})):
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
 
-# PLATFORM POINT SUBSIDY POLICY: the platform pays Gear Points used on activities,
-# so it owns the global permission gate. Clubs still decide per activity whether to accept it.
+# PLATFORM POINT SUBSIDY POLICY: 装备积分用于活动报名抵扣时，成本由总平台承担，
+# 所以**准入权与比例都归总平台**（2026-10-24 用户明确：不是由俱乐部自己决定，
+# 而是由该俱乐部订阅的套餐决定；基础套餐无此项权益，Pro/Enterprise 有，
+# 比例再由总平台针对不同俱乐部单独设定）。
 @app.get('/api/platform/points-policy')
 def platform_points_policy():
+    """平台积分补贴总开关 + 各俱乐部的装备积分抵用现状。"""
     enabled=str(setting('gear_points_activity_redeem_enabled','1')).strip().lower() in {'1','true','yes','on'}
-    return {'gearPointsActivityRedeemEnabled':enabled}
+    with conn() as c:
+        clubs=rows(c.execute("""SELECT cl.id,cl.name,cl.status,
+                                     COALESCE(s.plan_code,cl.plan) plan_code
+                              FROM clubs cl
+                              LEFT JOIN club_ai_subscriptions s ON s.club_id=cl.id AND s.status='active'
+                              ORDER BY cl.id"""))
+        plans={p['code']:p for p in ai_credit_engine.plans(c,include_inactive=True)}
+        items=[]
+        for cl in clubs:
+            pol=gear_points_policy.resolve(c,int(cl['id'])).as_dict()
+            plan=plans.get(cl['plan_code']) or {}
+            items.append({
+                'clubId':int(cl['id']),
+                'clubName':cl['name'],
+                'clubStatus':cl['status'],
+                'planCode':cl['plan_code'] or '',
+                'planName':str(plan.get('name') or ''),
+                'planPercent':round(float(plan.get('gear_points_redeem_percent') or 0),2),
+                'allowed':bool(pol['allowed']),
+                'redeemPercent':pol['redeemPercent'],
+                'hasClubOverride':bool(pol['hasClubOverride']),
+                'clubPercent':pol['clubPercent'],
+                'reason':pol['reason'],
+            })
+    return {'gearPointsActivityRedeemEnabled':enabled,'clubs':items}
 
 @app.patch('/api/platform/points-policy')
 def update_platform_points_policy(payload:dict=Body(...)):
@@ -4006,6 +4046,31 @@ def update_platform_points_policy(payload:dict=Body(...)):
         c.execute('INSERT INTO platform_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                   ('gear_points_activity_redeem_enabled','1' if enabled else '0'))
     return {'gearPointsActivityRedeemEnabled':enabled}
+
+@app.patch('/api/platform/points-policy/clubs/{club_id}')
+def update_platform_club_gear_points_policy(club_id:int,payload:dict=Body(...)):
+    """总平台按俱乐部设定装备积分抵用比例。
+
+    `redeemPercent` = 该俱乐部单笔最多可抵**订单金额**的百分之几；
+    实际生效比例 = min(这里设的值, 该俱乐部套餐自带的比例) —— 套餐是权益上限，
+    平台只能在这个额度内分配，不能凭空放大。
+    传 `clearOverride: true` 表示清除单独设定、回到套餐默认比例。
+    """
+    with conn() as c:
+        try:
+            if bool(payload.get('clearOverride')):
+                return gear_points_policy.clear_club_policy(c,club_id)
+            pct=payload.get('redeemPercent')
+            if pct is None:
+                raise ValueError('请填写抵扣比例')
+            return gear_points_policy.set_club_policy(
+                c,club_id,
+                redeem_percent=float(pct),
+                enabled=bool(payload.get('enabled',True)),
+                note=str(payload.get('note') or ''),
+            )
+        except ValueError as e:
+            raise HTTPException(400,str(e))
 
 @app.post('/api/public/club-applications')
 def public_club_application(payload:dict=Body(...)):

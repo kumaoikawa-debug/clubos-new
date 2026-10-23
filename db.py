@@ -77,6 +77,27 @@ def _backfill_plan_gear_discount(c):
               "ON CONFLICT(key) DO UPDATE SET value='1'")
 
 
+def _backfill_plan_gear_points_percent(c):
+    """装备积分抵用从「俱乐部活动自己决定」迁到「俱乐部订阅的套餐决定 + 平台按俱乐部设比例」
+    （2026-10-24 用户明确：装备积分抵用不是由俱乐部决定，而应由该俱乐部选用的套餐决定；
+    基础套餐没有这项权益，Pro/Enterprise 可以抵扣，但比例由总平台针对不同俱乐部单独设计）。
+
+    一次性回填（platform_settings 标记防重跑）：
+    · Starter = 0% → 该套餐俱乐部完全没有装备积分抵用资格。
+    · Pro = 20% / Enterprise = 50% → 具备资格，比例是「平台未按俱乐部单独设定时」的默认值，
+      平台之后可以在「积分补贴」页按俱乐部改比例，迁移绝不再碰。
+    """
+    _ensure_column(c,'ai_credit_plans','gear_points_redeem_percent',
+                   'gear_points_redeem_percent REAL NOT NULL DEFAULT 0')
+    done=c.execute("SELECT value FROM platform_settings WHERE key='plan_gear_points_percent_backfilled'").fetchone()
+    if done: return
+    for code,pct in (('starter',0.0),('pro',20.0),('enterprise',50.0)):
+        c.execute('UPDATE ai_credit_plans SET gear_points_redeem_percent=?,updated_at=CURRENT_TIMESTAMP WHERE code=?',
+                  (pct,code))
+    c.execute("INSERT INTO platform_settings(key,value) VALUES('plan_gear_points_percent_backfilled','1') "
+              "ON CONFLICT(key) DO UPDATE SET value='1'")
+
+
 def _backfill_v023_ai_credits(c):
     from clubos_domain.ai_credits import AICreditEngine
     # seed_defaults 会写 gear_discount 列（装备折扣随套餐，2026-10-23）——
@@ -617,6 +638,7 @@ def init_db():
             _backfill_v021_finance(c)
             _backfill_v023_ai_credits(c)
             _backfill_plan_gear_discount(c)
+            _backfill_plan_gear_points_percent(c)
             _backfill_v027_variants(c)
             # 必须挂在这个 return 之前：init_db 只要发现库里已经有 clubs
             # 就会提前返回，挂在后面等于给存量库迁移不到新列。
@@ -625,6 +647,8 @@ def init_db():
         if os.getenv('CLUBOS_SECURITY_MODE','demo')=='production':
             # Never provision sample clubs, consumers, catalog, payments or credits in production.
             from clubos_domain.ai_credits import AICreditEngine
+            _ensure_column(c,'ai_credit_plans','gear_points_redeem_percent',
+                           'gear_points_redeem_percent REAL NOT NULL DEFAULT 0')
             AICreditEngine().seed_defaults(c)
             return
         c.execute('INSERT INTO clubs(name,status,plan) VALUES(?,?,?)',('远拓户外','active','pro')); club_id=c.execute('SELECT last_insert_rowid()').fetchone()[0]

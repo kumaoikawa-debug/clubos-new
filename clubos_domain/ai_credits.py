@@ -13,11 +13,15 @@ class AICreditEngine:
     """
 
     DEFAULT_PLANS = [
-        # 末位是装备商城会员折扣（gear_discount）：折扣是套餐资产、由总平台控制，
-        # 俱乐部会员等级不再参与（2026-10-23）。Starter 无折扣 / Pro 9.5 折 / Enterprise 9 折。
-        ("starter", "Starter", 299.0, 3000, "适合刚开始使用 ClubOS AI 的俱乐部", 10, 1.0),
-        ("pro", "Pro", 699.0, 10000, "适合持续运营活动与内容的俱乐部", 20, 0.95),
-        ("enterprise", "Enterprise", 0.0, 30000, "组织级额度；价格由平台另行约定", 30, 0.90),
+        # 末位两个都是「套餐资产」，由总平台控制，俱乐部/会员等级都不能改：
+        #   gear_discount          装备商城会员折扣（1.0 = 无折扣，0.95 = 九五折）
+        #   gear_points_percent    装备积分抵用活动的资格与默认比例（0 = 该套餐没有这项权益；
+        #                          >0 = 具备资格，这是平台未按俱乐部单独设定时的默认比例）
+        # 2026-10-23 装备折扣迁到套餐；2026-10-24 装备积分抵用资格也迁到套餐
+        # （基础套餐无此项权益，Pro/Enterprise 具备，比例由总平台按俱乐部单独设定）。
+        ("starter", "Starter", 299.0, 3000, "适合刚开始使用 ClubOS AI 的俱乐部", 10, 1.0, 0.0),
+        ("pro", "Pro", 699.0, 10000, "适合持续运营活动与内容的俱乐部", 20, 0.95, 20.0),
+        ("enterprise", "Enterprise", 0.0, 30000, "组织级额度；价格由平台另行约定", 30, 0.90, 50.0),
     ]
     DEFAULT_TOPUPS = [
         ("T1000", "1,000 Credits", 99.0, 1000, 10),
@@ -41,11 +45,12 @@ class AICreditEngine:
         return start.isoformat(), nxt.isoformat()
 
     def seed_defaults(self, c) -> None:
-        for code, name, fee, credits, description, sort_order, gear_discount in self.DEFAULT_PLANS:
+        for code, name, fee, credits, description, sort_order, gear_discount, gear_points_percent in self.DEFAULT_PLANS:
             c.execute(
-                """INSERT OR IGNORE INTO ai_credit_plans(code,name,monthly_fee,monthly_credits,gear_discount,description,status,sort_order)
-                   VALUES(?,?,?,?,?,?,'active',?)""",
-                (code, name, fee, credits, gear_discount, description, sort_order),
+                """INSERT OR IGNORE INTO ai_credit_plans(code,name,monthly_fee,monthly_credits,gear_discount,
+                     gear_points_redeem_percent,description,status,sort_order)
+                   VALUES(?,?,?,?,?,?,?,'active',?)""",
+                (code, name, fee, credits, gear_discount, gear_points_percent, description, sort_order),
             )
         for code, name, amount, credits, sort_order in self.DEFAULT_TOPUPS:
             c.execute(
@@ -226,22 +231,33 @@ class AICreditEngine:
             gear_discount = float(gear_raw)
             if not 0 < gear_discount <= 1:
                 raise ValueError("装备折扣必须在 (0,1] 之间，1 表示无折扣，0.9 表示九折")
+        # 装备积分抵用资格与默认比例（平台资产）：0 = 该套餐没有这项权益。
+        gp_raw = payload.get("gearPointsRedeemPercent")
+        gear_points_percent = None
+        if gp_raw not in (None, ""):
+            gear_points_percent = max(0.0, min(100.0, float(gp_raw)))
         existing = c.execute("SELECT code FROM ai_credit_plans WHERE code=?", (code,)).fetchone()
         if existing:
-            # 更新：gear_discount 用 COALESCE 保留旧值（None = 不改动）。
+            # 更新：gear_discount / gear_points_redeem_percent 用 COALESCE 保留旧值（None = 不改动）。
             c.execute(
                 """UPDATE ai_credit_plans SET name=?,monthly_fee=?,monthly_credits=?,
-                     gear_discount=COALESCE(?,gear_discount),description=?,status=?,sort_order=?,
+                     gear_discount=COALESCE(?,gear_discount),
+                     gear_points_redeem_percent=COALESCE(?,gear_points_redeem_percent),
+                     description=?,status=?,sort_order=?,
                      updated_at=CURRENT_TIMESTAMP WHERE code=?""",
-                (name, fee, credits, gear_discount, str(payload.get("description") or ""), status,
+                (name, fee, credits, gear_discount, gear_points_percent,
+                 str(payload.get("description") or ""), status,
                  int(payload.get("sortOrder") or 100), code),
             )
         else:
-            # 新建：不传折扣按 1.0（无折扣）建档 —— 新套餐默认不打折，绝不自己造折扣。
+            # 新建：不传折扣按 1.0（无折扣）建档、不传积分比例按 0（无资格）建档
+            # —— 新套餐默认既不打折也没有装备积分抵用权益，绝不自己造权益出来。
             c.execute(
-                """INSERT INTO ai_credit_plans(code,name,monthly_fee,monthly_credits,gear_discount,description,status,sort_order,updated_at)
-                   VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+                """INSERT INTO ai_credit_plans(code,name,monthly_fee,monthly_credits,gear_discount,
+                     gear_points_redeem_percent,description,status,sort_order,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
                 (code, name, fee, credits, 1.0 if gear_discount is None else gear_discount,
+                 0.0 if gear_points_percent is None else gear_points_percent,
                  str(payload.get("description") or ""), status, int(payload.get("sortOrder") or 100)),
             )
         return dict(c.execute("SELECT * FROM ai_credit_plans WHERE code=?", (code,)).fetchone())

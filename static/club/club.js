@@ -153,21 +153,47 @@ if(window.matchMedia&&matchMedia('(max-width:1180px)').matches)setTimeout(()=>pa
 
 function pointsPolicyCard(a){
   const p=a.pointsPolicy||{}; const e=p.effective||{};
+  /* 装备积分（Gear Points）是总平台出资的补贴：能不能用、用多少，都由总平台按
+     「俱乐部买的套餐」+「平台给这个俱乐部单独设的比例」决定，活动层面改不动。
+     所以这里只做只读展示 —— 不给开关，也不给输入框，
+     免得俱乐部以为改了自己就能生效（实际下发给 C 端的比例仍以总平台为准）。 */
+  const gp=p.gearPointsRule||{};
+  const gpPct=Number(e.gearPointsRedeemPercent||0);
+  const gpTag=gp.allowed
+    ? `<span class="tag">可抵 ${gpPct}%</span>`
+    : `<span class="tag orange">不可抵</span>`;
+  const gpPlan=gp.planName?`当前套餐「${gp.planName}」`:'当前套餐';
+  const gpHow=gp.hasClubOverride
+    ? '总平台已为本网俱乐部单独设定比例'
+    : (gp.allowed?'沿用套餐自带比例':'套餐未包含该权益');
+  const gpBlock=`<div class="notice" style="margin-top:12px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <strong>装备积分抵用</strong>${gpTag}
+        <span class="sub">由总平台统一控制，活动不可调整</span>
+      </div>
+      <div class="sub" style="margin-top:8px">
+        ${gpPlan}（上限 ${Number(gp.planPercent||0)}%）· ${gpHow}${gp.allowed?`，本俱乐部当前生效 ${gpPct}%`:''}。
+      </div>
+      ${gp.reason?`<div class="sub" style="margin-top:4px">${esc(gp.reason)}</div>`:''}
+    </div>`;
   return `<div class="card section" id="pointsPolicyCard">
     <div class="panel-title"><div><h3>活动积分规则</h3><div class="sub">由俱乐部决定这场活动是否参与积分；团期默认继承整场活动规则。</div></div><span class="tag ${p.enabled?'':'orange'}">${p.enabled?'已开启':'不参与积分'}</span></div>
     <label style="display:flex;gap:10px;align-items:center;padding:10px 0"><input id="ppEnabled" type="checkbox" ${p.enabled?'checked':''}> <strong>这场活动参与积分体系</strong></label>
     <div class="grid g2" style="margin-top:4px">
       <div class="notice"><label><input id="ppEarn" type="checkbox" ${p.earnClubPoints?'checked':''}> 报名后产生活动积分</label><div class="sub" style="margin-top:6px">成本由本俱乐部承担；默认按俱乐部积分规则累计。</div></div>
       <div class="notice"><label><input id="ppClub" type="checkbox" ${p.acceptClubPoints?'checked':''}> 允许活动积分抵现金</label><div style="margin-top:8px"><span class="sub">本单最多抵活动金额</span> <input id="ppClubMax" type="number" min="0" max="100" step="1" value="${Number(p.clubPointsMaxDiscountPercent??100)}" style="width:80px"> %</div></div>
-      <div class="notice"><strong>C端实际生效</strong><div class="sub" style="margin-top:6px">累计活动积分：${e.earnClubPoints?'是':'否'} · 活动积分抵扣：${e.acceptClubPoints?'是':'否'}</div></div>
     </div>
+    ${gpBlock}
+    <div class="notice" style="margin-top:12px"><strong>C端实际生效</strong><div class="sub" style="margin-top:6px">累计活动积分：${e.earnClubPoints?'是':'否'} · 活动积分抵扣：${e.acceptClubPoints?'是':'否'} · 装备积分抵扣：${e.acceptGearPoints?'是（最多 '+gpPct+'%）':'否'}</div></div>
     <button class="btn secondary" style="margin-top:12px" onclick="savePointsPolicy(${a.id})">保存积分规则</button>
   </div>`
 }
 async function savePointsPolicy(id){
   /* 装备积分（总平台体系）不在俱乐部后台配置：相关字段既不出现在界面上，
      也不进 payload —— 后端 activity_points_policy.normalize_update 对缺失键
-     回退到当前值，平台侧设置不会被这里顺手改掉。 */
+     回退到当前值，平台侧设置不会被这里顺手改掉。
+     （总平台按「套餐资格 + 按俱乐部设的比例」决定装备积分准入与封顶，
+       活动级 accept_gear_points / gear_points_max_discount_amount 都不再参与判定。） */
   const payload={
     enabled:$('#ppEnabled').checked,
     earnClubPoints:$('#ppEarn').checked,

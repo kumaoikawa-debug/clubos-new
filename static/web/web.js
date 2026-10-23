@@ -1607,7 +1607,13 @@ function pointsPolicyHtml(a){
   lines.push(e.earnClubPoints?'报名并完成后，本次现金实付将按俱乐部规则累计活动积分。':'本活动报名不累计活动积分。');
   if(e.acceptClubPoints)lines.push('报名时可使用活动积分抵扣现金，单笔最多抵扣活动金额的'+Number(p.clubPointsMaxDiscountPercent||100)+'%。');
   else lines.push('本活动不可使用活动积分抵扣现金。');
-  if(e.acceptGearPoints)lines.push('装备消费积分（平台积分）可在结算时用于抵扣相关装备消费。');
+  if(e.acceptGearPoints){
+    /* 装备积分是总平台出资的补贴，不是俱乐部自己给的福利，所以文案只说
+       「平台给这个俱乐部设的比例」，不暴露套餐名 / 内部额度，
+       也不提「装备消费」这种容易误解成只能抵装备的说法。 */
+    const gpPct=Number(e.gearPointsRedeemPercent||0);
+    lines.push('装备积分（平台补贴）可在结算时抵扣报名费用：总平台已为本俱乐部设定单笔最多可抵订单金额的 '+gpPct+'%。');
+  }
   return `<section class="w-block"><div class="w-block__head"><div><b>活动积分规则</b><div class="w-block__hint">积分的累计与抵扣由俱乐部与平台规则共同决定，具体以结算页计算为准。</div></div></div><div class="w-policy">${lines.map(t=>`<p>${esc(t)}</p>`).join('')}</div></section>`;
 }
 function refundPolicyHtml(a){
