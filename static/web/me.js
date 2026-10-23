@@ -103,7 +103,9 @@ const ME_IC={
   truck:'<path d="M2.8 7.4h9.6v8.2H2.8z"/><path d="M12.4 10h4l3 3.1v2.5h-7z"/><circle cx="6" cy="17.6" r="1.5"/><circle cx="16.4" cy="17.6" r="1.5"/>',
   star:'<path d="m12 4.8 2.3 4.7 5.2.7-3.8 3.6.9 5.1-4.6-2.5-4.6 2.5.9-5.1L4.5 10.2l5.2-.7z"/>',
   refund:'<path d="M4.6 10.4a7.4 7.4 0 1 1 2 6"/><path d="M4.4 5.6v4.8h4.8"/>',
-  box:'<path d="M4.4 8.6 12 4.8l7.6 3.8v6.8L12 19.2 4.4 15.4z"/><path d="M4.4 8.6 12 12.4l7.6-3.8M12 12.4v6.8"/>'
+  box:'<path d="M4.4 8.6 12 4.8l7.6 3.8v6.8L12 19.2 4.4 15.4z"/><path d="M4.4 8.6 12 12.4l7.6-3.8M12 12.4v6.8"/>',
+  phone:'<path d="M7.2 4.8h2.7l1.4 3.4-2 1.3a9.6 9.6 0 0 0 5 5l1.3-2 3.4 1.4v2.7a1.9 1.9 0 0 1-2.1 1.9A15.5 15.5 0 0 1 5.3 6.9a1.9 1.9 0 0 1 1.9-2.1Z"/>',
+  chat:'<path d="M4.6 6.4h14.8v9.4H9.6l-4 3.2v-3.2H4.6z"/><path d="M8.4 10.2h7.2M8.4 12.8h4.4"/>'
 };
 function meIcon(k){return `<svg viewBox="0 0 24 24" aria-hidden="true">${ME_IC[k]||''}</svg>`;}
 /* 升级进度（0-100）：当前档与下一档之间，按「消费额」或「场次」算比例。
@@ -387,23 +389,92 @@ SUB_ME.aftersale=function(){
       ${a.return_tracking_no?`<div class="me-card2__meta">退货物流 ${esc(a.return_tracking_no)}</div>`:''}
     </div>`).join('');
 };
+/* ── 联系我们 / 关于：内容由俱乐部在后台自定义 ────────────────────────────
+   这两页原来整页是前端写死的占位文案：服务时间「9:00 - 21:00」、官网
+   topoutdoor.cn、「户外俱乐部一站式服务平台」。顾客照着假时段打过去没人接，
+   还以为是自己的问题。现在后端只下发老板真的填了的字段（c_profile.public_view），
+   所以这里一律「有值才渲染这一行」—— 空字段宁可不出现，也不回退成假号码。 */
+function meProfile(){
+  const p=(ME.club&&ME.club.profile)||{};
+  return {c:p.contact||{},a:p.about||{}};
+}
+function meCopy(text,label){
+  const t=String(text||'').trim();if(!t)return;
+  const done=()=>{if(window.toast)toast((label||'内容')+'已复制：'+t)};
+  const manual=()=>{if(window.toast)toast('复制失败，请长按手动复制：'+t)};
+  const fallback=()=>{
+    try{
+      const ta=document.createElement('textarea');ta.value=t;ta.setAttribute('readonly','');
+      ta.style.cssText='position:fixed;top:-999px;opacity:0';document.body.appendChild(ta);
+      ta.select();document.execCommand('copy');ta.remove();done();
+    }catch(e){manual()}
+  };
+  if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(t).then(done).catch(fallback);
+  else fallback();
+}
+window.meCopy=meCopy;
+/* 复制按钮统一走委托：把微信号/邮箱拼进 onclick 字符串会被引号打断（值里带 ' 就炸）。 */
+document.addEventListener('click',function(e){
+  const b=e.target&&e.target.closest?e.target.closest('[data-copy]'):null;
+  if(b)meCopy(b.getAttribute('data-copy'),b.getAttribute('data-copy-label')||'内容');
+});
+
 SUB_ME.service=function(){
-  const c=ME.club||{};
-  return `<div class="me-info">
-      <div class="me-info__row"><span>俱乐部</span><b>${esc(c.name||'俱乐部')}</b></div>
-      ${c.contact_phone?`<div class="me-info__row"><span>客服电话</span><a href="tel:${esc(c.contact_phone)}">${esc(c.contact_phone)}</a></div>`:''}
-      ${c.wechat?`<div class="me-info__row"><span>微信</span><b>${esc(c.wechat)}</b></div>`:''}
-      ${c.email?`<div class="me-info__row"><span>邮箱</span><b>${esc(c.email)}</b></div>`:''}
-      <div class="me-info__row"><span>服务时间</span><b>9:00 - 21:00</b></div>
-    </div>
-    <p class="me-tip">出行前请确认装备与身体状况；如需退改，请在订单页发起申请，由平台统一处理。</p>`;
+  const c=ME.club||{},p=meProfile().c;
+  /* 客服电话没单独填时，用「设置 → 联系电话」兜底：同一个老板的号，不用填两遍。 */
+  const phone=String(p.phone||c.contactPhone||'').trim();
+  const tel=phone.replace(/[^0-9+]/g,'');
+  const wechat=String(p.wechat||'').trim();
+  const email=String(p.email||'').trim();
+  const hours=String(p.hours||'').trim();
+  const address=String(p.address||'').trim();
+  const note=String(p.note||'').trim();
+  const name=String(c.name||'俱乐部');
+  const tag=String((meProfile().a.tagline)||c.slogan||'').trim();
+
+  const acts=[];
+  if(phone&&tel)acts.push(`<a class="me-svc__act" href="tel:${esc(tel)}">${meIcon('phone')}拨打电话</a>`);
+  if(wechat)acts.push(`<button class="me-svc__act" type="button" data-copy="${esc(wechat)}" data-copy-label="微信号">${meIcon('chat')}复制微信号</button>`);
+
+  const rows=[];
+  if(phone)rows.push(`<div class="me-info__row"><span>客服电话</span>${tel?`<a href="tel:${esc(tel)}">${esc(phone)}</a>`:`<b>${esc(phone)}</b>`}</div>`);
+  if(wechat)rows.push(`<div class="me-info__row"><span>微信</span><button class="me-copy" type="button" data-copy="${esc(wechat)}" data-copy-label="微信号">${esc(wechat)}<i>复制</i></button></div>`);
+  if(email)rows.push(`<div class="me-info__row"><span>邮箱</span><a href="mailto:${esc(email)}">${esc(email)}</a></div>`);
+  if(hours)rows.push(`<div class="me-info__row"><span>服务时间</span><b>${esc(hours)}</b></div>`);
+  if(address)rows.push(`<div class="me-info__row"><span>地址</span><b class="me-info__addr">${esc(address)}</b></div>`);
+
+  return `<div class="me-svc">
+      <div class="me-svc__hd">
+        <span class="me-svc__ava">${esc(name.slice(0,1))}</span>
+        <div><b>${esc(name)}</b>${tag?`<em>${esc(tag)}</em>`:''}</div>
+      </div>
+      ${acts.length?`<div class="me-svc__acts">${acts.join('')}</div>`:''}
+      ${rows.length?`<div class="me-info">${rows.join('')}</div>`
+        :empty('暂未公布联系方式','报名后可在「我的报名」里查看集合地点与联络人')}
+      ${note?`<p class="me-tip">${esc(note)}</p>`:''}
+    </div>`;
 };
 SUB_ME.about=function(){
+  const c=ME.club||{},a=meProfile().a;
+  const name=String(c.name||'俱乐部');
+  const tag=String(a.tagline||c.slogan||'').trim();
+  const hl=(Array.isArray(a.highlights)?a.highlights:[]).slice(0,6).map(t=>String(t||'').trim()).filter(Boolean);
+  const paras=String(a.intro||'').split(/\n{2,}/).map(t=>t.trim()).filter(Boolean);
+  const website=String(a.website||'').trim();
+  let since=String(a.since||'').trim();
+  if(since&&!/年$/.test(since))since+=' 年';
+
+  const rows=[];
+  if(since)rows.push(`<div class="me-info__row"><span>成立</span><b>${esc(since)}</b></div>`);
+  if(website)rows.push(`<div class="me-info__row"><span>官网</span><a href="${esc(website)}" target="_blank" rel="noopener">${esc(website.replace(/^https?:\/\//,''))}</a></div>`);
+  rows.push(`<div class="me-info__row"><span>版本</span><b>v0.25</b></div>`);
+
   return `<div class="me-about">
-      <div class="me-about__logo">${esc((ME.club&&ME.club.name)||'俱乐部')}</div>
-      <p>户外俱乐部一站式服务平台</p>
-      <div class="me-info__row"><span>版本</span><b>v0.25</b></div>
-      <div class="me-info__row"><span>官网</span><b>topoutdoor.cn</b></div>
+      <div class="me-about__logo">${esc(name)}</div>
+      ${tag?`<div class="me-about__tag">${esc(tag)}</div>`:''}
+      ${hl.length?`<div class="me-about__chips">${hl.map(t=>`<span>${esc(t)}</span>`).join('')}</div>`:''}
+      ${paras.length?`<div class="me-about__intro">${paras.map(t=>`<p>${esc(t)}</p>`).join('')}</div>`:''}
+      <div class="me-info">${rows.join('')}</div>
     </div>`;
 };
 SUB_ME.membercard=function(){

@@ -483,6 +483,9 @@ def _run_compat_migrations(c):
     # v0.29 C 端「业务介绍」可配置区：俱乐部自定义（团建/研学/企业团、租装备……），
     # C 端户外能力页读它；未配置 = NULL → 前端整节隐藏（空壳板块比没有更伤信任）。
     _ensure_column(c, 'clubs', 'biz_section_json', 'biz_section_json TEXT')
+    # C 端「我的」页文案（联系我们 / 关于俱乐部）：原来这两页的内容全是前端写死的占位
+    # 文案，现在由俱乐部在后台自定义；未配置 = NULL = 前端只出「名字 + 版本」的最小页。
+    _ensure_column(c, 'clubs', 'c_profile_json', 'c_profile_json TEXT')
 
 
 def _backfill_media_urls(c):

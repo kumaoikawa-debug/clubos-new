@@ -676,3 +676,64 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .settle-hero__side .btn:disabled{opacity:.5;cursor:not-allowed}
 .settle-sec-t{font-size:12.5px;font-weight:800;color:var(--text);margin:14px 0 6px;letter-spacing:.03em}
 @media (max-width:760px){.settle-hero__side{align-items:flex-start;text-align:left}}
+
+/* ── C 端「我的」页文案编辑器（设置 → 我的页文案，2026-10-23）────────────────
+   左边填、右边手机预览：改一个字立刻能看到顾客会看到什么，不用保存完再跑去
+   C 端对一遍。预览里空字段画成虚线 —— 后台没填的字段后端根本不下发，C 端
+   就是不显示，预览必须诚实地表现这一点。 ── */
+.cpv{display:grid;grid-template-columns:minmax(0,1.16fr) minmax(300px,.84fr);gap:18px;align-items:start}
+.cpv__form{display:flex;flex-direction:column;gap:14px;min-width:0}
+.cpv-card{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:14px 16px}
+.cpv-card__hd{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;padding-bottom:10px;margin-bottom:12px;border-bottom:1px dashed var(--line)}
+.cpv-card__hd b{font-size:14px;color:var(--text)}
+.cpv-card__hd .sub{font-size:11.5px;color:var(--muted)}
+.cpv-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 14px}
+.cpv-f{display:block;min-width:0}
+.cpv-f--wide{grid-column:1/-1}
+.cpv-f>span{display:block;font-size:12px;font-weight:650;color:var(--text);margin-bottom:5px}
+.cpv-f input,.cpv-f textarea{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:10px;
+  padding:9px 11px;font:inherit;font-size:13px;color:var(--text);background:#fbfcfa;
+  transition:border-color .15s,box-shadow .15s,background .15s}
+.cpv-f input:focus,.cpv-f textarea:focus{outline:0;border-color:var(--brand2);background:#fff;box-shadow:0 0 0 3px rgba(36,87,67,.10)}
+.cpv-f textarea{resize:vertical;line-height:1.65;min-height:72px}
+.cpv-f em{display:block;font-style:normal;font-size:11px;color:var(--muted);margin-top:5px}
+.cpv-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:2px 0 6px}
+.cpv-hint{margin-top:8px;font-size:11.5px;color:var(--muted);text-align:center}
+
+.cpv__side{position:sticky;top:14px;min-width:0}
+.cpv-phone{border:1px solid var(--line);border-radius:20px;background:var(--panel);box-shadow:var(--shadow);overflow:hidden}
+.cpv-phone__bar{display:flex;align-items:center;gap:7px;padding:9px 14px;border-bottom:1px solid var(--line);background:#fbfcfa}
+.cpv-phone__bar i{width:7px;height:7px;border-radius:50%;background:var(--brand2)}
+.cpv-phone__bar span{margin-left:6px;font-size:11px;font-weight:700;letter-spacing:.4px;color:var(--muted)}
+.cpv-scr{max-height:584px;overflow:auto;background:#f2f4f0;padding-bottom:12px}
+.cpv-scr__nav{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:#fff;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}
+.cpv-scr__nav b{font-size:12px;color:var(--text)}
+.cpv-scr__nav--plain{border-top:1px solid var(--line);margin-top:10px}
+.cpv-scr__sec{padding:10px 10px 0}
+.cpv-scr__hd{display:flex;align-items:center;gap:9px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px}
+.cpv-scr__ava{width:34px;height:34px;flex:0 0 34px;border-radius:10px;background:linear-gradient(135deg,var(--brand),#0e3f2c);color:#fff;display:grid;place-items:center;font-size:14px;font-weight:700}
+.cpv-scr__hd b{display:block;font-size:12.5px;color:var(--text)}
+.cpv-scr__hd em{display:block;font-style:normal;font-size:10.5px;color:var(--muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:190px}
+.cpv-scr__acts{display:flex;gap:7px;margin-top:7px}
+.cpv-scr__acts span{flex:1;text-align:center;height:30px;line-height:28px;border-radius:9px;background:#fff;border:1px solid var(--line);font-size:11px;color:var(--text)}
+.cpv-scr__rows{margin-top:7px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:0 10px}
+.cpv-scr__row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid #f1f4f0;font-size:11.5px}
+.cpv-scr__row:last-child{border-bottom:0}
+.cpv-scr__row span{color:var(--muted);flex:none}
+.cpv-scr__row b{font-weight:600;color:var(--text);text-align:right;word-break:break-all}
+.cpv-scr__none{color:#b7c0b8!important;font-weight:500!important}
+.cpv-scr__note{margin-top:7px;font-size:10.5px;line-height:1.7;color:var(--muted);padding:0 4px}
+.cpv-scr__logo{text-align:center;font-size:15px;font-weight:800;color:var(--text);padding:10px 0 0;letter-spacing:.03em}
+.cpv-scr__tag{text-align:center;font-size:11px;color:var(--muted);margin-top:5px;line-height:1.6}
+.cpv-scr__chips{display:flex;flex-wrap:wrap;gap:5px;justify-content:center;margin-top:8px}
+.cpv-scr__chips span{font-size:10px;padding:3px 7px;border-radius:999px;background:rgba(36,87,67,.07);color:var(--brand);border:1px solid rgba(36,87,67,.14)}
+.cpv-scr__intro{margin-top:8px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:9px 11px}
+.cpv-scr__intro p{margin:0 0 6px;font-size:11px;line-height:1.72;color:#3b453f}
+.cpv-scr__intro p:last-child{margin:0}
+
+@media (max-width:900px){
+  .cpv{grid-template-columns:minmax(0,1fr)}
+  .cpv__side{position:static}
+  .cpv-scr{max-height:400px}
+  .cpv-grid{grid-template-columns:minmax(0,1fr)}
+}

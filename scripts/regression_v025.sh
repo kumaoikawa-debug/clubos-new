@@ -76,3 +76,7 @@ python tests/ledger_date_filter_smoke.py
 # 自带临时库隔离（CLUBOS_DB_PATH 指到 clubos_plan_gear_test.db），不需要外部传入。
 python tests/plan_gear_discount_smoke.py
 python tests/commission_request_smoke.py
+# C 端「我的」页文案（联系我们 / 关于俱乐部）由俱乐部自定义（2026-10-23）：
+# 没填的字段不下发（不编造营业时间）、局部更新不清空另一块、脏输入清洗、内部列不泄漏。
+# 自带临时库隔离（clubos_cprofile_test.db），不需要外部传入。
+python tests/cprofile_smoke.py

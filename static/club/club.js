@@ -2335,13 +2335,14 @@ let SETTINGS_TAB='brand';
 const SET_TAB_LOAD={brand:()=>loadSettings(),
   leaders:async()=>{await loadLeaders()},
   biz:async()=>{await loadBizSection()},
+  cprofile:async()=>{await loadCProfile()},
   credits:async()=>{await loadCredits();await loadAIUsage()},
   pay:async()=>{await loadPayAccount()}};
 window.setTab=async name=>{
   if(!SET_TAB_LOAD[name])name='brand';
   SETTINGS_TAB=name;
   document.querySelectorAll('#setTabs .set-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('onclick')===`setTab('${name}')`));
-  ['brand','leaders','biz','credits','pay'].forEach(p=>{
+  ['brand','leaders','biz','cprofile','credits','pay'].forEach(p=>{
     const el=document.getElementById('pane-'+p);
     if(el)el.style.display=p===name?'':'none';
   });
@@ -2421,6 +2422,132 @@ async function removeClubLogo(){
   toast('已移除 Logo');
 }
 
+
+/* ===== C 端「我的」页文案：联系我们 / 关于俱乐部（2026-10-23）==================
+   C 端「我的」里那两页原来把占位文案写死在前端：服务时间 9:00-21:00、官网
+   topoutdoor.cn、简介「户外俱乐部一站式服务平台」。顾客看到的是别人的文案。
+   现在由老板自己填，右边**实时预览**顾客会看到的样子 —— 改一个字立刻能看到，
+   不用保存后再跑去 C 端对一遍。空字段在预览里画成虚线占位，因为后端只下发
+   有值的键：空着就是真的不显示，绝不拿默认值编造一个打不通的营业时间。 */
+let CP={contact:{},about:{}};
+function cpvVal(id){const el=document.getElementById(id);return el?String(el.value||'').trim():''}
+function cpvClubName(){return (document.getElementById('clubTopName')?.textContent||'俱乐部').trim()||'俱乐部'}
+
+async function loadCProfile(){
+  const box=$('#cProfileBody');if(!box)return;
+  box.innerHTML='<div class="empty">正在加载文案…</div>';
+  let r;
+  try{r=await api(`/api/club/${CLUB}/c-profile`,{cache:'no-store'})}
+  catch(e){loaderError('#cProfileBody',e,'文案读取失败');return}
+  CP=r.profile||{contact:{},about:{}};
+  const c=CP.contact||{},a=CP.about||{},hl=(a.highlights||[]).join('\n');
+  const name=cpvClubName(),slogan=(r.slogan||'').trim();
+  box.innerHTML=`<div class="cpv">
+  <div class="cpv__form">
+    <div class="cpv-card">
+      <div class="cpv-card__hd"><b>联系我们</b><span class="sub">C 端「我的 → 联系我们」</span></div>
+      <div class="cpv-grid">
+        <label class="cpv-f"><span>客服电话</span><input id="cpPhone" maxlength="30" value="${esc(c.phone||'')}" placeholder="138 0000 0000"><em>顾客点一下直接拨号</em></label>
+        <label class="cpv-f"><span>微信</span><input id="cpWechat" maxlength="40" value="${esc(c.wechat||'')}" placeholder="微信号 / 加群说明"><em>顾客可一键复制</em></label>
+        <label class="cpv-f"><span>邮箱</span><input id="cpEmail" maxlength="80" value="${esc(c.email||'')}" placeholder="hello@example.com"><em>格式不对保存会被拦下</em></label>
+        <label class="cpv-f"><span>服务时间</span><input id="cpHours" maxlength="60" value="${esc(c.hours||'')}" placeholder="每天 09:00 - 21:00"><em>不填 → C 端不显示这一行</em></label>
+        <label class="cpv-f cpv-f--wide"><span>门店 / 办公地址</span><input id="cpAddress" maxlength="80" value="${esc(c.address||'')}" placeholder="成都市武侯区××路 8 号 3 楼"></label>
+        <label class="cpv-f cpv-f--wide"><span>底部提示语</span><textarea id="cpNote" maxlength="300" rows="3" placeholder="例如：退改请在订单页发起，我们会在 24 小时内回复。">${esc(c.note||'')}</textarea><em>退改规则、响应时效这类话说在这里</em></label>
+      </div>
+    </div>
+    <div class="cpv-card">
+      <div class="cpv-card__hd"><b>关于俱乐部</b><span class="sub">C 端「我的 → 关于${esc(name)}」</span></div>
+      <div class="cpv-grid">
+        <label class="cpv-f cpv-f--wide"><span>一句话简介</span><input id="caTagline" maxlength="40" value="${esc(a.tagline||'')}" placeholder="${esc(slogan?('留空则用品牌口号：'+slogan):'例如：把周末还给山野')}"></label>
+        <label class="cpv-f"><span>成立年份</span><input id="caSince" maxlength="12" value="${esc(a.since||'')}" placeholder="2019"></label>
+        <label class="cpv-f"><span>官网</span><input id="caWebsite" maxlength="120" value="${esc(a.website||'')}" placeholder="topoutdoor.cn"><em>自动补全 https://</em></label>
+        <label class="cpv-f cpv-f--wide"><span>亮点标签</span><textarea id="caHighlights" maxlength="200" rows="3" placeholder="一行一条，最多 6 条&#10;本地领队 1:8 配比&#10;三年零事故">${esc(hl)}</textarea><em>一行一条，最多 6 条，每条 24 字内</em></label>
+        <label class="cpv-f cpv-f--wide"><span>详细介绍</span><textarea id="caIntro" maxlength="1500" rows="5" placeholder="俱乐部怎么来的、谁在带队、擅长什么线路……空一行分段">${esc(a.intro||'')}</textarea><em>空一行 = 新段落</em></label>
+      </div>
+    </div>
+    <div class="cpv-actions">
+      <button class="btn" type="button" onclick="saveCProfile()">保存文案</button>
+      <button class="btn secondary" type="button" onclick="loadCProfile()">放弃修改</button>
+      <span class="sub" id="cpSaveTip"></span>
+    </div>
+  </div>
+  <aside class="cpv__side">
+    <div class="cpv-phone">
+      <div class="cpv-phone__bar"><i></i><span>顾客看到的样子</span></div>
+      <div class="cpv-scr" id="cpvScr"></div>
+    </div>
+    <div class="sub cpv-hint">虚线 = 还没填，C 端不会显示这一行。</div>
+  </aside>
+</div>`;
+  box.querySelectorAll('input,textarea').forEach(el=>el.addEventListener('input',cpvRender));
+  cpvRender();
+}
+
+function cpvRender(){
+  const scr=document.getElementById('cpvScr');if(!scr)return;
+  const name=cpvClubName();
+  const phone=cpvVal('cpPhone'),wechat=cpvVal('cpWechat'),email=cpvVal('cpEmail'),
+        hours=cpvVal('cpHours'),address=cpvVal('cpAddress'),note=cpvVal('cpNote');
+  const tagline=cpvVal('caTagline'),since=cpvVal('caSince'),website=cpvVal('caWebsite'),
+        intro=cpvVal('caIntro'),hlText=cpvVal('caHighlights');
+  const hl=hlText.split('\n').map(t=>t.trim()).filter(Boolean).slice(0,6);
+  const row=(label,v)=>`<div class="cpv-scr__row"><span>${label}</span>${v?`<b>${esc(v)}</b>`:'<b class="cpv-scr__none">未填写</b>'}</div>`;
+  const introHtml=intro?intro.split(/\n{2,}/).map(t=>`<p>${esc(t)}</p>`).join(''):'<p class="cpv-scr__none">未填写</p>';
+  const acts=[phone?'📞 拨打电话':'',wechat?'💬 复制微信':''].filter(Boolean);
+  scr.innerHTML=`
+    <div class="cpv-scr__nav"><span>‹ 返回</span><b>联系我们</b><span></span></div>
+    <div class="cpv-scr__sec">
+      <div class="cpv-scr__hd"><span class="cpv-scr__ava">${esc(name.slice(0,1))}</span><div><b>${esc(name)}</b><em>${esc(tagline||'')}</em></div></div>
+      ${acts.length?`<div class="cpv-scr__acts">${acts.map(t=>`<span>${t}</span>`).join('')}</div>`:''}
+      <div class="cpv-scr__rows">
+        ${row('客服电话',phone)}${row('微信',wechat)}${row('邮箱',email)}${row('服务时间',hours)}${row('地址',address)}
+      </div>
+      ${note?`<div class="cpv-scr__note">${esc(note)}</div>`:'<div class="cpv-scr__note cpv-scr__none">底部提示语：未填写</div>'}
+    </div>
+    <div class="cpv-scr__nav cpv-scr__nav--plain"><span></span><b>关于${esc(name)}</b><span></span></div>
+    <div class="cpv-scr__sec">
+      <div class="cpv-scr__logo">${esc(name)}</div>
+      <div class="cpv-scr__tag">${tagline?esc(tagline):'<span class="cpv-scr__none">未填写（留空时用品牌口号）</span>'}</div>
+      ${hl.length?`<div class="cpv-scr__chips">${hl.map(t=>`<span>${esc(t)}</span>`).join('')}</div>`:''}
+      <div class="cpv-scr__intro">${introHtml}</div>
+      <div class="cpv-scr__rows">
+        ${row('成立',since?since+' 年':'')}${row('官网',website)}${row('版本','v0.25')}
+      </div>
+    </div>`;
+}
+
+function cpvApply(){
+  const c=CP.contact||{},a=CP.about||{};
+  const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||''};
+  set('cpPhone',c.phone);set('cpWechat',c.wechat);set('cpEmail',c.email);
+  set('cpHours',c.hours);set('cpAddress',c.address);set('cpNote',c.note);
+  set('caTagline',a.tagline);set('caSince',a.since);set('caWebsite',a.website);
+  set('caIntro',a.intro);set('caHighlights',(a.highlights||[]).join('\n'));
+  cpvRender();
+}
+
+async function saveCProfile(){
+  const tip=$('#cpSaveTip');if(tip)tip.textContent='';
+  const email=cpvVal('cpEmail');
+  if(email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){
+    showAlert({title:'邮箱格式不正确',message:'检查一下邮箱，或者直接留空 —— 留空 C 端就不显示这一行。'});return;
+  }
+  const digits=cpvVal('cpPhone').replace(/\D/g,'');
+  if(cpvVal('cpPhone') && digits.length<5){
+    showAlert({title:'客服电话太短',message:'至少 5 位数字，否则顾客照着拨不通。'});return;
+  }
+  const payload={contact:{phone:cpvVal('cpPhone'),wechat:cpvVal('cpWechat'),email:email,
+      hours:cpvVal('cpHours'),address:cpvVal('cpAddress'),note:cpvVal('cpNote')},
+    about:{tagline:cpvVal('caTagline'),intro:cpvVal('caIntro'),website:cpvVal('caWebsite'),
+      since:cpvVal('caSince'),highlights:cpvVal('caHighlights').split('\n').map(t=>t.trim()).filter(Boolean)}};
+  try{
+    const r=await api(`/api/club/${CLUB}/c-profile`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    CP=r.profile||payload;
+    cpvApply();            // 回填服务端归一化后的值（域名补 https、电话清洗）—— 存进去什么就显示什么
+    if(tip)tip.textContent='已保存 ✓';
+    toast('我的页文案已保存，C 端刷新即生效');
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
+}
 
 /* ===== 业务介绍（C 端「户外能力」页的可配置区 · 2026-09-29）=================
    很多俱乐部除了常规线路，还有团建、研学、企业团、装备租赁等业务。老板在这里开关并

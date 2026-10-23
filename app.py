@@ -21,6 +21,7 @@ from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config
                         update_platform_provider_config, test_provider_connection, effective_gateway_mode)
 from clubos_domain.club_analytics import ClubBusinessIntelligence
 from clubos_domain import club_biz
+from clubos_domain import c_profile
 from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine, GearRecommendService, LeaderRecommendService
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
@@ -1734,6 +1735,25 @@ def club_settings_put(club_id:int,payload:dict=Body(...)):
         c.execute(f'UPDATE clubs SET {sets} WHERE id=?',(*fields.values(),club_id))
     return {'ok':True,'updated':sorted(fields.keys())}
 
+# ── C 端「我的」页文案：联系我们 / 关于俱乐部 ────────────────────────────────
+# 顾客点开的两页原来全是前端写死的占位文案（9:00-21:00、v0.25、topoutdoor.cn）。
+# 现在由俱乐部自己定义；未填的字段不下发（见 c_profile.public_view），
+# C 端只在有值时渲染那一行 —— 不拿默认值编造营业时间。
+@app.get('/api/club/{club_id}/c-profile')
+def club_c_profile_get(club_id:int):
+    x=club_or_404(club_id)
+    return {'profile':c_profile.from_club(x),'slogan':x.get('slogan') or '',
+            'contactPhone':x.get('contact_phone') or ''}
+
+@app.put('/api/club/{club_id}/c-profile')
+def club_c_profile_put(club_id:int,payload:dict=Body(...)):
+    x=club_or_404(club_id)
+    try: cfg=c_profile.normalize(payload,c_profile.from_club(x))
+    except ValueError as e: raise HTTPException(400,str(e))
+    with conn() as c:
+        c.execute('UPDATE clubs SET c_profile_json=? WHERE id=?',(c_profile.dumps(cfg),club_id))
+    return {'ok':True,'profile':cfg}
+
 @app.post('/api/club/{club_id}/settings/logo')
 @app.post('/api/club/{club_id}/settings/logo.{ext}')
 async def club_settings_logo_upload(club_id:int,file:UploadFile=File(...),ext:str=''):
@@ -2589,7 +2609,12 @@ def public_club(club_id:int):
     # 业务介绍区：未配置或关闭 → None，C 端整节隐藏（空壳板块比没有板块更伤信任）。
     # 图片在这里就换成公开代理地址（生产 /static/uploads/* 是 404）。
     out.pop('biz_section_json',None)
+    # 演示环境走的是 dict(x) 全量下发，内部列要显式摘掉（生产走白名单，天然不含）
+    out.pop('c_profile_json',None)
     out['biz_section']=club_biz.public_json(club_id,x)
+    # 我的页文案（联系我们 / 关于）：只下发有值的字段，生产/演示同一套白名单，
+    # 避免「演示环境能显示、线上 401/缺字段」这种环境差异bug。
+    out['profile']=c_profile.public_view(x)
     return out
 
 @app.get('/api/club/{club_id}/biz-section')
