@@ -111,4 +111,53 @@ check('装备积分未被俱乐部改动',
 r = c.post(f'/api/club/1/members/{uid}/points', json={'kind': 'bad', 'amount': 10})
 check('其它非法类型仍 400', r.status_code == 400, r.text)
 
+# ── 6) 俱乐部自助订阅 SaaS 套餐（2026-10-24「在哪里订」逻辑闭环）─────────────
+con4 = db()
+row = con4.execute('SELECT id FROM clubs WHERE id NOT IN (SELECT club_id FROM club_ai_subscriptions) ORDER BY id LIMIT 1').fetchone()
+if row is None:
+    con4.execute("INSERT INTO clubs(name,status,plan) VALUES('订阅测试俱乐部','active','starter')")
+    con4.commit()
+    scid = con4.execute('SELECT last_insert_rowid()').fetchone()[0]
+else:
+    scid = row[0]
+
+r = ok('post', f'/api/club/{scid}/subscription/plan', json={'planCode': 'starter'}).json()
+check('自助订阅：订阅即刻 active', r['subscription']['status'] == 'active' and r['subscription']['plan_code'] == 'starter', r)
+check('自助订阅：自动生成当月待付款账单', r['billingOrder']['status'] == 'pending' and r['billingOrder']['order_type'] == 'subscription', r)
+first_order = r['billingOrder']['id']
+check('订阅账单金额=套餐月费', abs(float(r['billingOrder']['amount']) - float(plans['starter']['monthly_fee'])) < 1e-9, r['billingOrder'])
+con5 = db()
+check('clubs.plan 同步为 starter', con5.execute('SELECT plan FROM clubs WHERE id=?', (scid,)).fetchone()[0] == 'starter')
+check('月度额度同步为套餐额度',
+      con5.execute('SELECT monthly_quota FROM ai_credit_accounts WHERE club_id=?', (scid,)).fetchone()[0] == int(plans['starter']['monthly_credits']))
+
+r2 = ok('post', f'/api/club/{scid}/subscription/plan', json={'planCode': 'starter'}).json()
+check('同月同套餐重复订阅幂等（同一张账单）', r2['billingOrder']['id'] == first_order, (first_order, r2['billingOrder']['id']))
+
+r3 = ok('post', f'/api/club/{scid}/subscription/plan', json={'planCode': 'pro'}).json()
+check('同月换套餐：订阅切到 pro', r3['subscription']['plan_code'] == 'pro', r3['subscription'])
+check('同月换套餐：当月账单原位改写为 pro（金额同 pro 月费）',
+      r3['billingOrder']['id'] == first_order and r3['billingOrder']['plan_code'] == 'pro'
+      and abs(float(r3['billingOrder']['amount']) - float(plans['pro']['monthly_fee'])) < 1e-9, r3['billingOrder'])
+
+r = ok('get', f'/api/club/{scid}/credits').json()
+check('/credits 返回可订阅套餐列表（含折扣）', isinstance(r.get('plans'), list) and all('gear_discount' in p for p in r['plans']), len(r.get('plans') or []))
+pend = [o for o in r['pendingOrders'] if o['order_type'] == 'subscription']
+check('当月只挂一张订阅账单且为 pro', len(pend) == 1 and pend[0]['plan_code'] == 'pro' and pend[0]['status'] == 'pending',
+      [(o['plan_code'], o['status']) for o in pend])
+
+# 收款闸门仍在平台手里：俱乐部账单由平台 confirm-paid 后 Credits 才入账
+before_bal = con5.execute('SELECT balance FROM ai_credit_accounts WHERE club_id=?', (scid,)).fetchone()[0]
+pro_order = next(o['id'] for o in pend if o['plan_code'] == 'pro')
+ok('post', f'/api/platform/ai-credit/orders/{pro_order}/confirm-paid', json={'paymentRef': f'sub-{pro_order}'})
+con6 = db()
+after_bal = con6.execute('SELECT balance FROM ai_credit_accounts WHERE club_id=?', (scid,)).fetchone()[0]
+check('平台确认收款后 Credits 入账', after_bal == before_bal + int(plans['pro']['monthly_credits']), (before_bal, after_bal))
+check('账单状态转 paid', con6.execute('SELECT status FROM ai_credit_orders WHERE id=?', (pro_order,)).fetchone()[0] == 'paid')
+
+r = c.post(f'/api/club/{scid}/subscription/plan', json={'planCode': 'nope'})
+check('未知套餐 400', r.status_code == 400, r.text)
+r = c.post(f'/api/club/{scid}/subscription/plan', json={})
+check('缺 planCode 400', r.status_code == 400, r.text)
+
 print(f'PYTHON CHECKS: {len(PASS)} passed')

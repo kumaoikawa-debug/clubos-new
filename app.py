@@ -2190,9 +2190,11 @@ def credits(club_id:int):
     with conn() as c:
         st=ai_credit_engine.statement(c,club_id=club_id)
         st['topupPackages']=ai_credit_engine.topup_packages(c)
+        st['plans']=ai_credit_engine.plans(c)
         st['pendingOrders']=[x for x in ai_credit_engine.orders(c,club_id=club_id,limit=50) if x['status']=='pending']
         return {'account':st['account'],'ledger':st['ledger'][:60],'subscription':st['subscription'],'unresolvedDebt':st['unresolvedDebt'],
-                'creditsConsumed':st['creditsConsumed'],'successfulCalls':st['successfulCalls'],'topupPackages':st['topupPackages'],'pendingOrders':st['pendingOrders'],'period':st['period']}
+                'creditsConsumed':st['creditsConsumed'],'successfulCalls':st['successfulCalls'],'topupPackages':st['topupPackages'],
+                'plans':st['plans'],'pendingOrders':st['pendingOrders'],'period':st['period']}
 
 @app.get('/api/club/{club_id}/credits/statement')
 def club_credit_statement(club_id:int,period:str|None=None):
@@ -2208,6 +2210,25 @@ def club_credit_topup(club_id:int,payload:dict=Body(...)):
     if club.get('status')!='active': raise HTTPException(403,'俱乐部当前未启用，不能创建充值订单')
     with conn() as c:
         try:return ai_credit_engine.create_topup_order(c,club_id=club_id,package_code=str(payload.get('packageCode') or ''))
+        except ValueError as e: raise HTTPException(400,str(e))
+
+@app.post('/api/club/{club_id}/subscription/plan')
+def club_subscribe_plan(club_id:int,payload:dict=Body(...)):
+    """俱乐部自助订阅/更换 AI Credits 套餐（2026-10-24 用户问「俱乐部要订阅 SaaS 在哪里订」——
+    此前只有平台能代分配，俱乐部端没有入口，逻辑没通）。
+
+    与平台代分配（PATCH /api/platform/clubs/{id}/plan）走同一套账务 assign_plan：
+    订阅即刻生效并切换月度额度口径，同时生成当月「待付款」账单；
+    账单必须由总平台确认收款（confirm-paid）后 Credits 才真正入账——
+    俱乐部不能自己确认付款，「钱货两讫」的闸门仍然握在平台手里。
+    """
+    club=club_or_404(club_id)
+    if club.get('status')!='active': raise HTTPException(403,'俱乐部当前未启用，不能订阅套餐')
+    code=str(payload.get('planCode') or '').strip()
+    if not code: raise HTTPException(400,'planCode 必填')
+    with conn() as c:
+        try:return ai_credit_engine.assign_plan(c,club_id=club_id,plan_code=code,
+                                                auto_renew=bool(payload.get('autoRenew',True)))
         except ValueError as e: raise HTTPException(400,str(e))
 
 @app.get('/api/club/{club_id}/ai/usage')

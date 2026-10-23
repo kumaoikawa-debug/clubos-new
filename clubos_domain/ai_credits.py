@@ -316,7 +316,13 @@ class AICreditEngine:
             (club_id, plan_code, start, end, 1 if auto_renew else 0, float(plan["monthly_fee"]), int(plan["monthly_credits"])),
         )
         c.execute("UPDATE clubs SET plan=? WHERE id=?", (plan_code, club_id))
-        c.execute("UPDATE ai_credit_accounts SET monthly_quota=? WHERE club_id=?", (int(plan["monthly_credits"]), club_id))
+        # 账户行可能还不存在（自助订阅的俱乐部此前从没碰过 AI Credits）：
+        # 只 UPDATE 会对不存在的行静默 no-op，月度额度就丢了——必须 upsert。
+        c.execute(
+            """INSERT INTO ai_credit_accounts(club_id,balance,monthly_quota) VALUES(?,0,?)
+               ON CONFLICT(club_id) DO UPDATE SET monthly_quota=excluded.monthly_quota""",
+            (club_id, int(plan["monthly_credits"])),
+        )
         order = self.create_subscription_order(c, club_id=club_id, period_key=period)
         return {"subscription": self.subscription(c, club_id), "billingOrder": order}
 
@@ -325,18 +331,36 @@ class AICreditEngine:
         sub = self.subscription(c, club_id)
         if not sub or sub.get("status") != "active":
             raise ValueError("俱乐部尚未开通 AI Credits 套餐")
+        # 唯一索引 idx_ai_credit_subscription_period 保证每月只有一张订阅账单——
+        # 这是刻意的账务不变量，不在它之外硬塞第二张。自助订阅引入后「同月换套餐」
+        # 成为俱乐部的随手动作，语义按账单状态分两支：
+        #   · 同套餐 → 幂等返回原账单；
+        #   · 未付款 + 换套餐 → 账单**原位改写**为当前订阅套餐（金额/额度/备注），
+        #     避免同月挂着一张口径对不上的待付款账单；
+        #   · 已付款 + 换套餐 → 明确拒绝（差额要走平台），绝不静默错账。
         existing = c.execute(
             "SELECT * FROM ai_credit_orders WHERE club_id=? AND order_type='subscription' AND period_key=? LIMIT 1",
             (club_id, period),
         ).fetchone()
         if existing:
-            return dict(existing)
+            if existing["plan_code"] == sub["plan_code"]:
+                return dict(existing)
+            if existing["status"] == "paid":
+                raise ValueError(
+                    f"{period} 的套餐账单已付款；本月内换套餐的差额请联系总平台处理，下月账单将按新套餐计费"
+                )
+            c.execute(
+                """UPDATE ai_credit_orders SET plan_code=?,credits=?,amount=?,note=? WHERE id=?""",
+                (sub["plan_code"], int(sub["monthly_credits_snapshot"]),
+                 float(sub["monthly_fee_snapshot"]), f"{period} AI Credits 套餐 {sub['plan_code']}", existing["id"]),
+            )
+            return dict(c.execute("SELECT * FROM ai_credit_orders WHERE id=?", (existing["id"],)).fetchone())
         oid = f"aio_{uuid.uuid4().hex}"
         c.execute(
             """INSERT INTO ai_credit_orders(id,club_id,order_type,plan_code,credits,amount,period_key,status,note)
                VALUES(?,?,?,?,?,?,?,'pending',?)""",
             (oid, club_id, "subscription", sub["plan_code"], int(sub["monthly_credits_snapshot"]),
-             float(sub["monthly_fee_snapshot"]), period, f"{period} AI Credits 套餐"),
+             float(sub["monthly_fee_snapshot"]), period, f"{period} AI Credits 套餐 {sub['plan_code']}"),
         )
         return dict(c.execute("SELECT * FROM ai_credit_orders WHERE id=?", (oid,)).fetchone())
 
