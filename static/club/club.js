@@ -1107,9 +1107,22 @@ async function subscribePlan(code){
     await loadCredits();
   }catch(e){showAlert({title:'订阅失败',message:e.message})}
 }
+/* 顶栏品牌名：唯一真源是 clubs.name（平台端与俱乐部设置改的是同一列）。
+   历史实现把名字写死在 index.html 里、只在启动时覆盖一次 —— 改完名字当场看不到变化，
+   用户会判定「后台没同步」（2026-10-23 用户反馈）。现在：保存即刷新 + 本地缓存兜底。 */
+function applyClubName(name,opt){
+  const n=String(name||'').trim();if(!n)return;
+  const el=document.getElementById('clubTopName')||document.querySelector('.topbar .title');
+  if(el)el.textContent=n;
+  document.title=n+' · ClubOS 俱乐部经营';
+  if(!opt||opt.cache!==false){try{localStorage.setItem('clubos_club_name_'+CLUB,n)}catch(e){}}
+}
+window.applyClubName=applyClubName;
 async function startClub(){
   if(clubosCookie('clubos_csrf')){const me=await api('/api/auth/me');if(me.role!=='club')throw new Error('请使用俱乐部账号登录');CLUB=Number(me.clubId);}
-  try{const club=await api('/api/public/clubs/'+CLUB);if(club?.name){document.querySelector('.topbar .title').textContent=club.name;document.title=club.name+' · ClubOS 俱乐部经营';}}catch(e){}
+  // 先拿上次缓存的品牌名渲染，刷新时不会先闪一眼占位名
+  try{const cached=localStorage.getItem('clubos_club_name_'+CLUB);if(cached)applyClubName(cached,{cache:false})}catch(e){}
+  try{const club=await api('/api/public/clubs/'+CLUB,{cache:'no-store'});if(club?.name)applyClubName(club.name)}catch(e){}
   await loadDash();
   loadCreateEngine();
 }
@@ -2338,9 +2351,10 @@ async function loadSettings(){
   const box=$('#settingsBody');if(!box)return;
   box.innerHTML='<div class="empty">正在加载设置…</div>';
   let s;
-  try{s=await api(`/api/club/${CLUB}/settings`)}
+  try{s=await api(`/api/club/${CLUB}/settings`,{cache:'no-store'})}
   catch(e){loaderError('#settingsBody',e,'设置读取失败');return}
   clubLogoUrl=s.logoUrl||'';
+  applyClubName(s.name);   // 进设置页也校一次：顶栏永远等于后端当前名字
   box.innerHTML=`
   <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
     <label style="display:block"><span class="sub">俱乐部名称 *</span><input id="setName" maxlength="40" style="width:100%;margin-top:4px" value="${esc(s.name||'')}" placeholder="例如：远拓户外"></label>
@@ -2372,8 +2386,10 @@ async function saveClubSettings(){
     city:$('#setCity')?.value||'',contact_name:$('#setContact')?.value||'',contact_phone:$('#setPhone')?.value||''};
   try{
     await api(`/api/club/${CLUB}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    // 顶栏 / 浏览器标题当场跟着改：不等刷新，也不留「这里改了后台没同步」的错觉
+    applyClubName(payload.name);
     if(tip)tip.textContent='已保存 ✓';
-    toast('俱乐部设置已保存，C 端门面已同步');
+    toast('俱乐部设置已保存，顶栏与 C 端门面已同步');
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
 }
 async function uploadClubLogo(input){

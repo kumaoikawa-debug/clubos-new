@@ -195,7 +195,7 @@ window.loadOrders=loadOrders;
 /* ── 二级页栈 ─────────────────────────────────────────────────────────── */
 const meStack=[];
 const SUB_ME={};
-const SUB_ME_TITLE={myregs:'我的报名',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于远拓户外',membercard:'会员信息'};
+const SUB_ME_TITLE={myregs:'我的报名',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息'};
 const SUB_ME_AFTER={};
 function meStackOpen(){return meStack.length>0;}
 function meEnsureStack(){
@@ -216,7 +216,7 @@ function renderMeSub(){
   s.hidden=false;
   const sh=document.querySelector('.web-shell'); if(sh)sh.classList.add('me-sub-open');
   const top=meStack[meStack.length-1];
-  const title=document.getElementById('meSubTitle'); if(title)title.textContent=SUB_ME_TITLE[top.k]||'';
+  const title=document.getElementById('meSubTitle'); if(title)title.textContent=top.k==='about'?('关于'+((ME.club&&ME.club.name)||'俱乐部')):(SUB_ME_TITLE[top.k]||'');
   const body=document.getElementById('meSubBody');
   if(body){
     body.innerHTML=(typeof SUB_ME[top.k]==='function')?SUB_ME[top.k](top.param):'<div class="me-empty">页面不存在</div>';
@@ -390,7 +390,7 @@ SUB_ME.aftersale=function(){
 SUB_ME.service=function(){
   const c=ME.club||{};
   return `<div class="me-info">
-      <div class="me-info__row"><span>俱乐部</span><b>${esc(c.name||'远拓户外')}</b></div>
+      <div class="me-info__row"><span>俱乐部</span><b>${esc(c.name||'俱乐部')}</b></div>
       ${c.contact_phone?`<div class="me-info__row"><span>客服电话</span><a href="tel:${esc(c.contact_phone)}">${esc(c.contact_phone)}</a></div>`:''}
       ${c.wechat?`<div class="me-info__row"><span>微信</span><b>${esc(c.wechat)}</b></div>`:''}
       ${c.email?`<div class="me-info__row"><span>邮箱</span><b>${esc(c.email)}</b></div>`:''}
@@ -400,7 +400,7 @@ SUB_ME.service=function(){
 };
 SUB_ME.about=function(){
   return `<div class="me-about">
-      <div class="me-about__logo">远拓户外</div>
+      <div class="me-about__logo">${esc((ME.club&&ME.club.name)||'俱乐部')}</div>
       <p>户外俱乐部一站式服务平台</p>
       <div class="me-info__row"><span>版本</span><b>v0.25</b></div>
       <div class="me-info__row"><span>官网</span><b>topoutdoor.cn</b></div>

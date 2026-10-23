@@ -98,14 +98,14 @@ window.loadHome=async function(){
     if(hero)hero.innerHTML=list.length
       ?'<div class="w-hero__track">'+list.slice(0,5).map(homeSlide).join('')+'</div>'
         +(list.length>1?'<div class="w-hero__meter"><i></i></div><div class="w-hero__count"></div>':'')
-      :'<div class="w-hero__slide is-fallback"><div class="w-hero__media"></div><div class="w-hero__scrim"></div><div class="w-hero__copy"><div class="w-hero__eyebrow">远拓户外</div><h1>去户外，找到下一场。</h1><p class="w-hero__sub">俱乐部正在筹备新的线路，稍后再来看看。</p></div></div>';
+      :'<div class="w-hero__slide is-fallback"><div class="w-hero__media"></div><div class="w-hero__scrim"></div><div class="w-hero__copy"><div class="w-hero__eyebrow">'+(window.__clubName||'俱乐部')+'</div><h1>去户外，找到下一场。</h1><p class="w-hero__sub">俱乐部正在筹备新的线路，稍后再来看看。</p></div></div>';
     const t=hero&&hero.querySelector('.w-hero__track');
     if(t&&list.length>1)bindCaro(t,hero.querySelector('.w-hero__meter i'),hero.querySelector('.w-hero__count'));
     if(feed)feed.innerHTML=list.length?list.map(feedCard).join(''):'<div class="w-empty">俱乐部正在筹备新的活动，稍后再来看看。</div>';
   }catch(e){
     /* hero 不能停在骨架条：失败时降级成「去户外」兜底文案，整页仍是完整可用的视觉，
        而不是半屏灰条。feed 给明确失败提示 + 重新加载入口（复用原生 loadHome）。 */
-    if(hero)hero.innerHTML='<div class="w-hero__slide is-fallback"><div class="w-hero__media"></div><div class="w-hero__scrim"></div><div class="w-hero__copy"><div class="w-hero__eyebrow">远拓户外</div><h1>去户外，找到下一场。</h1><p class="w-hero__sub">网络开了小差，稍后再来看看。</p></div></div>';
+    if(hero)hero.innerHTML='<div class="w-hero__slide is-fallback"><div class="w-hero__media"></div><div class="w-hero__scrim"></div><div class="w-hero__copy"><div class="w-hero__eyebrow">'+(window.__clubName||'俱乐部')+'</div><h1>去户外，找到下一场。</h1><p class="w-hero__sub">网络开了小差，稍后再来看看。</p></div></div>';
     if(feed)feed.innerHTML='<div class="w-empty">活动加载失败，请稍后重试<button class="w-retry" type="button" onclick="loadHome()">重新加载</button></div>';
   }
 };
@@ -187,9 +187,14 @@ window.applyClubBrand=async function(){
   if(!c)return;
   const name=String(c.name||'').trim();
   if(name){
+    // 名称写进 window/localStorage：兜底文案与「关于 X」菜单项都用它，不再回落到写死的旧品牌
+    window.__clubName=name;
+    try{localStorage.setItem('clubos_club_name_'+CLUB,name)}catch(e){}
     const top=document.querySelector('.web-top strong');
     if(top)top.textContent=name;
     document.title=name;
+    document.querySelectorAll('[data-club-about]').forEach(function(el){el.textContent='关于'+name});
+    document.querySelectorAll('[data-club-foot]').forEach(function(el){el.textContent=name+' · MEMBER'});
   }
   const logo=String(c.logoUrl||'');
   if(logo){

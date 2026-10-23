@@ -477,7 +477,7 @@ function renderMall(){
   if(sub)sub.textContent=q
     ? `「${q}」匹配 ${list.length} 件 · 共 ${MALL_ALL.length} 件在售`
     : (MALL_CAT==='全部'
-        ? `远拓户外 · 共 ${MALL_ALL.length} 件在售`
+        ? `${window.__clubName||'俱乐部'} · 共 ${MALL_ALL.length} 件在售`
         : `${MALL_CAT} · 共 ${list.length} 件在售`);
 }
 /* 商品卡必须带 .web-card 类：experience-consumer.js 是按 `#publicProducts .web-card` 数商品张数的，
@@ -753,7 +753,7 @@ async function openProduct(id){
    ★ 页面每一行都得有真数据：眉题取分类、副题取货号、产品信息取库存与会员折扣、
      规格表取规格的库存与价格。参考稿那种「身高体重区间」我们库里没有，
      一律不画 —— 不拿假参数填版式。后台配了真实规格后，尺码行与规格表自动出现。 */
-function pdClubName(){return document.querySelector('.web-top strong')?.textContent||'远拓户外'}
+function pdClubName(){return document.querySelector('.web-top strong')?.textContent||window.__clubName||'俱乐部'}
 /* 商品推荐：同页其它**有图**的在售商品。没有就整块不画 —— 空标题比没有标题更难看。 */
 function pdRecCards(cur){
   const list=(MALL_ALL||[]).filter(x=>String(x.id)!==String(cur.id)&&productImages(x).length).slice(0,3);
@@ -1390,7 +1390,7 @@ function renderMeGrids(){
 function openMemberCard(){
   const box=$('#meCardBody');const src=$('#wme');
   const CARD=[
-    ['俱乐部',document.querySelector('.web-top strong')?.textContent||'远拓户外'],
+    ['俱乐部',document.querySelector('.web-top strong')?.textContent||window.__clubName||'俱乐部'],
     ['姓名',PAYER_NAME||'户外会员'],
     ['会员等级',$('#meTier')?.textContent||'普通会员'],
     ['活动积分',($('#clubPts')?.textContent||'—')+' 分'],

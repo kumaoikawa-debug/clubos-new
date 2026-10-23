@@ -1,4 +1,4 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>远拓户外</title>
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>俱乐部</title>
 <!-- 内联 SVG 图标：省掉 /favicon.ico 的 404（浏览器默认会去请求它）。
      用山形描边，和底部导航的图标同一套笔画。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121714'/%3E%3Cpath d='M3.5 23.5 12 11l4.6 7.6 3-4.8 8.9 9.7z' fill='none' stroke='%237fd0a4' stroke-width='2.1' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
@@ -13,7 +13,7 @@
 
   <header class="web-top">
     <button class="web-top__btn" type="button" onclick="wv('wactivities')" aria-label="搜索活动"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.4"/><path d="m16 16 4.2 4.2"/></svg></button>
-    <strong>远拓户外</strong>
+    <strong>俱乐部</strong>
     <!-- 购物车：只在装备页（.is-mall）或车里真有东西时出现（见 web.css .web-top__cart）。
          #cartBadge 是角标数字，renderCartBadge() 把它和父按钮的 .has 一起切显隐。 -->
     <button class="web-top__cart" type="button" onclick="openCart()" aria-label="购物车"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.3 11.4a1.5 1.5 0 0 0 1.5 1.2h8.4a1.5 1.5 0 0 0 1.5-1.2L21 7H6"/><circle cx="9.5" cy="20" r="1.1"/><circle cx="17" cy="20" r="1.1"/></svg><i class="web-top__badge" id="cartBadge" hidden>0</i></button>
@@ -164,12 +164,12 @@
           <span class="wme-li__tx">联系我们</span><i class="wme-li__ar">›</i></button>
         <button class="wme-li" type="button" onclick="pushMe('about')">
           <span class="wme-li__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.4"/><path d="M12 11v5.2"/><path d="M12 8.2h.01"/></svg></span>
-          <span class="wme-li__tx">关于远拓户外</span><i class="wme-li__ar">›</i></button>
+          <span class="wme-li__tx" data-club-about>关于俱乐部</span><i class="wme-li__ar">›</i></button>
         <button class="wme-li wme-li--out" type="button" onclick="meLogout()">
           <span class="wme-li__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.4 6.6V4.8H5.2v14.4h9.2v-1.8"/><path d="M11.4 12h8.2"/><path d="m16.6 8.8 3.2 3.2-3.2 3.2"/></svg></span>
           <span class="wme-li__tx">退出登录</span><i class="wme-li__ar">›</i></button>
       </div>
-      <div class="wme-foot">远拓户外 · MEMBER</div>
+      <div class="wme-foot" data-club-foot>俱乐部 · MEMBER</div>
     </section>
 
   </div>
@@ -187,9 +187,9 @@
 </div>
 
 <script src="/static/shared.js?v=20261018e"></script>
-<script src="/static/ux/clubos-cities.js?v=20261023a"></script><script src="/static/web/web.js?v=20261024a"></script>
-<script src="/static/web/web-biz.js?v=20261018c"></script>
-<script src="/static/web/me.js?v=20261024a"></script>
+<script src="/static/ux/clubos-cities.js?v=20261023a"></script><script src="/static/web/web.js?v=20261024e"></script>
+<script src="/static/web/web-biz.js?v=20261024e"></script>
+<script src="/static/web/me.js?v=20261024e"></script>
 <script src="/static/ux/clubos-ux.js?v=20261014a"></script>
 <script src="/static/ux/workflows-web.js?v=20261014a"></script>
 <script src="/static/ux/qr-local.js?v=20261014a"></script>
