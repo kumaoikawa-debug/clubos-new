@@ -66,6 +66,7 @@ async function meLoadAll(force){
 const meWallet   =()=> (ME.mc&&ME.mc.wallet)||{};
 const meTiers    =()=> (ME.mc&&ME.mc.tiers)||[];
 const meBenefits =()=> (ME.mc&&ME.mc.benefits)||[];
+const meGearDiscount=()=> (ME.mc&&ME.mc.gearDiscount)||null;
 const meActivity =()=> (ME.oc&&ME.oc.activityOrders)||[];
 const meGear     =()=> (ME.oc&&ME.oc.gearOrders)||[];
 const mePending  =()=> (ME.oc&&ME.oc.pendingOrders)||[];
@@ -316,13 +317,17 @@ SUB_ME.myregs=function(){
 };
 
 SUB_ME.member=function(){
-  const tiers=meTiers(), ben=meBenefits();
+  const tiers=meTiers(), ben=meBenefits(), gd=meGearDiscount();
+  /* 装备折扣随俱乐部订阅套餐（平台控制，2026-10-23 起等级不参与）：
+     作为一条横幅放在等级列表上方，逐等级的「装备 X 折」不再展示。 */
+  const gdHtml=gd&&gd.rate<1
+    ? `<div class="me-gd">装备商城 <b>${esc(gd.discountZhe)} 折</b><span>本俱乐部「${esc(gd.planName||'订阅套餐')}」套餐权益 · 购物车与结算自动生效</span></div>`
+    : '';
   const tHtml=tiers.map(t=>{
-    const disc=(t.gear_discount&&t.gear_discount<1)?(Math.round(t.gear_discount*1000)/10)+' 折':'原价';
     const cur=String((meWallet().memberLevel)||'');
     const isCur=cur&&String(t.name)===cur;
     return `<div class="me-tier-row${isCur?' on':''}">
-      <div class="me-tier-row__hd"><span class="me-tier-row__name">${esc(t.name)}</span>${isCur?'<i class="me-tier-row__cur">当前等级</i>':''}<span class="me-tier-row__disc">${disc}</span></div>
+      <div class="me-tier-row__hd"><span class="me-tier-row__name">${esc(t.name)}</span>${isCur?'<i class="me-tier-row__cur">当前等级</i>':''}</div>
       <div class="me-tier-row__cond">${esc(t.qualification_mode==='ANY'?'满足其一即可':'需同时满足')} · 消费满 ${money(t.min_activity_spend||0)} 或 参加 ${t.min_activity_count||0} 场</div>
     </div>`;
   }).join('');
@@ -334,7 +339,7 @@ SUB_ME.member=function(){
         <button class="me-btn" onclick="redeemBenefit(${b.id})">兑换</button>
       </div>
     </div>`).join(''):empty('暂无可兑换福利','');
-  return `<div class="me-sec-t">会员等级</div>${tHtml||empty('暂无等级')}<div class="me-sec-t">会员权益</div>${bHtml}`;
+  return `${gdHtml}<div class="me-sec-t">会员等级</div>${tHtml||empty('暂无等级')}<div class="me-sec-t">会员权益</div>${bHtml}`;
 };
 
 SUB_ME.address=function(){

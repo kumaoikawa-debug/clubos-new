@@ -69,3 +69,9 @@ python tests/city_dimension_smoke.py
 # /ai/usage/summary 按 task_type 拆分；旧 /credits 端点与 /ai/usage 旧 list 契约保留。
 # 自带临时库隔离（CLUBOS_DB_PATH 指到 clubos_ledger_test.db），不需要外部传入。
 python tests/ledger_date_filter_smoke.py
+# 装备折扣归属迁移 + 积分权限边界（2026-10-23 用户反馈两件事）：
+# ① 装备折扣从俱乐部会员等级迁到平台订阅套餐（ai_credit_plans.gear_discount），
+#    结算/会员中心/只读端点全部按套餐口径，等级接口收到 gearDiscount 一律忽略；
+# ② 俱乐部调积分只允许活动积分，kind=gear 一律 403（装备积分只能由总平台调整）。
+# 自带临时库隔离（CLUBOS_DB_PATH 指到 clubos_plan_gear_test.db），不需要外部传入。
+python tests/plan_gear_discount_smoke.py

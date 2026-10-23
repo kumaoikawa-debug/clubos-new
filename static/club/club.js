@@ -799,13 +799,17 @@ async function showParticipants(regId){
 
 async function loadMembers(){skel('#tierList',3);
   try{
-  let [a,tiers,benefits,reds]=await Promise.all([
+  let [a,tiers,benefits,reds,gd]=await Promise.all([
     api(`/api/club/${CLUB}/members`),api(`/api/club/${CLUB}/membership/tiers`),
-    api(`/api/club/${CLUB}/benefits`),api(`/api/club/${CLUB}/benefits/redemptions`)
+    api(`/api/club/${CLUB}/benefits`),api(`/api/club/${CLUB}/benefits/redemptions`),
+    api(`/api/club/${CLUB}/gear-discount`)
   ]);
   $('#memberRows').innerHTML=a.map(x=>`<tr class="member-row" onclick="openMember(${x.user_id})"><td>${esc(x.name)}</td><td><strong>${esc(x.level)}</strong></td><td>${x.activity_count||0}</td><td>${money(x.lifetime_activity_spend||0)}</td><td>${x.club_points_balance}</td><td>${x.gear_points}</td><td>${esc(x.phone||'')}</td><td><span class="sub">查看详情 ›</span></td></tr>`).join('')||'<tr><td colspan="8" class="empty">暂无会员</td></tr>';
-  _tiers=tiers;
-  $('#tierList').innerHTML=tiers.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)} <span class="tag">Rank ${x.rank}</span>${tierGearChip(x)}</div><div class="list-row__sub">活动消费 ≥ ${money(x.min_activity_spend)} · 活动次数 ≥ ${x.min_activity_count} · ${x.qualification_mode==='ALL'?'同时满足':'任一满足'}</div><div class="list-row__sub">${tierGearNote(x)}</div></div><div class="list-row__end"><button class="btn ghost" onclick="editTier(${x.id})">编辑</button></div></div>`).join('');
+  _tiers=tiers;_gearDiscount=gd||null;
+  /* 2026-10-23 起等级规则不含装备折扣：折扣由总平台按俱乐部订阅的套餐统一控制，
+     这里只展示一个套餐口径的说明，不再逐等级配/展示折扣。 */
+  $('#tierList').innerHTML=`<div class="sub" style="margin:-4px 0 13px;line-height:1.6">等级只定义「怎么升级」。装备商城折扣不随等级配置 —— 由总平台按本俱乐部订阅的套餐统一控制${gd&&gd.rate<1?`（当前 <strong>${esc(gd.planName||gd.planCode||'套餐')}</strong> ${esc(gd.discountZhe)} 折）`:''}。</div>`
+    +tiers.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)} <span class="tag">Rank ${x.rank}</span></div><div class="list-row__sub">活动消费 ≥ ${money(x.min_activity_spend)} · 活动次数 ≥ ${x.min_activity_count} · ${x.qualification_mode==='ALL'?'同时满足':'任一满足'}</div></div><div class="list-row__end"><button class="btn ghost" onclick="editTier(${x.id})">编辑</button></div></div>`).join('');
   $('#clubBenefitList').innerHTML=benefits.filter(x=>x.owner_type==='CLUB').map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${x.points_cost} 活动积分 · ${x.benefit_type==='activity_coupon'?`活动抵扣 ${money(x.cash_value)}`:esc(x.benefit_type)} · 成本由俱乐部承担 · 库存 ${x.stock==null?'不限':x.stock}</div></div></div>`).join('')||'<div class="empty">还没有俱乐部福利</div>';
   $('#clubBenefitRedemptions').innerHTML=reds.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name)}</div> · ${esc(x.title)}<div class="list-row__sub">${x.points_spent} ${x.point_type==='club'?'活动积分':'装备积分'} · ${x.funding_owner==='CLUB'?'俱乐部承担':'平台承担'} · ${esc(x.voucher_code||'')}</div></div></div>`).join('')||'<div class="empty">暂无兑换记录</div>';
   }catch(e){loaderError('#tierList',e,'客户与会员加载失败')}
@@ -813,7 +817,9 @@ async function loadMembers(){skel('#tierList',3);
 async function recalcMembership(){await api(`/api/club/${CLUB}/membership/recalculate`,{method:'POST'});toast('会员等级已重新计算');loadMembers()}
 
 /* 会员深度管理（2026-10-22 用户截图反馈：「点进去之后，应该查看到所有相关该用户的信息」）。
-   详情弹窗用 uxDialog 自定义 body：个人信息 / 积分（可调）/ 历史订单 / 优惠券（可赠）/ 积分流水。
+   详情弹窗用 uxDialog 自定义 body：个人信息 / 积分 / 历史订单 / 优惠券（可赠）/ 积分流水。
+   2026-10-23 起积分面板只允许调「活动积分」：装备积分是总平台体系积分（平台承担成本），
+   俱乐部无权调整 —— 界面上干脆不给入口，只读展示并标注「平台管理」。
    调积分与赠券两个写流程在 workflows-club.js（adjustMemberPoints / giftMemberVoucher），
    成功后回调 renderMemberDetail 原位刷新，不叠弹窗。 */
 window._memberDetailOv=null;
@@ -846,10 +852,23 @@ async function renderMemberDetail(ov,userId){
         <div class="sub" style="margin-top:6px">${d.tier?`当前等级「${esc(d.tier.name||'')}」`:'暂未达到任何等级规则'} · 活动 ${m.activity_count||0} 次 · 累计消费 ${money(m.lifetime_activity_spend||0)}</div>
       </div>
       <div class="card">
-        <div class="panel-title"><h3>积分</h3><span class="sub">调整会写积分流水</span></div>
-        <div class="grid g2">
-          <div class="stat-tile"><div class="k">活动积分</div><div class="v">${m.club_points_balance||0}</div><div class="hint">本俱乐部体系内使用</div><div style="margin-top:10px"><button class="btn secondary" onclick="adjustMemberPoints(${m.user_id},'club')">调整</button></div></div>
-          <div class="stat-tile"><div class="k">装备积分</div><div class="v">${m.gear_points||0}</div><div class="hint">ClubOS 平台体系</div><div style="margin-top:10px"><button class="btn secondary" onclick="adjustMemberPoints(${m.user_id},'gear')">调整</button></div></div>
+        <div class="panel-title"><h3>积分</h3><span class="sub">调整会写入积分流水</span></div>
+        <div class="pts-panel">
+          <div class="pts-main">
+            <div class="pts-main__meta">
+              <div class="pts-label">活动积分</div>
+              <div class="pts-hint">本俱乐部体系内使用 · 报名付款可直接抵扣</div>
+            </div>
+            <div class="pts-main__num">${m.club_points_balance||0}</div>
+            <button class="btn secondary pts-btn" onclick="adjustMemberPoints(${m.user_id},'club')">调整</button>
+          </div>
+          <div class="pts-sub">
+            <div class="pts-sub__meta">
+              <div class="pts-label">装备积分 <span class="pts-lock">🔒 平台管理</span></div>
+              <div class="pts-hint">ClubOS 平台体系 · 由总平台按订单发放与调整，俱乐部无权修改</div>
+            </div>
+            <div class="pts-sub__num">${m.gear_points||0}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -874,7 +893,7 @@ async function renderMemberDetail(ov,userId){
     </div>`;
 }
 
-async function loadMall(){ try{skel('#clubOrders',4);let [p,cs,sett,aftersales,tiers]=await Promise.all([api(`/api/club/${CLUB}/mall/products`),api(`/api/club/${CLUB}/mall/commission-summary`),api(`/api/club/${CLUB}/mall/settlements`),api(`/api/club/${CLUB}/mall/after-sales`),api(`/api/club/${CLUB}/membership/tiers`)]);const md=bestGearDiscount(tiers);$('#clubCommissionSummary').innerHTML=[['待签收',money(cs.pending)],['售后冻结',money(cs.frozen)],['可结算',money(cs.payableNow)],['已结算',money(cs.settled)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">${cs.carryDebt&&x[0]==='可结算'?`退款待冲抵 ${money(cs.carryDebt)}`:`售后期 ${cs.policy.afterSalesDays} 天`}</div></div>`).join('');$('#clubProducts').innerHTML=p.map(x=>`<div class="product" data-pid="${x.id}" role="button" tabindex="0" onclick="openClubProduct(${x.id})"><div class="ph">🎒</div><h4>${esc(x.name)}</h4><div class="sub">${esc(x.category||'户外装备')}</div>${memberPriceHtml(x.price,md)}<div class="sub">库存 ${x.stock} · 平台统一履约</div></div>`).join('');await loadMallOrders();await loadSettlementAccount();$('#clubAfterSales').innerHTML=aftersales.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.case_type)}</div> · 订单 #${x.order_id} <span class="tag">${esc(x.status)}</span><div class="list-row__sub">平台售后处理 · ${esc(x.reason||'')} · 申请退款 ${money(x.requested_refund_amount||0)}</div></div></div>`).join('')||'<div class="empty">暂无商城售后</div>';$('#clubSettlements').innerHTML=sett.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${money(x.net_amount)}</div> · ${esc(x.payment_ref)} <span class="tag">${x.status}</span><div class="list-row__sub">佣金 ${money(x.gross_amount)} · 退款冲抵 ${money(x.deduction_amount)} · ${esc(x.paid_at||x.created_at)}</div></div></div>`).join('')||'<div class="empty">暂无结算记录</div>';await loadInventory()}
+async function loadMall(){ try{skel('#clubOrders',4);let [p,cs,sett,aftersales,gd]=await Promise.all([api(`/api/club/${CLUB}/mall/products`),api(`/api/club/${CLUB}/mall/commission-summary`),api(`/api/club/${CLUB}/mall/settlements`),api(`/api/club/${CLUB}/mall/after-sales`),api(`/api/club/${CLUB}/gear-discount`)]);const md=(gd&&gd.rate<1)?{rate:gd.rate,tierName:gd.planName||'会员',discountZhe:gd.discountZhe}:null;$('#clubCommissionSummary').innerHTML=[['待签收',money(cs.pending)],['售后冻结',money(cs.frozen)],['可结算',money(cs.payableNow)],['已结算',money(cs.settled)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">${cs.carryDebt&&x[0]==='可结算'?`退款待冲抵 ${money(cs.carryDebt)}`:`售后期 ${cs.policy.afterSalesDays} 天`}</div></div>`).join('');$('#clubProducts').innerHTML=p.map(x=>`<div class="product" data-pid="${x.id}" role="button" tabindex="0" onclick="openClubProduct(${x.id})"><div class="ph">🎒</div><h4>${esc(x.name)}</h4><div class="sub">${esc(x.category||'户外装备')}</div>${memberPriceHtml(x.price,md)}<div class="sub">库存 ${x.stock} · 平台统一履约</div></div>`).join('');await loadMallOrders();await loadSettlementAccount();$('#clubAfterSales').innerHTML=aftersales.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.case_type)}</div> · 订单 #${x.order_id} <span class="tag">${esc(x.status)}</span><div class="list-row__sub">平台售后处理 · ${esc(x.reason||'')} · 申请退款 ${money(x.requested_refund_amount||0)}</div></div></div>`).join('')||'<div class="empty">暂无商城售后</div>';$('#clubSettlements').innerHTML=sett.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${money(x.net_amount)}</div> · ${esc(x.payment_ref)} <span class="tag">${x.status}</span><div class="list-row__sub">佣金 ${money(x.gross_amount)} · 退款冲抵 ${money(x.deduction_amount)} · ${esc(x.paid_at||x.created_at)}</div></div></div>`).join('')||'<div class="empty">暂无结算记录</div>';await loadInventory()}
 catch(e){loaderError('#clubOrders',e,'商城数据加载失败')}}
 /* ── 商城订单按日期筛选（2026-10-22 用户反馈「佣金明细太多，要按日期搜索」）────
    DB 时间戳是 UTC（SQLite CURRENT_TIMESTAMP 恒 UTC，线上服务器还是 GMT），
@@ -1862,39 +1881,19 @@ function lpRemoveLeader(id){removeLeader(id,0)}
    领队推荐为空时也不能什么都不显示（用户会以为是坏了）。
 --------------------------------------------------------------------------- */
 let _tiers=[];
-function gearRate(r){const v=Number((r||{}).gear_discount);return v>0&&v<1?v:0}
-function gearZhe(rate){const z=rate*10;return (Math.round(z*10)/10)+' 折'}
-function bestGearDiscount(tiers){
-  const use=(tiers||[]).filter(x=>gearRate(x)>0);
-  if(!use.length)return null;
-  use.sort((a,b)=>gearRate(a)-gearRate(b));      // 折扣越低（数字越小）越优惠
-  const t=use[0],rate=gearRate(t);
-  return {rate,tierName:t.name||'会员',discountZhe:Math.round(rate*1000)/100};
-}
-function tierGearChip(r){
-  const rate=gearRate(r);
-  return rate?`<span class="tier-gear">装备 ${esc(gearZhe(rate))}</span>`:'<span class="tier-gear tier-gear--off">装备无折扣</span>';
-}
-function tierGearNote(r){
-  const rate=gearRate(r);
-  if(!rate)return '装备商城按原价：会员在出行清单 / 装备商城里看不到会员价。点「编辑」可以设置折扣。';
-  const t=(_tiers||[]).find(x=>gearRate(x)&&gearRate(x)<rate);
-  return `装备商城 ${gearZhe(rate)}：这件等级在出行清单与装备商城里直接显示会员价${t?`（低于「${esc(t.name)}」的 ${esc(gearZhe(gearRate(t)))}）`:''}。`;
-}
+/* 2026-10-23 起装备折扣不配在会员等级上：由总平台按俱乐部订阅套餐统一控制，
+   俱乐部端只读（loadMembers 已拉 /gear-discount 存在 _gearDiscount 里）。 */
+let _gearDiscount=null;
 async function editTier(tierId){
   const r=(_tiers||[]).find(x=>Number(x.id)===Number(tierId));
   if(!r){showAlert({title:'读取等级失败',message:'请重新打开「客户会员」再试'});return}
-  const rate=gearRate(r);
   const d=await uxForm({title:'编辑会员等级 · '+(r.name||''),
-    subtitle:'装备商城折扣决定这个等级的会员在出行清单与商城里看到的会员价——「加入会员更便宜」要看得见才成立。',
+    subtitle:'等级只定义升级条件（活动消费 / 次数）。装备商城折扣由总平台按俱乐部订阅的套餐统一控制，不在等级里配置。',
     fields:[
       {name:'name',label:'等级名称',type:'text',required:true,value:r.name||''},
       {name:'rank',label:'等级顺序（数字越大等级越高）',type:'number',min:0,step:1,value:r.rank||0},
       {name:'minActivitySpend',label:'累计活动消费（元）',type:'number',min:0,step:1,value:r.min_activity_spend||0},
       {name:'minActivityCount',label:'累计活动次数',type:'number',min:0,step:1,value:r.min_activity_count||0},
-      {name:'gearDiscount',label:'装备商城折扣',type:'select',full:true,value:String(rate||1),
-        options:[{value:'1',label:'无折扣（按原价）'},{value:'0.95',label:'95 折'},{value:'0.9',label:'9 折'},
-                 {value:'0.85',label:'85 折'},{value:'0.8',label:'8 折'}]},
       {name:'qualificationMode',label:'升级条件',type:'select',full:true,value:r.qualification_mode||'ANY',
         options:[{value:'ANY',label:'任一满足'},{value:'ALL',label:'同时满足'}]}
     ],submitText:'保存'});
@@ -1904,7 +1903,7 @@ async function editTier(tierId){
     // 必须把 benefits 原样带回：接口是全量覆盖，漏传会把这条等级已有的权益清空。
     await api(`/api/club/${CLUB}/membership/tiers/${tierId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name:d.name,rank:d.rank,minActivitySpend:d.minActivitySpend,
-        minActivityCount:d.minActivityCount,gearDiscount:d.gearDiscount,
+        minActivityCount:d.minActivityCount,
         qualificationMode:d.qualificationMode,benefits})});
     toast('会员等级已更新');
     await loadMembers();

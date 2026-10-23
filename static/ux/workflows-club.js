@@ -75,15 +75,17 @@ const _refreshMemberDetail=userId=>{
   if(ov&&ov.isConnected)renderMemberDetail(ov,userId);
 };
 window.adjustMemberPoints=async(userId,kind)=>uxTask(async()=>{
-  const isClub=kind==='club';
-  const d=await uxForm({title:isClub?'调整活动积分':'调整装备积分',
+  /* 2026-10-23 起俱乐部只能调「活动积分」：装备积分是总平台体系积分，
+     界面上不再提供入口，后端对 kind=gear 也一律 403。 */
+  if(kind&&kind!=='club'){showAlert({title:'无法调整装备积分',message:'装备积分由 ClubOS 总平台统一调整，俱乐部只能调整活动积分。'});return}
+  const d=await uxForm({title:'调整活动积分',
     subtitle:'正数＝增加，负数＝扣减。每次调整都会写进该会员的积分流水；扣减不能超过当前余额。',
     fields:[{name:'amount',label:'调整数量（正数增加 / 负数扣减）',type:'number',step:1,required:true,value:100,help:'例：补偿 500 分填 500；纠错扣 200 分填 -200'},
            {name:'note',label:'调整原因',required:true,full:true,value:'投诉补偿',placeholder:'会显示在积分流水里，请写清楚原因'}],
     submitText:'确认调整'});
   if(!d||!d.amount)return;
-  const r=await post(`/api/club/${CLUB}/members/${userId}/points`,{kind,amount:Number(d.amount),note:d.note});
-  toast(`${isClub?'活动':'装备'}积分已调整，当前余额 ${r.balance}`);
+  const r=await post(`/api/club/${CLUB}/members/${userId}/points`,{kind:'club',amount:Number(d.amount),note:d.note});
+  toast(`活动积分已调整，当前余额 ${r.balance}`);
   _refreshMemberDetail(userId);
 });
 window.giftMemberVoucher=async userId=>uxTask(async()=>{

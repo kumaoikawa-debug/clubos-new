@@ -127,7 +127,9 @@ ref=ok('post','/api/commerce/events/refund-succeeded',headers={'x-clubos-commerc
     'eventKey':'v16-refund-success-1','refundRequestId':rid,'provider':'local','providerRefundId':'local_refund_1'
 }).json()
 assert ref['result']['commerceMirror']['status']=='synced'
-assert any(x[1]=='/admin/payments/pay_medusa_1/refund' and x[3] is True and x[2]['amount']==729 for x in calls)
+# 2026-10-23 起装备折扣随俱乐部订阅套餐（pro=0.95）：结算先按会员价降价再镜像退款，
+# 729 × 0.95 = 692.55，退款镜像必须等于顾客实付，而不是划线前的原价。
+assert any(x[1]=='/admin/payments/pay_medusa_1/refund' and x[3] is True and x[2]['amount']==round(729*0.95,2) for x in calls)
 with app.conn() as db:
     rrdb=dict(db.execute('SELECT * FROM refund_requests WHERE id=?',(rid,)).fetchone())
     godb=dict(db.execute('SELECT * FROM gear_orders WHERE id=?',(gear_id,)).fetchone())

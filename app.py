@@ -470,24 +470,21 @@ def _gear_plan_for(c,master:dict,club_id:int)->dict:
     候选集合只含商城里 status='active' 的真实商品，推荐引擎不做任何商品条目的生成或补全；
     清单里没有对应装备时如实标注，不凑一个相近的顶上（与媒体清单同一条纪律）。
 
-    会员价按本俱乐部在用的「最高档」会员折扣计算并随商品一起下发，让「加入会员更便宜」
-    这件事在出行清单上直接看得见，而不是藏在会员中心里。
+    会员价按本俱乐部订阅套餐的装备折扣计算并随商品一起下发（折扣由总平台按套餐控制，
+    会员等级不参与），让「加入会员更便宜」这件事在出行清单上直接看得见，而不是藏在会员中心里。
     """
     prods=rows(c.execute('SELECT id,name,price,stock,category,image_url FROM products WHERE status="active" ORDER BY id'))
     plan=gear_recommend.plan(prods,master).as_dict()
-    tier=row(c.execute("""SELECT name,gear_discount FROM club_member_tiers
-                          WHERE club_id=? AND status="active" AND gear_discount IS NOT NULL AND gear_discount<1
-                          ORDER BY rank DESC,id DESC LIMIT 1""",(club_id,)))
-    if tier:
-        rate=float(tier['gear_discount']); tier_name=str(tier['name'])
-        plan['memberDiscount']={'rate':round(rate,4),'discountZhe':round(rate*10,2),'tierName':tier_name,
-                                'label':f'{tier_name} {rate*10:g} 折'}
+    rate,plan_name,_=ai_credit_engine.plan_gear_rate(c,club_id)
+    if rate<1:
+        plan['memberDiscount']={'rate':round(rate,4),'discountZhe':round(rate*10,2),'planName':plan_name,
+                                'tierName':plan_name,'label':f'{plan_name} 套餐 {rate*10:g} 折'}
         picks=[p for it in (plan.get('items') or []) for p in (it.get('matches') or [])]
         picks+=list(plan.get('extras') or [])
         for p in picks:
             base=round(float(p.get('price') or 0),2); mp=round(base*rate,2)
             p['memberPrice']=mp; p['memberSavings']=round(base-mp,2)
-            p['memberDiscount']=round(rate,4); p['memberTierName']=tier_name
+            p['memberDiscount']=round(rate,4); p['memberTierName']=plan_name
     return plan
 
 
@@ -2062,6 +2059,18 @@ def club_recalculate_membership(club_id:int):
     with conn() as c: count=membership_engine.refresh_all(c,club_id)
     return {'ok':True,'membersUpdated':count}
 
+@app.get('/api/club/{club_id}/gear-discount')
+def club_gear_discount(club_id:int):
+    """本俱乐部当前生效的装备商城会员折扣（只读）。
+
+    折扣由总平台按俱乐部订阅的套餐统一控制（2026-10-23），会员等级不参与；
+    俱乐部端只用于展示（商城会员价、等级页说明），无任何修改入口。"""
+    club_or_404(club_id)
+    with conn() as c:
+        rate,name,code=ai_credit_engine.plan_gear_rate(c,club_id)
+    return {'rate':round(rate,4),'discountZhe':round(rate*10,2),'planName':name,'planCode':code,
+            'label':(f'{name} 套餐 {rate*10:g} 折' if rate<1 else '无折扣（按原价）')}
+
 @app.get('/api/club/{club_id}/benefits')
 def club_benefits(club_id:int):
     club_or_404(club_id)
@@ -2118,16 +2127,22 @@ def club_member_detail(club_id:int,user_id:int):
         vouchers=rows(c.execute('''SELECT r.*,b.title,b.benefit_type,b.description
                                    FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
                                    WHERE r.user_id=? AND r.display_club_id=? ORDER BY r.id DESC LIMIT 50''',(user_id,club_id)))
+        # 装备折扣随俱乐部订阅套餐（平台控制，等级不参与）：C 端会员中心直接展示这一个值。
+        grate,gname,gcode=ai_credit_engine.plan_gear_rate(c,club_id)
+        gear_discount={'rate':round(grate,4),'discountZhe':round(grate*10,2),'planName':gname,'planCode':gcode}
     return {'member':member,'tier':tier,'activityOrders':activity_orders,'gearOrders':gear_orders,
-            'clubLedger':club_ledger,'gearLedger':gear_ledger,'vouchers':vouchers}
+            'clubLedger':club_ledger,'gearLedger':gear_ledger,'vouchers':vouchers,'gearDiscount':gear_discount}
 
 @app.post('/api/club/{club_id}/members/{user_id}/points')
 def club_adjust_member_points(club_id:int,user_id:int,payload:dict=Body(...)):
-    """手工增减会员积分。正数加、负数扣；每次调整必写积分流水（type=manual_adjust），
-    余额不允许被调成负数。装备积分是平台体系积分，扣减时同样落 gear_point_ledger。"""
+    """手工增减会员**活动积分**。正数加、负数扣；每次调整必写积分流水（type=manual_adjust），
+    余额不允许被调成负数。
+    装备积分是 ClubOS 总平台体系积分（成本由平台承担），俱乐部无权调整（2026-10-23 用户明确）：
+    kind=gear 一律 403，只有平台侧能改 gear_point_accounts。"""
     club_or_404(club_id)
     kind=str(payload.get('kind') or 'club').lower()
-    if kind not in ('club','gear'): raise HTTPException(400,'积分类型只能是 club（活动积分）或 gear（装备积分）')
+    if kind=='gear': raise HTTPException(403,'装备积分由 ClubOS 总平台统一调整，俱乐部只能调整活动积分')
+    if kind!='club': raise HTTPException(400,'积分类型只能是 club（活动积分）；装备积分由总平台调整')
     try: amount=int(payload.get('amount') or 0)
     except (TypeError,ValueError): raise HTTPException(400,'调整数量必须是整数')
     if amount==0: raise HTTPException(400,'调整数量不能为 0')
@@ -2136,21 +2151,12 @@ def club_adjust_member_points(club_id:int,user_id:int,payload:dict=Body(...)):
     with conn() as c:
         mem=row(c.execute('SELECT club_points_balance FROM club_members WHERE club_id=? AND user_id=?',(club_id,user_id)))
         if not mem: raise HTTPException(404,'该用户还不是本俱乐部会员')
-        if kind=='club':
-            newbal=int(mem['club_points_balance'] or 0)+amount
-            if newbal<0: raise HTTPException(409,f'调整后活动积分为 {newbal}，不能为负；请先调小扣减数量')
-            c.execute('UPDATE club_members SET club_points_balance=? WHERE club_id=? AND user_id=?',(newbal,club_id,user_id))
-            c.execute('''INSERT INTO club_point_ledger(club_id,user_id,type,amount,source_type,source_id,note)
-                         VALUES(?,?,?,?,?,?,?)''',(club_id,user_id,'manual_adjust',amount,'manual','',note))
-        else:
-            acc=row(c.execute('SELECT balance FROM gear_point_accounts WHERE user_id=?',(user_id,)))
-            newbal=int((acc or {}).get('balance') or 0)+amount
-            if newbal<0: raise HTTPException(409,f'调整后装备积分为 {newbal}，不能为负；请先调小扣减数量')
-            if not acc: c.execute('INSERT INTO gear_point_accounts(user_id,balance) VALUES(?,?)',(user_id,newbal))
-            else: c.execute('UPDATE gear_point_accounts SET balance=? WHERE user_id=?',(newbal,user_id))
-            c.execute('''INSERT INTO gear_point_ledger(user_id,type,amount,source_type,source_id,note)
-                         VALUES(?,?,?,?,?,?)''',(user_id,'manual_adjust',amount,'manual','',note))
-    return {'ok':True,'kind':kind,'amount':amount,'balance':newbal}
+        newbal=int(mem['club_points_balance'] or 0)+amount
+        if newbal<0: raise HTTPException(409,f'调整后活动积分为 {newbal}，不能为负；请先调小扣减数量')
+        c.execute('UPDATE club_members SET club_points_balance=? WHERE club_id=? AND user_id=?',(newbal,club_id,user_id))
+        c.execute('''INSERT INTO club_point_ledger(club_id,user_id,type,amount,source_type,source_id,note)
+                     VALUES(?,?,?,?,?,?,?)''',(club_id,user_id,'manual_adjust',amount,'manual','',note))
+    return {'ok':True,'kind':'club','amount':amount,'balance':newbal}
 
 @app.post('/api/club/{club_id}/members/{user_id}/vouchers')
 def club_gift_member_voucher(club_id:int,user_id:int,payload:dict=Body(...)):
@@ -3673,8 +3679,11 @@ def public_member_center(club_id:int,user_id:int=1):
                                 FROM gear_order_items i JOIN gear_orders o ON o.id=i.order_id
                                 LEFT JOIN products p ON p.id=i.product_id
                                 WHERE o.user_id=? ORDER BY o.id DESC LIMIT 50''',(user_id,)))
+        # 装备折扣随俱乐部订阅套餐（平台控制，等级不参与）：C 端会员中心直接展示这一个值。
+        grate,gname,gcode=ai_credit_engine.plan_gear_rate(c,club_id)
+        gear_discount={'rate':round(grate,4),'discountZhe':round(grate*10,2),'planName':gname,'planCode':gcode}
     return {'member':member,'wallet':wallet,'benefits':benefits,'redemptions':redemptions,'tiers':tiers,
-            'activityHistory':history,'gearOwned':owned}
+            'activityHistory':history,'gearOwned':owned,'gearDiscount':gear_discount}
 
 @app.post('/api/public/clubs/{club_id}/benefits/{benefit_id}/redeem')
 def public_redeem_benefit(club_id:int,benefit_id:int,payload:dict=Body(...)):

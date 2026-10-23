@@ -374,9 +374,22 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
    否则空着看起来像功能坏了。 */
 .leader-recs--none{margin-top:9px}
 .leader-note{font-size:11.5px;color:#8a9a91;line-height:1.65}
-/* 会员等级的「装备商城折扣」：这个能力必须在设置处看得见、改得动，否则会员价无从配置。 */
-.tier-gear{font-size:11px;font-weight:800;color:#2f6b48;background:#eef5ec;border:1px solid #dcebdc;border-radius:999px;padding:2px 9px;margin-left:6px}
-.tier-gear--off{color:#8a9a91;background:#f4f6f3;border-color:#e8ece6;font-weight:600}
+/* 会员详情 · 积分面板（2026-10-23 重做）：
+   活动积分是俱乐部唯一可调的积分，做成主行（大数字 + 调整按钮）；
+   装备积分是平台体系积分，降为只读副行并明确标注「平台管理」—— 界面上不给调整入口。 */
+.pts-panel{display:flex;flex-direction:column;gap:10px;margin-top:2px}
+.pts-main{display:flex;align-items:center;gap:14px;padding:14px 16px;border:1px solid #d7e6d4;
+  border-radius:14px;background:linear-gradient(135deg,#eef5ec80,#f7faf6)}
+.pts-main__meta{flex:1;min-width:0}
+.pts-label{font-weight:800;font-size:13.5px;color:var(--text)}
+.pts-hint{font-size:11.5px;color:var(--muted);margin-top:3px;line-height:1.5}
+.pts-main__num{font-size:30px;font-weight:820;letter-spacing:-1px;font-variant-numeric:tabular-nums;color:var(--brand);white-space:nowrap}
+.pts-btn{flex:0 0 auto;min-height:34px;padding:7px 16px;font-size:12.5px}
+.pts-sub{display:flex;align-items:center;gap:14px;padding:11px 16px;border:1.5px dashed #dfe7de;border-radius:12px}
+.pts-sub__meta{flex:1;min-width:0}
+.pts-sub__num{font-size:18px;font-weight:750;font-variant-numeric:tabular-nums;color:#8a9a91;white-space:nowrap}
+.pts-lock{display:inline-block;font-size:10.5px;font-weight:750;color:#8a6d1f;background:#f6ecd6;
+  border-radius:999px;padding:1.5px 9px;margin-left:7px;vertical-align:1.5px;letter-spacing:.2px}
 /* 装备商城的会员价：与出行清单同一口径，避免同一件商品两处价格不一致。 */
 .product .price-was{font-size:12px;color:#9aa8a0;text-decoration:line-through;font-weight:600;margin-left:6px}
 .product .price-member{font-size:11px;font-weight:800;color:#2f6b48;margin-top:3px}

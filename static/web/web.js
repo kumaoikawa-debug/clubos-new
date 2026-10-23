@@ -1961,20 +1961,14 @@ async function loadMemberCenter(){
      旧文案「普通会员 · 已参加…」在 420px 宽下会被挤成两行、且「¥0」单独落一行。 */
   if($('#memberLevel'))$('#memberLevel').innerHTML=`已参加 ${w.activityCount||0} 场活动 · 累计活动消费 ${money(w.lifetimeActivitySpend||0)}`;
   renderMemberCard(w,d);
-  /* 会员等级权益：装备折扣是「加入会员更便宜」的唯一凭证，只在后台配置、C 端看不到
-     就等于没做。这里把当前折扣与「再消费能降到几折」讲清楚。 */
+  /* 会员权益：装备折扣由俱乐部订阅的套餐决定（平台控制，2026-10-23 起等级不参与）。
+     C 端把这一个值讲清楚即可，不再做「升级能降到几折」的推算 —— 那是套餐的事。 */
   if($('#memberTierPerks')){
-    const tiers=d.tiers||[],rate=t=>{const v=Number(t&&t.gear_discount);return v>0&&v<1?v:0};
-    const cur=tiers.find(t=>String(t.name||'')===String(w.memberLevel||''))||null;
-    const up=tiers.filter(t=>(Number(t.rank)||0)>(Number(cur&&cur.rank)||0)).sort((a,b)=>(Number(a.rank)||0)-(Number(b.rank)||0))[0]||null;
-    const on=rate(cur),lines=[];
+    const gd=d.gearDiscount||null,on=!!(gd&&gd.rate<1);
+    const lines=[];
     lines.push(on
-      ? `会员权益：装备商城 <b>${(Math.round(on*1000)/100)} 折</b> —— 在活动出行清单与装备商城里直接看到会员价。`
-      : '当前等级的装备商城按原价结算。');
-    const nu=rate(up);
-    /* 升级目标名已经在上面「升级条件」那行写过了，这里不重复念一遍等级名，
-       只补一条它给不出的信息：升上去以后折扣变成几折。没有折扣变化就不加这一句。 */
-    if(up&&nu&&(!on||nu<on))lines.push(`升级后装备商城折扣可降到 <b>${(Math.round(nu*1000)/100)} 折</b>。`);
+      ? `会员权益：装备商城 <b>${esc(gd.discountZhe)} 折</b>（${esc(gd.planName||'订阅套餐')} 套餐）—— 在活动出行清单与装备商城里直接看到会员价。`
+      : '装备商城按原价结算；装备折扣由平台按俱乐部订阅的套餐提供。');
     $('#memberTierPerks').innerHTML=lines.join(' ');
   }
   /* 福利条目做成「成本归属 + 积分成本 + 权益价值 + 兑换」四段，

@@ -13,9 +13,11 @@ class AICreditEngine:
     """
 
     DEFAULT_PLANS = [
-        ("starter", "Starter", 299.0, 3000, "适合刚开始使用 ClubOS AI 的俱乐部", 10),
-        ("pro", "Pro", 699.0, 10000, "适合持续运营活动与内容的俱乐部", 20),
-        ("enterprise", "Enterprise", 0.0, 30000, "组织级额度；价格由平台另行约定", 30),
+        # 末位是装备商城会员折扣（gear_discount）：折扣是套餐资产、由总平台控制，
+        # 俱乐部会员等级不再参与（2026-10-23）。Starter 无折扣 / Pro 9.5 折 / Enterprise 9 折。
+        ("starter", "Starter", 299.0, 3000, "适合刚开始使用 ClubOS AI 的俱乐部", 10, 1.0),
+        ("pro", "Pro", 699.0, 10000, "适合持续运营活动与内容的俱乐部", 20, 0.95),
+        ("enterprise", "Enterprise", 0.0, 30000, "组织级额度；价格由平台另行约定", 30, 0.90),
     ]
     DEFAULT_TOPUPS = [
         ("T1000", "1,000 Credits", 99.0, 1000, 10),
@@ -39,11 +41,11 @@ class AICreditEngine:
         return start.isoformat(), nxt.isoformat()
 
     def seed_defaults(self, c) -> None:
-        for code, name, fee, credits, description, sort_order in self.DEFAULT_PLANS:
+        for code, name, fee, credits, description, sort_order, gear_discount in self.DEFAULT_PLANS:
             c.execute(
-                """INSERT OR IGNORE INTO ai_credit_plans(code,name,monthly_fee,monthly_credits,description,status,sort_order)
-                   VALUES(?,?,?,?,?,'active',?)""",
-                (code, name, fee, credits, description, sort_order),
+                """INSERT OR IGNORE INTO ai_credit_plans(code,name,monthly_fee,monthly_credits,gear_discount,description,status,sort_order)
+                   VALUES(?,?,?,?,?,?,'active',?)""",
+                (code, name, fee, credits, gear_discount, description, sort_order),
             )
         for code, name, amount, credits, sort_order in self.DEFAULT_TOPUPS:
             c.execute(
@@ -217,15 +219,58 @@ class AICreditEngine:
         status = str(payload.get("status") or "active")
         if status not in {"active", "inactive"}:
             raise ValueError("套餐状态错误")
-        c.execute(
-            """INSERT INTO ai_credit_plans(code,name,monthly_fee,monthly_credits,description,status,sort_order,updated_at)
-               VALUES(?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
-               ON CONFLICT(code) DO UPDATE SET name=excluded.name,monthly_fee=excluded.monthly_fee,
-                 monthly_credits=excluded.monthly_credits,description=excluded.description,status=excluded.status,
-                 sort_order=excluded.sort_order,updated_at=CURRENT_TIMESTAMP""",
-            (code, name, fee, credits, str(payload.get("description") or ""), status, int(payload.get("sortOrder") or 100)),
-        )
+        # 装备商城折扣（平台资产）：不传表示「不改动」，避免误把已配好的折扣清回 1.0。
+        gear_raw = payload.get("gearDiscount")
+        gear_discount = None
+        if gear_raw not in (None, ""):
+            gear_discount = float(gear_raw)
+            if not 0 < gear_discount <= 1:
+                raise ValueError("装备折扣必须在 (0,1] 之间，1 表示无折扣，0.9 表示九折")
+        existing = c.execute("SELECT code FROM ai_credit_plans WHERE code=?", (code,)).fetchone()
+        if existing:
+            # 更新：gear_discount 用 COALESCE 保留旧值（None = 不改动）。
+            c.execute(
+                """UPDATE ai_credit_plans SET name=?,monthly_fee=?,monthly_credits=?,
+                     gear_discount=COALESCE(?,gear_discount),description=?,status=?,sort_order=?,
+                     updated_at=CURRENT_TIMESTAMP WHERE code=?""",
+                (name, fee, credits, gear_discount, str(payload.get("description") or ""), status,
+                 int(payload.get("sortOrder") or 100), code),
+            )
+        else:
+            # 新建：不传折扣按 1.0（无折扣）建档 —— 新套餐默认不打折，绝不自己造折扣。
+            c.execute(
+                """INSERT INTO ai_credit_plans(code,name,monthly_fee,monthly_credits,gear_discount,description,status,sort_order,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)""",
+                (code, name, fee, credits, 1.0 if gear_discount is None else gear_discount,
+                 str(payload.get("description") or ""), status, int(payload.get("sortOrder") or 100)),
+            )
         return dict(c.execute("SELECT * FROM ai_credit_plans WHERE code=?", (code,)).fetchone())
+
+    def plan_gear_rate(self, c, club_id: int) -> tuple[float, str, str]:
+        """该俱乐部当前生效套餐的装备折扣。返回 (折扣率, 套餐名, 套餐code)。
+
+        装备折扣是平台资产（2026-10-23 起）：由俱乐部订阅的套餐决定，会员等级不再参与。
+        优先取 active 订阅的 plan_code，退回 clubs.plan 兜底；查不到或值非法一律
+        1.0（不打折）—— 宁可不打折，也绝不自己造一个折扣出来。
+        """
+        try:
+            r = c.execute(
+                """SELECT p.gear_discount AS gd,p.name AS pn,p.code AS pc FROM clubs cl
+                   LEFT JOIN club_ai_subscriptions s ON s.club_id=cl.id AND s.status='active'
+                   LEFT JOIN ai_credit_plans p ON p.code=COALESCE(s.plan_code,cl.plan)
+                   WHERE cl.id=?""",(club_id,)).fetchone()
+        except Exception:
+            return 1.0, "", ""
+        rate, name, code = 1.0, "", ""
+        if r is not None:
+            raw = r["gd"] if "gd" in r.keys() else None
+            if raw is not None:
+                try:
+                    v = float(raw)
+                    if 0 < v <= 1: rate = v
+                except (TypeError, ValueError): pass
+            name = str(r["pn"] or ""); code = str(r["pc"] or "")
+        return rate, name, code
 
     def upsert_topup_package(self, c, payload: dict[str, Any]) -> dict[str, Any]:
         code = str(payload.get("code") or "").strip().upper()

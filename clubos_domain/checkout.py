@@ -75,20 +75,16 @@ class CheckoutEngine:
     def _member_gear_discount(self,c,*,club_id:int,user_id:int,gross:float=0.0):
         """返回 (折扣率, 折扣金额)。
 
-        会员等级是按俱乐部运营的，装备折扣 gear_discount 也配在俱乐部等级上
-        （1.0 无折扣 / 0.95 九五折）。查不到等级、或配了非法值，一律按原价 ——
+        装备折扣是平台资产（2026-10-23 起）：由该俱乐部**订阅的套餐**决定
+        （ai_credit_plans.gear_discount，总平台控制），会员等级不再参与。
+        只有本俱乐部会员才享受；查不到会员、查不到套餐或值非法，一律按原价 ——
         宁可不打折，也不能自己造一个折扣出来。
         """
         try:
-            r=c.execute('''SELECT t.gear_discount AS gd FROM club_members m
-                           JOIN club_member_tiers t ON t.id=m.current_tier_id
-                           WHERE m.user_id=? AND m.club_id=? AND t.status='active' ''',(user_id,club_id)).fetchone()
-            rate=1.0
-            if r is not None:
-                raw=r['gd'] if 'gd' in r.keys() else (r[0] if len(r) else None)
-                if raw is not None:
-                    v=float(raw)
-                    if 0<v<=1: rate=v
+            member=c.execute('SELECT 1 FROM club_members WHERE club_id=? AND user_id=?',(club_id,user_id)).fetchone()
+            if member is None:
+                return 1.0,0.0
+            rate=self.ai_credits.plan_gear_rate(c,club_id)[0] if self.ai_credits else 1.0
             gross=float(gross or 0.0)
             return rate,(round(gross*(1.0-rate),2) if rate<1 else 0.0)
         except Exception as e:
@@ -151,7 +147,7 @@ class CheckoutEngine:
     def create_gear_intent(self,c,*,club_id:int,user_id:int,items:list[dict],resolved_products:list[tuple[dict,int]],
                            requested_gear_points:int=0,voucher_codes:list[str]|None=None,address:dict|None=None):
         original=sum(float(p['price'])*q for p,q in resolved_products)
-        # 会员等级装备折扣：俱乐部后台按等级配置了 gear_discount（1.0 无折扣 / 0.95 九五折）。
+        # 会员装备折扣：由俱乐部订阅的套餐决定（平台控制，会员等级不参与）。
         # 之前这里根本没读它 —— C 端会员中心白纸黑字写着「装备商城 9.5 折」、
         # 商品页也写着「会员折扣自动生效」，结算却按原价收钱，
         # 等于向顾客承诺了一个并不存在的价格。折扣先于积分抵扣生效：
@@ -165,9 +161,9 @@ class CheckoutEngine:
                                 allow_club_points=False,allow_gear_points=True)
         intent_id=self._new_id()
         benefit_quote={'clubDiscount':0.0,'platformSubsidy':0.0,'totalDiscount':0.0,'applied':[],
-                       # 会员等级折扣由平台承担：装备订单本来就禁止用「俱乐部承担」的福利券
+                       # 套餐装备折扣由平台承担：装备订单本来就禁止用「俱乐部承担」的福利券
                        # （见下面的 clubDiscount 校验），俱乐部佣金仍按商品原价计提，
-                       # 俱乐部不会因自己把等级折扣设得大方而做到亏本。
+                       # 俱乐部改不了折扣（那是平台按套餐定的），更不会因此做到亏本。
                        # 单独列出来是为了让 C 端把它显示成一行「会员折扣」，而不是混在券里说不清。
                        'memberGearDiscount':member_discount,'memberGearDiscountRate':rate,
                        'grossAmount':round(original+member_discount,2)}

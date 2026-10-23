@@ -74,16 +74,15 @@ with app.conn() as dbc:
 check('积分流水：两条手工调整',len(led)==2 and led[0]['amount']==500 and led[1]['amount']==-200,[dict(x) for x in led])
 check('流水带原因',led[0]['note']=='投诉补偿',led[0]['note'])
 
-# ── 3) 积分手工调整（装备积分，账号不存在时自动建档）──
-r=ok('post',f'/api/club/1/members/{uid}/points',json={'kind':'gear','amount':300,'note':'平台活动赠送'}).json()
-check('装备积分 +300（自动建档）',r['balance']==300,r)
-r=ok('post',f'/api/club/1/members/{uid}/points',json={'kind':'gear','amount':-100,'note':'纠错'}).json()
-check('装备积分 -100',r['balance']==200,r)
-r=c.post(f'/api/club/1/members/{uid}/points',json={'kind':'gear','amount':-999999})
-check('装备积分扣成负数被拒（409）',r.status_code==409,r.text)
+# ── 3) 装备积分：俱乐部无权调整（2026-10-23 起只能由总平台调整，一律 403）──
+r=c.post(f'/api/club/1/members/{uid}/points',json={'kind':'gear','amount':300,'note':'尝试调装备积分'})
+check('俱乐部调装备积分被拒（403）',r.status_code==403,r.text)
+r=c.post(f'/api/club/1/members/{uid}/points',json={'kind':'gear','amount':-100})
+check('俱乐部扣装备积分同样被拒（403）',r.status_code==403,r.text)
 with app.conn() as dbc:
     gled=dbc.execute("SELECT type,amount FROM gear_point_ledger WHERE user_id=? AND type='manual_adjust' ORDER BY id",(uid,)).fetchall()
-check('装备积分流水两条',len(gled)==2 and gled[0]['amount']==300,[dict(x) for x in gled])
+    gbal=dbc.execute('SELECT balance FROM gear_point_accounts WHERE user_id=?',(uid,)).fetchone()
+check('装备积分余额/流水未被俱乐部改动',gled==[] and (gbal is None or int(gbal[0])==0),[dict(x) for x in gled])
 
 # ── 4) 赠券：俱乐部在营销里已生成的抵扣券 ──
 bid=ok('post','/api/club/1/benefits',json={'title':'会员日 ¥50 抵扣券','benefitType':'activity_coupon','pointsCost':3000,'cashValue':50,'stock':2,'description':'赠券测试'}).json()['benefitId']

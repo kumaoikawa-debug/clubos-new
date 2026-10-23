@@ -593,7 +593,8 @@ CREATE TABLE IF NOT EXISTS club_member_tiers (
   min_activity_count INTEGER NOT NULL DEFAULT 0,
   qualification_mode TEXT NOT NULL DEFAULT 'ANY',
   benefits_json TEXT NOT NULL DEFAULT '[]',
-  -- 装备商城会员折扣率：1.0 = 无折扣，0.9 = 九折。NULL = 尚未配置（由迁移按等级回填）。
+  -- ★ 已弃用（2026-10-23）：装备折扣改由 ai_credit_plans.gear_discount（俱乐部订阅套餐）决定，
+  --   会员等级不再参与。列仅为兼容保留，不再读写。
   gear_discount REAL,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1110,6 +1111,9 @@ CREATE TABLE IF NOT EXISTS ai_credit_plans (
   name TEXT NOT NULL,
   monthly_fee REAL NOT NULL DEFAULT 0,
   monthly_credits INTEGER NOT NULL DEFAULT 0,
+  -- 装备商城会员折扣率：由总平台按套餐统一控制（2026-10-23 起不再配在俱乐部会员等级上）。
+  -- 1.0 = 无折扣，0.95 = 九五折。该套餐下俱乐部的所有会员共用这一个折扣。
+  gear_discount REAL NOT NULL DEFAULT 1.0,
   description TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'active',
   sort_order INTEGER NOT NULL DEFAULT 100,

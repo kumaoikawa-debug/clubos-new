@@ -51,29 +51,23 @@ class MembershipEngine:
         import json
         benefits = payload.get('benefits') or []
         status = str(payload.get('status') or 'active')
-        # 装备商城会员折扣：不传表示「不改动」（避免误把已配置的折扣清成 NULL）
-        gear_raw = payload.get('gearDiscount')
-        if gear_raw in (None, ''):
-            gear_discount = None
-        else:
-            gear_discount = float(gear_raw)
-            if not 0 < gear_discount <= 1:
-                raise ValueError('装备商城会员折扣必须在 (0, 1] 之间，例如 0.9 表示九折')
+        # 装备折扣自 2026-10-23 起不再属于会员等级：等级只定义「怎么升级」，
+        # 折扣由总平台按俱乐部订阅的套餐统一控制（ai_credit_plans.gear_discount）。
+        # 老客户端传来的 gearDiscount 一律忽略，绝不落库。
         if tier_id:
             exists = c.execute('SELECT id FROM club_member_tiers WHERE id=? AND club_id=?', (tier_id, club_id)).fetchone()
             if not exists:
                 raise LookupError('会员等级不存在')
             c.execute('''UPDATE club_member_tiers SET name=?,rank=?,min_activity_spend=?,min_activity_count=?,
-                         qualification_mode=?,benefits_json=?,gear_discount=COALESCE(?,gear_discount),
+                         qualification_mode=?,benefits_json=?,
                          status=?,updated_at=CURRENT_TIMESTAMP
                          WHERE id=? AND club_id=?''',
-                      (name,rank,spend,count,mode,json.dumps(benefits,ensure_ascii=False),gear_discount,status,tier_id,club_id))
+                      (name,rank,spend,count,mode,json.dumps(benefits,ensure_ascii=False),status,tier_id,club_id))
             return tier_id
         c.execute('''INSERT INTO club_member_tiers(
-            club_id,name,rank,min_activity_spend,min_activity_count,qualification_mode,benefits_json,gear_discount,status)
-            VALUES(?,?,?,?,?,?,?,?,?)''',
-                  (club_id,name,rank,spend,count,mode,json.dumps(benefits,ensure_ascii=False),
-                   1.0 if gear_discount is None else gear_discount,status))
+            club_id,name,rank,min_activity_spend,min_activity_count,qualification_mode,benefits_json,status)
+            VALUES(?,?,?,?,?,?,?,?)''',
+                  (club_id,name,rank,spend,count,mode,json.dumps(benefits,ensure_ascii=False),status))
         return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
 
     def _qualifies(self, tier: dict[str, Any], *, spend: float, count: int) -> bool:

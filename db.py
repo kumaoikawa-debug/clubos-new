@@ -61,28 +61,27 @@ def _backfill_v021_finance(c):
     for r in c.execute('SELECT id FROM purchase_receipts ORDER BY received_at,id').fetchall():
         finance.register_receipt_payable(c,receipt_id=str(r['id']))
 
-def _backfill_gear_discount(c):
-    """给存量会员等级补一个「装备商城会员折扣」兜底值：等级越高折扣越低。
+def _backfill_plan_gear_discount(c):
+    """装备折扣从「俱乐部会员等级」迁到「平台订阅套餐」（2026-10-23 用户明确：
+    会员等级及规则不涉及装备折扣，折扣程度由该俱乐部订阅的套餐决定，总平台控制）。
 
-    按俱乐部分组、**按 rank 排序取档位**（最低档无折扣、第二档 95 折、第三档及以后 9 折），
-    而不是拿 rank 的绝对值当档位——本项目 rank 用的是 0/10/20 这种量级，
-    用绝对值判断会把银卡也算成 9 折（实测踩过这个坑）。
-
-    只补 NULL（= 从未配置过）的行，所以重复执行幂等，也绝不会覆盖俱乐部自己调过的比例。
+    一次性回填（platform_settings 标记防重跑）：Starter 无折扣 / Pro 9.5 折 / Enterprise 9 折，
+    正好对齐原「普通/银卡/金卡」三档。平台之后随时可以在套餐管理里改，迁移绝不再碰。
     """
-    ladder=(1.0,0.95,0.90)
-    for row in c.execute('SELECT DISTINCT club_id FROM club_member_tiers').fetchall():
-        cid=row[0]
-        tiers=c.execute('SELECT id,gear_discount FROM club_member_tiers WHERE club_id=? ORDER BY rank,id',(cid,)).fetchall()
-        for pos,t in enumerate(tiers):
-            if t['gear_discount'] is not None:
-                continue
-            rate=ladder[pos] if pos<len(ladder) else ladder[-1]
-            c.execute('UPDATE club_member_tiers SET gear_discount=? WHERE id=?',(rate,t['id']))
+    _ensure_column(c,'ai_credit_plans','gear_discount','gear_discount REAL NOT NULL DEFAULT 1.0')
+    done=c.execute("SELECT value FROM platform_settings WHERE key='plan_gear_discount_backfilled'").fetchone()
+    if done: return
+    for code,rate in (('starter',1.0),('pro',0.95),('enterprise',0.90)):
+        c.execute('UPDATE ai_credit_plans SET gear_discount=?,updated_at=CURRENT_TIMESTAMP WHERE code=?',(rate,code))
+    c.execute("INSERT INTO platform_settings(key,value) VALUES('plan_gear_discount_backfilled','1') "
+              "ON CONFLICT(key) DO UPDATE SET value='1'")
 
 
 def _backfill_v023_ai_credits(c):
     from clubos_domain.ai_credits import AICreditEngine
+    # seed_defaults 会写 gear_discount 列（装备折扣随套餐，2026-10-23）——
+    # 存量库必须先补列再播种，否则 INSERT 直接炸。
+    _ensure_column(c,'ai_credit_plans','gear_discount','gear_discount REAL NOT NULL DEFAULT 1.0')
     eng=AICreditEngine(); eng.seed_defaults(c)
     c.execute("INSERT OR IGNORE INTO platform_settings(key,value) VALUES('ai_usd_cny_rate','7.2')")
     # Preserve legacy club plan labels by mapping known plan codes. Existing balances are untouched.
@@ -442,15 +441,16 @@ def _run_compat_migrations(c):
     CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_detail_pending ON activity_detail_versions(activity_id) WHERE status='pending';
     ''')
     _ensure_column(c,'activity_detail_versions','status',"status TEXT NOT NULL DEFAULT 'ready'")
-    # v0.27：装备商城的会员折扣率、领队资源库与团期领队的关联列
-    _ensure_column(c,'club_member_tiers','gear_discount','gear_discount REAL')
+    # v0.27：领队资源库与团期领队的关联列。
+    # ★ club_member_tiers.gear_discount（装备折扣）已于 2026-10-23 弃用：
+    #   折扣改由 ai_credit_plans.gear_discount（俱乐部订阅套餐）决定，等级列保留但不再读写。
     _ensure_column(c,'occurrence_leaders','leader_id','leader_id INTEGER')
-    _backfill_gear_discount(c)
     _backfill_detail_versions(c)
     _backfill_v019_opening_inventory(c)
     _backfill_v020_warehouse(c)
     _backfill_v021_finance(c)
     _backfill_v023_ai_credits(c)
+    _backfill_plan_gear_discount(c)  # 必须在套餐 seed 之后：给已有套餐按档位回填装备折扣
     _backfill_media_urls(c)
     # v0.28 保险自动化：参加人参保/退保时间窗口 + 保费 + 审计表
     _ensure_column(c, 'registration_participants', 'effective_at', 'effective_at TEXT')
@@ -613,6 +613,7 @@ def init_db():
             _backfill_v020_warehouse(c)
             _backfill_v021_finance(c)
             _backfill_v023_ai_credits(c)
+            _backfill_plan_gear_discount(c)
             _backfill_v027_variants(c)
             # 必须挂在这个 return 之前：init_db 只要发现库里已经有 clubs
             # 就会提前返回，挂在后面等于给存量库迁移不到新列。
