@@ -2431,6 +2431,21 @@ def club_commission_summary(club_id:int):
     with conn() as c:
         summary=commission_engine.summary(c,club_id=club_id)
         summary['recentSettlements']=commission_engine.settlements(c,club_id=club_id)[:10]
+        summary['months']=commission_engine.monthly(c,club_id=club_id)
+        # 参考「推广费结算」模式：把起结门槛与「现在能不能申请」一并下发，
+        # 前端据此渲染申请按钮的可点性，而不是让俱乐部点了才吃 400。
+        threshold=float(summary['policy'].get('minSettlement',100) or 0)
+        summary['threshold']=round(threshold,2)
+        acct=row(c.execute("SELECT id FROM club_settlement_accounts WHERE club_id=? AND status='active'",(club_id,)))
+        summary['accountExists']=bool(acct)
+        if summary['payableNow']>=threshold and summary['payableNow']>0:
+            summary['canRequest']=True; summary['blockReason']=''
+        elif not acct and summary['payableNow']>0:
+            summary['canRequest']=False; summary['blockReason']='请先登记结算账户（法人卡/对公账户）'
+        elif summary['payableNow']<=0:
+            summary['canRequest']=False; summary['blockReason']='暂无可申请佣金：订单签收并过售后期后自动转入'
+        else:
+            summary['canRequest']=False; summary['blockReason']=f'未满 ¥{threshold:g} 起结门槛，还差 ¥{threshold-summary["payableNow"]:,.2f}'
         return summary
 
 @app.get('/api/club/{club_id}/mall/commissions')
@@ -2453,6 +2468,20 @@ def club_commission_ledger(club_id:int,status:str|None=None,date_from:str|None=N
 def club_commission_settlements(club_id:int):
     club_or_404(club_id)
     with conn() as c:return commission_engine.settlements(c,club_id=club_id)
+
+@app.post('/api/club/{club_id}/mall/settlement-requests')
+def club_request_settlement(club_id:int,payload:dict=Body(default={})):
+    """俱乐部主动申请佣金结算（参考「保险推广费结算」模式，2026-10-24）。
+
+    门槛/账户/流水三道闸都在引擎里：可申请净额须达到起结门槛（默认 ¥100）、
+    必须已登记结算账户、且当前没有进行中的申请。申请成功后对应佣金流水
+    进入 reserved（预留在该结算单上），平台核对账户打款（confirm_payout）后转已结算。
+    """
+    club=club_or_404(club_id)
+    if club.get('status')!='active': raise HTTPException(403,'俱乐部当前未启用，不能申请结算')
+    with conn() as c:
+        try:return commission_engine.request_settlement(c,club_id=club_id,note=str(payload.get('note') or ''))
+        except ValueError as e: raise HTTPException(409,str(e))
 
 # ── 佣金结算账户（法人卡 / 对公账户，2026-10-22 用户反馈）────────────────────
 # 平台给俱乐部结算佣金的前置条件：没提供账户就不能结算。一个俱乐部一条 active
@@ -4831,6 +4860,19 @@ def platform_create_settlement(payload:dict=Body(...)):
         r['payee']={'accountTypeCn':_SETTLEMENT_ACCOUNT_TYPES.get(acct['account_type'],acct['account_type']),
                     'holder':acct['holder'],'bankName':acct['bank_name'],'cardNoMasked':_mask_card(acct['card_no'])}
         return r
+
+@app.post('/api/platform/settlements/{settlement_id}/payout')
+def platform_confirm_settlement_payout(settlement_id:str,payload:dict=Body(...)):
+    """平台确认打款：俱乐部申请的结算单（requested）→ paid，预留佣金流水转已结算。
+
+    平台侧的动作语义与 settle_available 不同：钱对应的流水在俱乐部申请时就已锁定，
+    这里只补打款凭证——不复算、不重新圈流水，避免打款金额与申请金额对不上。
+    """
+    with conn() as c:
+        try:return commission_engine.confirm_payout(c,settlement_id=settlement_id,
+                                                    payment_ref=str(payload.get('paymentRef') or ''))
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(409,str(e))
 
 
 

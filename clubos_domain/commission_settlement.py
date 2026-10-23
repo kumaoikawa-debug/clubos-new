@@ -9,6 +9,9 @@ import uuid
 @dataclass(frozen=True)
 class CommissionPolicy:
     after_sales_days: int = 7
+    # 起结门槛（元）：可申请佣金不足时不允许发起结算——对齐主流推广费/佣金结算
+    # 平台的做法（满 100 才能提现），避免平台被碎片化的小额打款淹没。
+    min_settlement: float = 100.0
 
 
 class CommissionSettlementEngine:
@@ -26,7 +29,12 @@ class CommissionSettlementEngine:
             days = int(float(self.setting("commission_after_sales_days", 7) or 7))
         except Exception:
             days = 7
-        return CommissionPolicy(after_sales_days=max(0, min(days, 90)))
+        try:
+            minimum = float(self.setting("commission_min_settlement", 100) or 100)
+        except Exception:
+            minimum = 100.0
+        return CommissionPolicy(after_sales_days=max(0, min(days, 90)),
+                                min_settlement=max(0.0, minimum))
 
     @staticmethod
     def _parse_dt(value: str | None) -> datetime | None:
@@ -132,10 +140,12 @@ class CommissionSettlementEngine:
         available = float(by_status.get("available", 0) or 0)
         return {
             "clubId": club_id,
-            "policy": {"afterSalesDays": self.policy().after_sales_days},
+            "policy": {"afterSalesDays": self.policy().after_sales_days,
+                       "minSettlement": round(self.policy().min_settlement, 2)},
             "pending": round(float(by_status.get("pending", 0) or 0), 2),
             "frozen": round(float(by_status.get("frozen", 0) or 0), 2),
             "available": round(available, 2),
+            "reserved": round(float(by_status.get("reserved", 0) or 0), 2),
             "settled": round(float(by_status.get("settled", 0) or 0), 2),
             "reversedNet": round(float(by_status.get("reversed", 0) or 0), 2),
             "lifetimeEarned": round(earned, 2),
@@ -245,7 +255,10 @@ class CommissionSettlementEngine:
         if to_reverse <= 0:
             return {"reversed": 0.0, "futureOffset": 0.0, "idempotent": True}
 
-        settled_earn = sum(float(r.get("amount") or 0) for r in earn_rows if r.get("status") == "settled")
+        # reserved（俱乐部已申请、平台待打款）视同已结算：这笔佣金已经承诺要打给俱乐部，
+        # 退款不能把它从结算单里抽回来，只能进「下期负向冲抵」，与 settled 同一语义。
+        settled_earn = sum(float(r.get("amount") or 0) for r in earn_rows
+                           if r.get("status") in ("settled", "reserved"))
         unsettled_earn = max(0.0, earned - settled_earn)
         unsettled_reverse = min(to_reverse, unsettled_earn)
         settled_reverse = max(0.0, to_reverse - unsettled_reverse)
@@ -284,3 +297,99 @@ class CommissionSettlementEngine:
             args.append(club_id)
         sql += " ORDER BY s.created_at DESC,s.id DESC"
         return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+    # ── 俱乐部主动申请结算（2026-10-24 用户参考「保险推广费结算」模式）─────────
+    # 参考模型的三段式：可申请金额（带起结门槛）→ 俱乐部发起申请 → 平台核对账户打款。
+    # 申请单与结算单共用 commission_settlements 表：status='requested' 表示「俱乐部
+    # 已申请、等平台打款」，平台 confirm_payout 填 payment_ref 后转 'paid'。
+    # 申请即把对应佣金流水标为 'reserved'（预留在结算单上）——preview 只取
+    # status='available'，所以预留中的流水不会被重复申请/重复结算。
+
+    def request_settlement(self, c, *, club_id: int, note: str = "") -> dict[str, Any]:
+        policy = self.policy()
+        # 幂等在前：已有进行中的申请单（requested）时直接返回它——此时可申请流水
+        # 已全部 reserved、preview 必然为空，先查流水会把重复申请误判成「无流水」。
+        open_req = c.execute(
+            "SELECT * FROM commission_settlements WHERE club_id=? AND status='requested' ORDER BY id DESC LIMIT 1",
+            (club_id,),
+        ).fetchone()
+        if open_req:
+            return {**dict(open_req), "idempotent": True}
+        preview = self.preview(c, club_id=club_id)
+        net = float(preview["netAmount"] or 0)
+        if not preview["entries"]:
+            raise ValueError("当前没有可申请结算的佣金流水；佣金在订单签收并过售后期后转入可申请")
+        if net < policy.min_settlement:
+            raise ValueError(f"可申请佣金 ¥{net:,.2f} 未达到起结门槛 ¥{policy.min_settlement:g}，继续累计后再来申请")
+        acct = c.execute(
+            "SELECT id FROM club_settlement_accounts WHERE club_id=? AND status='active'", (club_id,)
+        ).fetchone()
+        if not acct:
+            raise ValueError("请先在「商城 · 结算账户」登记法人卡或对公账户，平台才能打款")
+        sid = "cst_" + uuid.uuid4().hex[:20]
+        # payment_ref 在 schema 里 NOT NULL UNIQUE：申请单先用占位凭证号 pending:{sid}
+        # （天然唯一），平台确认打款时被真实凭证号原位替换——不做表重建迁移。
+        c.execute(
+            """INSERT INTO commission_settlements(
+                 id,club_id,gross_amount,deduction_amount,net_amount,entry_count,status,payment_ref,note,created_by)
+               VALUES(?,?,?,?,?,?,'requested',?,?,?)""",
+            (sid, club_id, preview["grossAmount"], preview["deductionAmount"], net,
+             preview["entryCount"], f"pending:{sid}", note or "俱乐部主动申请结算", f"club:{club_id}"),
+        )
+        ids = [int(x["id"]) for x in preview["entries"]]
+        marks = ",".join("?" for _ in ids)
+        c.execute(
+            f"""UPDATE commission_ledger
+                SET status='reserved',settlement_id=?
+                WHERE id IN ({marks}) AND status='available' AND settlement_id IS NULL""",
+            [sid, *ids],
+        )
+        row = c.execute("SELECT * FROM commission_settlements WHERE id=?", (sid,)).fetchone()
+        return {**dict(row), "idempotent": False}
+
+    def confirm_payout(self, c, *, settlement_id: str, payment_ref: str) -> dict[str, Any]:
+        s = c.execute("SELECT * FROM commission_settlements WHERE id=?", (settlement_id,)).fetchone()
+        if not s:
+            raise LookupError("结算单不存在")
+        s = dict(s)
+        if s["status"] == "paid":
+            return {**s, "idempotent": True}
+        if s["status"] != "requested":
+            raise ValueError("当前结算单状态不可确认打款")
+        payment_ref = str(payment_ref or "").strip()
+        if not payment_ref:
+            raise ValueError("paymentRef 必填")
+        dup = c.execute("SELECT id FROM commission_settlements WHERE payment_ref=?", (payment_ref,)).fetchone()
+        if dup and str(dup[0]) != settlement_id:
+            raise ValueError("paymentRef 已被其他结算单使用")
+        c.execute(
+            "UPDATE commission_settlements SET status='paid',payment_ref=?,paid_at=CURRENT_TIMESTAMP WHERE id=?",
+            (payment_ref, settlement_id),
+        )
+        c.execute(
+            "UPDATE commission_ledger SET status='settled',settled_at=CURRENT_TIMESTAMP WHERE settlement_id=? AND status='reserved'",
+            (settlement_id,),
+        )
+        return {**dict(c.execute("SELECT * FROM commission_settlements WHERE id=?", (settlement_id,)).fetchone()),
+                "idempotent": False}
+
+    def monthly(self, c, *, club_id: int, limit: int = 12) -> list[dict[str, Any]]:
+        """按 +8 本地日历月汇总佣金：产生 / 冲抵 / 已结算 / 未结，用于结算页的按月明细表。
+
+        归月口径用 COALESCE(available_at, created_at)——佣金真正「归属」可支配的时间点，
+        与申请门槛看的是同一批钱，避免「这个月产生的佣金下个月才可申请」造成的对账困惑。
+        """
+        self.release_matured(c, club_id=club_id)
+        rs = c.execute(
+            """SELECT substr(COALESCE(available_at,created_at),1,7) ym,
+                      ROUND(COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0),2) earned,
+                      ROUND(COALESCE(SUM(CASE WHEN amount<0 THEN -amount ELSE 0 END),0),2) reversed,
+                      ROUND(COALESCE(SUM(CASE WHEN status='settled' THEN amount ELSE 0 END),0),2) settled,
+                      ROUND(COALESCE(SUM(CASE WHEN amount>0 THEN amount ELSE 0 END),0)
+                           -COALESCE(SUM(CASE WHEN amount<0 THEN -amount ELSE 0 END),0),2) net
+               FROM commission_ledger
+               WHERE club_id=? AND ledger_type IN ('earn','refund_reverse')
+               GROUP BY ym ORDER BY ym DESC LIMIT ?""",
+            (club_id, max(1, min(int(limit), 36))),
+        ).fetchall()
+        return [dict(r) for r in rs]

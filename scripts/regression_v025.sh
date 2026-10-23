@@ -75,3 +75,4 @@ python tests/ledger_date_filter_smoke.py
 # ② 俱乐部调积分只允许活动积分，kind=gear 一律 403（装备积分只能由总平台调整）。
 # 自带临时库隔离（CLUBOS_DB_PATH 指到 clubos_plan_gear_test.db），不需要外部传入。
 python tests/plan_gear_discount_smoke.py
+python tests/commission_request_smoke.py
