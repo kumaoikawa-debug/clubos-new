@@ -628,3 +628,20 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
   .led-dates input[type=date]{flex:1;min-width:0}
   .led-row__note{white-space:normal}
 }
+
+/* ── 活动执行中心（俱乐部端「活动执行」视图，2026-10-24）：筛选条复用 .led-*，
+   团期行沿用 led 行语言（hover 反馈 + 三段信息：标题/行程/执行计数）。 ── */
+.exe-row{padding:11px 6px;border-bottom:1px solid #f1f4f0;border-radius:8px;cursor:pointer;
+  animation:ledIn .26s ease both;transition:background .15s}
+.exe-row:hover{background:#f6faf4}
+.exe-row:active{background:#eef5ec}
+.exe-row:last-child{border-bottom:0}
+.exe-row__hd{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.exe-row__hd strong{font-size:13.5px;color:var(--text);line-height:1.45}
+.exe-row__hd .tag{flex:none}
+.exe-row__meta{font-size:12px;color:var(--muted);margin-top:3px}
+.exe-row__ct{font-size:11.5px;color:var(--muted);margin-top:3px;font-variant-numeric:tabular-nums}
+.exe-row__ct b{color:var(--danger);font-weight:700}
+.led-dates select{border:1px solid var(--line);border-radius:10px;background:#fff;
+  padding:6px 9px;font-family:inherit;font-size:12px;color:var(--text);min-height:32px}
+@media (max-width:760px){.led-dates select{flex:1;min-width:0}}

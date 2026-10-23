@@ -1099,13 +1099,88 @@ async function loadCreateEngine(){
 startClub().catch(err=>{showAlert({title:'无法进入俱乐部后台',message:err.message});setTimeout(()=>location.href='/login',1800)});
 
 
-// v0.13 Activity Execution Center
-let currentExecutionOccurrence=null;
+// v0.13 Activity Execution Center（2026-10-24 重做：出发日期/执行状态筛选 + 区间汇总 +
+//   按出发日分组——复用 AI Credits 明细的 .led-* 组件体系，长列表不再是无位置感的平铺。
+//   start_at 是自由文本（有 '2026-10-xx' 这类占位），取前 10 位解析日期；
+//   解析不出的归入「未定档期」组永远展示，任何筛选下都不会把团期悄悄藏没。）
+let _exeAll=null,currentExecutionOccurrence=null;
 const execStateLabel={preparing:'准备中',departed:'已出发',in_progress:'进行中',completed:'已完成'};
+const EXE_QUICK=[{k:'upcoming',label:'即将到来'},{k:'7d',label:'近 7 天'},{k:'30d',label:'近 30 天'},{k:'month',label:'本月'},{k:'past',label:'历史团期'},{k:'all',label:'全部'}];
+const EXE_STATES=[{k:'',label:'全部状态'},{k:'preparing',label:'准备中'},{k:'departed',label:'已出发'},{k:'in_progress',label:'进行中'},{k:'completed',label:'已完成'}];
+let EXE_ST=null;
+function exeSt(){if(!EXE_ST)EXE_ST={k:'upcoming',from:'',to:'',status:''};return EXE_ST}
+function exeDayOf(o){const m=/^(\d{4}-\d{2}-\d{2})/.exec(String(o.start_at||'').trim());return m?m[1]:''}
+function exeRangeOf(k){
+  const t=localDay(0);
+  if(k==='upcoming')return{from:t,to:''};
+  if(k==='7d')return{from:t,to:localDay(7)};
+  if(k==='30d')return{from:t,to:localDay(30)};
+  if(k==='month'){const first=t.slice(0,8)+'01',y=+t.slice(0,4),m=+t.slice(5,7);
+    const last=new Date(Date.UTC(y,m,0)).getUTCDate();
+    return{from:first,to:t.slice(0,8)+String(last).padStart(2,'0')}}
+  if(k==='past')return{from:'',to:localDay(-1)};
+  return{from:'',to:''};
+}
+function exeDayLabel(d){
+  const t=localDay(0);
+  if(d===t)return'今天出发';
+  if(d===localDay(1))return'明天出发';
+  if(d===localDay(2))return'后天出发';
+  const wk='日一二三四五六'[new Date(d+'T00:00:00Z').getUTCDay()];
+  const md=(+d.slice(5,7))+'月'+(+d.slice(8,10))+'日';
+  return (d.slice(0,4)===t.slice(0,4)?'':d.slice(0,4)+'年')+md+' 周'+wk+' 出发';
+}
+function exeFiltered(){
+  const st=exeSt(),rg=st.k==='custom'?{from:st.from||'',to:st.to||''}:exeRangeOf(st.k);
+  const list=[],unknown=[];
+  for(const o of (_exeAll||[])){
+    if(st.status&&(o.execution_status||'preparing')!==st.status)continue;
+    const d=exeDayOf(o);
+    if(!d){unknown.push(o);continue}
+    if((rg.from&&d<rg.from)||(rg.to&&d>rg.to))continue;
+    list.push(o);
+  }
+  list.sort((a,b)=>exeDayOf(a).localeCompare(exeDayOf(b))||(a.id-b.id));
+  unknown.sort((a,b)=>a.id-b.id);
+  return{list,unknown};
+}
+function exeSumHtml(f){
+  const s=f.list.concat(f.unknown).reduce((a,o)=>{a.sold+=o.sold||0;a.named+=o.named_participants||0;a.inc+=o.incomplete_participants||0;a.ins+=o.insurance_pending||0;a.ck+=o.checked_in||0;return a},{sold:0,named:0,inc:0,ins:0,ck:0});
+  const n=f.list.length+f.unknown.length;
+  return `<div class="led-sum"><span>团期 <b>${n}</b></span><span>售出 <b>${s.sold}</b></span><span>实名 <b>${s.named}</b></span><span class="${s.inc?'bad':''}">资料待补 <b>${s.inc}</b></span><span class="${s.ins?'bad':''}">保险待处理 <b>${s.ins}</b></span><span>已签到 <b>${s.ck}</b></span></div>`;
+}
+function exeBarHtml(){
+  const st=exeSt();
+  return `<div class="led-bar"><div class="led-chips">${EXE_QUICK.map(q=>`<button class="led-chip ${st.k===q.k?'on':''}" onclick="exeQuick('${q.k}')">${q.label}</button>`).join('')}</div><div class="led-dates"><select onchange="exeStatus(this.value)">${EXE_STATES.map(s=>`<option value="${s.k}" ${st.status===s.k?'selected':''}>${s.label}</option>`).join('')}</select><input type="date" value="${st.from}" onchange="exeCustom()"><span class="led-dates__sep">至</span><input type="date" value="${st.to}" onchange="exeCustom()"></div></div>`;
+}
+function exeRow(o){
+  const stKey=o.execution_status||'preparing';
+  const exl=execStateLabel[stKey]||stKey;
+  const raw=String(o.start_at||'').trim();
+  const day=exeDayOf(o);
+  const tpart=day&&raw.length>10?raw.slice(10).replace(/^[\s至]+/,'').trim():'';
+  const when=day?(tpart?tpart+' · ':''):(raw?esc(raw)+' · ':'');
+  return `<div class="exe-row" onclick="openExecution(${o.id})"><div class="exe-row__hd"><strong>${esc(o.activity_title)}</strong><span class="tag ${stKey==='completed'?'':'orange'}">${esc(exl)}</span></div><div class="exe-row__meta">${o.label?esc(o.label)+' · ':''}${when}${money(o.price)} · 售出 ${o.sold}/${o.capacity}${o.activity_location?` · ${esc(o.activity_location)}`:''}</div><div class="exe-row__ct">实名 ${o.named_participants||0} · 资料待补 ${o.incomplete_participants||0} · 保险待处理 ${o.insurance_pending||0} · 已签到 ${o.checked_in||0}</div></div>`;
+}
+function renderExe(){
+  const f=exeFiltered();
+  $('#exeBar').innerHTML=exeBarHtml();
+  $('#exeSum').innerHTML=(f.list.length+f.unknown.length)?exeSumHtml(f):'';
+  const parts=[];
+  let cur=null,rows=[];
+  const pushGroup=()=>{if(cur!==null&&rows.length){parts.push(`<div class="led-day"><span class="led-day__label">${esc(exeDayLabel(cur))}</span><span class="led-day__sum">${rows.length} 个团期 · 售出 ${rows.reduce((a,o)=>a+(o.sold||0),0)}</span></div>`+rows.map(exeRow).join(''))}};
+  for(const o of f.list){const d=exeDayOf(o);if(d!==cur){pushGroup();cur=d;rows=[]}rows.push(o)}
+  pushGroup();
+  if(f.unknown.length)parts.push(`<div class="led-day"><span class="led-day__label">未定档期</span><span class="led-day__sum">${f.unknown.length} 个团期</span></div>`+f.unknown.map(exeRow).join(''));
+  $('#executionOccurrenceList').innerHTML=parts.join('')||'<div class="empty">所选范围内暂无团期；切「全部」可查看历史与未定档期团期。</div>';
+}
+function exeQuick(k){const st=exeSt();st.k=k;renderExe()}
+function exeStatus(v){const st=exeSt();st.status=v;renderExe()}
+function exeCustom(){const st=exeSt();const ds=document.querySelectorAll('#exeBar input[type=date]');st.from=ds[0]?ds[0].value:'';st.to=ds[1]?ds[1].value:'';st.k='custom';renderExe()}
 async function loadExecution(){skel('#executionOccurrenceList',4);
   try{
-  let list=await api(`/api/club/${CLUB}/execution/occurrences`);
-  $('#executionOccurrenceList').innerHTML=list.map(o=>`<div class="notice" style="margin-bottom:10px;cursor:pointer" onclick="openExecution(${o.id})"><div class="panel-title"><div><strong>${esc(o.activity_title)}</strong><div class="sub">${esc(o.label||o.start_at)} · ${money(o.price)} · 售出 ${o.sold}/${o.capacity}</div></div><span class="tag ${o.execution_status==='completed'?'':'orange'}">${execStateLabel[o.execution_status||'preparing']||esc(o.execution_status)}</span></div><div class="sub">实名 ${o.named_participants||0} · 资料待补 ${o.incomplete_participants||0} · 保险待处理 ${o.insurance_pending||0} · 已签到 ${o.checked_in||0}</div></div>`).join('')||'<div class="empty">暂无团期</div>';
+  _exeAll=await api(`/api/club/${CLUB}/execution/occurrences`);
+  renderExe();
   }catch(e){loaderError('#executionOccurrenceList',e,'活动执行加载失败')}
 }
 async function openExecution(oid){
