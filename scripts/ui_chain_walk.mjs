@@ -61,14 +61,18 @@ for (const end of ENDS) {
   page.on("response", r => { if (r.status() >= 400) badResp.push(r.status() + " " + r.url().replace(BASE, "")); });
 
   // 登录（同源种 cookie）
+  // ★ /login 页面自身会跳转，趁它跳转时 evaluate 会撞上
+  //   「Execution context was destroyed, most likely because of a navigation」。
+  //   先等页面稳定，登录失败也允许继续（TEST_OPEN 下本来就不需要登录态）。
   await page.goto(BASE + "/login", { waitUntil: "domcontentloaded" }).catch(() => {});
+  await page.waitForTimeout(1200);
   const login = await page.evaluate(async ([u, p]) => {
     const r = await fetch("/api/auth/login", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: u, password: p }),
     });
     return r.status;
-  }, [end.user, PW]);
+  }, [end.user, PW]).catch(() => 0);
 
   await page.goto(BASE + end.path, { waitUntil: "networkidle" }).catch(() => {});
   await page.waitForTimeout(2500);
