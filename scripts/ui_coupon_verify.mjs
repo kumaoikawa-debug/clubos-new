@@ -1,6 +1,8 @@
-/* 优惠券体系 — 真浏览器验收（2026-10-24）
+/* 优惠券体系 — 真浏览器验收（2026-10-24 重设计版）
  * 覆盖：
- *   ① 平台端优惠券中心：快捷模板一键建券 / 新建券表单 / 改投放 / 发放 / 券卡统计
+ *   ① 平台端优惠券中心：快捷模板一键建券 / 拆分式券卡（左渐变券面＋右白信息区）
+ *      / 分栏编辑器（基本信息/使用条件/效期设置/领用限制/其他设置 + 实时预览）
+ *      / 建券 / 改投放（同一页编辑器）/ 发放 / 券卡统计
  *   ② C 端：领券中心 / 领取 / 我的券包 / 券面渲染 / 城市设置 / 分享入口
  * 用法：NODE_PATH=<workspace>/node_modules node scripts/ui_coupon_verify.mjs [baseUrl]
  */
@@ -28,6 +30,16 @@ async function closeAllDialogs(page) {
     await page.waitForTimeout(250);
   }
   return (await page.locator(".ux-overlay").count()) === 0;
+}
+
+/* 分栏编辑器不是 .ux-overlay，单独关：点取消 → 有未保存修改会弹确认 → 点放弃 */
+async function closeCouponEditor(page) {
+  if (!(await page.locator(".plat-cpe").count())) return;
+  await page.locator(".plat-cpe [data-act=close]").first().click();
+  await page.waitForTimeout(400);
+  const giveUp = page.locator('.ux-overlay button:has-text("放弃修改")');
+  if (await giveUp.count()) await giveUp.click().catch(() => {});
+  await page.waitForTimeout(400);
 }
 
 mkdirSync("/tmp/plat_coupon", { recursive: true });
@@ -65,43 +77,112 @@ const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
 
   const presetText = await page.locator(".plat-cpnpreset").first().textContent().catch(() => "");
   rec("模板写明用途/门槛/投放", /活动券|装备券/.test(presetText || ""), (presetText || "").trim().slice(0, 40));
+  rec("模板卡带渐变面额图标", (await page.locator(".plat-cpnpreset__icon").count()) === 4,
+      String(await page.locator(".plat-cpnpreset__icon").count()));
 
   // 一键建券
-  const before = await page.locator(".plat-cpn").count();
+  const before = await page.locator("#platformCoupons .plat-cpn").count();
   await page.locator(".plat-cpnpreset").first().click();
   await page.waitForTimeout(1200);
-  const after = await page.locator(".plat-cpn").count();
+  const after = await page.locator("#platformCoupons .plat-cpn").count();
   rec("点模板即建券（券卡 +1）", after === before + 1, `${before} → ${after}`);
 
-  const faceCount = await page.locator(".plat-cpn .ux-cpn").count();
-  rec("券卡带通用券图（.ux-cpn）", faceCount >= 1, String(faceCount));
-  const amt = await page.locator(".plat-cpn .ux-cpn__amt b").first().textContent().catch(() => "");
+  // ── 拆分式券卡（左渐变券面 + 右白信息区，照图1）──
+  const faceCount = await page.locator(".plat-cpn__face").count();
+  rec("券卡是拆分式（左渐变券面 .plat-cpn__face）", faceCount >= 1, String(faceCount));
+  const amt = await page.locator(".plat-cpn__face b").first().textContent().catch(() => "");
   rec("券面显示面额", /¥/.test(amt || ""), (amt || "").trim());
-
+  const sub = await page.locator(".plat-cpn__face span").first().textContent().catch(() => "");
+  rec("券面显示门槛（无门槛/满X可用）", /无门槛|满/.test(sub || ""), (sub || "").trim());
+  const infoTitle = await page.locator(".plat-cpn__info .plat-cpn__head strong").first().textContent().catch(() => "");
+  rec("右侧信息区有标题", (infoTitle || "").trim().length > 0, (infoTitle || "").trim());
+  const useText = await page.locator(".plat-cpn__use").first().textContent().catch(() => "");
+  rec("右侧信息区有用途（活动报名可用/装备购买可用）", /活动报名可用|装备购买可用/.test(useText || ""), (useText || "").trim());
+  const badge = await page.locator(".plat-cpn__badge").first().textContent().catch(() => "");
+  rec("状态徽章（进行中/已下架）", /进行中|已下架/.test(badge || ""), (badge || "").trim());
   const stat = await page.locator(".plat-cpn__stat").first().textContent().catch(() => "");
-  rec("券卡显示已发/已核销统计", /已发/.test(stat || ""), (stat || "").trim());
+  rec("券卡显示已发/已核销统计", /已发/.test(stat || "") && /已核销/.test(stat || ""), (stat || "").trim());
+  const opNames = await page.locator(".plat-cpn__ops").first().textContent().catch(() => "");
+  rec("操作行：发放/改投放/下架", /发放/.test(opNames || "") && /改投放/.test(opNames || "") && /下架/.test(opNames || ""),
+      (opNames || "").trim().replace(/\s+/g, " "));
 
-  // 新建券表单
+  // ── 分栏编辑器（照图3-13 的栏目结构）──
   await page.click('button:has-text("＋ 新建优惠券")');
   await page.waitForTimeout(700);
-  const fields = await page.locator(".ux-overlay input, .ux-overlay select").count();
-  rec("新建券表单字段精简（≤8 个）", fields > 0 && fields <= 8, String(fields));
-  const labels = await page.locator(".ux-overlay .ux-field__label, .ux-overlay label").allTextContents();
-  const labelText = labels.join(" ");
-  rec("表单含用途/面额/门槛/数量/券图", /券用途/.test(labelText) && /抵扣金额/.test(labelText) &&
-      /门槛/.test(labelText) && /发行数量/.test(labelText) && /券面/.test(labelText), labelText.slice(0, 90));
-  await closeAllDialogs(page);
+  rec("编辑器是全屏分栏页（.plat-cpe）", (await page.locator(".plat-cpe").count()) === 1);
+  const navLabels = (await page.locator(".plat-cpe__nav a").allTextContents()).join(" ");
+  rec("右侧栏目导航 5 项", ["基本信息", "使用条件", "效期设置", "领用限制", "其他设置"].every((s) => navLabels.includes(s)),
+      navLabels.trim().replace(/\s+/g, " "));
+  const secTitles = (await page.locator(".plat-cpe__sec-h h3").allTextContents()).join(" ");
+  rec("内容区 5 个分区", ["基本信息", "使用条件", "效期设置", "领用限制", "其他设置"].every((s) => secTitles.includes(s)),
+      secTitles.trim().replace(/\s+/g, " "));
+  rec("顶部实时预览券卡", (await page.locator(".plat-cpe__preview .plat-cpn__face").count()) === 1);
+  rec("预览卡不挂操作按钮（编辑器里点了会两层弹窗）",
+      (await page.locator(".plat-cpe__preview .plat-cpn__ops").count()) === 0);
+  // 条件字段默认隐藏：all_clubs 不显示城市/俱乐部；长期有效不显示日期
+  rec("默认（全部俱乐部）不显示投放城市/俱乐部",
+      (await page.locator('.plat-cpe__cond[data-when=city]').isVisible()) === false &&
+      (await page.locator('.plat-cpe__cond[data-when=club]').isVisible()) === false);
+  rec("默认（长期有效）不显示有效期输入",
+      (await page.locator('.plat-cpe__cond[data-when=fixed]').isVisible()) === false);
 
-  // 改投放
+  // 实时预览联动：改面额 → 预览跟着变
+  await page.fill("#cpeCash", "66");
+  await page.waitForTimeout(300);
+  const previewAmt = await page.locator(".plat-cpe__preview .plat-cpn__face b").textContent().catch(() => "");
+  rec("改面额实时刷新预览", /66/.test(previewAmt || ""), (previewAmt || "").trim());
+
+  // 填表：活动券 + 城市投放 + 固定有效期 + 限领 2 张 + 不允许分享
+  const uniq = String(Date.now()).slice(-6);
+  await page.fill("#cpeTitle", `自动化验收券 ${uniq}`);
+  await page.fill("#cpeThreshold", "120");
+  await page.fill("#cpeStock", "88");
+  await page.click('.plat-cpe__radio:has(input[name="targetType"][value="city"])');
+  await page.waitForTimeout(250);
+  rec("选「指定城市」后出现城市下拉", (await page.locator('.plat-cpe__cond[data-when=city]').isVisible()) === true);
+  await page.selectOption("#cpeCity", { index: 1 }).catch(() => {});
+  await page.click('.plat-cpe__radio:has(input[name="validType"][value="fixed"])');
+  await page.waitForTimeout(250);
+  rec("选「固定有效期」后出现日期输入", (await page.locator('.plat-cpe__cond[data-when=fixed]').isVisible()) === true);
+  await page.fill("#cpeValidFrom", "2026-11-01T09:00");
+  await page.fill("#cpeValidTo", "2026-12-31T23:59");
+  await page.fill("#cpePerUser", "2");
+  await page.click('.plat-cpe__radio:has(input[name="shareEnabled"][value="0"])');
+  await page.click('.plat-cpe__tpl:has(input[value="forest"])');
+  await page.waitForTimeout(250);
+  const tplOnVal = await page.evaluate(() => {
+    const lab = document.querySelector('.plat-cpe__tpl.is-on input');
+    return lab ? lab.value : '';
+  });
+  rec("券面样式可点选（forest 高亮）", (await page.locator(".plat-cpe__tpl.is-on").count()) === 1 &&
+      tplOnVal === "forest", tplOnVal);
+
+  const listBefore = await page.locator("#platformCoupons .plat-cpn").count();
+  await page.locator(".plat-cpe__foot [data-act=save]").click();
+  await page.waitForTimeout(1600);
+  rec("点创建后编辑器关闭", (await page.locator(".plat-cpe").count()) === 0);
+  const listAfter = await page.locator("#platformCoupons .plat-cpn").count();
+  rec("建券成功（券卡 +1）", listAfter === listBefore + 1, `${listBefore} → ${listAfter}`);
+  const firstCard = await page.locator("#platformCoupons .plat-cpn").first().textContent().catch(() => "");
+  rec("新券出现在列表最前（id DESC）", firstCard.includes(uniq), (firstCard || "").trim().slice(0, 50));
+  rec("新券门槛文案为「满 ¥120 可用」", /满\s*¥?\s*120\s*可用/.test(firstCard || ""));
+
+  // ── 改投放（同一页编辑器，编辑模式）──
   await page.locator('.plat-cpn button:has-text("改投放")').first().click();
-  await page.waitForTimeout(700);
-  const scopeOpts = await page.locator(".ux-overlay select").evaluateAll((els) =>
-    els.map((e) => [...e.options].map((o) => o.textContent).join(" | ")).join(" ;; "));
-  rec("投放弹层含 全部俱乐部/全部用户/城市/俱乐部", /全部俱乐部/.test(scopeOpts) &&
-      /全部 C 端用户/.test(scopeOpts) && /城市/.test(scopeOpts) && /俱乐部/.test(scopeOpts), scopeOpts.slice(0, 110));
-  await closeAllDialogs(page);
+  await page.waitForTimeout(800);
+  rec("改投放打开同一页编辑器", (await page.locator(".plat-cpe").count()) === 1);
+  const benefitLocked = await page.locator('.plat-cpe input[name="benefitType"]').first().isDisabled();
+  rec("编辑模式券用途只读", benefitLocked === true);
+  const titleVal = await page.locator("#cpeTitle").inputValue().catch(() => "");
+  rec("编辑模式回填券名称", (titleVal || "").includes(uniq), (titleVal || "").trim());
+  await page.click('.plat-cpe__radio:has(input[name="targetType"][value="all_users"])');
+  await page.waitForTimeout(250);
+  await page.locator(".plat-cpe__foot [data-act=save]").click();
+  await page.waitForTimeout(1600);
+  const afterEdit = await page.locator("#platformCoupons .plat-cpn").first().textContent().catch(() => "");
+  rec("改投放保存后范围变为「全部 C 端用户」", /全部 C 端用户/.test(afterEdit || ""), (afterEdit || "").trim().slice(0, 60));
 
-  // 发放
+  // 发放（uxForm 弹层不变）
   await page.locator('.plat-cpn button:has-text("发放")').first().click();
   await page.waitForTimeout(700);
   const grantOpts = await page.locator(".ux-overlay select").evaluateAll((els) =>

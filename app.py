@@ -4351,6 +4351,16 @@ def platform_update_benefit(benefit_id:int,payload:dict=Body(...)):
 # × 四种投放范围（全部俱乐部 / 全部 C 端用户 / 指定俱乐部 / 指定城市）。
 # 成本一律总平台承担：核销时 funding_owner=PLATFORM，结算进平台补贴账。
 
+# PATCH 驼峰 → 列名（POST 走 benefits.py 的驼峰约定，PATCH  historically 是列名，
+# 两边都收，避免「弹层发了但没落库」这类静默失败）
+_COUPON_PATCH_ALIAS = {
+    'benefitType': 'benefit_type', 'cashValue': 'cash_value', 'thresholdAmount': 'threshold_amount',
+    'targetType': 'target_type', 'targetCity': 'target_city', 'targetClubId': 'target_club_id',
+    'claimMode': 'claim_mode', 'imageKey': 'image_key', 'validFrom': 'valid_from',
+    'validTo': 'valid_to', 'perUserLimit': 'per_user_limit', 'shareEnabled': 'share_enabled',
+    'pointsCost': 'points_cost', 'pointsType': 'points_type',
+}
+
 @app.get('/api/platform/coupon-images')
 def platform_coupon_images():
     """内置通用券图模板（不做图片上传，后台建券时挑一款即可）。"""
@@ -4383,19 +4393,41 @@ def platform_add_coupon(payload: dict = Body(...)):
 
 @app.patch('/api/platform/coupons/{coupon_id}')
 def platform_update_coupon(coupon_id: int, payload: dict = Body(...)):
+    # 兼容两种提交口味：后端列名（snake_case）与前端惯用驼峰。旧版「改投放」弹层
+    # 发的是驼峰，被 allowed 白名单静默丢弃 —— 表现为「改了投放没反应」。
+    payload = {_COUPON_PATCH_ALIAS.get(k, k): v for k, v in (payload or {}).items()}
     allowed = ['title', 'description', 'status', 'stock', 'cash_value', 'mode', 'threshold_amount',
                'image_key', 'valid_from', 'valid_to', 'claim_mode', 'target_type', 'target_city',
-               'per_user_limit', 'share_enabled']
+               'target_club_id', 'per_user_limit', 'share_enabled']
     sets = []
     vals = []
     for k in allowed:
         if k in payload:
+            v = payload[k]
+            if k == 'target_club_id':
+                v = int(v) if v not in (None, '') else None
+            elif k == 'per_user_limit' and v not in (None, ''):
+                v = max(1, int(v))
             sets.append(f'{k}=?')
-            vals.append(payload[k])
+            vals.append(v)
     with conn() as c:
         b = row(c.execute("SELECT * FROM member_benefits WHERE id=? AND owner_type='PLATFORM'", (coupon_id,)))
         if not b:
             raise HTTPException(404, '优惠券不存在')
+        # 生效前的合并态校验（与 _create 一致：投放范围必须配对，否则会出现
+        # 「target_type=club 但没选俱乐部」这种谁都领不到的券）
+        merged = dict(b)
+        for k in allowed:
+            if k in payload:
+                merged[k] = payload[k]
+        if merged.get('target_type') == 'club':
+            tcid = merged.get('target_club_id')
+            if tcid in (None, '', 0):
+                raise HTTPException(400, '定向俱乐部投放必须选择俱乐部')
+            club_or_404(int(tcid))
+        elif merged.get('target_type') == 'city':
+            if not str(merged.get('target_city') or '').strip():
+                raise HTTPException(400, '按城市投放必须选择城市')
         if sets:
             vals.append(coupon_id)
             c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?", vals)

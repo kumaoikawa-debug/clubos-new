@@ -43,6 +43,22 @@
     return t === 'activity_coupon' ? '活动报名可用' : (t === 'gear_coupon' ? '装备购买可用' : '平台福利');
   };
 
+  /* 按 key 取模板，拿不到回落第一个 —— 平台端拆分券卡的左侧渐变块要用同一套色板 */
+  window.uxCouponTpl = function (key) {
+    for (var i = 0; i < TEMPLATES.length; i++) { if (TEMPLATES[i].key === key) return TEMPLATES[i]; }
+    return TEMPLATES[0];
+  };
+
+  /* 面额 + 门槛文案：{amount:'¥50', sub:'无门槛' | '满 200 可用'} */
+  window.uxCouponAmountText = function (cashValue, thresholdAmount) {
+    var value = Number(cashValue || 0);
+    var threshold = Number(thresholdAmount || 0);
+    return {
+      amount: money(value),
+      sub: threshold > 0 ? ('满 ' + money(threshold) + ' 可用') : '无门槛'
+    };
+  };
+
   /* 券面渲染。opts: {title, imageKey, cashValue, thresholdAmount, mode, benefitType,
                        targetType, targetCity, validTo, voucherCode, status, scope} */
   window.uxCouponFace = function (opts) {
