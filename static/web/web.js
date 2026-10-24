@@ -149,7 +149,7 @@ function miniCard(x){
 }
 function miniGear(x){
   return `<button class="w-mini w-mini--gear" type="button" onclick="openProductFromPacking(${x.id})">
-    <div class="w-mini__media">${x.image_url?`<img src="${esc(x.image_url)}" alt="" loading="lazy">`:WI.bag}</div>
+    <div class="w-mini__media">${(x.coverUrl||x.image_url)?`<img src="${esc(x.coverUrl||x.image_url)}" alt="" loading="lazy">`:WI.bag}</div>
     <div class="w-mini__title">${esc(x.name)}</div>
     <div class="w-mini__meta"><span class="w-mini__price">${priceHtml(x.price,{pending:x.priceFrom==='pending'})}</span></div>
   </button>`;
@@ -522,7 +522,7 @@ function productCard(x){
      键盘通路（Enter/空格）由 bindWebEvents 的 keydown 委托补齐（on 属性只绑 click）。 */
   return `<div class="web-card w-product${out?' is-out':''}" role="button" tabindex="0"
     aria-label="${esc(x.name)}，${money(x.price)}${out?'，暂时缺货':''}" onclick="openProduct(${x.id})">
-    <div class="w-product__media">${x.image_url?`<img src="${esc(x.image_url)}" alt="${esc(x.name)}" loading="lazy">`:WI.bag}${out?'<span class="w-product__flag">缺货</span>':''}
+    <div class="w-product__media">${(x.coverUrl||x.image_url)?`<img src="${esc(x.coverUrl||x.image_url)}" alt="${esc(x.name)}" loading="lazy">`:WI.bag}${out?'<span class="w-product__flag">缺货</span>':''}
       ${out?'':`<button class="w-product__add" type="button" aria-label="把${esc(x.name)}加入购物车" onclick="event.stopPropagation();quickAdd(${x.id})"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/><path d="M12 12.9v4.2M9.9 15h4.2"/></svg></button>`}
     </div>
     <div class="w-product__inner">
@@ -642,7 +642,7 @@ function paintCart(){
     const v=cartVariantOf(p,l.variantId),q=Math.max(1,Number(l.qty||1));
     const unit=memberPriceOf(p,v),orig=productPrice(p,v);
     const stock=v?Number(v.stock||0):Number(p.stock||0),dead=stock<=0;
-    const img=(p.images&&p.images[0]&&(p.images[0].url||p.images[0]))||p.image_url||'';
+    const img=(p.coverUrl)||(p.images&&p.images[0]&&(p.images[0].url||p.images[0]))||p.image_url||'';
     const k=cartKeyOf(l);
     return `<div class="w-cart__row${dead?' is-out':''}">
       <div class="w-cart__img">${img?`<img src="${esc(img)}" alt="${esc(p.name)}">`:WI.bag}</div>
@@ -686,8 +686,11 @@ let P_CUR=null,P_VID=null,P_QTY=1;
 /* 图集只有一张时不画指示点：一排只有一个点是噪音。
    商品没有图就返回空数组，由调用方画占位 —— 不拿占位图冒充商品照。 */
 function productImages(x){
-  const list=(x.images||[]).map(i=>typeof i==='string'?i:(i&&i.url)).filter(Boolean);
-  return list.length?list:(x.image_url?[x.image_url]:[]);
+  /* 头图（coverUrl）优先作为首图：C 端卡片 / 详情首图都读它；图集里若已有同 url 不重复。 */
+  const cov = x.coverUrl || (x.images&&x.images[0]&&(x.images[0].url||x.images[0])) || x.image_url || '';
+  if(!cov) return [];
+  const rest=(x.images||[]).map(i=>typeof i==='string'?i:(i&&i.url)).filter(Boolean).filter(u=>u!==cov);
+  return [cov, ...rest];
 }
 /* 只有一个规格时不显示规格选择区。迁移给无规格商品建的那个「默认」规格会混在
    variants 里，画一排只有一个按钮的「选择规格」，顾客会以为还有别的没加载出来。 */

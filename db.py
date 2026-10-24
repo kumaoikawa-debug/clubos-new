@@ -286,6 +286,10 @@ def _run_compat_migrations(c):
     _ensure_column(c,'products','season','season TEXT')
     _ensure_column(c,'products','series','series TEXT')
     _ensure_column(c,'products','material','material TEXT')
+    # 头图（cover_url）：商品的主视觉，C 端卡片 / 详情页首图都优先用它；
+    # 与 product_images 图集解耦 —— 头图不一定是图集里的某一张，运营可单独设。
+    # 可空 + 无回填，幂等（_ensure_column 已判列存在）。
+    _ensure_column(c,'products','cover_url','cover_url TEXT')
     # 颜色 × 尺码：规格从「一维的 name」升级成「颜色 + 尺码两个维度」，
     # 2 色 × 3 码要生成 6 个 SKU，而不是 6 个混在一维里的名字。
     # 存量规格的颜色尺码留空（不猜），C 端按老的一维 name 显示，功能不受影响。

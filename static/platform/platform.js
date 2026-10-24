@@ -48,13 +48,23 @@ function clubLogoHtml(x){
   if(!x.logoUrl)return `<span class="plat-club-logo__ph">${esc(initial)}</span>`;
   return `<img class="plat-club-logo__img" src="${esc(x.logoUrl)}" alt="${esc(x.name||'')}" data-ph="${esc(initial)}" loading="lazy">`;
 }
-/* 事件委托：一次绑定管全表所有 logo（表格是整块重渲染的，绑到 tbody 上最稳）。 */
+/* 商品列表头图缩略：跟俱乐部 logo 同一套兜底逻辑（裂图 → platLogoFallback 换占位）。
+   平台列表接口给的是原始列 cover_url；没有就显示「无图」占位块。 */
+function productCoverHtml(x){
+  if(!x.cover_url)return `<span class="plat-prod-cover plat-prod-cover--ph">无图</span>`;
+  return `<img class="plat-prod-cover" src="${esc(x.cover_url)}" alt="" loading="lazy">`;
+}
+/* 事件委托：一次绑定管全页所有头像/头图（表格是整块重渲染的，绑到 document 最稳）。
+   商品头图裂图时同样换成「无图」占位块 —— 占位与真图同尺寸，行高不跳。 */
 function platLogoFallback(e){
   const img=e.target;
-  if(!img||img.tagName!=='IMG'||!img.classList.contains('plat-club-logo__img'))return;
+  if(!img||img.tagName!=='IMG')return;
+  let phClass=null,phText=null;
+  if(img.classList.contains('plat-club-logo__img')){phClass='plat-club-logo__ph';phText=img.getAttribute('data-ph')||'?';}
+  else if(img.classList.contains('plat-prod-cover')){phClass='plat-prod-cover plat-prod-cover--ph';phText='无图';}
+  else return;
   const ph=document.createElement('span');
-  ph.className='plat-club-logo__ph';
-  ph.textContent=img.getAttribute('data-ph')||'?';
+  ph.className=phClass;ph.textContent=phText;
   if(img.parentNode)img.parentNode.replaceChild(ph,img);
 }
 
@@ -169,7 +179,7 @@ function clearProductFilter(){['#prodFilterBrand','#prodFilterCat','#prodFilterG
 function prodRowHtml(x){
   const brand=x.brand_name?esc(x.brand_name):'<span class="sub">未设品牌</span>';
   const cat=x.category_name?esc(x.category_name)+(x.parent_category_name?`<div class="sub">${esc(x.parent_category_name)}</div>`:''):'<span class="sub">未分类</span>';
-  return `<tr><td><strong>${esc(x.name)}</strong><div class="sub">${esc(x.gender?PROD_GENDERS.find(g=>g.value===x.gender)?.label||x.gender:'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0} · ${x.description?'有介绍':'无介绍'}</div></td><td>${brand}<div class="sub">${cat}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.stock}</td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="editProduct(${x.id})">编辑</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`;
+  return `<tr><td><div class="plat-prod-cell">${productCoverHtml(x)}<div><strong>${esc(x.name)}</strong><div class="sub">${esc(x.gender?PROD_GENDERS.find(g=>g.value===x.gender)?.label||x.gender:'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0} · ${x.description?'有介绍':'无介绍'}</div></div></div></td><td>${brand}<div class="sub">${cat}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.stock}</td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="editProduct(${x.id})">编辑</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`;
 }
 async function loadProducts(){try{await loadProductDicts()}catch(e){/* 字典拉不到也要让列表自己报错，别静默 */}applyProductFilter()}
 async function addProduct(){return platformAddProduct()}
@@ -212,6 +222,7 @@ async function platformAddProduct(){
     const r=await api('/api/platform/products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     toast('商品已上架'+(r&&r.variantsCreated?` · ${r.variantsCreated} 个规格`:''));
     loadProducts();
+    if(r&&r.id) openProductImageManager(r.id);
   }catch(e){showAlert({title:'上架失败',message:e.message})}
 }
 /* ── 规格矩阵弹层 ─────────────────────────────────────────────────────────
@@ -701,36 +712,7 @@ async function manageVariants(pid){
     }
   };
 }
-async function manageImages(pid){
-  const list=async()=>await api(`/api/platform/products/${pid}/images`);
-  const paint=async(dlg)=>{
-    const imgs=await list();
-    dlg.querySelector('.pi-list').innerHTML=imgs.length?imgs.map(i=>`<div class="list-row" data-id="${i.id}">
-        <div class="list-row__main"><div class="list-row__title" style="word-break:break-all;font-weight:400">${esc(i.url)}</div>
-          <div class="list-row__sub">${i.sort===0?'主图（同时作为列表封面）':'第 '+(i.sort+1)+' 张'}</div></div>
-        <div class="list-row__end"><button class="btn ghost" data-act="del">删除</button></div>
-      </div>`).join(''):'<div class="empty">还没有图片。没有图片的商品在 C 端详情页显示占位，不会显示轮播。</div>';
-  };
-  const dlg=uxDialog({title:'商品图集',
-    desc:'C 端详情页按这里的顺序轮播；第一张同时作为列表卡片封面。',
-    body:'<div class="pi-list"></div>',wide:true,
-    foot:'<button class="btn" data-act="add">添加图片</button>'});
-  await paint(dlg);
-  dlg.querySelector('[data-act="add"]').onclick=async()=>{
-    const v=await showForm({title:'添加图片',submitText:'保存',fields:[
-      {name:'url',label:'图片地址',required:true,help:'以 /static/uploads/… 或 https:// 开头的图片地址'}]});
-    if(!v||!v.url)return;
-    try{await api(`/api/platform/products/${pid}/images`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({url:String(v.url).trim()})});
-      await paint(dlg);loadProducts();toast('图片已添加')}
-    catch(e){showAlert({title:'添加失败',message:e.message})}
-  };
-  dlg.querySelector('.pi-list').onclick=async e=>{
-    const row=e.target.closest('.list-row[data-id]');if(!row)return;
-    if(e.target.dataset.act!=='del')return;
-    const ok=await showConfirm({title:'删除这张图片？',message:'删除后 C 端详情页就不再显示它。',confirmText:'删除',danger:true});
-    if(!ok)return;
-    try{await api(`/api/platform/products/${pid}/images/${row.dataset.id}`,{method:'DELETE'});await paint(dlg);loadProducts();toast('已删除')}
-    catch(err){showAlert({title:'删除失败',message:err.message})}
-  };
-}
+/* 商品图片：头图 + 详情图集（本地批量上传 + 裁剪）。
+   旧逻辑是「配图片地址」文本框（先把图传到别处再粘地址），现已迁到 product-image-manager.js
+   的 openProductImageManager —— 直接本地选文件、自动裁到最佳比例、服务端落盘。 */
+async function manageImages(pid){ return openProductImageManager(pid); }

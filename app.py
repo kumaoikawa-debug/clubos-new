@@ -2359,7 +2359,7 @@ def club_credit_ledger(club_id:int,date_from:str|None=None,date_to:str|None=None
 # 商品列表/详情共用的列：品牌与品类用子查询带出名字，避免每个调用点各写一遍 JOIN。
 # 保留 category 文本列是因为老接口（列表副标题、Medusa 同步）还在读它 ——
 # 迁移只回填 category_id，不删文本，两边同时可用。
-PROD_COLS = """id,name,sku,price,stock,status,image_url,category,brand_id,category_id,gender,season,series,material,
+PROD_COLS = """id,name,sku,price,stock,status,image_url,cover_url,category,brand_id,category_id,gender,season,series,material,
                (SELECT name FROM product_brands b WHERE b.id=products.brand_id) brand_name,
                (SELECT name FROM product_categories ct WHERE ct.id=products.category_id) category_name"""
 
@@ -2392,8 +2392,21 @@ def _with_extras(c, product_list:list[dict]):
     out=[]
     for x in product_list:
         d=dict(x); pid=int(x['id'])
-        imgs=images.get(pid) or ([{'url':x['image_url']}] if x.get('image_url') else [])
-        d['images']=imgs; d['variants']=variants.get(pid) or []
+        gal=images.get(pid) or []
+        cover=x.get('cover_url') or None
+        # 头图优先作为第一张：C 端卡片 / 详情首图都读它；图集里若已有同 url 则不重复。
+        all_imgs=[]; seen=set()
+        if cover:
+            all_imgs.append({'url':cover,'cover':True}); seen.add(cover)
+        for g in gal:
+            u=g['url']
+            if u and u not in seen:
+                all_imgs.append({'url':u}); seen.add(u)
+        if not all_imgs and x.get('image_url'):
+            all_imgs.append({'url':x['image_url']})
+        d['images']=all_imgs
+        d['coverUrl']=cover or (all_imgs[0]['url'] if all_imgs else None)
+        d['variants']=variants.get(pid) or []
         out.append(d)
     return out
 
@@ -4610,10 +4623,30 @@ def delete_product_variant(product_id:int, variant_id:int):
         _resync_product_stock(c,product_id)
         return {'ok':True,'restoredDefault':left==0}
 
+# ── 商品图片：头图 + 详情图集（本地批量上传 + 服务端落盘）──────────────────
+#   旧逻辑只有「配图片地址」文本框（POST /images 传 url），运营得自己先想办法把图
+#   传到某个地方再粘地址，体验割裂。现在改成：直接从本地选文件 → 服务端落盘到
+#   static/uploads/platform/ → 写库。头图（cover_url）与图集（product_images）解耦，
+#   头图优先作为 C 端首图，可单独设也可从图集里「设为主图」。
+async def _save_platform_upload(file:UploadFile)->str|None:
+    """落盘一张平台上传的图片，返回可访问 URL；非图片 / 超限返回 None。"""
+    ext=Path(file.filename or '').suffix.lower()
+    if ext not in _PUBLIC_IMAGE_EXT: return None
+    data=await file.read()
+    if len(data) > 10*1024*1024: return None
+    batch=UPLOAD/'platform'/uuid.uuid4().hex
+    batch.mkdir(parents=True, exist_ok=True)
+    dest=batch/f'img{ext}'
+    dest.write_bytes(data)
+    return f'/static/uploads/platform/{batch.name}/img{ext}'
+
 @app.get('/api/platform/products/{product_id}/images')
 def platform_product_images(product_id:int):
     with conn() as c:
-        return rows(c.execute('SELECT id,product_id,url,sort FROM product_images WHERE product_id=? ORDER BY sort,id',(product_id,)))
+        p=row(c.execute('SELECT cover_url FROM products WHERE id=?',(product_id,)))
+        if not p: raise HTTPException(404,'商品不存在')
+        imgs=rows(c.execute('SELECT id,product_id,url,sort FROM product_images WHERE product_id=? ORDER BY sort,id',(product_id,)))
+        return {'images':imgs,'cover':p['cover_url']}
 
 @app.post('/api/platform/products/{product_id}/images')
 def add_product_image(product_id:int, payload:dict=Body(...)):
@@ -4625,17 +4658,70 @@ def add_product_image(product_id:int, payload:dict=Body(...)):
         n=c.execute('SELECT COUNT(*) n FROM product_images WHERE product_id=?',(product_id,)).fetchone()['n']
         c.execute('INSERT INTO product_images(product_id,url,sort) VALUES(?,?,?)',(product_id,url,int(n)))
         iid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
-        # 第一张图同时写回 products.image_url：老接口（列表卡、Medusa 同步）读的是它，
-        # 不回写的话后台卡片和 C 端详情会显示成两个不同的图。
-        if n==0: c.execute('UPDATE products SET image_url=? WHERE id=?',(url,product_id))
+        if n==0:
+            c.execute('UPDATE products SET image_url=? WHERE id=?',(url,product_id))
+            if not c.execute('SELECT cover_url FROM products WHERE id=?',(product_id,)).fetchone()['cover_url']:
+                c.execute('UPDATE products SET cover_url=? WHERE id=?',(url,product_id))
         return {'ok':True,'id':iid}
+
+@app.post('/api/platform/products/{product_id}/cover')
+async def upload_product_cover(product_id:int, file:UploadFile=File(...)):
+    """头图：直接本地选文件上传，服务端落盘并写回 cover_url + image_url。"""
+    with conn() as c:
+        if not c.execute('SELECT id FROM products WHERE id=?',(product_id,)).fetchone():
+            raise HTTPException(404,'商品不存在')
+    url=await _save_platform_upload(file)
+    if not url: raise HTTPException(400,'只支持图片文件（png/jpg/jpeg/webp/gif），单张上限 10MB')
+    with conn() as c:
+        c.execute('UPDATE products SET cover_url=?,image_url=? WHERE id=?',(url,url,product_id))
+    return {'cover':url}
+
+@app.post('/api/platform/products/{product_id}/images/batch')
+async def upload_product_images_batch(product_id:int, files:list[UploadFile]=File(...)):
+    """详情图集：本地批量选多张 → 一次性落盘并追加到图集；若还没有头图则首张顶上。"""
+    with conn() as c:
+        p=row(c.execute('SELECT id,cover_url FROM products WHERE id=?',(product_id,)))
+        if not p: raise HTTPException(404,'商品不存在')
+    urls=[]
+    for f in files:
+        u=await _save_platform_upload(f)
+        if u: urls.append(u)
+    if not urls: raise HTTPException(400,'没有可保存的图片文件（只支持 png/jpg/jpeg/webp/gif，单张上限 10MB）')
+    inserted=0; cover=None
+    with conn() as c:
+        n=c.execute('SELECT COUNT(*) n FROM product_images WHERE product_id=?',(product_id,)).fetchone()['n']
+        for i,u in enumerate(urls):
+            c.execute('INSERT INTO product_images(product_id,url,sort) VALUES(?,?,?)',(product_id,u,int(n+i)))
+            inserted+=1
+        # 还没有头图时，首张详情图自动顶成头图（含 image_url 兜底）。
+        if not p['cover_url']:
+            cover=urls[0]
+            c.execute('UPDATE products SET cover_url=?,image_url=? WHERE id=?',(cover,cover,product_id))
+    return {'inserted':inserted,'cover':cover,'urls':urls}
+
+@app.patch('/api/platform/products/{product_id}/images/{image_id}')
+def patch_product_image(product_id:int, image_id:int, payload:dict=Body(...)):
+    """单张图操作：setCover=把这张设为主图（写 cover_url）；否则按 sort 重排。"""
+    with conn() as c:
+        r=row(c.execute('SELECT id,url FROM product_images WHERE id=? AND product_id=?',(image_id,product_id)))
+        if not r: raise HTTPException(404,'图片不存在')
+        if payload.get('setCover'):
+            c.execute('UPDATE products SET cover_url=?,image_url=? WHERE id=?',(r['url'],r['url'],product_id))
+        elif 'sort' in payload and payload['sort'] is not None:
+            c.execute('UPDATE product_images SET sort=? WHERE id=?',(int(payload['sort']),image_id))
+        return {'ok':True}
 
 @app.delete('/api/platform/products/{product_id}/images/{image_id}')
 def delete_product_image(product_id:int, image_id:int):
     with conn() as c:
+        r=row(c.execute('SELECT url FROM product_images WHERE id=? AND product_id=?',(image_id,product_id)))
+        if not r: raise HTTPException(404,'图片不存在')
         c.execute('DELETE FROM product_images WHERE id=? AND product_id=?',(image_id,product_id))
-        first=c.execute('SELECT url FROM product_images WHERE product_id=? ORDER BY sort,id LIMIT 1',(product_id,)).fetchone()
-        c.execute('UPDATE products SET image_url=? WHERE id=?',(first['url'] if first else None,product_id))
+        # 删掉的是当前头图 → 头图回落到图集第一张（都没有就清空）。
+        if r['url']==c.execute('SELECT cover_url FROM products WHERE id=?',(product_id,)).fetchone()['cover_url']:
+            first=c.execute('SELECT url FROM product_images WHERE product_id=? ORDER BY sort,id LIMIT 1',(product_id,)).fetchone()
+            new_cover=first['url'] if first else None
+            c.execute('UPDATE products SET cover_url=?,image_url=? WHERE id=?',(new_cover,new_cover,product_id))
         return {'ok':True}
 
 

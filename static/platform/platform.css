@@ -271,3 +271,43 @@
 .plat-cpn__ops{margin-left:auto;display:flex;gap:6px}
 .plat-cpn__ops .btn{min-height:28px;padding:4px 10px;font-size:11.5px;border-radius:9px}
 @media(max-width:900px){.plat-cpnlist{grid-template-columns:1fr}}
+
+/* ── 商品图片管理器（头图 + 详情图集）────────────────────────────────────── */
+.pim__sec{margin-bottom:18px}
+.pim__label{font-size:12.5px;font-weight:700;color:var(--ink-2);margin-bottom:10px}
+.pim-coverwrap{display:flex}
+.pim-cover{position:relative;border-radius:12px;overflow:hidden;width:240px;height:240px;background:#0d0f12;border:1px solid var(--line)}
+.pim-cover img{width:100%;height:100%;object-fit:cover;display:block}
+.pim-cover__btns{position:absolute;left:0;right:0;bottom:0;display:flex;gap:8px;padding:10px;background:linear-gradient(transparent,rgba(0,0,0,.72))}
+.pim-cover--empty{border:2px dashed var(--line);background:#0f1114;color:var(--ink-3);font-size:13px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.pim-cover--empty:hover{border-color:var(--accent,#3a7afe);color:var(--accent,#3a7afe)}
+.pim-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+.pim-thumb{position:relative;border:1px solid var(--line);border-radius:12px;overflow:hidden;background:#0d0f12;aspect-ratio:3/4}
+.pim-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.pim-thumb__bar{position:absolute;left:0;right:0;bottom:0;display:flex;gap:4px;padding:6px;background:linear-gradient(transparent,rgba(0,0,0,.74));opacity:0;transition:opacity .15s}
+.pim-thumb:hover .pim-thumb__bar{opacity:1}
+.pim-thumb__bar .btn{font-size:11px;padding:3px 7px;min-height:0;border-radius:8px}
+.pim-thumb__idx{position:absolute;top:6px;left:6px;font-size:10.5px;font-weight:700;color:#fff;background:rgba(0,0,0,.55);border-radius:6px;padding:1px 6px;font-variant-numeric:tabular-nums}
+.pim-thumb__cover{position:absolute;top:6px;right:6px;font-size:10.5px;font-weight:700;color:#0c0f14;background:var(--accent,#3a7afe);border-radius:6px;padding:1px 6px}
+
+/* ── 裁剪弹层 ───────────────────────────────────────────────────────── */
+.pim-crop{display:flex;flex-direction:column;align-items:center;gap:12px}
+.pim-crop__stage{position:relative;overflow:hidden;background:#000;border-radius:10px;touch-action:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+.pim-crop__stage::after{content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(rgba(255,255,255,.18) 1px,transparent 1px) 0 0/100% 33.33%,
+             linear-gradient(90deg,rgba(255,255,255,.18) 1px,transparent 1px) 0 0/33.33% 100%}
+#cropImg{position:absolute;left:0;top:0;user-select:none;cursor:grab;will-change:transform}
+#cropImg:active{cursor:grabbing}
+.pim-crop__row{display:flex;gap:18px;flex-wrap:wrap;align-items:center;justify-content:center}
+.pim-crop__ratio{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--ink-3)}
+.pim-crop__ratio button{border:1px solid var(--line);background:#0f1114;color:var(--ink-2);font-size:12px;padding:5px 10px;border-radius:8px;cursor:pointer}
+.pim-crop__ratio button.is-on{border-color:var(--accent,#3a7afe);color:var(--accent,#3a7afe);font-weight:700}
+.pim-crop__zoom{display:flex;gap:8px;align-items:center;font-size:12px;color:var(--ink-3)}
+.pim-crop__zoom input{width:160px}
+
+/* ── 商品列表：头图缩略 ──────────────────────────────────────────────────
+   后台一屏几十行商品，光看名字分不出谁配了头图；头图是 C 端卡片/详情首图，
+   这里放一枚 38×38 缩略图，没配的显示占位块（与俱乐部 logo 同规格，行高不跳）。 */
+.plat-prod-cell{display:flex;align-items:center;gap:10px}
+.plat-prod-cover{width:38px;height:38px;flex:0 0 38px;border-radius:10px;object-fit:cover;border:1px solid var(--line);background:#eef4f1}
+.plat-prod-cover--ph{display:grid;place-items:center;font-size:10.5px;font-weight:700;color:var(--muted);background:#f1f3f2}
