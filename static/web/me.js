@@ -49,16 +49,23 @@ function meAsSt(s){return ({open:'处理中',awaiting_return:'待退货',returne
 /* ── 数据获取 ─────────────────────────────────────────────────────────── */
 async function meLoadAll(force){
   if(!force && ME.ts && Date.now()-ME.ts<1500 && ME.mc) return;
-  const [mc,oc,addr,vch]=await Promise.all([
+  const [mc,oc,addr,vch,claimable,mine,prof]=await Promise.all([
     api(`/api/public/clubs/${CLUB}/member-center?user_id=${USER}`),
     api(`/api/public/users/${USER}/order-center?club_id=${CLUB}`),
     api(`/api/public/users/${USER}/addresses`),
-    api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=gear`)
+    api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=gear`),
+    // 领券中心与券包（2026-10-24 优惠券体系）：券是用户维度的钱包，跨俱乐部。
+    api(`/api/public/coupons/claimable?user_id=${USER}&club_id=${CLUB}`).catch(()=>[]),
+    api(`/api/public/coupons/mine?user_id=${USER}`).catch(()=>[]),
+    api(`/api/public/users/${USER}/profile`).catch(()=>({}))
   ]);
   ME.mc=mc||{}; ME.oc=oc||{};
   if(mc&&mc.member&&mc.member.name) ME.name=mc.member.name;
   ME.addr=Array.isArray(addr)?addr:(addr&&addr.items)||[];
   ME.vch =Array.isArray(vch)?vch:(vch&&vch.items)||[];
+  ME.claimable=Array.isArray(claimable)?claimable:[];
+  ME.mineCoupons=Array.isArray(mine)?mine:[];
+  ME.city=(prof&&prof.city)||'';
   ME.ts=Date.now();
   ME.cardNo='YT'+String(CLUB).padStart(2,'0')+String(USER).padStart(4,'0');
   if(!ME.club){ try{ ME.club=await api(`/api/public/clubs/${CLUB}`); }catch(e){ ME.club=ME.club||{}; } }
@@ -358,13 +365,64 @@ SUB_ME.address=function(){
       </div>
     </div>`).join('');
 };
+/* 券包（2026-10-24）：领券中心 + 我的券 + 城市设置。
+   券面用通用券图模板渲染（coupon-faces.js），平台端发的券在这里也能领、也能分享。 */
+function meCouponFace(v,claimable){
+  const face=window.uxCouponFace?window.uxCouponFace({
+    title:v.title,imageKey:v.image_key||v.imageKey,
+    cashValue:(v.cash_value!=null?v.cash_value:v.cashValue),
+    thresholdAmount:(v.threshold_amount!=null?v.threshold_amount:v.thresholdAmount),
+    mode:v.mode,benefitType:v.benefit_type||v.benefitType,
+    targetType:v.target_type||v.targetType,targetCity:v.target_city||v.targetCity,
+    validTo:v.valid_to||v.validTo,voucherCode:v.voucher_code||v.voucherCode,
+    status:v.expired?'expired':(v.status==='used'?'used':'')
+  }):'';
+  const code=v.voucher_code||v.voucherCode||'';
+  let act='';
+  if(claimable) act=`<button class="me-btn me-btn--sm" onclick="meClaimCoupon(${v.id})">立即领取</button>`;
+  else if(v.status==='issued'&&!v.expired&&code) act=`<button class="me-btn me-btn--sm" onclick="meShareCoupon('${esc(code)}','${esc(v.title||'优惠券')}')">分享</button>`;
+  return `<div class="me-cpnitem">${face}<div class="me-cpnitem__ops">${act}</div></div>`;
+}
 SUB_ME.coupons=function(){
-  const list=ME.vch;
-  if(!list.length) return empty('暂无优惠券','');
-  return list.map(v=>`<div class="me-cpn">
-      <div class="me-cpn__val">¥${money(v.cash_value||0)}</div>
-      <div class="me-cpn__info"><b>${esc(v.title||'优惠券')}</b>${v.desc?`<span>${esc(v.desc)}</span>`:''}${v.voucher_code?`<span class="me-cpn__code">券码 ${esc(v.voucher_code)}</span>`:''}</div>
-    </div>`).join('');
+  const claimable=ME.claimable||[];
+  const mine=ME.mineCoupons||[];
+  const usable=mine.filter(v=>v.status==='issued'&&!v.expired);
+  const spent=mine.filter(v=>v.status!=='issued'||v.expired);
+  const head=`<div class="me-cpn__city">所在城市：<b>${esc(ME.city||'未设置')}</b>
+      <button class="me-btn me-btn--sm" onclick="meSetCity()">${ME.city?'修改':'去设置'}</button>
+      <span class="me-cpn__hint">按城市定向的优惠券按这里圈人</span></div>`;
+  const parts=[];
+  if(claimable.length) parts.push(`<div class="me-cpn__grp"><h4>可领取</h4><div class="me-cpn__list">${claimable.map(v=>meCouponFace(v,true)).join('')}</div></div>`);
+  if(usable.length) parts.push(`<div class="me-cpn__grp"><h4>我的优惠券（${usable.length}）</h4><div class="me-cpn__list">${usable.map(v=>meCouponFace(v,false)).join('')}</div></div>`);
+  if(spent.length) parts.push(`<div class="me-cpn__grp"><h4>已使用 / 已过期</h4><div class="me-cpn__list">${spent.map(v=>meCouponFace(v,false)).join('')}</div></div>`);
+  if(!parts.length) return head+empty('还没有优惠券，去活动页或商城领一张');
+  return head+parts.join('');
+};
+async function meClaimCoupon(id){
+  try{
+    const r=await api(`/api/public/coupons/${id}/claim`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:USER,clubId:CLUB})});
+    toast('已领取 '+(window.uxCouponMoney?window.uxCouponMoney(r.cashValue||0):('¥'+(r.cashValue||0)))+' 优惠券');
+    ME.ts=0; await meLoadAll(true); renderMeSub();
+  }catch(e){ toast((e&&e.message)||e); }
+}
+async function meShareCoupon(code,title){
+  if(!code) return;
+  const text=(title||'优惠券')+'｜券码 '+code+'｜报名或买装备时直接使用';
+  try{ if(navigator.share){ await navigator.share({title:title||'优惠券',text}); return; } }catch(e){}
+  if(typeof meCopy==='function'){ meCopy(text,'券码已复制'); return; }
+  try{ await navigator.clipboard.writeText(text); toast('券码已复制：'+code); }
+  catch(e){ showAlert({title:'券码',message:'请复制券码使用：'+code}); }
+}
+async function meSetCity(){
+  const cities=(window.CLUBOS_CITIES||[]);
+  const opts=[{value:'',label:'不设置'}].concat(cities.map(c=>({value:c,label:c})));
+  const v=await showForm({title:'设置所在城市',subtitle:'城市定向的优惠券按注册城市发放（例：成都区域的用户可领专属券）。',fields:[{name:'city',label:'所在城市',type:'select',options:opts,value:ME.city||''}],submitText:'保存'});
+  if(!v) return;
+  try{
+    await api(`/api/public/users/${USER}/city`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({city:v.city})});
+    ME.city=v.city; ME.ts=0; toast('已保存');
+    await meLoadAll(true); renderMeSub();
+  }catch(e){ toast((e&&e.message)||e); }
 };
 SUB_ME.orders=function(st){
   const tab=st||'all';

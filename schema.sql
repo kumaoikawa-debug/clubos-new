@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   phone TEXT,
+  city TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -634,6 +635,18 @@ CREATE TABLE IF NOT EXISTS member_benefits (
   stock INTEGER,
   status TEXT NOT NULL DEFAULT 'active',
   rules_json TEXT NOT NULL DEFAULT '{}',
+  -- ↓ 2026-10-24 优惠券体系：形态、门槛、有效期、投放范围、券图、领取方式
+  mode TEXT NOT NULL DEFAULT 'fixed',          -- fixed=直接抵 / threshold=满多少减多少
+  threshold_amount REAL NOT NULL DEFAULT 0,    -- 满减门槛，0 = 无门槛（后台自由设定的抵扣基数）
+  image_key TEXT NOT NULL DEFAULT 'sunrise',   -- 通用券图模板 key（内置若干款，不做上传）
+  valid_from TEXT,                             -- 生效时间
+  valid_to TEXT,                               -- 失效时间
+  claim_mode TEXT NOT NULL DEFAULT 'grant',    -- grant=后台发放 / claim=用户自己领
+  target_type TEXT NOT NULL DEFAULT 'all_clubs', -- all_clubs/all_users/club/city
+  target_city TEXT,                            -- target_type='city' 时的投放城市
+  per_user_limit INTEGER NOT NULL DEFAULT 1,   -- 每人可领上限
+  claimed_count INTEGER NOT NULL DEFAULT 0,     -- 已发放/已领取张数
+  share_enabled INTEGER NOT NULL DEFAULT 1,    -- 是否允许分享给他人
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(owner_club_id) REFERENCES clubs(id),
@@ -645,7 +658,7 @@ CREATE TABLE IF NOT EXISTS benefit_redemptions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   benefit_id INTEGER NOT NULL,
   user_id INTEGER NOT NULL,
-  display_club_id INTEGER NOT NULL,
+  display_club_id INTEGER,
   point_type TEXT NOT NULL,
   points_spent INTEGER NOT NULL,
   funding_owner TEXT NOT NULL,

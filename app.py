@@ -2207,15 +2207,30 @@ def club_gift_member_voucher(club_id:int,user_id:int,payload:dict=Body(...)):
         if not mem: raise HTTPException(404,'该用户还不是本俱乐部会员')
         b=row(c.execute('SELECT * FROM member_benefits WHERE id=?',(benefit_id,)))
         if not b or b['status']!='active': raise HTTPException(404,'优惠券不存在或已下架')
-        if b['owner_type']!='CLUB' or int(b['owner_club_id'] or 0)!=club_id:
-            raise HTTPException(409,'只能赠送本俱乐部创建的优惠券；平台福利由总平台发放')
+        # 平台券也允许俱乐部转发给会员（2026-10-24）：营销活动由俱乐部发起、
+        # 成本仍由总平台承担 —— 券的 funding_owner 保持 PLATFORM，结算照旧进平台补贴账。
+        if b['owner_type']=='CLUB' and int(b['owner_club_id'] or 0)!=club_id:
+            raise HTTPException(409,'只能赠送本俱乐部创建的优惠券')
+        if b['owner_type']=='PLATFORM':
+            if b['benefit_type']!='activity_coupon':
+                raise HTTPException(409,'平台券只有活动报名券可以转发给会员')
+            if b['target_club_id'] is not None and int(b['target_club_id'])!=club_id:
+                raise HTTPException(409,'该平台券未向本俱乐部开放')
+            # 城市定向券是给「该城市用户」的定向投放，俱乐部转发会越权（把券发给
+            # 不在该城市的人）—— 城市定向只能由总平台自己发。
+            if b['target_club_id'] is None and str(b.get('target_type') or 'all_clubs')=='city':
+                raise HTTPException(409,'城市定向的券不支持俱乐部转发，请由总平台发放')
+            if int(b.get('points_cost') or 0)>0:
+                raise HTTPException(409,'该平台券需积分兑换，不能直接转发')
         if b['stock'] is not None:
             if int(b['stock'])<=0: raise HTTPException(409,'该优惠券库存不足')
             c.execute('UPDATE member_benefits SET stock=stock-1,updated_at=CURRENT_TIMESTAMP WHERE id=?',(benefit_id,))
         code='BEN-'+secrets.token_hex(4).upper()
         c.execute('''INSERT INTO benefit_redemptions(benefit_id,user_id,display_club_id,point_type,points_spent,
                      funding_owner,cash_value,status,voucher_code,gift_note) VALUES(?,?,?,?,?,?,?,?,?,?)''',
-                  (benefit_id,user_id,club_id,b['points_type'],0,'CLUB',float(b['cash_value'] or 0),'issued',code,note))
+                  (benefit_id,user_id,club_id,b['points_type'],0,
+                   ('CLUB' if b['owner_type']=='CLUB' else 'PLATFORM'),
+                   float(b['cash_value'] or 0),'issued',code,note))
         rid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
     return {'ok':True,'redemptionId':rid,'voucherCode':code,'title':b['title'],
             'benefitType':b['benefit_type'],'cashValue':float(b['cash_value'] or 0)}
@@ -4316,6 +4331,162 @@ def platform_update_benefit(benefit_id:int,payload:dict=Body(...)):
         if sets:
             vals.append(benefit_id); c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?",vals)
     return {'ok':True}
+
+# ── 优惠券体系（2026-10-24）────────────────────────────────────────────────
+# 两种用途（活动报名券 / 装备购买券）× 两种形态（直接抵 / 满多少减多少）
+# × 四种投放范围（全部俱乐部 / 全部 C 端用户 / 指定俱乐部 / 指定城市）。
+# 成本一律总平台承担：核销时 funding_owner=PLATFORM，结算进平台补贴账。
+
+@app.get('/api/platform/coupon-images')
+def platform_coupon_images():
+    """内置通用券图模板（不做图片上传，后台建券时挑一款即可）。"""
+    return {'keys': list(benefit_engine.COUPON_IMAGE_KEYS),
+            'modes': list(benefit_engine.COUPON_MODES),
+            'targetTypes': list(benefit_engine.TARGET_TYPES),
+            'claimModes': list(benefit_engine.CLAIM_MODES)}
+
+
+@app.get('/api/platform/coupons')
+def platform_coupons():
+    with conn() as c:
+        out = rows(c.execute("""SELECT * FROM member_benefits
+                                WHERE owner_type='PLATFORM' AND benefit_type IN ('activity_coupon','gear_coupon')
+                                ORDER BY id DESC"""))
+        for x in out:
+            x['stats'] = benefit_engine.coupon_stats(c, int(x['id']))
+        return out
+
+
+@app.post('/api/platform/coupons')
+def platform_add_coupon(payload: dict = Body(...)):
+    with conn() as c:
+        try:
+            bid = benefit_engine.create_platform_benefit(c, payload=payload)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {'ok': True, 'couponId': bid, 'voucherCode': None}
+
+
+@app.patch('/api/platform/coupons/{coupon_id}')
+def platform_update_coupon(coupon_id: int, payload: dict = Body(...)):
+    allowed = ['title', 'description', 'status', 'stock', 'cash_value', 'mode', 'threshold_amount',
+               'image_key', 'valid_from', 'valid_to', 'claim_mode', 'target_type', 'target_city',
+               'per_user_limit', 'share_enabled']
+    sets = []
+    vals = []
+    for k in allowed:
+        if k in payload:
+            sets.append(f'{k}=?')
+            vals.append(payload[k])
+    with conn() as c:
+        b = row(c.execute("SELECT * FROM member_benefits WHERE id=? AND owner_type='PLATFORM'", (coupon_id,)))
+        if not b:
+            raise HTTPException(404, '优惠券不存在')
+        if sets:
+            vals.append(coupon_id)
+            c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?", vals)
+        return {'ok': True, 'stats': benefit_engine.coupon_stats(c, coupon_id)}
+
+
+@app.post('/api/platform/coupons/{coupon_id}/grant')
+def platform_grant_coupon(coupon_id: int, payload: dict = Body(default={})):
+    """定向群发：全部 C 端用户 / 指定俱乐部成员。成本总平台承担。"""
+    scope = str(payload.get('scope') or 'all_users')
+    with conn() as c:
+        b = row(c.execute("SELECT * FROM member_benefits WHERE id=? AND owner_type='PLATFORM'", (coupon_id,)))
+        if not b:
+            raise HTTPException(404, '优惠券不存在')
+        if scope == 'club':
+            cid = int(payload.get('clubId') or 0)
+            if not cid:
+                raise HTTPException(400, '请选择要投放的俱乐部')
+            club_or_404(cid)
+            uids = [int(r[0]) for r in c.execute(
+                'SELECT DISTINCT user_id FROM club_members WHERE club_id=?', (cid,)).fetchall()]
+        elif scope == 'city':
+            city = str(payload.get('city') or '').strip()
+            if not city:
+                raise HTTPException(400, '请选择投放城市')
+            uids = [int(r[0]) for r in c.execute(
+                'SELECT id FROM users WHERE city=?', (city,)).fetchall()]
+        else:
+            uids = [int(r[0]) for r in c.execute('SELECT id FROM users').fetchall()]
+        try:
+            res = benefit_engine.grant_coupon(c, benefit_id=coupon_id, user_ids=uids,
+                                              club_id=int(payload.get('clubId') or 0))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {'ok': True, **res, 'stats': benefit_engine.coupon_stats(c, coupon_id)}
+
+
+# ── C 端：领券中心 / 我的券包 / 分享 / 注册城市 ──────────────────────────────
+
+@app.get('/api/public/coupons/claimable')
+def public_claimable_coupons(user_id: int = 1, club_id: int = 0, city: str = ''):
+    """领券中心：当前用户可以领的券（城市定向按注册城市圈人）。"""
+    with conn() as c:
+        u = row(c.execute('SELECT * FROM users WHERE id=?', (user_id,)))
+        user_city = str((u or {}).get('city') or '').strip() or str(city or '').strip()
+        return benefit_engine.claimable_coupons(c, user_id=user_id, city=user_city, club_id=club_id)
+
+
+@app.post('/api/public/coupons/{coupon_id}/claim')
+def public_claim_coupon(coupon_id: int, payload: dict = Body(default={})):
+    user_id = int(payload.get('userId') or 1)
+    with conn() as c:
+        u = row(c.execute('SELECT * FROM users WHERE id=?', (user_id,)))
+        user_city = str((u or {}).get('city') or '').strip() or str(payload.get('city') or '').strip()
+        try:
+            res = benefit_engine.claim_coupon(c, benefit_id=coupon_id, user_id=user_id,
+                                              city=user_city, club_id=int(payload.get('clubId') or 0))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        return {'ok': True, **res}
+
+
+@app.get('/api/public/coupons/mine')
+def public_my_coupons(user_id: int = 1):
+    """我的券包：跨俱乐部的全部券（平台券 + 俱乐部券）。"""
+    with conn() as c:
+        out = benefit_engine.user_redemptions(c, user_id=user_id, club_id=0)
+        now = benefit_engine._now()
+        for x in out:
+            x['expired'] = benefit_engine._expired(x, now=now)
+        return out
+
+
+@app.get('/api/public/coupons/{code}')
+def public_coupon_share(code: str):
+    """分享详情：按券码查券（不暴露领取者隐私）。"""
+    with conn() as c:
+        x = benefit_engine.coupon_by_code(c, code)
+        if not x:
+            raise HTTPException(404, '券码不存在')
+        x['expired'] = benefit_engine._expired(x)
+        return x
+
+
+@app.get('/api/public/users/{user_id}/profile')
+def public_user_profile(user_id: int):
+    """用户基本信息（名字 + 注册城市）。手机号不返回：这是公开接口。"""
+    with conn() as c:
+        u = row(c.execute('SELECT id,name,city FROM users WHERE id=?', (user_id,)))
+        if not u:
+            raise HTTPException(404, '用户不存在')
+        return u
+
+
+@app.post('/api/public/users/{user_id}/city')
+def public_set_user_city(user_id: int, payload: dict = Body(...)):
+    """设置注册城市（城市定向投放按它圈人）。"""
+    city = str(payload.get('city') or '').strip()[:24]
+    with conn() as c:
+        u = row(c.execute('SELECT id FROM users WHERE id=?', (user_id,)))
+        if not u:
+            raise HTTPException(404, '用户不存在')
+        c.execute('UPDATE users SET city=? WHERE id=?', (city or None, user_id))
+    return {'ok': True, 'city': city}
+
 
 @app.get('/api/platform/commerce/status')
 def platform_commerce_status():

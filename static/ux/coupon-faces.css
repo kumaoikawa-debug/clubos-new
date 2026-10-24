@@ -1,0 +1,36 @@
+/* 通用券面样式（2026-10-24 优惠券体系）
+   平台端券列表、C 端券包、分享卡共用。券面用 CSS 渐变 + 伪元素锯齿缺口，
+   不依赖任何图片资源，所以离线/弱网都不会裂图。 */
+.ux-cpn{
+  position:relative;display:flex;align-items:stretch;gap:0;overflow:hidden;
+  border-radius:14px;background:linear-gradient(135deg,var(--cpn-from,#FF9A5A),var(--cpn-to,#EF6236));
+  color:var(--cpn-ink,#fff);min-height:76px;box-shadow:0 4px 16px rgba(20,40,30,.10);
+}
+.ux-cpn__amt{
+  flex:0 0 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;
+  padding:14px 16px;min-width:104px;border-right:1px dashed rgba(255,255,255,.38);
+}
+.ux-cpn__amt b{font-size:24px;font-weight:800;line-height:1.1;letter-spacing:-.6px}
+.ux-cpn__amt span{font-size:11px;opacity:.85;margin-top:3px;white-space:nowrap}
+.ux-cpn__body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px;padding:13px 16px}
+.ux-cpn__body strong{font-size:14px;font-weight:750;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ux-cpn__use{font-size:11.5px;opacity:.9}
+.ux-cpn__meta{font-size:11px;opacity:.82}
+.ux-cpn__code{font-size:10.5px;opacity:.7;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.4px}
+/* 券口锯齿：两侧半圆缺口，像撕下来的票券 */
+.ux-cpn::before,.ux-cpn::after{
+  content:'';position:absolute;right:132px;width:14px;height:14px;border-radius:50%;
+  background:var(--cpn-bg,var(--color-background-primary,#fff));
+}
+.ux-cpn::before{top:-7px}
+.ux-cpn::after{bottom:-7px}
+.ux-cpn--used{filter:grayscale(.55);opacity:.72}
+.ux-cpn--expired{filter:grayscale(1);opacity:.5}
+/* 小尺寸变体：列表里一排几张时用 */
+.ux-cpn--sm{min-height:56px}
+.ux-cpn--sm .ux-cpn__amt{padding:9px 12px;min-width:78px}
+.ux-cpn--sm .ux-cpn__amt b{font-size:18px}
+.ux-cpn--sm .ux-cpn__body{padding:9px 12px;gap:2px}
+.ux-cpn--sm .ux-cpn__body strong{font-size:12.5px}
+.ux-cpn--sm .ux-cpn__use,.ux-cpn--sm .ux-cpn__meta,.ux-cpn--sm .ux-cpn__code{font-size:10.5px}
+.ux-cpn--sm::before,.ux-cpn--sm::after{right:96px;width:12px;height:12px}

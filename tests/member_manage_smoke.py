@@ -103,12 +103,26 @@ r=c.post(f'/api/club/1/members/{uid}/vouchers',json={'benefitId':999999})
 check('赠送不存在的券被拒（404）',r.status_code==404,r.text)
 r=c.post(f'/api/club/1/members/999999/vouchers',json={'benefitId':bid})
 check('给非会员赠券被拒（404）',r.status_code==404,r.text)
-# 平台创建的券不能由俱乐部赠（直插一条 PLATFORM 福利）
+# 平台券转发规则（2026-10-24 新需求）：总平台可以定向给某个俱乐部做营销活动，
+# 俱乐部转发给会员时成本仍由总平台承担；但城市定向券不能被俱乐部转发（会越权）。
 with app.conn() as dbc:
-    dbc.execute("INSERT INTO member_benefits(owner_type,owner_club_id,target_club_id,title,benefit_type,points_type,points_cost,cash_value,stock,status) VALUES('PLATFORM',NULL,NULL,'平台补贴券','activity_coupon','gear',0,20,NULL,'active')")
+    dbc.execute("INSERT INTO member_benefits(owner_type, owner_club_id, target_club_id, title, benefit_type, points_type, points_cost, cash_value, stock, status, target_type, target_city) VALUES('PLATFORM',NULL,NULL,'平台补贴券','activity_coupon','gear',0,20,NULL,'active','all_clubs',NULL)")
     pid=dbc.execute("SELECT last_insert_rowid()").fetchone()[0]
+    dbc.execute("INSERT INTO member_benefits(owner_type, owner_club_id, target_club_id, title, benefit_type, points_type, points_cost, cash_value, stock, status, target_type, target_city) VALUES('PLATFORM',NULL,NULL,'城市定向券','activity_coupon','gear',0,20,NULL,'active','city','成都')")
+    pcity=dbc.execute("SELECT last_insert_rowid()").fetchone()[0]
+    dbc.execute("INSERT INTO clubs(name,status,plan) VALUES('另一家俱乐部','active','pro')")
+    other_club=dbc.execute("SELECT last_insert_rowid()").fetchone()[0]
+    dbc.execute("INSERT INTO member_benefits(owner_type, owner_club_id, target_club_id, title, benefit_type, points_type, points_cost, cash_value, stock, status, target_type, target_city) VALUES('PLATFORM',NULL,?,'别的俱乐部券','activity_coupon','gear',0,20,NULL,'active','club',NULL)",(other_club,))
+    pother=dbc.execute("SELECT last_insert_rowid()").fetchone()[0]
 r=c.post(f'/api/club/1/members/{uid}/vouchers',json={'benefitId':pid})
-check('平台券不能由俱乐部赠送（409）',r.status_code==409,r.text)
+check('全平台通用券可由俱乐部转发给会员（200）',r.status_code==200,r.text)
+with app.conn() as dbc:
+    fund=dbc.execute("SELECT funding_owner FROM benefit_redemptions WHERE id=?",(r.json().get('redemptionId'),)).fetchone()
+check('转发后成本仍由总平台承担（funding=PLATFORM）',fund and fund[0]=='PLATFORM',str(fund))
+r=c.post(f'/api/club/1/members/{uid}/vouchers',json={'benefitId':pcity})
+check('城市定向券不能由俱乐部转发（409）',r.status_code==409,r.text)
+r=c.post(f'/api/club/1/members/{uid}/vouchers',json={'benefitId':pother})
+check('定向给别的俱乐部的券不能转发（409）',r.status_code==409,r.text)
 
 # ── 5) 赠出的券进 C 端可用福利券（顾客付款时能抵扣）──
 vs=ok('get',f'/api/public/clubs/1/vouchers?user_id={uid}&kind=activity').json()

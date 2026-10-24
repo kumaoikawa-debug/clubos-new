@@ -248,3 +248,26 @@
 .main .view .table .btn{min-height:28px;padding:5px 10px;font-size:11.5px}
 /* 栏目标题描述断行更匀（避免「SKU 按「品/牌-品类…」这种词中断开） */
 .main .view .panel-title .sub{text-wrap:pretty}
+
+/* ── 优惠券中心（2026-10-24）──────────────────────────────────────────────
+   券面本身由 coupon-faces.css 渲染（通用券图模板，平台端与 C 端同一套），
+   这里只管列表排布与操作条。 */
+.plat-cpnpresets{display:grid;grid-template-columns:repeat(auto-fill,minmax(228px,1fr));gap:10px;margin-bottom:14px}
+.plat-cpnpreset{
+  position:relative;display:flex;flex-direction:column;gap:3px;align-items:flex-start;text-align:left;
+  padding:13px 14px 13px 16px;border:1px solid var(--line);border-radius:14px;background:#fff;cursor:pointer;
+  transition:border-color .16s,box-shadow .16s,transform .16s;overflow:hidden;
+}
+.plat-cpnpreset:hover{border-color:#9fc4ae;box-shadow:0 6px 18px rgba(20,50,36,.07);transform:translateY(-1px)}
+.plat-cpnpreset i{position:absolute;left:0;top:0;bottom:0;width:5px}
+.plat-cpnpreset b{font-size:13.5px;font-weight:780;line-height:1.4}
+.plat-cpnpreset span{font-size:11.5px;color:var(--ink-3);line-height:1.45}
+.plat-cpnlist{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:12px}
+.plat-cpn{display:flex;flex-direction:column;gap:9px;padding:12px;border:1px solid var(--line);border-radius:16px;background:#fff}
+.plat-cpn .ux-cpn{width:100%}
+.plat-cpn__bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:0 2px}
+.plat-cpn__scope{font-size:11.5px;color:var(--ink-3)}
+.plat-cpn__stat{font-size:11.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.plat-cpn__ops{margin-left:auto;display:flex;gap:6px}
+.plat-cpn__ops .btn{min-height:28px;padding:4px 10px;font-size:11.5px;border-radius:9px}
+@media(max-width:900px){.plat-cpnlist{grid-template-columns:1fr}}

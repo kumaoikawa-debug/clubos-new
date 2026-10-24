@@ -208,6 +208,23 @@ def _run_compat_migrations(c):
     _ensure_column(c,'registrations','platform_benefit_subsidy','platform_benefit_subsidy REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'registrations','benefit_redemption_ids_json',"benefit_redemption_ids_json TEXT NOT NULL DEFAULT '[]'")
     _ensure_column(c,'benefit_redemptions','gift_note','gift_note TEXT')
+    # v0.31 优惠券体系（2026-10-24）：member_benefits 扩成「券模板」——
+    # 形态（直接抵 / 满减）、门槛、有效期、投放范围（全平台 / 指定俱乐部 / 指定城市）、
+    # 通用券图、领取方式（后台发放 / 用户领取）、每人上限、已领计数、能否分享。
+    # 全部可空/有默认值 → 存量库老券继续按原语义工作，不需要数据回填。
+    _ensure_column(c,'member_benefits','mode',"mode TEXT NOT NULL DEFAULT 'fixed'")
+    _ensure_column(c,'member_benefits','threshold_amount','threshold_amount REAL NOT NULL DEFAULT 0')
+    _ensure_column(c,'member_benefits','image_key',"image_key TEXT NOT NULL DEFAULT 'sunrise'")
+    _ensure_column(c,'member_benefits','valid_from','valid_from TEXT')
+    _ensure_column(c,'member_benefits','valid_to','valid_to TEXT')
+    _ensure_column(c,'member_benefits','claim_mode',"claim_mode TEXT NOT NULL DEFAULT 'grant'")
+    _ensure_column(c,'member_benefits','target_type',"target_type TEXT NOT NULL DEFAULT 'all_clubs'")
+    _ensure_column(c,'member_benefits','target_city','target_city TEXT')
+    _ensure_column(c,'member_benefits','per_user_limit','per_user_limit INTEGER NOT NULL DEFAULT 1')
+    _ensure_column(c,'member_benefits','claimed_count','claimed_count INTEGER NOT NULL DEFAULT 0')
+    _ensure_column(c,'member_benefits','share_enabled','share_enabled INTEGER NOT NULL DEFAULT 1')
+    # 用户注册城市：城市定向投放（成都区域的用户在 11 月都能领一张券）要按它圈人。
+    _ensure_column(c,'users','city','city TEXT')
     _ensure_column(c,'activities','points_enabled','points_enabled INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'activities','earn_club_points','earn_club_points INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'activities','accept_club_points','accept_club_points INTEGER NOT NULL DEFAULT 1')
@@ -682,10 +699,54 @@ def _seed_v15_payment_defaults(c):
         cid=int(cr[0])
         c.execute("INSERT INTO payment_accounts(scope_type,scope_id,provider,channel,credential_ref,enabled) SELECT 'club',?,'local','mock',?,1 WHERE NOT EXISTS (SELECT 1 FROM payment_accounts WHERE scope_type='club' AND scope_id=?)",(cid,f'club_{cid}_local',cid))
 
+def _migrate_v031_coupon_club_nullable(c):
+    """平台直发的券没有归属俱乐部 → benefit_redemptions.display_club_id 必须允许 NULL。
+
+    原来是 NOT NULL + 外键指向 clubs(id)，插 display_club_id=0 直接撞外键
+    （FOREIGN KEY constraint failed）。SQLite 不能直接改列，只能重建表；
+    这张表只存券记录（线上目前 0 行），照搬现结构 + 放宽这一列即可。
+    重建前必须先 commit：PRAGMA foreign_keys 在事务里是空操作。
+    """
+    row = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='benefit_redemptions'").fetchone()
+    if not row:
+        return
+    sql = row[0] or ''
+    if 'display_club_id INTEGER NOT NULL' not in sql:
+        return  # 已经是可空（或表还没建）
+    cols = [r[1] for r in c.execute('PRAGMA table_info(benefit_redemptions)')]
+    if not cols:
+        return
+    c.commit()
+    c.execute('PRAGMA foreign_keys=OFF')
+    try:
+        new_sql = sql.replace('display_club_id INTEGER NOT NULL', 'display_club_id INTEGER')
+        new_sql = new_sql.replace('CREATE TABLE benefit_redemptions', 'CREATE TABLE benefit_redemptions_v031', 1)
+        c.execute(new_sql)
+        c.execute('INSERT INTO benefit_redemptions_v031(%s) SELECT %s FROM benefit_redemptions'
+                  % (','.join(cols), ','.join(cols)))
+        c.execute('DROP TABLE benefit_redemptions')
+        c.execute('ALTER TABLE benefit_redemptions_v031 RENAME TO benefit_redemptions')
+    finally:
+        c.execute('PRAGMA foreign_keys=ON')
+    c.commit()
+    # 重建表会把索引一起带走，这里补回来。
+    for idx in ("CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_user "
+                "ON benefit_redemptions(user_id,display_club_id,created_at DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_checkout "
+                "ON benefit_redemptions(held_checkout_id,status)",
+                "CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_order "
+                "ON benefit_redemptions(used_order_kind,used_order_id,status)"):
+        c.execute(idx)
+    c.commit()
+
+
 def init_db():
     with conn() as c:
         c.executescript(SCHEMA.read_text(encoding='utf-8'))
         _run_compat_migrations(c)
+        # 券表放宽 display_club_id（平台直发的券没有归属俱乐部）—— 必须排在播种之前，
+        # 否则任何一条发券动作都会撞外键。
+        _migrate_v031_coupon_club_nullable(c)
         if c.execute('SELECT COUNT(*) FROM clubs').fetchone()[0]:
             _seed_v08_defaults(c)
             if os.getenv('CLUBOS_SECURITY_MODE','demo')!='production': _seed_v15_payment_defaults(c)

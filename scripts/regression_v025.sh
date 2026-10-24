@@ -118,3 +118,10 @@ python tests/club_commission_rate_smoke.py
 # 前端形态（筛选条 / 字典管理 / 矩阵弹层 / C 端两级选择器 / 版本号同批）。
 # 自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/product_catalog_smoke.py
+
+# 优惠券体系（2026-10-24 用户需求：总平台发券 / 定向投放 / 券图 / 分享）：
+# 两种用途（活动券 / 装备券）× 两种形态（直接抵 / 满减）× 四种投放范围
+# （全部俱乐部 / 全部用户 / 指定俱乐部 / 指定城市）；领取限领与库存、群发、
+# 门槛校验、平台承担成本、跨俱乐部可用、定向券不外溢、注册城市设置。
+# 自带临时库隔离，不需要 CLUBOS_DB_PATH。
+python tests/coupon_smoke.py
