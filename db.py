@@ -726,9 +726,15 @@ def init_db():
         c.executemany('INSERT INTO products(name,sku,price,stock,category,commission_rate) VALUES(?,?,?,?,?,?)',products)
 
         media=_demo_media()
+        # 演示团期必须始终落在未来：原先把日期写死成 2026-10-24，当天 08:00 之后
+        # 「报名」一律 409（该团期已出发），演示站看起来像坏了，回归里 6 个
+        # checkout 用例（smoke / v08 / v09 / v10 / v15 / cost_leak）也会集体挂掉。
+        from datetime import date as _date, timedelta as _td
+        _d1=_date.today()+_td(days=1)
+        _d2=_d1+_td(days=7)
         demo_master={
-            'title':'MOVE TO NATURAL｜蓥华山徒步 × 户外瑜伽','date':'2026-10-24','location':'什邡蓥华山','price':498,'capacity':30,
-            'publicFacts':{'date':'2026-10-24','location':'什邡蓥华山','distance':'约6公里','price':'新客498元','team':'约30人'},
+            'title':'MOVE TO NATURAL｜蓥华山徒步 × 户外瑜伽','date':_d1.isoformat(),'location':'什邡蓥华山','price':498,'capacity':30,
+            'publicFacts':{'date':_d1.isoformat(),'location':'什邡蓥华山','distance':'约6公里','price':'新客498元','team':'约30人'},
             'itinerary':[
                 {'time':'08:00–08:30','content':'万象城 icebreaker 门店集合签到'},
                 {'time':'08:30–10:00','content':'统一乘车前往蓥华山'},
@@ -747,7 +753,7 @@ def init_db():
             'coreSellingIdea':'先把身体打开，再走进森林。',
             'editorialIntent':{'opening':'从身体感受而不是景区介绍开场','visualWeight':'high','template':'NONE'},
             'blocks':[
-                {'type':'hero','kicker':'ICEBREAKER NATURAL CLUB · 2026.10.24','headline':'MOVE TO NATURAL','subtitle':'先把身体打开，再走进森林。','mediaRefs':refs(0,1)},
+                {'type':'hero','kicker':f'ICEBREAKER NATURAL CLUB · {_d1:%Y.%m.%d}','headline':'MOVE TO NATURAL','subtitle':'先把身体打开，再走进森林。','mediaRefs':refs(0,1)},
                 {'type':'lead','text':'周末不一定需要安排得很满。离开城市，把上午交给呼吸和伸展，再把午后交给一条约6公里的森林步道。'},
                 {'type':'facts','items':[{'label':'YOGA','value':'1 HOUR'},{'label':'HIKE','value':'6 KM'},{'label':'TEAM','value':'≈30 PEOPLE'}]},
                 {'type':'gallery','mediaRefs':refs(1,4),'caption':'真正进入山里之前，先让身体慢下来。'},
@@ -769,8 +775,8 @@ def init_db():
             1,1,1,10,1,30,json.dumps(demo_master,ensure_ascii=False),json.dumps(demo_detail,ensure_ascii=False)))
         aid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
         occs=[
-            (aid,club_id,'2026-10-24 08:00','2026-10-24 18:50',498,30,8,'open','10月24日 · 标准团'),
-            (aid,club_id,'2026-10-31 08:00','2026-10-31 18:50',528,24,3,'open','10月31日 · 小团'),
+            (aid,club_id,f'{_d1} 08:00',f'{_d1} 18:50',498,30,8,'open',f'{_d1.month}月{_d1.day}日 · 标准团'),
+            (aid,club_id,f'{_d2} 08:00',f'{_d2} 18:50',528,24,3,'open',f'{_d2.month}月{_d2.day}日 · 小团'),
         ]
         c.executemany('INSERT INTO activity_occurrences(activity_id,club_id,start_at,end_at,price,capacity,sold,status,label) VALUES(?,?,?,?,?,?,?,?,?)',occs)
         settings={

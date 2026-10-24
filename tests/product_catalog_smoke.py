@@ -242,6 +242,19 @@ def main():
     ok('id="pdSheetColors"' in wjs and 'w-pd__color' in wcss, 'C 端颜色行与样式')
     ok('id="mallFilters"' in (ROOT / 'static/web/index.html').read_text(encoding='utf-8'), 'C 端商城筛选行容器')
     ok('function renderMallFilters' in wjs, 'C 端筛选渲染函数')
+    # 2026-10-24 页头压缩：用户反馈「上面占比太大、正式工作区太小要不停往下翻」。
+    # 把平台端顶部两层收成「面包屑行 + 品牌行（标题与副标题同行）」，用断言钉住形态，
+    # 防止以后调样式时又把 kicker / 大标题加回来把页头重新撑高。
+    pcss = (ROOT / 'static/platform/platform.css').read_text(encoding='utf-8')
+    ok('.main>.topbar .eyebrow{display:none}' in pcss and '.main>.topbar .title{font-size:19px' in pcss,
+       '平台端紧凑页头（隐藏 kicker、标题 19px 与副标题同行）')
+    ok('.main>.workspace-bar{margin-bottom:5px' in pcss, '面包屑行与搜索框收紧')
+    ok('.main .view>.panel-title>div:has(.btn){flex:0 0 auto}' in pcss,
+       '栏目标题按钮组不被文字挤成两行')
+    # finance 的「订单真实利润」list-row 模板曾少一个 </div>：导致列宽塌成竖排单字、
+    # 页面横向溢出 2118px（2026-10-24 巡检抓到，与页头改动无关的既有 bug）。
+    pjs = (ROOT / 'static/platform/platform.js').read_text(encoding='utf-8')
+    ok("%</span></div></div></div>`).join" in pjs, 'finance 订单利润 list-row 闭合完整（防竖排单字）')
 
     import re
     def ver(asset, html):
