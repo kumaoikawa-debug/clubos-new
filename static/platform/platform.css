@@ -228,3 +228,23 @@
   .main>.topbar .title{font-size:17px}
   .main>.topbar .sub{font-size:11px}
 }
+
+/* ── 表格防竖排单字 + 收紧行高（2026-10-24 UI 走查）───────────────────────
+   根因不是文案，是列宽：.table{width:100%} 走自动布局，容器一变窄，浏览器把
+   列压到 1 字宽，中文于是逐字换行（实测 1024 宽下「矩阵吸/收商品」「已启/用」
+   「图/片」全部竖排）。正确做法是给宽表保底宽度 + 容器横向滚动，而不是把字
+   压扁；.card:has(>.table){overflow-x:auto} 之前形同虚设 —— 表格被压到 100%
+   永远不溢出，滚动条自然永不出现。
+   按列数分级（规则从小到大，后面的匹配覆盖前面的，10 列表取最宽）。 */
+.main .view .card:has(.table),.main .view div:has(> .table){overflow-x:auto}
+.main .view .table:has(th:nth-child(4)){min-width:600px}
+.main .view .table:has(th:nth-child(6)){min-width:820px}
+.main .view .table:has(th:nth-child(9)){min-width:1040px}
+/* 单元格内容不再被压成单字竖排（按钮/状态标签保持整词） */
+.main .view .table th{white-space:nowrap}
+.main .view .table td .btn,.main .view .table td .tag{white-space:nowrap}
+/* 行高收一档：42 行佣金流水能少滚好几屏（td padding 14→10px、按钮 31→28px） */
+.main .view .table th,.main .view .table td{padding:10px}
+.main .view .table .btn{min-height:28px;padding:5px 10px;font-size:11.5px}
+/* 栏目标题描述断行更匀（避免「SKU 按「品/牌-品类…」这种词中断开） */
+.main .view .panel-title .sub{text-wrap:pretty}

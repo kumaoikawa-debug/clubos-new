@@ -251,6 +251,15 @@ def main():
     ok('.main>.workspace-bar{margin-bottom:5px' in pcss, '面包屑行与搜索框收紧')
     ok('.main .view>.panel-title>div:has(.btn){flex:0 0 auto}' in pcss,
        '栏目标题按钮组不被文字挤成两行')
+    # 2026-10-24 UI 走查抓到：表格列被压到 1 字宽时中文会逐字竖排
+    # （实测 1024 宽下「矩阵吸/收商品」「已启/用」「图/片」全竖排）。
+    # 修法是给宽表保底宽度 + 容器横向滚动，而不是把字压扁。
+    ok('.main .view .table:has(th:nth-child(9)){min-width:1040px}' in pcss,
+       '宽表保底宽度（按列数分级）')
+    ok('.main .view .card:has(.table),.main .view div:has(> .table){overflow-x:auto}' in pcss,
+       '表格容器可横向滚动')
+    ok('.main .view .table td .btn,.main .view .table td .tag{white-space:nowrap}' in pcss,
+       '单元格按钮/标签不断词')
     # finance 的「订单真实利润」list-row 模板曾少一个 </div>：导致列宽塌成竖排单字、
     # 页面横向溢出 2118px（2026-10-24 巡检抓到，与页头改动无关的既有 bug）。
     pjs = (ROOT / 'static/platform/platform.js').read_text(encoding='utf-8')
