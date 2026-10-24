@@ -28,6 +28,7 @@ from clubos_domain.product_catalog import ProductCatalogService
 from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine, GearRecommendService, LeaderRecommendService
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
+import logistics_engine
 
 ROOT=Path(__file__).resolve().parent
 STATIC=ROOT/'static'
@@ -5086,7 +5087,15 @@ def platform_add_product(payload:dict=Body(...)):
 
     维度（品牌 / 品类 / 人群 / 季节 / 系列 / 面料）与 SKU 矩阵在同一个事务里落库：
     先建商品再补规格的话，中途失败会留下一个「没有 SKU、C 端显示缺货」的半成品商品。
+
+    前端单页编辑器已经卡过必填，但接口是可以直接调的：少一道校验就有人能建出
+    「名字为空、价格 0」的商品，然后一路同步到商城。
     """
+    name = str(payload.get('name') or '').strip()
+    if not name:
+        raise HTTPException(400, '请填写商品名称')
+    if float(payload.get('price') or 0) <= 0:
+        raise HTTPException(400, '请填写有效零售价')
     initial_stock=max(0,int(payload.get('stock',0) or 0))
     brand_id=payload.get('brandId') or payload.get('brand_id')
     category_id=payload.get('categoryId') or payload.get('category_id')
@@ -5099,20 +5108,25 @@ def platform_add_product(payload:dict=Body(...)):
             r=c.execute('SELECT name FROM product_categories WHERE id=?',(int(category_id),)).fetchone()
             cat_name=r['name'] if r else None
         category=str(payload.get('category') or cat_name or '').strip() or None
-        c.execute("""INSERT INTO products(name,sku,price,stock,status,image_url,category,commission_rate,reorder_point,description,
+        # 款号唯一键冲突会直接冒 sqlite3.IntegrityError → 前端只看到一句 Internal Server Error。
+        # 单页编辑器鼓励手填款号，撞号是常态而不是异常，必须翻成一句人话（409）。
+        try:
+            c.execute("""INSERT INTO products(name,sku,price,stock,status,image_url,category,commission_rate,reorder_point,description,
                      brand_id,category_id,gender,season,series,material,commerce_sync_status)
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                  (payload['name'],payload['sku'],payload['price'],0,payload.get('status','active'),payload.get('image_url'),
-                   category,payload.get('commission_rate',0.08),
-                   max(0,int(payload.get('reorder_point',payload.get('reorderPoint',5)) or 0)),
-                   str(payload.get('description') or ''),
-                   int(brand_id) if brand_id else None,
-                   int(category_id) if category_id else None,
-                   gender,
-                   catalog_service.normalize_season(payload.get('season')),
-                   catalog_service.normalize_series(payload.get('series')),
-                   catalog_service.normalize_material(payload.get('material')),
-                   'pending' if commerce_provider()=='medusa' else 'local'))
+                      (name,payload.get('sku') or '',float(payload.get('price') or 0),0,payload.get('status','active'),payload.get('image_url'),
+                       category,payload.get('commission_rate',0.08),
+                       max(0,int(payload.get('reorder_point',payload.get('reorderPoint',5)) or 0)),
+                       str(payload.get('description') or ''),
+                       int(brand_id) if brand_id else None,
+                       int(category_id) if category_id else None,
+                       gender,
+                       catalog_service.normalize_season(payload.get('season')),
+                       catalog_service.normalize_series(payload.get('series')),
+                       catalog_service.normalize_material(payload.get('material')),
+                       'pending' if commerce_provider()=='medusa' else 'local'))
+        except IntegrityError:
+            raise HTTPException(409, f'款号「{payload.get("sku") or "(空)"}」已被占用，请换一个')
         pid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         if initial_stock:
             inventory_engine.adjust_stock(c,product_id=pid,quantity_delta=initial_stock,reason='新商品期初库存',actor_type='platform',reference_type='product_opening',reference_id=str(pid))
@@ -5250,14 +5264,54 @@ def platform_update_product(product_id:int,payload:dict=Body(...)):
 
 
 @app.get('/api/platform/orders')
-def platform_orders():
+def platform_orders(club_id:int|None=Query(None), date_from:str=Query(''), date_to:str=Query(''),
+                    user:str=Query(''), phone:str=Query(''), status:str=Query('')):
     # packed 让平台端订单行能判断「还该不该显示打包按钮」—— 打包结果只落在 warehouse_tasks，
     # 订单行自己看不出来，否则打完包按钮还挂在那里。
+    #
+    # 筛选（2026-10-24）：俱乐部 / 时间 / 用户名 / 手机号。全部走 SQL 而不是拉回来在前端过滤，
+    # 订单量上千以后前端过滤既慢又筛不全（只筛当前已经渲染的那一页）。
+    where, values = [], []
+    if club_id:
+        where.append('o.source_club_id=?'); values.append(int(club_id))
+    # 时间按 GMT+8 判定：DB 存 UTC，运营说的「今天」是本地零点到零点。
+    # 直接比较 created_at 的日期会让早上 8 点前的订单落到前一天。
+    if date_from:
+        where.append("date(o.created_at,'+8 hours')>=date(?)"); values.append(date_from)
+    if date_to:
+        where.append("date(o.created_at,'+8 hours')<=date(?)"); values.append(date_to)
+    if (user or '').strip():
+        where.append('u.name LIKE ?'); values.append('%' + user.strip() + '%')
+    if (phone or '').strip():
+        # 订单收货手机号优先，没填收货信息的（历史订单）退回账号手机号，
+        # 否则运营按客户手机号搜会漏掉一批只有账号没有地址的单。
+        where.append("(COALESCE(o.shipping_phone,'') LIKE ? OR COALESCE(u.phone,'') LIKE ?)")
+        p = '%' + phone.strip() + '%'; values.extend([p, p])
+    if (status or '').strip():
+        where.append('o.status=?'); values.append(status.strip())
+    sql = ('SELECT o.*,u.name buyer,u.phone buyer_phone,cl.name source_club FROM gear_orders o '
+           'JOIN users u ON u.id=o.user_id JOIN clubs cl ON cl.id=o.source_club_id'
+           + (' WHERE ' + ' AND '.join(where) if where else '') + ' ORDER BY o.id DESC')
     with conn() as c:
         packed={r['order_id'] for r in rows(c.execute("SELECT DISTINCT order_id FROM warehouse_tasks WHERE task_type='pack' AND status='packed'"))}
-        out=rows(c.execute('SELECT o.*,u.name buyer,cl.name source_club FROM gear_orders o JOIN users u ON u.id=o.user_id JOIN clubs cl ON cl.id=o.source_club_id ORDER BY o.id DESC'))
+        out=rows(c.execute(sql, values))
         for x in out:x['packed']=x['id'] in packed
         return out
+
+@app.get('/api/platform/orders/filters')
+def platform_order_filters():
+    """订单筛选器的候选项：俱乐部下拉 + 状态枚举。
+
+    单独做轻量接口而不是复用 /api/platform/clubs：后者联了 AI 额度、
+    订阅与欠费三张表，只为填一个下拉框太重。
+    """
+    with conn() as c:
+        clubs=[{'id':r['id'],'name':r['name']} for r in rows(c.execute(
+            "SELECT id,name FROM clubs ORDER BY CASE status WHEN 'active' THEN 0 ELSE 1 END,id DESC"))]
+        # value 是英文状态值（直接进 ?status= 查询），label 是下拉里给人看的中文。
+        statuses=[{'value':k,'label':v} for k,v in (('paid','已付款'),('shipped','已发货'),
+                                                     ('delivered','已签收'),('refunded','已退款'))]
+    return {'clubs':clubs,'statuses':statuses}
 
 @app.patch('/api/platform/orders/{order_id}')
 def platform_update_order(order_id:int,payload:dict=Body(...)):
@@ -5275,6 +5329,233 @@ def platform_update_order(order_id:int,payload:dict=Body(...)):
                 c.execute('UPDATE gear_orders SET delivered_at=COALESCE(delivered_at,CURRENT_TIMESTAMP) WHERE id=?',(order_id,))
                 commission=commission_engine.freeze_order(c,order_id=order_id)
     return {'ok':True,'commission':commission}
+
+
+# ==========================================================================
+# 物流履约（2026-10-24）
+# 设计见 logistics_engine.py 顶部注释。这一层只做三件事：
+#   ① 配置读写（服务商 / 密钥 / 回调 token）
+#   ② 建运单、查轨迹、手动补录 —— 全部经过 Provider 适配层
+#   ③ 回调入口：承运商 push 过来时按 tracking_no 落到对应运单
+# 订单上的 carrier/tracking_no 两列继续写，是为了兼容既有列表、导出和
+# C 端订单页 —— 它们读的是这两列，不读运单表。
+# ==========================================================================
+LOGISTICS_CONFIG_KEY = 'logistics_provider_json'
+
+
+def _logistics_config() -> dict:
+    cfg = jload(setting(LOGISTICS_CONFIG_KEY, '{}'), {}) or {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    # 环境变量兜底：容器化部署时密钥只放环境里，不落库。
+    cfg.setdefault('provider', (os.getenv('CLUBOS_LOGISTICS_PROVIDER', 'mock') or 'mock').strip())
+    if not cfg.get('key'):
+        cfg['key'] = os.getenv('KUAIDI100_KEY', '')
+    if not cfg.get('customer'):
+        cfg['customer'] = os.getenv('KUAIDI100_CUSTOMER', '')
+    return cfg
+
+
+def _save_logistics_config(cfg: dict) -> None:
+    with conn() as c:
+        c.execute('INSERT INTO platform_settings(key,value) VALUES(?,?) '
+                  'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                  (LOGISTICS_CONFIG_KEY, jdump(cfg)))
+
+
+@app.get('/api/platform/logistics/config')
+def platform_logistics_config():
+    cfg = _logistics_config()
+    code = str(cfg.get('provider') or 'mock').lower()
+    return {
+        'provider': code,
+        'providerName': (logistics_engine.PROVIDERS.get(code) or logistics_engine.MockProvider).name,
+        'providers': logistics_engine.provider_list(),
+        'carriers': logistics_engine.CARRIERS,
+        'statuses': [{'value': k, 'label': v} for k, v in logistics_engine.STATUS_CN.items()],
+        'hasKey': bool(cfg.get('key')),
+        'customer': cfg.get('customer', ''),
+        'webhookPath': f'/api/webhooks/logistics/{code}',
+        'tokenSet': bool(cfg.get('token')),
+    }
+
+
+@app.patch('/api/platform/logistics/config')
+def platform_logistics_config_update(payload: dict = Body(...)):
+    cfg = _logistics_config()
+    if 'provider' in payload:
+        code = str(payload.get('provider') or '').strip().lower()
+        if code not in logistics_engine.PROVIDERS:
+            raise HTTPException(400, '未知物流服务商')
+        cfg['provider'] = code
+    for key in ('key', 'customer', 'token'):
+        if key in payload:
+            cfg[key] = str(payload.get(key) or '').strip()
+    _save_logistics_config(cfg)
+    return {'ok': True, 'provider': cfg.get('provider')}
+
+
+def _shipment_payload(order_id: int) -> dict:
+    with conn() as c:
+        s = logistics_engine.get_shipment(c, order_id)
+        if not s:
+            o = row(c.execute('SELECT carrier,tracking_no,status FROM gear_orders WHERE id=?', (order_id,)))
+            return {'shipment': None, 'events': [],
+                    'legacy': {'carrier': (o or {}).get('carrier') or '',
+                               'trackingNo': (o or {}).get('tracking_no') or '',
+                               'orderStatus': (o or {}).get('status') or ''}}
+        return {'shipment': s, 'events': logistics_engine.list_events(c, s['id'])}
+
+
+def _apply_order_progress(c, order_id: int, shipment: dict):
+    """运单「已签收」时把订单推到 delivered 并冻结佣金，与手工「标记签收」等价。
+
+    发货时不在这里写订单：创建运单的端点已经把 status/carrier/tracking_no 写好了。
+    """
+    if (shipment or {}).get('status') != 'delivered':
+        return None
+    o = row(c.execute('SELECT status FROM gear_orders WHERE id=?', (order_id,)))
+    if not o or o['status'] in ('delivered', 'refunded'):
+        return None
+    c.execute("UPDATE gear_orders SET status='delivered',delivered_at=COALESCE(delivered_at,CURRENT_TIMESTAMP)"
+              " WHERE id=?", (order_id,))
+    try:
+        return commission_engine.freeze_order(c, order_id=order_id)
+    except Exception:
+        return None
+
+
+@app.get('/api/platform/logistics/carriers')
+def platform_logistics_carriers():
+    return logistics_engine.CARRIERS
+
+
+@app.post('/api/platform/orders/{order_id}/shipment')
+def platform_create_shipment(order_id: int, payload: dict = Body(...)):
+    """发货：建运单 + 写订单。承运商既接受编码也接受名称（运营可能直接填中文）。"""
+    tracking = str(payload.get('trackingNo') or '').strip()
+    if not tracking:
+        raise HTTPException(400, '请填写物流单号')
+    code = str(payload.get('carrierCode') or '').strip().upper()
+    carrier = str(payload.get('carrier') or '').strip()
+    if code:
+        meta = logistics_engine.CARRIER_BY_CODE.get(code)
+        if not meta:
+            raise HTTPException(400, '未知承运商编码')
+        carrier = carrier or meta['name']
+    else:
+        # 只给了中文名：反查编码，查不到按「其他」处理，不阻断发货。
+        meta = next((c for c in logistics_engine.CARRIERS if c['name'] == carrier), None)
+        code = (meta or {}).get('code', 'OTHER')
+    with conn() as c:
+        o = row(c.execute('SELECT id,status FROM gear_orders WHERE id=?', (order_id,)))
+    if not o:
+        raise HTTPException(404, '装备订单不存在')
+    if o['status'] == 'refunded':
+        raise HTTPException(409, '已退款订单不能发货')
+    cfg = _logistics_config()
+    provider = logistics_engine.get_provider(cfg)
+    try:
+        result = provider.create_shipment(order_id=order_id, carrier=carrier,
+                                          carrier_code=code, tracking_no=tracking)
+    except logistics_engine.LogisticsError as exc:
+        raise HTTPException(502, f'物流服务商返回失败：{exc}')
+    with conn() as c:
+        sid = logistics_engine.upsert_shipment(
+            c, order_id=order_id, provider=provider.code, carrier=carrier, carrier_code=code,
+            tracking_no=tracking, status=result.get('status') or 'in_transit',
+            events=result.get('events') or [], raw=result)
+        c.execute("UPDATE gear_orders SET carrier=?,tracking_no=?,status='shipped',"
+                  "shipped_at=COALESCE(shipped_at,CURRENT_TIMESTAMP)"
+                  " WHERE id=? AND status NOT IN ('delivered','refunded')", (carrier, tracking, order_id))
+        s = logistics_engine.get_shipment(c, order_id)
+        _apply_order_progress(c, order_id, s or {})
+    return {'ok': True, 'shipmentId': sid, 'carrier': carrier, 'carrierCode': code,
+            'trackingNo': tracking, 'status': (s or {}).get('status') or 'in_transit'}
+
+
+@app.get('/api/platform/orders/{order_id}/shipment')
+def platform_order_shipment(order_id: int):
+    return _shipment_payload(order_id)
+
+
+@app.post('/api/platform/orders/{order_id}/shipment/events')
+def platform_append_shipment_events(order_id: int, payload: dict = Body(...)):
+    """手动补录一条轨迹（服务商还没对接、或线下临时改派时用）。"""
+    desc = str(payload.get('description') or '').strip()
+    if not desc:
+        raise HTTPException(400, '请填写轨迹描述')
+    with conn() as c:
+        s = logistics_engine.get_shipment(c, order_id)
+        if not s:
+            raise HTTPException(404, '该订单还没有运单，请先填写物流单号')
+        ev = {'event_time': str(payload.get('eventTime') or logistics_engine.now_utc()),
+              'status': str(payload.get('status') or logistics_engine.status_from_text(desc)),
+              'description': desc, 'location': str(payload.get('location') or '')}
+        out = logistics_engine.append_events(c, s['id'], [ev])
+        cur = logistics_engine.get_shipment(c, order_id)
+        _apply_order_progress(c, order_id, cur or {})
+    return {'ok': True, **out}
+
+
+@app.post('/api/platform/orders/{order_id}/shipment/sync')
+def platform_sync_shipment(order_id: int):
+    """主动向服务商拉一次轨迹（回调不可达时的兜底，也是「刷新轨迹」按钮的实现）。"""
+    with conn() as c:
+        s = logistics_engine.get_shipment(c, order_id)
+    if not s:
+        raise HTTPException(404, '该订单还没有运单')
+    cfg = _logistics_config()
+    provider = logistics_engine.get_provider({**cfg, 'provider': s.get('provider') or cfg.get('provider')})
+    try:
+        events = provider.fetch_events(s)
+    except logistics_engine.LogisticsError as exc:
+        raise HTTPException(502, f'查询物流轨迹失败：{exc}')
+    with conn() as c:
+        out = logistics_engine.append_events(c, s['id'], events)
+        cur = logistics_engine.get_shipment(c, order_id)
+        _apply_order_progress(c, order_id, cur or {})
+        timeline = logistics_engine.list_events(c, s['id'])
+    return {'ok': True, 'added': out['added'], 'status': out['status'], 'events': timeline}
+
+
+@app.post('/api/webhooks/logistics/{provider_code}')
+async def logistics_webhook(provider_code: str, request: Request):
+    """承运商回调入口（无会话，凭 token 校验）。
+
+    安全口径：配置里没有 token 时一律拒绝 —— 回调写的是轨迹数据，
+    开放等于让任何人往任意运单里塞「已签收」。
+    """
+    code = str(provider_code or '').strip().lower()
+    if code not in logistics_engine.PROVIDERS:
+        raise HTTPException(404, '未知物流服务商')
+    cfg = _logistics_config()
+    expected = str(cfg.get('token') or '').strip()
+    if not expected:
+        raise HTTPException(403, '物流回调未启用（未配置 token）')
+    got = (request.headers.get('x-clubos-token') or request.query_params.get('token') or '').strip()
+    if not got or not secrets.compare_digest(got, expected):
+        raise HTTPException(401, 'token 校验失败')
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, 'invalid JSON')
+    provider = logistics_engine.get_provider({**cfg, 'provider': code})
+    events = provider.parse_webhook(body if isinstance(body, dict) else {})
+    tracking = str((body or {}).get('trackingNo') or (body or {}).get('nu') or '').strip()
+    if not tracking and isinstance(body, dict):
+        tracking = str(((body.get('lastResult') or {}).get('nu')) or '').strip()
+    if not tracking:
+        raise HTTPException(400, '缺少运单号')
+    with conn() as c:
+        s = row(c.execute('SELECT * FROM logistics_shipments WHERE tracking_no=? ORDER BY id DESC LIMIT 1',
+                          (tracking,)))
+        if not s:
+            return {'ok': False, 'reason': 'unknown tracking_no'}
+        out = logistics_engine.append_events(c, s['id'], events)
+        cur = logistics_engine.get_shipment(c, s['order_id'])
+        _apply_order_progress(c, s['order_id'], cur or {})
+    return {'ok': True, 'added': out['added'], 'status': out['status']}
 
 
 def _medusa_fulfillment_items(local_order:dict, medusa_order:dict):

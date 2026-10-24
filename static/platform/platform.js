@@ -191,39 +191,17 @@ async function addProduct(){return platformAddProduct()}
      没有「可增删的颜色行」这种卡片式 body（memory 雷区 ⑧）。
    ★ 款号留空时系统生成 GEAR-<时间戳>：它是 CSV 导入的归组键，运营认自己的款号。 */
 async function platformAddProduct(){
+  /* 2026-10-24：改成「单页编辑器」——原来要过三道弹窗（基本信息 → 规格矩阵 →
+     图片管理器），每改一个字段都得关掉重来。现在所有信息在一页里上下滑动填完，
+     一次保存；实现见 static/platform/product-editor.js。
+     ★ 函数名保持 platformAddProduct 不变：workflows-platform.js 后加载，
+       会用它覆盖 window.addProduct，覆盖壳里调的就是这个名字。 */
+  if(typeof openProductEditor!=='function'){
+    await showAlert({title:'页面未就绪',message:'商品编辑器脚本没有加载成功，请刷新页面后重试。'});
+    return;
+  }
   await loadProductDicts();
-  const v=await uxForm({title:'新建装备商品',subtitle:'统一商品池由平台持有；品牌 / 品类 / 人群 / 季节 / 系列 / 面料在这里一次配好，SKU 由系统自动生成。',hint:'不配矩阵则只建一个「默认」规格承接期初库存，C 端照常可买。',submitText:'下一步：配规格',wide:true,fields:[
-    {name:'name',label:'商品名称',full:true,required:true,placeholder:'例如：Beta LT 冲锋衣'},
-    {name:'styleNo',label:'款号 / 货号',placeholder:'留空自动生成（GEAR-…）',help:'CSV 导入按货号归组，建议填品牌方给的款号'},
-    {name:'brandId',label:'品牌',type:'select',options:[{value:'',label:'不设品牌'},...prodBrandOptions()]},
-    {name:'categoryId',label:'品类',type:'select',options:[{value:'',label:'不分类'},...prodCatOptions()]},
-    {name:'gender',label:'人群',type:'select',value:'unisex',options:PROD_GENDERS},
-    {name:'season',label:'季节',placeholder:'例如 2026 秋冬',help:'留空表示常年款'},
-    {name:'series',label:'系列',placeholder:'例如 Beta 系列'},
-    {name:'material',label:'面料 / 材质',placeholder:'例如 GORE-TEX 3L'},
-    {name:'price',label:'零售价（元）',type:'number',min:0,step:0.01,required:true},
-    {name:'commissionRatePct',label:'来源俱乐部佣金率（%）',type:'number',min:0,max:100,step:0.1,value:8,required:true},
-    {name:'stock',label:'期初可售库存',type:'number',min:0,step:1,value:0,required:true,help:'落在第一个颜色×尺码组合上；后续补货请走采购入库，不要直接改库存'},
-    {name:'description',label:'商品介绍',type:'textarea',full:true,placeholder:'C 端详情页展示的图文介绍；留空则详情页不显示该区块'}
-  ]});
-  if(!v||!v.name)return;
-  const mx=await prodMatrixDialog({});
-  if(mx===null)return;
-  const body={name:v.name,sku:(v.styleNo||'').trim()||('GEAR-'+Date.now()),price:Number(v.price||0),
-    stock:Number(v.stock||0),commission_rate:Number(v.commissionRatePct||8)/100,
-    gender:v.gender||'unisex',description:v.description||''};
-  if(v.brandId)body.brandId=Number(v.brandId);
-  if(v.categoryId)body.categoryId=Number(v.categoryId);
-  if((v.season||'').trim())body.season=v.season.trim();
-  if((v.series||'').trim())body.series=v.series.trim();
-  if((v.material||'').trim())body.material=v.material.trim();
-  if(mx&&(mx.colors.length||mx.sizes.length)){body.colors=mx.colors;body.sizes=mx.sizes}
-  try{
-    const r=await api('/api/platform/products',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    toast('商品已上架'+(r&&r.variantsCreated?` · ${r.variantsCreated} 个规格`:''));
-    loadProducts();
-    if(r&&r.id) openProductImageManager(r.id);
-  }catch(e){showAlert({title:'上架失败',message:e.message})}
+  await openProductEditor({});
 }
 /* ── 规格矩阵弹层 ─────────────────────────────────────────────────────────
    返回 {colors:[{name,hex}],sizes:[…]}（确定）/ {colors:[],sizes:[]}（跳过矩阵）/ null（取消）。
@@ -292,36 +270,56 @@ async function prodMatrixDialog(initial){
    六维（品牌 / 品类 / 人群 / 季节 / 系列 / 面料）在这里一起改：品类同时回写
    category 文本列，C 端副标题、Medusa 同步、老统计都还在读它。 */
 async function editProduct(id){
+  /* 2026-10-24：编辑也走单页编辑器 —— 改个介绍顺手就能换头图、补一张详情图、
+     追加两个尺码，不再需要「先保存基本信息 → 再进图片管理器」两次往返。 */
+  if(typeof openProductEditor!=='function'){
+    await showAlert({title:'页面未就绪',message:'商品编辑器脚本没有加载成功，请刷新页面后重试。'});
+    return;
+  }
   await loadProductDicts();
-  const ps=await api('/api/platform/products');
-  const p=(ps||[]).find(x=>Number(x.id)===Number(id));if(!p)return;
-  const v=await uxForm({title:'编辑商品',subtitle:'商品由总平台统一上架、定价与库存；改描述不影响在售状态。颜色与尺码请在「规格」里维护。',submitText:'保存',wide:true,fields:[
-    {name:'name',label:'商品名',value:p.name,required:true},
-    {name:'price',label:'价格',type:'number',value:p.price,min:0,required:true},
-    {name:'brandId',label:'品牌',type:'select',value:p.brand_id||'',options:[{value:'',label:'不设品牌'},...prodBrandOptions(p.brand_id)]},
-    {name:'categoryId',label:'品类',type:'select',value:p.category_id||'',options:[{value:'',label:'不分类'},...prodCatOptions(p.category_id)]},
-    {name:'gender',label:'人群',type:'select',value:p.gender||'unisex',options:PROD_GENDERS},
-    {name:'season',label:'季节',value:p.season||'',placeholder:'例如 2026 秋冬',help:'留空表示常年款'},
-    {name:'series',label:'系列',value:p.series||'',placeholder:'例如 Beta 系列'},
-    {name:'material',label:'面料 / 材质',value:p.material||'',placeholder:'例如 GORE-TEX 3L'},
-    {name:'description',label:'商品介绍',type:'textarea',full:true,value:p.description||'',placeholder:'留空则 C 端详情页不显示「商品介绍」区块'}
-  ]});
-  if(!v)return;
-  /* category 文本列不从前端发：后端在收到 category_id 时会按所选品类自动回写，
-     两边永远一致，不需要前端再算一份（也算不对 —— 前端只有压平标签）。 */
-  const body={name:v.name,price:Number(v.price||0),description:v.description||'',gender:v.gender||'unisex',
-    brand_id:v.brandId?Number(v.brandId):null,category_id:v.categoryId?Number(v.categoryId):null,
-    season:(v.season||'').trim()||null,series:(v.series||'').trim()||null,material:(v.material||'').trim()||null};
-  await api('/api/platform/products/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-  loadProducts();toast('商品已更新');
+  await openProductEditor({id});
 }
 async function toggleProduct(id,status){await api(`/api/platform/products/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:status==='active'?'inactive':'active'})});loadProducts()}
 /* 俱乐部提交的上下架申请。平台自己有 toggleProduct 直接改，但俱乐部没有这个权限，
    只能走申请；批准即写 products.status，C 端商城的可见性才跟着变。 */
 async function loadVisibilityRequests(){try{skel('#visibilityRequestList',3);let list=await api('/api/platform/product-visibility-requests');$('#visibilityRequestList').innerHTML=list.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.club_name)} · ${esc(x.product_name)} <span class="tag ${x.action==='on'?'':'orange'}">${x.action==='on'?'申请上架':'申请下架'}</span></div><div class="list-row__sub">当前 ${esc(enumCn(x.product_status))} · ${esc(x.note||'')} · 提交于 ${esc(x.created_at||'')}${x.decided_note?' · 处理意见 '+esc(x.decided_note):''}</div></div><div class="list-row__end">${x.status==='pending'?`<button class="btn secondary" onclick="decideVisibility(${x.id},'approved')">批准</button> <button class="btn ghost" onclick="decideVisibility(${x.id},'rejected')">驳回</button>`:`<span class="tag">${x.status==='approved'?'已批准':'已驳回'}</span>`}</div></div>`).join('')||'<div class="empty">暂无上下架申请</div>'}catch(e){loaderError('#visibilityRequestList',e,'loadVisibilityRequests 加载失败')}}
 async function decideVisibility(id,decision){if(!(await showConfirm({title:decision==='approved'?'批准上下架申请':'驳回上下架申请',message:decision==='approved'?'批准后会立即写入商品状态，C 端商城可见性随之变化。':'驳回后俱乐部会看到处理结果，商品状态不变。',confirmText:decision==='approved'?'确认批准':'确认驳回'})))return;try{await api(`/api/platform/product-visibility-requests/${id}/decide`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision})});toast(decision==='approved'?'已批准，商品状态已更新':'已驳回');await loadVisibilityRequests()}catch(e){showAlert({title:'处理失败',message:e.message})}}
-async function loadOrders(){try{skel('#orderRows',4);let a=await api('/api/platform/orders');$('#orderRows').innerHTML=a.map(x=>`<tr><td>#${x.id}</td><td>${esc(x.source_club)}</td><td>${esc(x.buyer)}</td><td>${x.shipping_consignee?esc(x.shipping_consignee)+(x.shipping_phone?' '+esc(x.shipping_phone):'')+(x.shipping_address?'<div class="sub">'+esc(x.shipping_address)+'</div>':''):'<span class="sub">历史订单无地址</span>'}</td><td>${money(x.total)}</td><td><span class="tag ${x.status==='paid'?'orange':''}">${esc(enumCn(x.status))}</span></td><td>${esc(x.carrier||'')} ${esc(x.tracking_no||'待发货')}</td><td>${x.after_sales_status||'无'}</td><td><div style="display:flex;gap:6px;flex-wrap:wrap">${x.packed?'<span class="tag">已打包</span>':`<button class="btn ghost" onclick="packOrder(${x.id})">完成打包</button>`}<button class="btn secondary" onclick="ship(${x.id})">更新物流</button>${x.status==='shipped'?`<button class="btn ghost" onclick="markDelivered(${x.id})">标记签收</button>`:''}${x.status!=='refunded'?`<button class="btn ghost" onclick="refundOrder(${x.id})">全额退款</button>`:''}</div></td></tr>`).join('')||'<tr><td colspan="9" class="empty">暂无订单</td></tr>'}catch(e){loaderError('#orderRows',e,'loadOrders 加载失败')}}
-async function ship(id){const v=await showForm({title:'填写物流信息',submitText:'确认发货',fields:[{name:'no',label:'物流单号',value:'SF'+Date.now(),required:true},{name:'carrier',label:'承运商',value:'顺丰'}]});if(!v)return;await api(`/api/platform/orders/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'shipped',carrier:v.carrier||'顺丰',tracking_no:v.no})});loadOrders();toast('物流已更新')}
+/* 订单履约列表：筛选走服务端（俱乐部 / 时间 / 用户名 / 手机号），
+   SQL 拼装在本函数里，筛选条与物流界面在同目录 order-logistics.js。
+   ★ 表格带 data-ux-skip：experience-core 的通用「筛选当前列表」是客户端
+     模糊匹配，只能过已经渲染出来的行，跟这里的四维筛选互相打架。 */
+function orderLogCell(x){
+  if(!x.carrier&&!x.tracking_no)return '<span class="sub">待发货</span>';
+  const trace=x.tracking_no?`<button class="btn ghost sm" style="margin-top:4px" onclick="openShipmentTimeline(${x.id})">轨迹</button>`:'';
+  return `<div class="plat-ordlog"><b>${esc(x.carrier||'承运商')}</b><span class="sub">${esc(x.tracking_no||'')}</span>${trace}</div>`;
+}
+function orderRowHtml(x){
+  const shipBtn=x.status==='refunded'?'':`<button class="btn secondary" onclick="openShipmentDialog(${x.id})">${x.tracking_no?'更新物流':'发货'}</button>`;
+  return `<tr><td>#${x.id}</td><td>${esc(x.source_club)}</td><td>${esc(x.buyer)}${x.buyer_phone?`<div class="sub">${esc(x.buyer_phone)}</div>`:''}</td>`
+    +`<td>${x.shipping_consignee?esc(x.shipping_consignee)+(x.shipping_phone?' '+esc(x.shipping_phone):'')+(x.shipping_address?'<div class="sub">'+esc(x.shipping_address)+'</div>':''):'<span class="sub">历史订单无地址</span>'}</td>`
+    +`<td>${money(x.total)}</td><td><span class="tag ${x.status==='paid'?'orange':''}">${esc(enumCn(x.status))}</span></td>`
+    +`<td>${orderLogCell(x)}</td><td>${x.after_sales_status||'无'}</td>`
+    +`<td><div style="display:flex;gap:6px;flex-wrap:wrap">${x.packed?'<span class="tag">已打包</span>':`<button class="btn ghost" onclick="packOrder(${x.id})">完成打包</button>`}${shipBtn}${x.status==='shipped'?`<button class="btn ghost" onclick="markDelivered(${x.id})">标记签收</button>`:''}${x.status!=='refunded'?`<button class="btn ghost" onclick="refundOrder(${x.id})">全额退款</button>`:''}</div></td></tr>`;
+}
+async function loadOrders(){
+  try{
+    skel('#orderRows',4);
+    if(typeof ensureOrderFilters==='function')await ensureOrderFilters();
+    const q=(typeof orderFilterQuery==='function')?orderFilterQuery():'';
+    const a=await api('/api/platform/orders'+(q?'?'+q:''));
+    $('#orderRows').innerHTML=a.map(orderRowHtml).join('')||'<tr><td colspan="9" class="empty">没有符合筛选条件的订单</td></tr>';
+    const hit=$('#ordFilterHit');if(hit)hit.textContent=a.length?a.length+' 笔订单':'';
+  }catch(e){loaderError('#orderRows',e,'loadOrders 加载失败')}
+}
+async function ship(id){
+  /* 发货改走物流适配层（建运单 + 首条轨迹 + 回写订单）。
+     旧实现只 PATCH 了订单的 carrier/tracking_no，没有运单与轨迹，也没法接外部系统。 */
+  if(typeof openShipmentDialog==='function')return openShipmentDialog(id);
+  const v=await showForm({title:'填写物流信息',submitText:'确认发货',fields:[{name:'no',label:'物流单号',value:'SF'+Date.now(),required:true},{name:'carrier',label:'承运商',value:'顺丰'}]});
+  if(!v)return;
+  await api(`/api/platform/orders/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'shipped',carrier:v.carrier||'顺丰',tracking_no:v.no})});
+  loadOrders();toast('物流已更新');
+}
 async function markDelivered(id){if(!(await showConfirm({title:'标记签收',message:'确认买家已签收？签收后进入售后保障期，佣金冻结。',confirmText:'确认签收'})))return;try{await api(`/api/platform/orders/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'delivered'})});toast('已标记签收，佣金冻结');loadOrders()}catch(e){showAlert({title:'操作失败',message:e.message})}}
 async function refundOrder(id){if(!(await showConfirm({title:'确认全额退款',message:'确认全额退款？系统会同步冲回 Gear Points、俱乐部佣金和商城奖励 AI Credits。',confirmText:'确认退款',danger:true})))return;try{let r=await api(`/api/platform/orders/${id}/refund`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason:'平台确认全额退款'})});toast(`订单已退款 · 佣金冲回 ${money(r.commissionReversed||0)}`);loadOrders();loadCommissions();dash()}catch(e){showAlert({title:'退款失败',message:e.message})}}
 let platformCommissionRange={from:'',to:''};

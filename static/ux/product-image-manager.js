@@ -31,6 +31,8 @@
     URL.revokeObjectURL(im.src);
     return b;
   }
+  /* 单页编辑器要在「保存前」就能预览裁剪结果，所以把自动裁剪暴露出去。 */
+  window.uxAutoCrop=autoCrop;
 
   /* 裁剪弹层：手动平移 / 缩放 / 比例预设。返回裁剪后的 Blob（取消返回 null）。 */
   window.uxCropImage=function({src, ratio=1, title='裁剪图片'}){

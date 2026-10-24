@@ -341,6 +341,11 @@ async def _authorize_shared(request: Request, strict: bool) -> dict | None:
         if not expected or not hmac.compare_digest(request.headers.get('x-clubos-commerce-secret',''),expected):
             _forbidden('invalid commerce secret',401)
         return None
+    if path.startswith('/api/webhooks/logistics/'):
+        # 物流服务商回调（快递100 等）没有会话身份，只能靠 token。这里只放行到路由层：
+        # 端点内部用 X-ClubOS-Token 与 logistics_provider_json.token 做常量时间比对，
+        # 未配置 token 时直接 403 —— 否则任何人知道运单号就能往轨迹里塞「已签收」。
+        return None
     if path=='/api/public/club-applications' and method=='POST':
         if strict:
             public_rate_limit(request,'club-application',3,3600)

@@ -297,6 +297,39 @@ def _run_compat_migrations(c):
     _ensure_column(c,'product_variants','color_hex','color_hex TEXT')
     _ensure_column(c,'product_variants','size','size TEXT')
     _ensure_column(c,'product_variants','barcode','barcode TEXT')
+    # 物流履约（2026-10-24）：运单与轨迹分两张表。
+    # 为什么独立于点单上的 carrier/tracking_no 两列：那两列只能存「最后一次填的值」，
+    # 换承运商、补录轨迹、服务商回调都会把历史抹掉。运单表按住 order_id 唯一，
+    # 轨迹表按 (shipment_id,event_time,description) 唯一做幂等 —— 服务商重复推送
+    # 同一条轨迹不会写出两行（这是接真实 API 时最常见的脏数据来源）。
+    c.execute('''CREATE TABLE IF NOT EXISTS logistics_shipments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL UNIQUE,
+        provider TEXT NOT NULL DEFAULT 'mock',
+        carrier TEXT NOT NULL DEFAULT '',
+        carrier_code TEXT NOT NULL DEFAULT '',
+        tracking_no TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'in_transit',
+        shipped_at TEXT,
+        delivered_at TEXT,
+        last_sync_at TEXT,
+        raw_json TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_logistics_shipments_tracking ON logistics_shipments(tracking_no)')
+    c.execute('''CREATE TABLE IF NOT EXISTS logistics_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        shipment_id INTEGER NOT NULL,
+        event_time TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        location TEXT NOT NULL DEFAULT '',
+        raw_json TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(shipment_id,event_time,description)
+    )''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_logistics_events_shipment ON logistics_events(shipment_id,event_time DESC,id DESC)')
     c.execute('''CREATE TABLE IF NOT EXISTS user_addresses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL,
