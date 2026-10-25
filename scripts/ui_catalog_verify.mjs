@@ -1,8 +1,11 @@
-/* 商品域多品牌化 — 真浏览器验收（2026-10-24）
+/* 商品域多品牌化 — 真浏览器验收（2026-10-24；2026-10-25 跟进单页编辑器与手填色值）
  * 覆盖三处本次改动：
- *  ① 平台端「装备商品」视图：筛选条 / 品牌品类列 / 新商品表单六维 / 规格矩阵弹层 / 字典管理弹窗 / CSV 导入导出
+ *  ① 平台端「装备商品」视图：筛选条 / 品牌品类列 / 新商品编辑器六维 / 规格矩阵 / 字典管理弹窗 / CSV 导入导出
  *  ② C 端商城：品牌+人群筛选 chip / 商品卡品牌前缀
  *  ③ C 端商品详情：底部弹层两级选择（先颜色后尺码），换色后尺码行只留该色、价格随规格走
+ * 注意：2026-10-24 起新商品/编辑都走单页编辑器（.plat-pe），不再是
+ *       「基本信息 → 配规格 → 图片」三道 uxDialog；C 端用例依赖 smoke 种好的
+ *       「UI 验收软壳」商品，跑之前先跑 product_catalog_smoke.py 灌数。
  * 用法：NODE_PATH=<workspace>/node_modules node scripts/ui_catalog_verify.mjs [baseUrl]
  */
 import { createRequire } from "module";
@@ -94,31 +97,35 @@ const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
   await page.click('button:has-text("清除")');
   await page.waitForTimeout(600);
 
-  // 新商品表单：六维字段
+  /* 新商品编辑器（2026-10-24 起是一页到底，不再是「基本信息 → 配规格 → 图片」三步弹窗） */
   await page.click('button:has-text("＋ 新商品")');
-  await page.waitForTimeout(600);
-  const formLabels = await page.locator(".ux-overlay .ux-field label").allTextContents();
+  await page.waitForSelector(".plat-pe__scroll", { timeout: 15000 });
+  await page.waitForTimeout(500);
+  const formLabels = await page.locator(".plat-pe__f > span").allTextContents();
   for (const f of ["品牌", "品类", "人群", "季节", "系列", "面料 / 材质"]) {
     rec(`上架表单有「${f}」字段`, formLabels.some((t) => t.includes(f)), formLabels.join("|").slice(0, 160));
   }
-  await page.fill('.ux-overlay input[name="name"]', "矩阵验收商品");
-  await page.fill('.ux-overlay input[name="price"]', "899");
-  await page.click('.ux-overlay button:has-text("下一步：配规格")');
-  await page.waitForTimeout(700);
+  await page.fill("#peName", "矩阵验收商品");
+  await page.fill("#pePrice", "899");
 
-  // 矩阵弹层：加两个颜色、填尺码
-  const mxVisible = await page.locator("#mxColors").count();
-  rec("矩阵弹层打开", mxVisible === 1);
-  await page.click("#mxAddColor");
-  await page.click("#mxAddColor");
-  await page.locator(".plat-mx__chip").nth(0).locator(".plat-mx__chipname").fill("雪白");
-  await page.locator(".plat-mx__chip").nth(1).locator(".plat-mx__chipname").fill("松绿");
-  await page.fill("#mxSizes", "S, M, L");
+  // 规格矩阵：加两个颜色（色值手填）+ 尺码
+  await page.locator('.plat-pe [data-act="addcolor"]').click();
+  await page.locator('.plat-pe [data-act="addcolor"]').click();
   await page.waitForTimeout(300);
-  const preview = await page.locator("#mxPreview").textContent();
+  rec("色值是手填文本框（无系统取色器）",
+    (await page.locator('.plat-pe input[type="color"]').count()) === 0 &&
+    (await page.locator(".plat-pe__chiphex").count()) === 2,
+    `chip=${await page.locator(".plat-pe__chiphex").count()}`);
+  await page.locator(".plat-pe__chip").nth(0).locator(".plat-pe__chipname").fill("雪白");
+  await page.locator(".plat-pe__chip").nth(0).locator(".plat-pe__chiphex").fill("#F5F5F0");
+  await page.locator(".plat-pe__chip").nth(1).locator(".plat-pe__chipname").fill("松绿");
+  await page.locator(".plat-pe__chip").nth(1).locator(".plat-pe__chiphex").fill("3F6B4F");
+  await page.fill("#peSizes", "S, M, L");
+  await page.waitForTimeout(400);
+  const preview = await page.locator("#peMxPreview").textContent();
   rec("矩阵预览算出 2 色 × 3 码 = 6 个 SKU", /2 色 × 3 码 = 6/.test(preview || ""), preview);
-  await page.click('.ux-dialog-foot button:has-text("生成矩阵")');
-  await page.waitForTimeout(1500);
+  await page.click('.plat-pe__foot [data-act="save"]');
+  await page.waitForTimeout(2000);
   const toast = await page.locator(".toast, .ux-toast").allTextContents().catch(() => []);
   rec("上架成功并提示规格数", toast.some((t) => /6 个规格/.test(t)), toast.join("|"));
 

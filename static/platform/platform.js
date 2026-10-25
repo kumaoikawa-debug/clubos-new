@@ -183,6 +183,23 @@ function prodRowHtml(x){
 }
 async function loadProducts(){try{await loadProductDicts()}catch(e){/* 字典拉不到也要让列表自己报错，别静默 */}applyProductFilter()}
 async function addProduct(){return platformAddProduct()}
+/* 色值文本 → #RRGGBB；非法返回 ''。
+   2026-10-25 用户要求「颜色只手动填写，不要系统色块选择器」：原生 <input type="color">
+   弹出的是系统取色盘（几十个固定色格 + 显示颜色…），运营手里有品牌色号时填不准。
+   现在颜色 chips 里就是普通文本框，这里负责把 2b2b2b / #2B2B2B / #abc 这几种写法
+   统一成 #RRGGBB —— 展示与落库都用同一个口径，C 端色块才不会渲染成透明。 */
+function platNormHex(v){
+  let s=String(v==null?'':v).trim().replace(/^#+/,'');
+  if(/^[0-9a-f]{3}$/i.test(s))s=s.split('').map(c=>c+c).join('');
+  if(!/^[0-9a-f]{6}$/i.test(s))return '';
+  return '#'+s.toUpperCase();
+}
+/* 规格表单（showForm）里的色值校验：手填 #RRGGBB，非法就地拦下，别把坏串落库。 */
+function platHexOk(v){
+  const h=String((v&&v.colorHex)||'').trim();
+  if(h&&!platNormHex(h)){toast('色值请填 #RRGGBB，例如 #2B2B2B');return false}
+  return true;
+}
 /* 新商品上架：六维 + 颜色×尺码矩阵，分两步 —— 先填商品信息，再配规格矩阵。
    ★ 真身叫 platformAddProduct 而不是 addProduct：workflows-platform.js 后加载，
      它的 window.addProduct 会覆盖本函数；那个覆盖壳要能无损调到这里，
@@ -215,7 +232,7 @@ async function prodMatrixDialog(initial){
   const dlg=uxDialog({title:initial.title||'规格矩阵',desc:initial.desc||'按 颜色 × 尺码 一次生成所有 SKU 组合；已存在的组合会跳过，不会重置已调好的库存与条码。',wide:true,
     onClose:()=>_resolve&&_resolve(null),
     body:'<div class="plat-mx">'
-      +'<div><div class="plat-mx__label">颜色 <em>可留空；色值用于 C 端色块</em></div><div class="plat-mx__chips" id="mxColors"></div>'
+      +'<div><div class="plat-mx__label">颜色 <em>可留空；色值手填 #RRGGBB，用于 C 端色块</em></div><div class="plat-mx__chips" id="mxColors"></div>'
       +'<div style="margin-top:8px"><button class="btn ghost plat-mx__add" type="button" id="mxAddColor">＋ 添加颜色</button></div></div>'
       +'<div><div class="plat-mx__label">尺码 <em>逗号分隔，例如 S,M,L,XL 或 38,39,40,41</em></div>'
       +'<input class="plat-mx__sizes" id="mxSizes" placeholder="S, M, L, XL" value="'+esc((initial.sizes||[]).join(', '))+'"></div>'
@@ -223,17 +240,25 @@ async function prodMatrixDialog(initial){
       +'<div class="plat-mx__hint">库存真源在规格层：每个组合都是独立 SKU，期初库存落在第一个组合上。<br>不配任何颜色 / 尺码时，系统只建一个「默认」规格，C 端照常可买。</div>'
       +'</div>',
     foot:'<button class="btn ghost" type="button" data-skip>不配矩阵</button><button class="btn" type="button" data-ok>生成矩阵</button>'});
-  const chip=i=>'<span class="plat-mx__chip" data-i="'+i+'"><span class="plat-mx__swatch" style="background:'+(colors[i].hex||'#dfe5e0')+'"></span>'
+  /* 色值只用文本框手填（2026-10-25）：不用系统取色盘，左边小方块退化成纯预览。 */
+  const chip=i=>{const hex=platNormHex(colors[i].hex);
+    return '<span class="plat-mx__chip" data-i="'+i+'"><span class="plat-mx__swatch'+(hex?'':' plat-mx__swatch--empty')+'"'+(hex?' style="background:'+hex+'"':'')+'></span>'
     +'<input class="plat-mx__chipname" type="text" value="'+esc(colors[i].name)+'" placeholder="颜色名" style="width:88px;border:0;background:none;font-size:12.5px;font-weight:700">'
-    +'<input type="color" value="'+(colors[i].hex||'#dfe5e0')+'" aria-label="色值">'
-    +'<button type="button" aria-label="删除该颜色">×</button></span>';
-  const paint=()=>{
-    dlg.querySelector('#mxColors').innerHTML=colors.map((_,i)=>chip(i)).join('');
+    +'<input class="plat-mx__chiphex" type="text" value="'+esc(hex)+'" placeholder="#RRGGBB" maxlength="7" spellcheck="false" autocomplete="off" aria-label="色值（手填，例如 #2B2B2B）">'
+    +'<button type="button" aria-label="删除该颜色">×</button></span>'};
+  /* syncPreview 只刷预览文字；paint 才整块重建 chips。
+     分开是为了打字时不再重建 DOM —— 原来每敲一个字 paint() 一次，
+     输入框被换掉、焦点丢失，颜色名根本打不完整。 */
+  const syncPreview=()=>{
     const sizes=parseSizes();
     const n=Math.max(1,colors.length)*Math.max(1,sizes.length);
     dlg.querySelector('#mxPreview').textContent=colors.length&&sizes.length
       ?('将生成 '+colors.length+' 色 × '+sizes.length+' 码 = '+n+' 个 SKU：'+colors.slice(0,3).map(c=>c.name||'未命名').join(' / ')+(colors.length>3?' 等':'')+' × '+sizes.slice(0,6).join(',')+(sizes.length>6?' 等':''))
       :(colors.length||sizes.length)?'将生成 '+n+' 个 SKU':'未配置矩阵：只建一个「默认」规格';
+  };
+  const paint=()=>{
+    dlg.querySelector('#mxColors').innerHTML=colors.map((_,i)=>chip(i)).join('');
+    syncPreview();
   };
   const parseSizes=()=>(dlg.querySelector('#mxSizes').value||'').split(/[,，]/).map(s=>s.trim()).filter(Boolean);
   dlg.querySelector('#mxColors').addEventListener('click',e=>{
@@ -243,12 +268,27 @@ async function prodMatrixDialog(initial){
   dlg.querySelector('#mxColors').addEventListener('input',e=>{
     const chipEl=e.target.closest('.plat-mx__chip');if(!chipEl)return;
     const i=Number(chipEl.dataset.i);
-    if(e.target.classList.contains('plat-mx__chipname'))colors[i].name=e.target.value.trim();
-    if(e.target.type==='color')colors[i].hex=e.target.value;
-    paint();
+    if(e.target.classList.contains('plat-mx__chipname')){colors[i].name=e.target.value.trim();syncPreview();return}
+    if(e.target.classList.contains('plat-mx__chiphex')){
+      colors[i].hex=e.target.value.trim();
+      const hex=platNormHex(e.target.value),sw=chipEl.querySelector('.plat-mx__swatch');
+      if(sw){sw.style.background=hex||'';sw.classList.toggle('plat-mx__swatch--empty',!hex)}
+      if(hex)e.target.classList.remove('is-bad');
+    }
+  });
+  /* 失焦补全写法：2b2b2b → #2B2B2B（打字过程中不改，免得吃掉还没写完的字符）。
+     写错了标红留着，不清空 —— 清空等于把用户填的色号悄悄抹掉。 */
+  dlg.querySelector('#mxColors').addEventListener('focusout',e=>{
+    const el=e.target;if(!el||!el.classList||!el.classList.contains('plat-mx__chiphex'))return;
+    const chipEl=el.closest('.plat-mx__chip');if(!chipEl)return;
+    const raw=(el.value||'').trim(),hex=platNormHex(raw);
+    if(hex){el.value=hex;el.classList.remove('is-bad')}else if(raw)el.classList.add('is-bad');else el.classList.remove('is-bad');
+    colors[Number(chipEl.dataset.i)].hex=raw;
+    const sw=chipEl.querySelector('.plat-mx__swatch');
+    if(sw){sw.style.background=hex||'';sw.classList.toggle('plat-mx__swatch--empty',!hex)}
   });
   dlg.querySelector('#mxAddColor').onclick=()=>{colors.push({name:'',hex:''});paint();dlg.querySelector('#mxColors').lastElementChild?.querySelector('.plat-mx__chipname')?.focus()};
-  dlg.querySelector('#mxSizes').addEventListener('input',paint);
+  dlg.querySelector('#mxSizes').addEventListener('input',syncPreview);
   paint();
   return await new Promise(resolve=>{
     _resolve=resolve;
@@ -260,7 +300,9 @@ async function prodMatrixDialog(initial){
       const named=colors.filter(c=>c.name);
       if(!named.length&&!sizes.length){fin({colors:[],sizes:[]});dlg.uxClose();return}
       if(colors.length&&!named.length){toast('颜色还没有填名称');return}
-      fin({colors:named.map(c=>({name:c.name,hex:c.hex||''})),sizes});
+      const bad=colors.filter(c=>(c.hex||'').trim()&&!platNormHex(c.hex));
+      if(bad.length){toast('色值请填 #RRGGBB，例如 #2B2B2B');return}
+      fin({colors:named.map(c=>({name:c.name,hex:platNormHex(c.hex)})),sizes});
       dlg.uxClose();
     };
   });
@@ -667,16 +709,16 @@ async function manageVariants(pid){
     const v=await showForm({title:'新增规格',submitText:'保存',fields:[
       {name:'name',label:'规格名',help:'颜色 / 尺码都填了可留空，自动拼成「炭灰 / M」'},
       {name:'color',label:'颜色',placeholder:'例如 炭灰'},
-      {name:'colorHex',label:'色值',type:'color',help:'C 端色块用；不填用默认灰'},
+      {name:'colorHex',label:'色值',placeholder:'#2B2B2B',help:'手填 #RRGGBB，C 端色块用；不填用默认灰'},
       {name:'size',label:'尺码',placeholder:'例如 M'},
       {name:'barcode',label:'条码',placeholder:'可留空'},
       {name:'price',label:'规格价',type:'number',value:'',min:0,help:'留空则跟随商品价格'},
-      {name:'stock',label:'该规格库存',type:'number',value:0,min:0,required:true}]});
+      {name:'stock',label:'该规格库存',type:'number',value:0,min:0,required:true}],validate:platHexOk});
     if(!v)return;
     if(!v.name&&!v.color&&!v.size){showAlert({title:'保存失败',message:'规格名、颜色、尺码至少要填一个'});return}
     try{
       const r=await api(`/api/platform/products/${pid}/variants`,{method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({name:v.name||'',color:v.color||'',colorHex:v.colorHex||'',size:v.size||'',barcode:v.barcode||'',
+        body:JSON.stringify({name:v.name||'',color:v.color||'',colorHex:platNormHex(v.colorHex),size:v.size||'',barcode:v.barcode||'',
           price:(v.price===''||v.price==null)?null:Number(v.price),stock:Number(v.stock||0)})});
       toast(r.movedStock?`规格已新增（占位规格的 ${r.movedStock} 件库存已转入）`:'规格已新增');
       await paint(dlg);loadProducts();
@@ -696,14 +738,14 @@ async function manageVariants(pid){
       const v=await showForm({title:'编辑规格',submitText:'保存',fields:[
         {name:'name',label:'规格名',value:cur.name,required:true},
         {name:'color',label:'颜色',value:cur.color||'',placeholder:'例如 炭灰'},
-        {name:'colorHex',label:'色值',type:'color',value:cur.color_hex||'#dfe5e0',help:'C 端色块用'},
+        {name:'colorHex',label:'色值',value:cur.color_hex||'',placeholder:'#2B2B2B',help:'手填 #RRGGBB，C 端色块用'},
         {name:'size',label:'尺码',value:cur.size||'',placeholder:'例如 M'},
         {name:'barcode',label:'条码',value:cur.barcode||'',placeholder:'可留空'},
         {name:'price',label:'规格价',type:'number',value:cur.price==null?'':cur.price,min:0,help:'留空则跟随商品价格'},
-        {name:'stock',label:'库存',type:'number',value:cur.stock,min:0,required:true}]});
+        {name:'stock',label:'库存',type:'number',value:cur.stock,min:0,required:true}],validate:platHexOk});
       if(!v)return;
       try{await api(`/api/platform/products/${pid}/variants/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({name:v.name,color:v.color||'',colorHex:v.colorHex||'',size:v.size||'',barcode:v.barcode||'',
+        body:JSON.stringify({name:v.name,color:v.color||'',colorHex:platNormHex(v.colorHex),size:v.size||'',barcode:v.barcode||'',
           price:(v.price===''||v.price==null)?null:Number(v.price),stock:Number(v.stock||0)})});
         await paint(dlg);loadProducts();toast('已保存')}
       catch(err){showAlert({title:'保存失败',message:err.message})}

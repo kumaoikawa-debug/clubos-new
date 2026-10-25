@@ -37,8 +37,17 @@
   function readColors(root) {
     return [...root.querySelectorAll('.plat-pe__chip')].map(chip => ({
       name: (chip.querySelector('.plat-pe__chipname').value || '').trim(),
-      hex: chip.querySelector('input[type=color]').value || ''
+      hex: platNormHex(chip.querySelector('.plat-pe__chiphex').value)
     }));
+  }
+
+  /* 手填色值的非法项（写了东西但不是 #RGB/#RRGGBB）——保存前用来拦一下，
+     别把一个看不出错的串悄悄落库，C 端色块会渲染成透明。 */
+  function badHexChips(root) {
+    return [...root.querySelectorAll('.plat-pe__chiphex')].filter(el => {
+      const raw = (el.value || '').trim();
+      return raw && !platNormHex(raw);
+    });
   }
 
   function sizesOf(root) {
@@ -59,11 +68,18 @@
       : '未配置矩阵：只建一个「默认」规格，C 端照常可买';
   }
 
+  /* 颜色 chip：色块预览（只读）+ 颜色名 + 色值文本框 + 删除。
+     2026-10-25 用户要求「颜色只手动填写，不要系统色块选择器」——原来的
+     <input type="color"> 会把浏览器/系统的取色盘顶出来，取色盘只能给近似色，
+     运营手里有品牌色号（#2B2B2B 这种）时反而填不准。改成手填后，左边那个小方块
+     退化成纯预览：填对了它显示成什么色，一眼可验，但它不可点、不弹任何东西。 */
   function chipHtml(c, i) {
+    const hex = platNormHex(c.hex);
     return `<span class="plat-mx__chip plat-pe__chip" data-i="${i}">
-      <span class="plat-mx__swatch" style="background:${esc(c.hex || '#dfe5e0')}"></span>
+      <span class="plat-mx__swatch${hex ? '' : ' plat-mx__swatch--empty'}"${hex ? ` style="background:${hex}"` : ''} aria-hidden="true"></span>
       <input class="plat-pe__chipname" type="text" value="${esc(c.name)}" placeholder="颜色名" aria-label="颜色名">
-      <input type="color" value="${esc(c.hex || '#dfe5e0')}" aria-label="色值">
+      <input class="plat-pe__chiphex" type="text" value="${esc(hex)}" placeholder="#RRGGBB" maxlength="7"
+             spellcheck="false" autocomplete="off" aria-label="色值（手填，例如 #2B2B2B）">
       <button type="button" data-act="delcolor" aria-label="删除该颜色">×</button>
     </span>`;
   }
@@ -199,7 +215,7 @@
               <p>${isEdit ? '按 颜色 × 尺码 追加组合，已存在的组合会跳过，不会重置已调好的库存与条码。' : '按 颜色 × 尺码 一次生成所有 SKU 组合；不配则只建一个「默认」规格。'}</p></div>
             <div class="plat-pe__mx">
               <div>
-                <div class="plat-mx__label">颜色 <em>可留空；色值用于 C 端色块</em></div>
+                <div class="plat-mx__label">颜色 <em>可留空；色值手填 #RRGGBB，用于 C 端色块</em></div>
                 <div class="plat-mx__chips" id="peColors"></div>
                 <div style="margin-top:8px"><button class="btn ghost" type="button" data-act="addcolor">＋ 添加颜色</button></div>
               </div>
@@ -390,6 +406,13 @@
       if (!name) { toast('请填写商品名称'); root.querySelector('#peName').focus(); return; }
       if (!(price > 0)) { toast('请填写有效零售价'); root.querySelector('#pePrice').focus(); return; }
       const rawColors = readColors(root);
+      const badHex = badHexChips(root);
+      if (badHex.length) {
+        toast('色值请填 #RRGGBB，例如 #2B2B2B');
+        badHex[0].focus();
+        try { badHex[0].select(); } catch (_) { /* 有些环境不让选 */ }
+        return;
+      }
       const colors = rawColors.filter(c => c.name);
       if (rawColors.length && !colors.length) { toast('颜色还没有填名称'); return; }
       const sizes = sizesOf(root);
@@ -515,9 +538,16 @@
         if (!chip) return;
         const i = Number(chip.dataset.i);
         if (e.target.classList.contains('plat-pe__chipname')) st.colors[i].name = e.target.value;
-        else if (e.target.type === 'color') {
-          st.colors[i].hex = e.target.value;
-          chip.querySelector('.plat-mx__swatch').style.background = e.target.value;
+        else if (e.target.classList.contains('plat-pe__chiphex')) {
+          /* 边打字边预览：只有能解析成色值时才刷色块，输一半的 “#2B” 不闪黑 */
+          st.colors[i].hex = e.target.value.trim();
+          const sw = chip.querySelector('.plat-mx__swatch');
+          const hex = platNormHex(e.target.value);
+          if (sw) {
+            sw.style.background = hex || '';
+            sw.classList.toggle('plat-mx__swatch--empty', !hex);
+          }
+          if (hex) e.target.classList.remove('is-bad');
         }
         dirty = true;
         mxPreview(root);
@@ -525,6 +555,27 @@
       }
       if (e.target.id === 'peSizes') { dirty = true; mxPreview(root); return; }
       dirty = true;
+    });
+
+    /* 失焦时把色值补成规范写法：2b2b2b / #2B2B2B / #abc → #2B2B2B / #AABBCC。
+       放在这里而不是 input 事件里，是因为边打字边改会把人还没写完的字符吃掉。
+       写错了就标红留着让用户改 —— 直接清空等于「我填的色号凭空消失了」。 */
+    root.addEventListener('focusout', e => {
+      const el = e.target;
+      if (!el || !el.classList || !el.classList.contains('plat-pe__chiphex')) return;
+      const raw = (el.value || '').trim();
+      const hex = platNormHex(raw);
+      if (hex) { el.value = hex; el.classList.remove('is-bad'); }
+      else if (raw) el.classList.add('is-bad');
+      else el.classList.remove('is-bad');
+      const chip = el.closest('.plat-pe__chip');
+      const i = chip ? Number(chip.dataset.i) : -1;
+      if (i >= 0 && st.colors[i]) st.colors[i].hex = raw;
+      const sw = chip && chip.querySelector('.plat-mx__swatch');
+      if (sw) {
+        sw.style.background = hex || '';
+        sw.classList.toggle('plat-mx__swatch--empty', !hex);
+      }
     });
 
     /* 初次绘制 */

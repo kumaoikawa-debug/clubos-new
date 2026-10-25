@@ -169,8 +169,18 @@
 .plat-mx__chips{display:flex;flex-wrap:wrap;gap:8px}
 .plat-mx__chip{display:flex;align-items:center;gap:7px;padding:5px 9px 5px 6px;border:1px solid var(--line);border-radius:10px;background:#fff}
 .plat-mx__swatch{width:22px;height:22px;border-radius:7px;border:1px solid rgba(0,0,0,.12);flex:none}
+/* 没填色值时的空样：虚线格子，和「填了但很浅」区分开 */
+.plat-mx__swatch--empty{background:repeating-linear-gradient(45deg,#f2f4f3 0 4px,#fff 4px 8px);border-style:dashed}
+/* 色值文本框（2026-10-25 取代原生取色器）：等宽字、靠 # 对齐，一眼能看出写了几位 */
+.plat-mx__chiphex,.plat-pe__chiphex{
+  width:84px;flex:none;padding:3px 7px;border:1px solid var(--line);border-radius:7px;background:#fff;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;letter-spacing:.2px;color:var(--ink-2,#3a4a44);
+}
+.plat-mx__chiphex:focus,.plat-pe__chiphex:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px rgba(31,122,77,.10)}
+/* 写了东西但解析不出色值：标红但不清空，保存/生成时再拦一次 */
+.plat-mx__chiphex.is-bad,.plat-pe__chiphex.is-bad{border-color:#c0564a;background:#fdf6f5;color:#a44435}
+.plat-mx__chiphex::placeholder,.plat-pe__chiphex::placeholder{color:#a9b6b0;letter-spacing:0}
 .plat-mx__chip b{font-size:12.5px;font-weight:750}
-.plat-mx__chip input[type=color]{width:26px;height:24px;padding:0;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer}
 .plat-mx__chip button{border:0;background:none;color:#a44435;cursor:pointer;font-size:14px;line-height:1;padding:2px 4px}
 .plat-mx__add{border-style:dashed}
 .plat-mx__sizes{width:100%;min-height:34px;padding:6px 10px;border:1px solid var(--line);border-radius:9px;font-size:13px}
