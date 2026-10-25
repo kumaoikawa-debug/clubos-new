@@ -140,6 +140,34 @@ rec("上架生效", st == 200 and one and one["status"] == "active")
 st, _ = call("PATCH", "/api/platform/coupons/999999", {"title": "x"})
 rec("PATCH 不存在 → 404", st == 404, str(st))
 
+# ── ⑫ 删除：从未发放过的券可删（2026-10-25 新增）───────────────────────
+# 一张券都没发出去 → 删掉不会留下孤儿券包，直接放行
+fresh = dict(body, title="API 验收券 · 待删除", targetType="all_users", targetCity=None,
+             targetClubId=None, stock=10, validFrom=None, validTo=None)
+st, res8 = call("POST", "/api/platform/coupons", fresh)
+did = int(res8.get("couponId") or 0)
+rec("创建待删除券（200）", st == 200 and did > 0, "%s %s" % (st, res8))
+st, res9 = call("DELETE", "/api/platform/coupons/%d" % did)
+rec("删除未发放的券（200）", st == 200 and res9.get("ok"), "%s %s" % (st, res9))
+st, lst = call("GET", "/api/platform/coupons")
+rec("删除后列表不再出现", all(int(x["id"]) != did for x in lst), "id=%s" % did)
+st, res10 = call("DELETE", "/api/platform/coupons/%d" % did)
+rec("重复删除 → 404", st == 404, "%s %s" % (st, res10))
+
+# ── ⑬ 删除保护：已经有人领过的券不能删（409，且券还在）─────────────────
+st, res11 = call("POST", "/api/platform/coupons",
+                 dict(fresh, title="API 验收券 · 已领过", claimMode="claim"))
+kid = int(res11.get("couponId") or 0)
+st_claim, _ = call("POST", "/api/public/coupons/%d/claim" % kid, {"userId": 1})
+st, res12 = call("DELETE", "/api/platform/coupons/%d" % kid)
+rec("已领取的券删除 → 409（带原因）",
+    st_claim == 200 and st == 409 and "领取" in str(res12.get("detail")),
+    "claim=%s del=%s %s" % (st_claim, st, res12))
+st, lst = call("GET", "/api/platform/coupons")
+rec("409 后券仍在列表（没被误删）", any(int(x["id"]) == kid for x in lst), "id=%s" % kid)
+# 收尾：这张券留着会污染后续浏览器走查的列表，改成下架并清库存
+call("PATCH", "/api/platform/coupons/%d" % kid, {"status": "inactive"})
+
 failed = [n for n, ok in results if not ok]
 print("\n%d/%d 通过" % (len(results) - len(failed), len(results)) + ("" if not failed else " · 失败: " + "; ".join(failed)))
 sys.exit(1 if failed else 0)

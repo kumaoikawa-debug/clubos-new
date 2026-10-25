@@ -1,6 +1,7 @@
-/* 优惠券体系 — 真浏览器验收（2026-10-24 重设计版）
+/* 优惠券体系 — 真浏览器验收（2026-10-25 列表版）
  * 覆盖：
- *   ① 平台端优惠券中心：快捷模板一键建券 / 拆分式券卡（左渐变券面＋右白信息区）
+ *   ① 平台端优惠券中心：快捷模板一键建券 / 拆分式券卡改「一行一张」列表
+ *      （券面贴左 + 名称条件 + 状态统计 + 操作贴右）/ 删除（未发放可删、已发放置灰）
  *      / 分栏编辑器（基本信息/使用条件/效期设置/领用限制/其他设置 + 实时预览）
  *      / 建券 / 改投放（同一页编辑器）/ 发放 / 券卡统计
  *   ② C 端：领券中心 / 领取 / 我的券包 / 券面渲染 / 城市设置 / 分享入口
@@ -103,8 +104,37 @@ const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
   const stat = await page.locator(".plat-cpn__stat").first().textContent().catch(() => "");
   rec("券卡显示已发/已核销统计", /已发/.test(stat || "") && /已核销/.test(stat || ""), (stat || "").trim());
   const opNames = await page.locator(".plat-cpn__ops").first().textContent().catch(() => "");
-  rec("操作行：发放/改投放/下架", /发放/.test(opNames || "") && /改投放/.test(opNames || "") && /下架/.test(opNames || ""),
+  rec("操作行：发放/改投放/下架/删除", /发放/.test(opNames || "") && /改投放/.test(opNames || "") &&
+      /下架/.test(opNames || "") && /删除/.test(opNames || ""),
       (opNames || "").trim().replace(/\s+/g, " "));
+
+  // ── 列表式布局（2026-10-25：用户要求「以列表形式呈现」）──
+  const listDir = await page.evaluate(() => getComputedStyle(document.getElementById("platformCoupons")).flexDirection);
+  rec("券列表单列纵向排列（flex column，非卡片网格）", listDir === "column", listDir);
+  const rowGeo = await page.evaluate(() => {
+    const box = document.getElementById("platformCoupons");
+    const cards = [...box.querySelectorAll(".plat-cpn")];
+    const g = cards.map((c) => {
+      const r = c.getBoundingClientRect();
+      return { x: Math.round(r.x), w: Math.round(r.width) };
+    });
+    const boxW = Math.round(box.getBoundingClientRect().width);
+    return { rows: g, boxW };
+  });
+  const sameLeft = rowGeo.rows.length >= 2 && rowGeo.rows.every((r) => r.x === rowGeo.rows[0].x);
+  const fullWidth = rowGeo.rows.length >= 1 && rowGeo.rows[0].w >= rowGeo.boxW - 2;
+  rec("一行一张券：左缘对齐且铺满整行", sameLeft && fullWidth, JSON.stringify(rowGeo).slice(0, 160));
+  const innerGeo = await page.evaluate(() => {
+    const c = document.querySelector("#platformCoupons .plat-cpn");
+    const f = c.querySelector(".plat-cpn__face").getBoundingClientRect();
+    const o = c.querySelector(".plat-cpn__ops").getBoundingClientRect();
+    const info = c.querySelector(".plat-cpn__info").getBoundingClientRect();
+    return { faceLeft: Math.round(f.left), faceW: Math.round(f.width),
+             infoW: Math.round(info.width), opsRight: Math.round(o.right),
+             rowH: Math.round(c.getBoundingClientRect().height) };
+  });
+  rec("行内横排：券面贴左、操作贴右、行高紧凑（<130px）",
+      innerGeo.opsRight - innerGeo.faceLeft > 400 && innerGeo.rowH < 130, JSON.stringify(innerGeo));
 
   // ── 分栏编辑器（照图3-13 的栏目结构）──
   await page.click('button:has-text("＋ 新建优惠券")');
@@ -182,14 +212,55 @@ const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
   const afterEdit = await page.locator("#platformCoupons .plat-cpn").first().textContent().catch(() => "");
   rec("改投放保存后范围变为「全部 C 端用户」", /全部 C 端用户/.test(afterEdit || ""), (afterEdit || "").trim().slice(0, 60));
 
-  // 发放（uxForm 弹层不变）
+  // 发放（uxForm 弹层不变）——真的发出去，才能验「已发放的券不能删」
   await page.locator('.plat-cpn button:has-text("发放")').first().click();
   await page.waitForTimeout(700);
   const grantOpts = await page.locator(".ux-overlay select").evaluateAll((els) =>
     els.map((e) => [...e.options].map((o) => o.textContent).join(" | ")).join(" ;; "));
   rec("发放弹层含 全部用户/俱乐部/城市", /全部 C 端用户/.test(grantOpts) &&
       /城市/.test(grantOpts) && /俱乐部/.test(grantOpts), grantOpts.slice(0, 110));
+  await page.locator('.ux-overlay button:has-text("立即发放")').first().click();
+  await page.waitForTimeout(1600);
   await closeAllDialogs(page);
+  await page.waitForTimeout(600);
+
+  // ── 删除按钮的可用性 = 「这张券有没有发出去过」──
+  const guard = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll("#platformCoupons .plat-cpn")].map((c) => {
+      const stat = (c.querySelector(".plat-cpn__stat") || {}).textContent || "";
+      const issued = Number((stat.match(/已发\s*(\d+)/) || [])[1] || 0);
+      const del = [...c.querySelectorAll(".plat-cpn__ops button")].find((b) => b.textContent.trim() === "删除");
+      return { issued, hasDel: !!del, disabled: !!del && del.disabled };
+    });
+    return rows;
+  });
+  rec("每张券的操作行都有「删除」", guard.length > 0 && guard.every((r) => r.hasDel), String(guard.length));
+  rec("删除按钮：从未发放可点，发过即置灰（后端另 409 兜底）",
+      guard.some((r) => r.issued > 0) && guard.every((r) => (r.issued > 0 ? r.disabled : !r.disabled)),
+      JSON.stringify(guard).slice(0, 180));
+  const dimTip = await page.evaluate(() => {
+    const w = document.querySelector(".plat-cpn__delwrap");
+    return w ? w.getAttribute("title") : "";
+  });
+  rec("置灰的删除按钮带原因提示（改为下架）", /领取/.test(dimTip || "") && /下架/.test(dimTip || ""), dimTip);
+
+  // ── 删除流程：新建一张没发过的券 → 二次确认 → 真删掉 ──
+  await page.locator(".plat-cpnpreset").nth(3).click();
+  await page.waitForTimeout(1300);
+  const cnt0 = await page.locator("#platformCoupons .plat-cpn").count();
+  const delBtn = page.locator("#platformCoupons .plat-cpn").first().locator('button:has-text("删除")');
+  rec("新券（未发放）删除按钮可点", (await delBtn.isDisabled()) === false);
+  await delBtn.click();
+  await page.waitForTimeout(500);
+  const confirmTitle = await page.locator(".ux-overlay .ux-dialog-head h2").first().textContent().catch(() => "");
+  const confirmBody = await page.locator(".ux-overlay .ux-dialog-head p").first().textContent().catch(() => "");
+  rec("点删除先弹二次确认（标题 + 后果说明）", /删除/.test(confirmTitle || "") && /不可恢复/.test(confirmBody || ""),
+      (confirmTitle || "").trim() + " | " + (confirmBody || "").trim().slice(0, 40));
+  await page.locator('.ux-overlay button:has-text("确认删除")').first().click();
+  await page.waitForTimeout(1600);
+  const cnt1 = await page.locator("#platformCoupons .plat-cpn").count();
+  rec("确认后券从列表移除（-1）", cnt1 === cnt0 - 1, `${cnt0} → ${cnt1}`);
+  rec("删除后无残留确认弹层", (await page.locator(".ux-overlay").count()) === 0);
 
   await page.screenshot({ path: "/tmp/plat_coupon/platform.png" });
   rec("平台端无 JS 异常", errs.filter((e) => !/404|Failed to load resource/.test(e)).length === 0,

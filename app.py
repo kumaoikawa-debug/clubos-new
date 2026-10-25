@@ -4434,6 +4434,28 @@ def platform_update_coupon(coupon_id: int, payload: dict = Body(...)):
         return {'ok': True, 'stats': benefit_engine.coupon_stats(c, coupon_id)}
 
 
+@app.delete('/api/platform/coupons/{coupon_id}')
+def platform_delete_coupon(coupon_id: int):
+    """删除优惠券（2026-10-25）。
+
+    只允许删「一张都没发出去」的券：benefit_redemptions 里一旦有记录，C 端券包
+    是按 benefit_id JOIN 券面渲染的，删了主表就会留下孤儿券（点进去白屏）。
+    这种券正确的操作是「下架」。所以这里先查发放数，非零直接 409 说明原因。
+    """
+    with conn() as c:
+        b = row(c.execute("SELECT * FROM member_benefits WHERE id=? AND owner_type='PLATFORM'", (coupon_id,)))
+        if not b:
+            raise HTTPException(404, '优惠券不存在')
+        if b.get('benefit_type') not in ('activity_coupon', 'gear_coupon'):
+            raise HTTPException(400, '该记录不是优惠券，请到福利管理里操作')
+        stats = benefit_engine.coupon_stats(c, coupon_id)
+        issued = int(stats.get('issued') or 0)
+        if issued:
+            raise HTTPException(409, f'已有 {issued} 张券被领取（含已核销 {int(stats.get("used") or 0)} 张），不能删除；如需停止投放请改为下架')
+        c.execute('DELETE FROM member_benefits WHERE id=?', (coupon_id,))
+        return {'ok': True, 'deletedId': coupon_id}
+
+
 @app.post('/api/platform/coupons/{coupon_id}/grant')
 def platform_grant_coupon(coupon_id: int, payload: dict = Body(default={})):
     """定向群发：全部 C 端用户 / 指定俱乐部成员。成本总平台承担。"""

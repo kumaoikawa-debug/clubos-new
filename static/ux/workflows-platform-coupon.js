@@ -80,8 +80,10 @@
     } catch (e) { /* 俱乐部列表拿不到时，投放里就不给「指定俱乐部」选项 */ }
   }
 
-  /* ── 券卡（拆分式：左渐变券面 + 右白信息区，照图1）────────────────────────── */
-  function couponCardHtml(x) {
+  /* ── 券卡（拆分式：左渐变券面 + 右白信息区）
+     列表里一行一张（variant 缺省）；编辑器顶部预览用 'card'（竖排卡片）。
+     两态共用同一段结构，只差信息区的排布 class，避免两套 DOM 各改各的。 */
+  function couponCardHtml(x, variant) {
     var st = x.stats || {};
     var tpl = window.uxCouponTpl ? window.uxCouponTpl(x.image_key) : null;
     var amt = window.uxCouponAmountText
@@ -96,20 +98,30 @@
     var claimText = x.claim_mode === 'claim' ? '用户自领' : '后台发放';
     var validText = x.valid_to ? ('有效期至 ' + String(x.valid_to).slice(0, 10)) : '长期有效';
     var stockText = st.stock != null ? String(st.stock) : '不限';
+    var issued = Number(st.issued || 0);
+    /* 删除只对「一张都没发出去」的券开放：一旦有人领过/核销过，删掉会让券包里的券
+       变成孤儿（C 端 JOIN 不到券面），这种券只能下架。按钮置灰 + tooltip 说明原因，
+       后端 DELETE 也会 409 兜底。 */
+    var delHtml = issued > 0
+      ? '<span class="plat-cpn__delwrap" title="已有 ' + issued + ' 张被领取，不能删除；如需停止投放请点「下架」">' +
+          '<button class="btn ghost plat-cpn__del" type="button" disabled>删除</button></span>'
+      : '<button class="btn ghost plat-cpn__del" type="button" onclick="deletePlatformCoupon(' + x.id + ')">删除</button>';
     return '' +
-      '<div class="plat-cpn">' +
+      '<div class="plat-cpn' + (variant === 'card' ? ' plat-cpn--card' : '') + '">' +
         '<div class="plat-cpn__face" style="--cpn-from:' + from + ';--cpn-to:' + to + ';--cpn-ink:' + ink + '">' +
           '<b>' + amt.amount + '</b><span>' + amt.sub + '</span>' +
         '</div>' +
         '<div class="plat-cpn__info">' +
-          '<div class="plat-cpn__head"><strong>' + esc(x.title) + '</strong></div>' +
-          '<div class="plat-cpn__use">' + esc(useText) + '</div>' +
-          '<div class="plat-cpn__valid">' + esc(validText) + (scope ? ' · ' + esc(scope) : '') + '</div>' +
+          '<div class="plat-cpn__main">' +
+            '<div class="plat-cpn__head"><strong>' + esc(x.title) + '</strong></div>' +
+            '<div class="plat-cpn__use">' + esc(useText) + '</div>' +
+            '<div class="plat-cpn__valid">' + esc(validText) + (scope ? ' · ' + esc(scope) : '') + '</div>' +
+          '</div>' +
           '<div class="plat-cpn__meta">' +
             '<span class="plat-cpn__badge' + (active ? '' : ' plat-cpn__badge--off') + '">' +
               (active ? '进行中' : '已下架') + '</span>' +
             '<span class="plat-cpn__scope">' + esc(scope) + ' · ' + claimText + '</span>' +
-            '<span class="plat-cpn__stat">已发 ' + (st.issued || 0) + ' / ' + stockText +
+            '<span class="plat-cpn__stat">已发 ' + issued + ' / ' + stockText +
               ' · 已核销 ' + (st.used || 0) + '</span>' +
           '</div>' +
           '<div class="plat-cpn__ops">' +
@@ -117,6 +129,7 @@
             '<button class="btn ghost" type="button" onclick="editPlatformCoupon(' + x.id + ')">改投放</button>' +
             '<button class="btn ghost" type="button" onclick="togglePlatformCoupon(' + x.id + ",'" + x.status + "')\">" +
               (active ? '下架' : '上架') + '</button>' +
+            delHtml +
           '</div>' +
         '</div>' +
       '</div>';
@@ -443,7 +456,7 @@
         valid_to: toDbInput(validToInput.value),
         stats: { issued: 0, used: 0, stock: stockInput.value === '' ? null : num(stockInput.value, 0) }
       };
-      previewBox.innerHTML = couponCardHtml(like);
+      previewBox.innerHTML = couponCardHtml(like, 'card');
     }
 
     /* 顶部预览卡不挂操作行（编辑器里点了会两层弹窗，直接摘掉） */
@@ -595,6 +608,26 @@
       toast(status === 'active' ? '已下架' : '已上架');
       loadPlatformCoupons();
     } catch (e) { toast((e && e.message) || e); }
+  };
+
+  /* 删除券（只允许删「一张都没发出去」的券）。已发过的券后端 409，前端也置灰。 */
+  window.deletePlatformCoupon = async function (id) {
+    var ok = await showConfirm({
+      title: '删除这张优惠券？',
+      message: '删除后不可恢复：后台列表、C 端领券中心都会立刻不再出现这张券。' +
+               '已经发出去的券不能删（只能下架），这里只会删掉从未发放过的券。',
+      confirmText: '确认删除', danger: true
+    });
+    if (!ok) return;
+    try {
+      await api('/api/platform/coupons/' + id, { method: 'DELETE' });
+      toast('已删除');
+      loadPlatformCoupons();
+    } catch (e) {
+      /* 并发场景：别人刚领了 / 别的窗口刚发过 —— 后端 409 带原因，直接透给用户 */
+      var msg = (e && e.message) || String(e);
+      await showAlert({ title: '删除失败', message: msg });
+    }
   };
 
   /* 点「优惠券」栏目时加载：包一层 onView（experience-core 已经包过一次，这里再包一层） */
