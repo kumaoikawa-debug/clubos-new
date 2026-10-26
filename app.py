@@ -161,6 +161,10 @@ gear_points_policy=GearPointsPolicyService(setting)
 activity_refund_policy=ActivityRefundPolicyService()
 membership_engine=MembershipEngine()
 benefit_engine=BenefitEngine(wallet_snapshot)
+# 会员生命周期钩子（2026-10-26）：新会员入会自动发「邀请优惠券」，升级到设定等级自动发「升级赠券」。
+# 防重由 benefits 层负责（tier_gift_log 唯一索引 / referral 每人一张），异常在 membership 层兜底。
+membership_engine.on_member_created=benefit_engine.welcome_new_member
+membership_engine.on_upgrade=benefit_engine.process_tier_gifts
 # 积分商城（2026-10-26）：俱乐部用活动积分上架优惠券/活动/服务/实物兑换。
 from clubos_domain.points_mall import PointsMallEngine
 points_mall_engine=PointsMallEngine(benefit_engine)
@@ -295,7 +299,8 @@ def club_activities(club_id:int):
     # 免得页面上为每一行再打一次 points-policy。
     with conn() as c:return rows(c.execute('''SELECT id,title,status,event_date,location,city,price,capacity,created_at,cover,
         points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent,
-        accept_gear_points,gear_points_max_discount_amount,club_points_earn_rate_override
+        accept_gear_points,gear_points_max_discount_amount,club_points_earn_rate_override,
+        member_discount_enabled
         FROM activities WHERE club_id=? ORDER BY id DESC''',(club_id,)))
 
 # ===== 活动详情版本：生成 / 重新生成 / 恢复上一版 =====
@@ -1014,6 +1019,23 @@ def update_activity_points_policy(club_id:int,activity_id:int,payload:dict=Body(
         policy=activity_points_policy.normalize_update(payload,current)
         activity_points_policy.persist(c,activity_id,club_id,policy)
     return policy.as_dict()
+
+@app.get('/api/club/{club_id}/activities/{activity_id}/member-discount')
+def get_activity_member_discount(club_id:int,activity_id:int):
+    with conn() as c:
+        a=row(c.execute('SELECT member_discount_enabled FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+        if not a: raise HTTPException(404,'活动不存在')
+    return {'enabled':bool(a['member_discount_enabled'])}
+
+@app.patch('/api/club/{club_id}/activities/{activity_id}/member-discount')
+def update_activity_member_discount(club_id:int,activity_id:int,payload:dict=Body(...)):
+    """活动级「参与会员优惠」开关（2026-10-26）：会员等级折扣生效的前提条件之一。"""
+    with conn() as c:
+        a=row(c.execute('SELECT id FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+        if not a: raise HTTPException(404,'活动不存在')
+        c.execute('UPDATE activities SET member_discount_enabled=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND club_id=?',
+                  (1 if payload.get('enabled') else 0,activity_id,club_id))
+    return {'ok':True,'enabled':bool(payload.get('enabled'))}
 
 @app.get('/api/club/{club_id}/activities/{activity_id}/refund-policy')
 def get_activity_refund_policy(club_id:int,activity_id:int):
@@ -2671,6 +2693,120 @@ def public_points_mall_redeem(club_id:int,item_id:int,payload:dict=Body(...)):
         wallet=wallet_snapshot(c,user_id,club_id)
     return {'ok':True,**result,'wallet':wallet}
 
+# ---- 升级赠券 / 拉新邀请 / 券转赠（2026-10-26）--------------------------------
+
+@app.get('/api/club/{club_id}/tier-gift-rules')
+def club_tier_gift_rules(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return benefit_engine.tier_gift_rules(c,club_id=club_id)
+
+@app.post('/api/club/{club_id}/tier-gift-rules')
+def club_create_tier_gift_rule(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        try:
+            rid=benefit_engine.create_tier_gift_rule(c,club_id=club_id,payload=payload)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'ruleId':rid}
+
+@app.patch('/api/club/{club_id}/tier-gift-rules/{rule_id}')
+def club_update_tier_gift_rule(club_id:int,rule_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        try:
+            benefit_engine.update_tier_gift_rule(c,club_id=club_id,rule_id=rule_id,payload=payload)
+        except LookupError as e: raise HTTPException(404,str(e))
+    return {'ok':True}
+
+@app.delete('/api/club/{club_id}/tier-gift-rules/{rule_id}')
+def club_delete_tier_gift_rule(club_id:int,rule_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        benefit_engine.delete_tier_gift_rule(c,club_id=club_id,rule_id=rule_id)
+    return {'ok':True}
+
+@app.get('/api/club/{club_id}/referral-coupon')
+def club_referral_coupon(club_id:int):
+    """俱乐部拉新设定：注册会员自动发放的「邀请优惠券」是哪张。"""
+    club_or_404(club_id)
+    with conn() as c:
+        cfg=row(c.execute('SELECT referral_coupon_benefit_id FROM clubs WHERE id=?',(club_id,)))
+        bid=int((cfg or {}).get('referral_coupon_benefit_id') or 0)
+        b=benefit_engine._coupon_row(c,bid) if bid else None
+        pool=rows(c.execute('''SELECT id,title,mode,cash_value,threshold_amount,discount_percent,stock,status
+                               FROM member_benefits WHERE owner_type='CLUB' AND owner_club_id=? AND benefit_type='activity_coupon'
+                               ORDER BY id DESC''',(club_id,)))
+    return {'benefitId':bid,'benefit':({'id':b['id'],'title':b['title']} if b else None),'pool':pool}
+
+@app.patch('/api/club/{club_id}/referral-coupon')
+def club_set_referral_coupon(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    bid=int(payload.get('benefitId') or 0)
+    if bid:
+        with conn() as c:
+            b=row(c.execute('''SELECT id FROM member_benefits WHERE id=? AND owner_type='CLUB' AND owner_club_id=?
+                               AND benefit_type='activity_coupon' ''',(bid,club_id)))
+            if not b: raise HTTPException(400,'只能选择本俱乐部创建的活动优惠券作为邀请券')
+            c.execute('UPDATE clubs SET referral_coupon_benefit_id=? WHERE id=?',(bid,club_id))
+    else:
+        with conn() as c:
+            c.execute('UPDATE clubs SET referral_coupon_benefit_id=0 WHERE id=?',(club_id,))
+    return {'ok':True,'benefitId':bid}
+
+@app.get('/api/public/clubs/{club_id}/membership/invite-info')
+def public_invite_info(club_id:int,user_id:int=1):
+    """C 端邀请卡：我的邀请码 + 已邀请人数 + 奖励说明。"""
+    club_or_404(club_id)
+    with conn() as c:
+        code=membership_engine.ensure_invite_code(c,club_id=club_id,user_id=user_id)
+        invited=rows(c.execute('''SELECT m.user_id,u.name,m.level,m.created_at
+                                  FROM club_members m JOIN users u ON u.id=m.user_id
+                                  WHERE m.club_id=? AND m.referred_by=? ORDER BY m.id DESC LIMIT 20''',(club_id,user_id)))
+        cfg=row(c.execute('SELECT referral_coupon_benefit_id FROM clubs WHERE id=?',(club_id,)))
+        b=benefit_engine._coupon_row(c,int((cfg or {}).get('referral_coupon_benefit_id') or 0)) if (cfg or {}).get('referral_coupon_benefit_id') else None
+    return {'inviteCode':code,'invitedCount':len(invited),'invited':invited,
+            'reward':{'title':b['title'],'mode':b.get('mode'),'cashValue':float(b.get('cash_value') or 0),
+                      'discountPercent':float(b.get('discount_percent') or 0)} if b else None}
+
+@app.post('/api/public/clubs/{club_id}/membership/join')
+def public_join_with_invite(club_id:int,payload:dict=Body(...)):
+    """新会员填邀请码入会：记录邀请关系，双方自动获赠「邀请优惠券」（若俱乐部已设定）。"""
+    club_or_404(club_id)
+    user_id=int(payload.get('userId',1))
+    with conn() as c:
+        try:
+            info=membership_engine.join_with_invite(c,club_id=club_id,user_id=user_id,invite_code=str(payload.get('inviteCode') or ''))
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+        gifts=[]
+        if not info.get('alreadyBound'):
+            cfg=row(c.execute('SELECT referral_coupon_benefit_id FROM clubs WHERE id=?',(club_id,)))
+            if (cfg or {}).get('referral_coupon_benefit_id'):
+                b=benefit_engine._coupon_row(c,int(cfg['referral_coupon_benefit_id']))
+                if b:
+                    try:
+                        for uid,note in ((user_id,'好友邀请注册赠送'),(int(info['inviterUserId']),'成功邀请好友注册赠送')):
+                            gifts.append(benefit_engine._issue(c,b,uid,club_id,funding='CLUB',note=note))
+                    except Exception:
+                        pass
+        wallet=wallet_snapshot(c,user_id,club_id)
+    return {'ok':True,**info,'gifts':gifts,'wallet':wallet}
+
+@app.post('/api/public/clubs/{club_id}/coupons/transfer')
+def public_transfer_coupon(club_id:int,payload:dict=Body(...)):
+    """券转赠：好友输入券码领取（接收方须已是本俱乐部会员，券未使用未过期且允许分享）。"""
+    club_or_404(club_id)
+    to_user_id=int(payload.get('toUserId',1))
+    with conn() as c:
+        try:
+            result=benefit_engine.transfer_coupon(c,club_id=club_id,code=str(payload.get('code') or ''),to_user_id=to_user_id)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+        wallet=wallet_snapshot(c,to_user_id,club_id)
+    return {'ok':True,**result,'wallet':wallet}
+
 # ---- 会员深度管理（2026-10-22 用户截图反馈：点进会员要看全量信息 + 调积分 + 赠券）----
 # 脱敏纪律同 _public_leaders：这里全是俱乐部自己建档/收单的数据，俱乐部后台可见；
 # 但 C 端公开接口绝不复用本函数——给领队的备注、内部成本一律不出俱乐部边界。
@@ -3685,6 +3821,14 @@ def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_
             raise HTTPException(409,'该活动价格待定，请联系俱乐部咨询')
         try:
             q=booking_engine.quote(c,activity_id=activity_id,occurrence_id=occurrence_id,user_id=user_id,requested_club_points=club_points,requested_gear_points=gear_points,participant_count=max(1,participant_count))
+            # 会员等级活动折扣（2026-10-26）：试算与下单同口径 —— 折扣先于券，券基于折后金额判断门槛。
+            _a=row(c.execute('SELECT * FROM activities WHERE id=?',(activity_id,)))
+            _md,_mrate=(checkout_engine._member_activity_discount(c,activity=dict(_a),user_id=user_id,
+                        amount=float(q.points['payable'])) if _a else (0.0,0.0))
+            # 无折扣也要下发键（0），C 端与测试都按「键存在、值为 0」判定不折扣。
+            q.points['memberDiscount']=_md; q.points['memberDiscountRate']=_mrate
+            if _md>0:
+                q.points['payable']=round(float(q.points['payable'])-_md,2)
             benefits=benefit_engine.quote_vouchers(c,voucher_codes=codes,user_id=user_id,club_id=int(q.occurrence['club_id']),kind='activity',amount_available=float(q.points['payable']))
         except ValueError as e:
             raise HTTPException(409,str(e))
@@ -3721,8 +3865,10 @@ def create_activity_checkout(activity_id:int,payload:dict=Body(...)):
             participants,participant_policy=participant_service.normalize_for_checkout(activity=a,payer_name=name,payer_phone=phone,participants=participant_input)
             intent_id,q,policy_snapshot,benefits=checkout_engine.create_activity_intent(c,activity=a,occurrence=occ,user_id=uid,requested_club_points=req_cp,requested_gear_points=req_gp,voucher_codes=voucher_codes,participants=participants,participant_policy=participant_policy.as_dict())
         except (OverflowError,ValueError) as e: raise HTTPException(409,str(e))
+        _mi=row(c.execute('SELECT member_discount,member_discount_rate FROM checkout_intents WHERE id=?',(intent_id,)))
     # Activity commerce is intentionally ClubOS Domain only. Medusa is Gear-only.
     return {'ok':True,'checkoutId':intent_id,'userId':uid,**q.as_dict(),'pointsPolicy':policy_snapshot,'benefits':benefits,
+            'memberDiscount':float(_mi['member_discount'] or 0),'memberDiscountRate':float(_mi['member_discount_rate'] or 0) if _mi else 0,
             'commerceProvider':'clubos-domain','commerceCartId':None,'commerceNote':None,'nextAction':'PAY',
             'participantCount':len(participants),'participantPolicy':participant_policy.as_dict()}
 

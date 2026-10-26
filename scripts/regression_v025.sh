@@ -159,3 +159,8 @@ python tests/platform_gear_editor_smoke.py
 # 消费送券（满额自动送券，券须有库存）、积分商城（券/活动/服务/实物兑换+核销）。
 # 自带临时库隔离。
 python tests/member_coupon_mall_smoke.py
+
+# ── 会员体系 V2（2026-10-26）：等级活动折扣（活动级开关双闸）+ 升级自动赠券（幂等防重）+
+# 拉新邀请（邀请码/双方得券/幂等绑定）+ 券转赠（输码领取）+ 券面自定义（face_json 色值归一）。
+# 自带临时库隔离。
+python tests/member_v2_smoke.py

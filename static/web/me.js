@@ -205,7 +205,7 @@ window.loadOrders=loadOrders;
 /* ── 二级页栈 ─────────────────────────────────────────────────────────── */
 const meStack=[];
 const SUB_ME={};
-const SUB_ME_TITLE={myregs:'我的报名',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息',pointsmall:'积分商城'};
+const SUB_ME_TITLE={myregs:'我的报名',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息',pointsmall:'积分商城',invite:'邀请好友'};
 const SUB_ME_AFTER={};
 function meStackOpen(){return meStack.length>0;}
 function meEnsureStack(){
@@ -371,6 +371,7 @@ SUB_ME.address=function(){
 function meCouponFace(v,claimable){
   const face=window.uxCouponFace?window.uxCouponFace({
     title:v.title,imageKey:v.image_key||v.imageKey,
+    face:v.face_json||v.face,
     cashValue:(v.cash_value!=null?v.cash_value:v.cashValue),
     thresholdAmount:(v.threshold_amount!=null?v.threshold_amount:v.thresholdAmount),
     mode:v.mode,discountPercent:(v.discount_percent!=null?v.discount_percent:v.discountPercent),
@@ -382,7 +383,7 @@ function meCouponFace(v,claimable){
   const code=v.voucher_code||v.voucherCode||'';
   let act='';
   if(claimable) act=`<button class="me-btn me-btn--sm" onclick="meClaimCoupon(${v.id})">立即领取</button>`;
-  else if(v.status==='issued'&&!v.expired&&code) act=`<button class="me-btn me-btn--sm" onclick="meShareCoupon('${esc(code)}','${esc(v.title||'优惠券')}')">分享</button>`;
+  else if(v.status==='issued'&&!v.expired&&code) act=`<button class="me-btn me-btn--sm" onclick="meShareCoupon('${esc(code)}','${esc(v.title||'优惠券')}')">送好友</button>`;
   return `<div class="me-cpnitem">${face}<div class="me-cpnitem__ops">${act}</div></div>`;
 }
 SUB_ME.coupons=function(){
@@ -409,12 +410,66 @@ async function meClaimCoupon(id){
 }
 async function meShareCoupon(code,title){
   if(!code) return;
-  const text=(title||'优惠券')+'｜券码 '+code+'｜报名或买装备时直接使用';
-  try{ if(navigator.share){ await navigator.share({title:title||'优惠券',text}); return; } }catch(e){}
-  if(typeof meCopy==='function'){ meCopy(text,'券码已复制'); return; }
+  const text=(title||'优惠券')+'｜券码 '+code+'｜把券码发给好友，好友在「邀请好友」页输入券码即可领取，报名活动直接抵用';
+  try{ if(navigator.share){ await navigator.share({title:title||'送你一张券',text}); return; } }catch(e){}
+  if(typeof meCopy==='function'){ meCopy(text,'券码已复制，发给好友吧'); return; }
   try{ await navigator.clipboard.writeText(text); toast('券码已复制：'+code); }
-  catch(e){ showAlert({title:'券码',message:'请复制券码使用：'+code}); }
+  catch(e){ showAlert({title:'券码',message:'请把券码发给好友：'+code}); }
 }
+/* 好友送券：输入券码领取（券会从好友券包转移到你的券包） */
+async function meClaimByCode(){
+  const v=await showForm({title:'输入券码领券',subtitle:'好友把「券码 + 领取码」发给你后，在这里输入即可把券领到自己的券包，报名活动时直接抵用。',
+    fields:[{name:'code',label:'券码',required:true,full:true,placeholder:'如 CPN-1A2B3C4D',validate:x=>/^CPN-/i.test(x||'')?'':'券码以 CPN- 开头'}],submitText:'领取到券包'});
+  if(!v) return;
+  try{
+    const r=await api(`/api/public/clubs/${CLUB}/coupons/transfer`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:v.code.trim().toUpperCase(),toUserId:USER})});
+    toast(`已领取「${r.title}」到券包`);
+    ME.ts=0; await meLoadAll(true); renderMeSub();
+  }catch(e){ showAlert({title:'领取失败',message:(e&&e.message)||e}); }
+}
+/* 填邀请码入会（拉新）：注册后补填也有效，双方各得一张邀请券 */
+async function meFillInviteCode(){
+  const v=await showForm({title:'填写好友邀请码',subtitle:'填好友的邀请码（IV 开头）完成绑定，你和好友都会获得一张邀请优惠券，报名活动时直接抵用。',
+    fields:[{name:'code',label:'好友邀请码',required:true,full:true,placeholder:'如 IV3A2B1C',validate:x=>/^IV/i.test(x||'')?'':'邀请码以 IV 开头'}],submitText:'绑定并领券'});
+  if(!v) return;
+  try{
+    const r=await api(`/api/public/clubs/${CLUB}/membership/join`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({inviteCode:v.code.trim().toUpperCase(),userId:USER})});
+    if(r.alreadyBound) toast('你已绑定过邀请人，无需重复填写');
+    else{ toast(`绑定成功！你和好友各得一张邀请优惠券`); }
+    ME.ts=0; await meLoadAll(true); renderMeSub();
+  }catch(e){ showAlert({title:'绑定失败',message:(e&&e.message)||e}); }
+}
+/* 邀请好友页（2026-10-26 拉新）：邀请码 / 已邀请 / 奖励说明 / 输码领券 */
+SUB_ME.invite=function(){
+  return `<div id="meInviteBody"><div class="me-empty">正在加载邀请卡…</div></div>`;
+};
+SUB_ME_AFTER.invite=async function(){
+  const box=document.getElementById('meInviteBody'); if(!box) return;
+  try{
+    const d=await api(`/api/public/clubs/${CLUB}/membership/invite-info?user_id=${USER}`);
+    const rw=d.reward;
+    const rwText=rw?`好友注册成功后，双方各得一张「${esc(rw.title)}」`+(String(rw.mode)==='discount'?`（${Number(rw.discountPercent||0)/10} 折）`:`（抵 ${window.uxCouponMoney?window.uxCouponMoney(rw.cashValue):'¥'+(rw.cashValue||0)}）`)+`，报名活动直接抵用`:'俱乐部暂未开启邀请奖励，仍可填写邀请码绑定好友';
+    const invited=(d.invited||[]).map(x=>`<div class="me-invite__rec"><b>${esc(x.name||'好友')}</b><span>${esc(x.level||'会员')} · ${esc(String(x.created_at||'').slice(0,10))}</span></div>`).join('');
+    box.innerHTML=`
+      <div class="me-invite__hero">
+        <div class="me-invite__label">我的邀请码</div>
+        <div class="me-invite__code" onclick="meCopy('${esc(d.inviteCode)}','邀请码已复制')">${esc(d.inviteCode)}</div>
+        <div class="me-invite__hint">把邀请码发给好朋友，TA 注册会员后填入即可绑定</div>
+        <div class="me-invite__ops">
+          <button class="me-btn" onclick="meCopy('${esc(d.inviteCode)}','邀请码已复制，发给好友吧')">复制邀请码</button>
+          <button class="me-btn me-btn--ghost" onclick="meFillInviteCode()">我有邀请码</button>
+        </div>
+      </div>
+      <div class="me-invite__reward">${esc(rwText)}</div>
+      <div class="me-sec-t">好友送我一张券？</div>
+      <div class="me-invite__gift">
+        <span class="sub">在下面输入券码（CPN- 开头），券会立刻转到你的券包，报名活动时直接抵用。</span>
+        <button class="me-btn me-btn--sm" onclick="meClaimByCode()">输入券码领取</button>
+      </div>
+      <div class="me-sec-t">已邀请好友（${d.invitedCount||0}）</div>
+      ${invited||'<div class="empty">还没有好友用你的邀请码注册，快去分享吧</div>'}`;
+  }catch(e){ box.innerHTML=empty('邀请卡加载失败',(e&&e.message)||'请稍后再试'); }
+};
 async function meSetCity(){
   const cities=(window.CLUBOS_CITIES||[]);
   const opts=[{value:'',label:'不设置'}].concat(cities.map(c=>({value:c,label:c})));
@@ -687,8 +742,9 @@ async function meLogout(){
 window.pushMe=pushMe; window.popMe=popMe; window.meSetTab=meSetTab;
 window.meAddAddr=meAddAddr; window.meEditAddr=meEditAddr; window.meDelAddr=meDelAddr; window.meDefaultAddr=meDefaultAddr;
 window.meLogout=meLogout;
-/* 积分商城 / 购买会员（inline onclick 引用，必须挂 window —— me.js 整体是 IIFE，裸 function 不上 window） */
+/* 积分商城 / 购买会员 / 拉新邀请（inline onclick 引用，必须挂 window —— me.js 整体是 IIFE，裸 function 不上 window） */
 window.meBuyTier=meBuyTier; window.meRedeemMall=meRedeemMall; window.meMallFilter=meMallFilter;
+window.meClaimByCode=meClaimByCode; window.meFillInviteCode=meFillInviteCode;
 
 /* 若脚本在 我的 已激活后注入，立即刷新一次 */
 if(document.getElementById('wme') && !document.getElementById('wme').hasAttribute('hidden')===false){

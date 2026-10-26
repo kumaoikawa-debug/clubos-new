@@ -55,10 +55,11 @@ window.addExecutionGroup=async oid=>uxTask(async()=>{const d=await uxForm({title
 window.assignVehicle=async(oid,pid)=>uxTask(async()=>{const r=await api('/api/club/'+CLUB+'/occurrences/'+oid+'/execution'),gs=(r.groups||[]).filter(g=>g.group_type==='vehicle');if(!gs.length){toast('请先创建车辆分组');return}const d=await uxForm({title:'为参加人分配车辆',fields:[{name:'groupId',label:'选择车辆',type:'select',required:true,full:true,options:gs.map(g=>({value:g.id,label:g.name+' · '+(g.assigned_count||0)+'/'+(g.capacity||'不限')}))}],submitText:'确认分车'});if(!d)return;await post('/api/club/'+CLUB+'/execution-groups/'+d.groupId+'/assign',{participantId:pid});toast('已分配车辆');openExecution(oid)});
 window.quickCheckin=async(oid,pid,current)=>uxTask(async()=>{const d=await uxForm({title:'更新参加人签到',fields:[{name:'status',label:'签到状态',type:'select',required:true,full:true,value:current||'pending',options:[{value:'checked_in',label:'已签到'},{value:'no_show',label:'未到场'},{value:'cancelled',label:'取消参加'},{value:'pending',label:'等待签到'}]}],submitText:'保存签到'});if(!d)return;await patch('/api/club/'+CLUB+'/occurrences/'+oid+'/participants/'+pid+'/checkin',d);toast('签到已更新');openExecution(oid)});
 window.addExecutionNotice=async oid=>uxTask(async()=>{const d=await uxForm({title:'活动通知',subtitle:'点「标记发送」后，报了名的顾客会立刻在自己的订单「出行指引」里看到这条通知；短信 / 微信渠道后续接入后才会真正发到手机上。',fields:[{name:'title',label:'通知标题',full:true,required:true,value:'出发前集合通知'},{name:'content',label:'通知内容',type:'textarea',full:true,required:true,value:'请按时到达集合点，并携带活动所需装备。'},{name:'channel',label:'通知渠道',type:'select',required:true,options:[{value:'manual',label:'站内同步（订单内展示）'},{value:'sms',label:'短信（需渠道接入）'},{value:'wechat',label:'微信（需渠道接入）'}]}],submitText:'创建通知'});if(!d)return;await post('/api/club/'+CLUB+'/occurrences/'+oid+'/notices',{...d,audience:'all'});toast('通知已创建');openExecution(oid)});
-window.addTier=async()=>uxTask(async()=>{const d=await uxForm({title:'创建会员等级',subtitle:'开通方式二选一：条件开通（消费/次数达标自动升级）或购买开通（顾客付费购买会员卡）。等级归属于当前俱乐部，不影响其他俱乐部会员。',fields:[{name:'name',label:'等级名称',required:true,value:'钻石会员'},{name:'rank',label:'等级顺序（越大越高）',type:'number',min:1,step:1,value:30,required:true},{name:'accessMode',label:'开通方式',type:'select',full:true,value:'CONDITION',options:[{value:'CONDITION',label:'条件开通（消费 / 次数达标自动升级）'},{value:'PURCHASE',label:'购买开通（顾客付费购买会员卡）'}]},{name:'price',label:'会员卡售价（元，仅购买开通生效）',type:'number',min:0,step:.01,value:399},{name:'validMonths',label:'会员卡有效期（月，仅购买开通生效）',type:'number',min:1,step:1,value:12},{name:'minActivitySpend',label:'累计活动消费（元，仅条件开通生效）',type:'number',min:0,step:1,value:5000,required:true},{name:'minActivityCount',label:'累计活动次数（仅条件开通生效）',type:'number',min:0,step:1,value:10,required:true}],submitText:'保存会员等级'});if(!d)return;await post('/api/club/'+CLUB+'/membership/tiers',{...d,qualificationMode:'ANY',benefits:['专属会员权益'],accessMode:d.accessMode||'CONDITION',price:Number(d.price||0),validMonths:Number(d.validMonths||12)});toast('等级已新增');loadMembers()});
-/* 俱乐部营销 · 优惠券（2026-10-26）：满减 / 折扣 / 直抵三种形态，只能用于活动报名。 */
+window.addTier=async()=>uxTask(async()=>{const d=await uxForm({title:'创建会员等级',subtitle:'开通方式二选一：条件开通（消费/次数达标自动升级）或购买开通（顾客付费购买会员卡）。等级归属于当前俱乐部，不影响其他俱乐部会员。',fields:[{name:'name',label:'等级名称',required:true,value:'钻石会员'},{name:'rank',label:'等级顺序（越大越高）',type:'number',min:1,step:1,value:30,required:true},{name:'accessMode',label:'开通方式',type:'select',full:true,value:'CONDITION',options:[{value:'CONDITION',label:'条件开通（消费 / 次数达标自动升级）'},{value:'PURCHASE',label:'购买开通（顾客付费购买会员卡）'}]},{name:'price',label:'会员卡售价（元，仅购买开通生效）',type:'number',min:0,step:.01,value:399},{name:'validMonths',label:'会员卡有效期（月，仅购买开通生效）',type:'number',min:1,step:1,value:12},{name:'minActivitySpend',label:'累计活动消费（元，仅条件开通生效）',type:'number',min:0,step:1,value:5000,required:true},{name:'minActivityCount',label:'累计活动次数（仅条件开通生效）',type:'number',min:0,step:1,value:10,required:true},{name:'activityDiscountPercent',label:'活动报名折扣（填折后百分比：90 = 9 折，0 = 该等级不折扣）',type:'number',min:0,max:99,step:1,value:0,full:true,help:'该等级会员报名「参与了会员优惠」的活动时按此折扣立减；每个活动还要自己打开「参与会员优惠」开关才生效。'}],submitText:'保存会员等级'});if(!d)return;await post('/api/club/'+CLUB+'/membership/tiers',{...d,qualificationMode:'ANY',benefits:['专属会员权益'],accessMode:d.accessMode||'CONDITION',price:Number(d.price||0),validMonths:Number(d.validMonths||12),activityDiscountPercent:Number(d.activityDiscountPercent||0)});toast('等级已新增');loadMembers()});
+/* 俱乐部营销 · 优惠券（2026-10-26）：满减 / 折扣 / 直抵三种形态，只能用于活动报名。
+   两步创建：先填券的业务信息，再进「券面设计器」挑模板或自定义渐变配色（实时预览）。 */
 window.addClubBenefit=window.addClubCoupon=async()=>uxTask(async()=>{
-  const d=await uxForm({title:'创建俱乐部优惠券',subtitle:'券只能用于本俱乐部活动报名，不能涉及装备商城；成本由本俱乐部承担。顾客可用活动积分兑换，也可由「消费送券」自动赠送。',
+  const d=await uxForm({title:'创建俱乐部优惠券',subtitle:'券只能用于本俱乐部活动报名，不能涉及装备商城；成本由本俱乐部承担。顾客可用活动积分兑换，也可由「消费送券」「升级赠券」自动赠送。',
     fields:[
       {name:'title',label:'券名称',required:true,full:true,value:'活动满 200 减 30 券'},
       {name:'mode',label:'券形态',type:'select',full:true,required:true,value:'threshold',options:[{value:'threshold',label:'满减券（满指定金额立减）'},{value:'discount',label:'折扣券（订单打 N 折）'},{value:'fixed',label:'直抵券（无门槛直接抵）'}]},
@@ -66,18 +67,75 @@ window.addClubBenefit=window.addClubCoupon=async()=>uxTask(async()=>{
       {name:'cashValue',label:'抵扣金额（元，仅满减/直抵券填写）',type:'number',min:0,step:.01,value:30},
       {name:'discountPercent',label:'折扣（填折后百分比：90 = 9 折，仅折扣券填写）',type:'number',min:1,max:99,step:1,value:90},
       {name:'pointsCost',label:'兑换所需活动积分',type:'number',min:1,step:1,value:300,required:true},
-      {name:'stock',label:'券库存（消费送券要求已有库存）',type:'number',min:0,step:1,value:50,required:true},
+      {name:'stock',label:'券库存（消费送券 / 升级赠券要求已有库存）',type:'number',min:0,step:1,value:50,required:true},
       {name:'description',label:'使用说明',full:true,value:'本俱乐部活动报名专用'}
-    ],submitText:'创建优惠券'});
+    ],submitText:'下一步：设计券面'});
   if(!d)return;
   const mode=String(d.mode||'threshold');
-  await post('/api/club/'+CLUB+'/benefits',{title:d.title,benefitType:'activity_coupon',mode,
+  const base={title:d.title,benefitType:'activity_coupon',mode,
     thresholdAmount:mode==='threshold'?Number(d.thresholdAmount||0):0,
     cashValue:(mode==='discount')?0:Number(d.cashValue||0),
     discountPercent:(mode==='discount')?Number(d.discountPercent||0):0,
     pointsCost:Number(d.pointsCost||0),stock:d.stock===''?null:Number(d.stock),
-    description:d.description,pointsType:'club',claimMode:'grant'});
-  toast('优惠券已创建');loadMembers()});
+    description:d.description,pointsType:'club',claimMode:'grant'};
+  const ok=await cpnFaceDialog(base);
+  if(ok){toast('优惠券已创建');loadMembers()}
+});
+/* 券面设计器（2026-10-26）：内置模板一键选色，或手填 #RRGGBB 自定义渐变双色 + 文字色，
+   实时预览最终券面。手填色失焦自动补 # 前缀，写错标红保留原值 —— 与规格色值同一套交互。
+   返回 true=已创建；false/undefined=取消。 */
+window.cpnFaceDialog=base=>new Promise(resolve=>{
+  const tpls=window.uxCouponTemplates||[];
+  const $=s=>document.querySelector(s);
+  const body=`<div class="ux-cpn-designer">
+    <div class="ux-field"><label>内置模板</label>
+      <div class="ux-cpn-designer__tpls">${tpls.map((t,i)=>`<button type="button" class="ux-cpn-designer__tpl${i===0?' on':''}" data-key="${t.key}"><i style="--t-from:${t.from};--t-to:${t.to}"></i>${t.name}</button>`).join('')}</div>
+      <small>选一款模板，或在下面自定义渐变双色与文字色（留空 = 跟随所选模板）。</small></div>
+    <div class="ux-cpn-designer__custom">
+      <label>渐变起 <input id="cpnC1" placeholder="#FF9A5A" maxlength="7" autocomplete="off"></label>
+      <label>渐变止 <input id="cpnC2" placeholder="#EF6236" maxlength="7" autocomplete="off"></label>
+      <label>文字色 <input id="cpnInk" placeholder="#FFFFFF" maxlength="7" autocomplete="off"></label>
+    </div>
+    <div class="ux-field"><label>实时预览（顾客券包 / 结算 / 分享卡同款）</label>
+      <div class="ux-cpn-designer__preview" id="cpnPrev"></div></div>
+  </div>`;
+  const ov=uxDialog({title:'设计券面',desc:'这张券会以你设计的样式出现在顾客的券包、报名结算与分享卡上。',wide:true,body,
+    onClose:()=>resolve(false),
+    foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-cpn-create>创建优惠券</button>`});
+  let tplKey=(tpls[0]||{}).key||'sunrise';
+  const norm=v=>{v=String(v||'').trim();if(!v)return null;if(/^[0-9a-fA-F]{6}$/.test(v))v='#'+v;return /^#[0-9a-fA-F]{6}$/.test(v)?v.toUpperCase():'BAD'};
+  const readFace=()=>{
+    const ids=['cpnC1','cpnC2','cpnInk'],out={},face={};
+    ids.forEach((id,i)=>{const el=ov.querySelector('#'+id);const v=norm(el.value);
+      el.classList.toggle('is-bad',v==='BAD');
+      if(v&&v!=='BAD')face[['c1','c2','ink'][i]]=v;});
+    return Object.keys(face).length?face:null;
+  };
+  const paint=()=>{
+    const prev=ov.querySelector('#cpnPrev');if(!prev)return;
+    prev.innerHTML=window.uxCouponFace(Object.assign({},base,{benefitType:'activity_coupon',imageKey:tplKey,face:readFace()}));
+  };
+  ov.querySelectorAll('.ux-cpn-designer__tpl').forEach(btn=>{btn.onclick=()=>{
+    ov.querySelectorAll('.ux-cpn-designer__tpl').forEach(b=>b.classList.remove('on'));
+    btn.classList.add('on');tplKey=btn.dataset.key;paint();}});
+  ['cpnC1','cpnC2','cpnInk'].forEach(id=>{const el=ov.querySelector('#'+id);
+    el.addEventListener('input',paint);
+    el.addEventListener('blur',()=>{const v=norm(el.value);
+      if(v&&v!=='BAD')el.value=v;           /* 失焦补全 # 与大写 */
+      el.classList.toggle('is-bad',v==='BAD');paint();});});
+  paint();
+  ov.querySelector('[data-cancel]').onclick=()=>{ov.uxClose();resolve(false)};
+  ov.querySelector('[data-cpn-create]').onclick=async()=>{
+    const bad=ov.querySelector('.is-bad');
+    if(bad){toast('自定义色值写错了，请填 6 位十六进制（如 #FF9A5A）');bad.focus();return}
+    const submit=ov.querySelector('[data-cpn-create]');submit.disabled=true;
+    try{
+      const face=readFace();
+      await post('/api/club/'+CLUB+'/benefits',face?Object.assign({},base,{face}):base);
+      ov.uxClose();resolve(true);
+    }catch(e){toast((e&&e.message)||e);submit.disabled=false}
+  };
+});
 /* 消费送券规则（2026-10-26）：单笔活动消费满 X 元自动送一张券（券须已有库存）。 */
 window.addGiftRule=async()=>uxTask(async()=>{
   let benefits=[];try{benefits=await api(`/api/club/${CLUB}/benefits`)}catch(e){benefits=[]}
@@ -96,6 +154,41 @@ window.addGiftRule=async()=>uxTask(async()=>{
   toast('送券规则已创建');loadMembers()});
 window.toggleGiftRule=async(id,enabled)=>uxTask(async()=>{await api(`/api/club/${CLUB}/coupon-gift-rules/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!enabled})});toast(enabled?'规则已启用':'规则已停用');loadMembers()});
 window.delGiftRule=async id=>uxTask(async()=>{if(!await uxConfirm({title:'删除送券规则',message:'删除后，已赠送出去的券不受影响，只是不再自动赠送。'}))return;await api(`/api/club/${CLUB}/coupon-gift-rules/${id}`,{method:'DELETE'});toast('规则已删除');loadMembers()});
+/* 升级赠券（2026-10-26）：会员达到设定等级时自动送一张券；每个等级绑一张券，可换绑。 */
+window.addTierGift=async()=>{
+  let tiers=[],benefits=[];
+  try{[tiers,benefits]=await Promise.all([api(`/api/club/${CLUB}/membership/tiers`),api(`/api/club/${CLUB}/benefits`)])}catch(e){}
+  const coupons=(benefits||[]).filter(b=>b.owner_type==='CLUB'&&b.benefit_type==='activity_coupon'&&b.status==='active');
+  if(!(tiers||[]).length){showAlert({title:'先创建会员等级',message:'请先在「会员等级规则」里创建至少一个等级，再设置升级赠券。'});return}
+  if(!coupons.length){showAlert({title:'先创建优惠券',message:'升级赠券只能赠送本俱乐部已创建且启用中的活动优惠券，请先在「俱乐部营销 · 优惠券」里建券并备好库存。'});return}
+  const d=await uxForm({title:'设置升级赠券',
+    subtitle:'会员升级到选定等级时，系统自动把券送进TA的券包（每个等级绑一张券，每位会员同一等级只送一次）。券必须有库存。',
+    fields:[
+      {name:'tierId',label:'达到哪个等级时赠送',type:'select',required:true,full:true,
+       options:tiers.filter(t=>t.status==='active').map(t=>({value:t.id,label:`${t.name}（Rank ${t.rank}）`})).filter(x=>x.label)},
+      {name:'benefitId',label:'赠送哪张券',type:'select',required:true,full:true,
+       options:coupons.map(b=>({value:b.id,label:`${b.title} · 库存 ${b.stock==null?'不限':b.stock}`}))}
+    ],submitText:'保存升级赠券'});
+  if(!d)return;
+  await post('/api/club/'+CLUB+'/tier-gift-rules',{tierId:Number(d.tierId),benefitId:Number(d.benefitId)});
+  toast('升级赠券已设置');loadMembers();
+};
+window.toggleTierGift=async(id,enabled)=>uxTask(async()=>{await api(`/api/club/${CLUB}/tier-gift-rules/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!enabled})});toast(enabled?'规则已启用':'规则已停用');loadMembers()});
+window.delTierGift=async id=>uxTask(async()=>{if(!await uxConfirm({title:'删除升级赠券',message:'删除后，已赠送出去的券不受影响，升级不再自动赠券。'}))return;await api(`/api/club/${CLUB}/tier-gift-rules/${id}`,{method:'DELETE'});toast('已删除');loadMembers()});
+/* 拉新设定（2026-10-26）：注册会员自动发一张「邀请优惠券」；邀请好友注册双方都得券。 */
+window.setReferralCoupon=async()=>{
+  let cfg=null;try{cfg=await api(`/api/club/${CLUB}/referral-coupon`)}catch(e){}
+  const pool=(cfg&&cfg.pool)||[];
+  if(!pool.length){showAlert({title:'先创建优惠券',message:'邀请券必须是本俱乐部创建的活动优惠券，请先在「俱乐部营销 · 优惠券」里建券并备好库存。'});return}
+  const d=await uxForm({title:'设定邀请优惠券',
+    subtitle:'新会员注册后自动获得一张该券；好友凭会员的邀请码注册，双方各得一张。报名活动时按券面金额抵扣。',
+    fields:[{name:'benefitId',label:'邀请优惠券',type:'select',required:true,full:true,
+      options:[{value:0,label:'不开启（不自动发邀请券）'}].concat(pool.map(b=>({value:b.id,label:`${b.title} · 库存 ${b.stock==null?'不限':b.stock}`}))),value:(cfg&&cfg.benefitId)||0}],
+    submitText:'保存设定'});
+  if(!d)return;
+  await api(`/api/club/${CLUB}/referral-coupon`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({benefitId:Number(d.benefitId||0)})});
+  toast(Number(d.benefitId)?'邀请优惠券已设定':'已关闭邀请券奖励');loadMembers();
+};
 window.togglePurchaseEnabled=async enabled=>uxTask(async()=>{await post('/api/club/'+CLUB+'/membership/purchase-enabled',{enabled:!!enabled});toast(enabled?'已开通「购买会员」：C 端会员中心会出现可购买的会员卡':'已关闭「购买会员」');loadMembers()});
 /* 积分商城（2026-10-26）：顾客在 C 端用活动积分兑换优惠券/活动/服务/实物。 */
 window.addMallItem=async()=>uxTask(async()=>{

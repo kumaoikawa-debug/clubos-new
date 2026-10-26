@@ -97,6 +97,33 @@ class CheckoutEngine:
             logger.warning("member gear discount lookup failed (club=%s user=%s): %s",club_id,user_id,e)
             return 1.0,0.0
 
+    def _member_activity_discount(self,c,*,activity:dict,user_id:int,amount:float):
+        """会员等级活动折扣（2026-10-26）：生效前提是「双闸」——
+        ① 活动开启 member_discount_enabled（活动是前提条件）；
+        ② 用户当前等级配了 activity_discount_percent（1~99，90=9折）。
+        返回 (立减金额, 折扣率)，任一条件不满足返回 (0.0, 0.0)。"""
+        try:
+            if not int(activity.get('member_discount_enabled') or 0):
+                return 0.0, 0.0
+            if not self.membership:
+                return 0.0, 0.0
+            m=c.execute('SELECT current_tier_id FROM club_members WHERE club_id=? AND user_id=?',
+                        (int(activity['club_id']),user_id)).fetchone()
+            if not m or not m['current_tier_id']:
+                return 0.0, 0.0
+            t=c.execute('SELECT activity_discount_percent FROM club_member_tiers WHERE id=? AND club_id=?',
+                        (int(m['current_tier_id']),int(activity['club_id']))).fetchone()
+            if not t:
+                return 0.0, 0.0
+            rate=float(t['activity_discount_percent'] or 0)
+            if not (1.0 <= rate < 100.0):
+                return 0.0, 0.0
+            amt=round(max(0.0,float(amount or 0)),2)
+            return min(amt, round(amt*(100.0-rate)/100.0, 2)), rate
+        except Exception as e:
+            logger.warning("member activity discount lookup failed (activity=%s user=%s): %s",activity.get('id'),user_id,e)
+            return 0.0, 0.0
+
     def create_activity_intent(self, c, *, activity:dict, occurrence:dict, user_id:int,
                                requested_club_points:int=0, requested_gear_points:int=0,
                                voucher_codes:list[str]|None=None, participants:list[dict]|None=None,
@@ -129,6 +156,11 @@ class CheckoutEngine:
             allow_gear_points=policy.effective_accept_gear_points,
             gear_points_max_discount_percent=policy.effective_gear_points_percent,
         )
+        # 会员等级活动折扣（2026-10-26）：先于券计算 —— 券基于「会员折后金额」判断门槛与抵扣。
+        member_discount, member_rate = self._member_activity_discount(
+            c, activity=activity, user_id=user_id, amount=quote.payable)
+        if member_discount > 0:
+            quote.payable = round(float(quote.payable) - member_discount, 2)
         intent_id=self._new_id()
         benefit_quote={'clubDiscount':0.0,'platformSubsidy':0.0,'totalDiscount':0.0,'applied':[]}
         if self.benefits and voucher_codes:
@@ -143,13 +175,14 @@ class CheckoutEngine:
         c.execute("""INSERT INTO checkout_intents(
           id,kind,user_id,club_id,status,original_amount,cash_amount,club_points_reserved,
           gear_points_reserved,club_point_discount,platform_point_subsidy,club_benefit_discount,
-          platform_benefit_subsidy,benefit_redemption_ids_json,payload_json,points_policy_snapshot_json,
+          platform_benefit_subsidy,member_discount,member_discount_rate,benefit_redemption_ids_json,payload_json,points_policy_snapshot_json,
           participant_count,participant_policy_snapshot_json)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(
             intent_id,'activity',user_id,int(activity['club_id']),'pending_payment',
             original_amount,cash_amount,quote.club_points_used,quote.gear_points_used,
             quote.club_point_discount,quote.platform_point_subsidy,benefit_quote['clubDiscount'],
-            benefit_quote['platformSubsidy'],json.dumps(redemption_ids),json.dumps(payload,ensure_ascii=False),
+            benefit_quote['platformSubsidy'],member_discount,member_rate,
+            json.dumps(redemption_ids),json.dumps(payload,ensure_ascii=False),
             json.dumps(policy_snapshot,ensure_ascii=False),participant_count,json.dumps(participant_policy,ensure_ascii=False)))
         self.points.hold_points(c,intent_id=intent_id,user_id=user_id,club_id=int(activity['club_id']),
                                club_points=quote.club_points_used,gear_points=quote.gear_points_used)
@@ -322,6 +355,8 @@ class CheckoutEngine:
                 'cashPaid':intent['cash_amount'],'commerceOrderId':commerce_order_id,'pointsPolicy':policy_snapshot,
                 'clubBenefitDiscount':float(intent.get('club_benefit_discount') or 0),
                 'platformBenefitSubsidy':float(intent.get('platform_benefit_subsidy') or 0),
+                'memberDiscount':float(intent.get('member_discount') or 0),
+                'memberDiscountRate':float(intent.get('member_discount_rate') or 0),
                 'memberLevel':(member.level if member else None),'participantCount':participant_count,'participantIds':participant_ids,
                 'couponGifts':coupon_gifts}
         # Persist the confirmed result so async payment polling (get_checkout) can hand back the

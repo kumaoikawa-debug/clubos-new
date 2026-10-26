@@ -1,25 +1,62 @@
-/* 通用券面样式（2026-10-24 优惠券体系）
-   平台端券列表、C 端券包、分享卡共用。券面用 CSS 渐变 + 伪元素锯齿缺口，
-   不依赖任何图片资源，所以离线/弱网都不会裂图。 */
+/* 通用券面样式 · 2026-10-26 视觉升级（自定义渐变 + 光泽层 + 票券缺口 + 水印）
+   -----------------------------------------------------------------------
+   平台端券列表、C 端券包、分享卡共用。全部 CSS 绘制，不依赖图片资源，
+   离线/弱网都不会裂图。
+   变量：
+     --cpn-from / --cpn-to  渐变起止色（模板色或商家自定义 face.c1/c2）
+     --cpn-ink              券面文字色（face.ink）
+   结构：ux-cpn > __amt(金额区) + __body(信息区)；::before/::after 为上下撕票缺口。 */
 .ux-cpn{
   position:relative;display:flex;align-items:stretch;gap:0;overflow:hidden;
-  border-radius:14px;background:linear-gradient(135deg,var(--cpn-from,#FF9A5A),var(--cpn-to,#EF6236));
-  color:var(--cpn-ink,#fff);min-height:76px;box-shadow:0 4px 16px rgba(20,40,30,.10);
+  border-radius:14px;
+  /* 三层背景：斜向光泽带（年轻感）→ 主渐变 → 顶部高光细线 */
+  background:
+    linear-gradient(112deg,rgba(255,255,255,.20) 0%,rgba(255,255,255,.06) 30%,rgba(255,255,255,0) 46%),
+    linear-gradient(132deg,var(--cpn-from,#FF9A5A),var(--cpn-to,#EF6236));
+  color:var(--cpn-ink,#fff);min-height:80px;
+  box-shadow:0 6px 18px -6px color-mix(in srgb,var(--cpn-to,#EF6236) 55%,transparent),
+             0 2px 6px rgba(20,40,30,.08);
 }
+/* 金额区：大数字 + 细字号说明，票券主视觉 */
 .ux-cpn__amt{
   flex:0 0 auto;display:flex;flex-direction:column;justify-content:center;align-items:center;
-  padding:14px 16px;min-width:104px;border-right:1px dashed rgba(255,255,255,.38);
+  padding:14px 18px;min-width:110px;position:relative;
+  border-right:1px dashed color-mix(in srgb,var(--cpn-ink,#fff) 42%,transparent);
 }
-.ux-cpn__amt b{font-size:24px;font-weight:800;line-height:1.1;letter-spacing:-.6px}
-.ux-cpn__amt span{font-size:11px;opacity:.85;margin-top:3px;white-space:nowrap}
-.ux-cpn__body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px;padding:13px 16px}
-.ux-cpn__body strong{font-size:14px;font-weight:750;line-height:1.35;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ux-cpn__use{font-size:11.5px;opacity:.9}
-.ux-cpn__meta{font-size:11px;opacity:.82}
-.ux-cpn__code{font-size:10.5px;opacity:.7;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.4px}
-/* 券口锯齿：两侧半圆缺口，像撕下来的票券 */
+.ux-cpn__amt b{
+  font-size:26px;font-weight:800;line-height:1.05;letter-spacing:-.8px;
+  text-shadow:0 1px 2px rgba(0,0,0,.12);white-space:nowrap;
+}
+.ux-cpn__amt span{font-size:11px;opacity:.88;margin-top:4px;white-space:nowrap;font-weight:550}
+/* 右下角大水印符号：低透明度，让票面不空 */
+.ux-cpn__wm{
+  position:absolute;right:-14px;bottom:-20px;width:72px;height:72px;border-radius:50%;
+  border:7px solid rgba(255,255,255,.14);pointer-events:none;
+}
+.ux-cpn__wm::after{
+  content:'¥';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:30px;font-weight:800;color:rgba(255,255,255,.14);font-style:normal;
+}
+/* 深色 ink 的券面（如米金款）水印改深色调 */
+.ux-cpn--darkink .ux-cpn__wm{border-color:rgba(0,0,0,.10)}
+.ux-cpn--darkink .ux-cpn__wm::after{color:rgba(0,0,0,.10)}
+.ux-cpn__body{
+  flex:1 1 auto;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:3px;
+  padding:13px 16px 13px 15px;
+}
+.ux-cpn__body strong{
+  font-size:14.5px;font-weight:750;line-height:1.35;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.ux-cpn__use{font-size:11.5px;opacity:.92;font-weight:600}
+.ux-cpn__meta{font-size:11px;opacity:.8}
+.ux-cpn__code{
+  font-size:10.5px;opacity:.72;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  letter-spacing:.5px;
+}
+/* 券口锯齿：右侧分隔线上的上下半圆缺口，像撕下来的票券 */
 .ux-cpn::before,.ux-cpn::after{
-  content:'';position:absolute;right:132px;width:14px;height:14px;border-radius:50%;
+  content:'';position:absolute;right:138px;width:14px;height:14px;border-radius:50%;
   background:var(--cpn-bg,var(--color-background-primary,#fff));
 }
 .ux-cpn::before{top:-7px}
@@ -28,9 +65,33 @@
 .ux-cpn--expired{filter:grayscale(1);opacity:.5}
 /* 小尺寸变体：列表里一排几张时用 */
 .ux-cpn--sm{min-height:56px}
-.ux-cpn--sm .ux-cpn__amt{padding:9px 12px;min-width:78px}
+.ux-cpn--sm .ux-cpn__amt{padding:9px 12px;min-width:80px}
 .ux-cpn--sm .ux-cpn__amt b{font-size:18px}
-.ux-cpn--sm .ux-cpn__body{padding:9px 12px;gap:2px}
+.ux-cpn--sm .ux-cpn__body{padding:9px 12px 9px 11px;gap:2px}
 .ux-cpn--sm .ux-cpn__body strong{font-size:12.5px}
 .ux-cpn--sm .ux-cpn__use,.ux-cpn--sm .ux-cpn__meta,.ux-cpn--sm .ux-cpn__code{font-size:10.5px}
-.ux-cpn--sm::before,.ux-cpn--sm::after{right:96px;width:12px;height:12px}
+.ux-cpn--sm .ux-cpn__wm{width:52px;height:52px;border-width:5px;right:-10px;bottom:-14px}
+.ux-cpn--sm .ux-cpn__wm::after{font-size:20px}
+.ux-cpn--sm::before,.ux-cpn--sm::after{right:100px;width:12px;height:12px}
+
+/* 券面设计器（俱乐部端编辑券时的预览容器） */
+.ux-cpn-designer__tpls{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0 10px}
+.ux-cpn-designer__tpl{
+  display:flex;align-items:center;gap:6px;padding:5px 10px 5px 6px;border-radius:999px;
+  border:1.5px solid var(--color-border,#e2e6e2);background:var(--color-background-primary,#fff);
+  font-size:12px;cursor:pointer;color:var(--color-text,#22302a);
+}
+.ux-cpn-designer__tpl i{
+  width:18px;height:18px;border-radius:50%;display:inline-block;
+  background:linear-gradient(132deg,var(--t-from),var(--t-to));flex:0 0 auto;
+}
+.ux-cpn-designer__tpl.on{border-color:var(--color-primary,#2F6B4F);font-weight:700;background:color-mix(in srgb,var(--color-primary,#2F6B4F) 8%,#fff)}
+.ux-cpn-designer__custom{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin:4px 0 10px}
+.ux-cpn-designer__custom label{font-size:11.5px;color:var(--color-text-2,#5a6b62);display:flex;align-items:center;gap:5px}
+.ux-cpn-designer__custom input{
+  width:86px;padding:5px 8px;border:1px solid var(--color-border,#e2e6e2);border-radius:8px;
+  font-family:ui-monospace,Menlo,monospace;font-size:12px;text-transform:uppercase;
+}
+.ux-cpn-designer__custom input.is-bad{border-color:#d64541;background:#fdf1f0}
+.ux-cpn-designer__preview{margin-top:4px}
+.ux-cpn-designer__preview .ux-cpn{max-width:420px}

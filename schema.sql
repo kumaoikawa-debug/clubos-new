@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS clubs (
   biz_section_json TEXT,
   home_banners_json TEXT,
   membership_purchase_enabled INTEGER NOT NULL DEFAULT 0, -- 2026-10-26 是否开通「购买会员」（0 关 / 1 开）
+  referral_coupon_benefit_id INTEGER NOT NULL DEFAULT 0,  -- 2026-10-26 拉新：注册/邀请成功自动发放的活动券（0=未设定）
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -110,6 +111,8 @@ CREATE TABLE IF NOT EXISTS club_members (
   lifetime_activity_spend REAL NOT NULL DEFAULT 0,
   activity_count INTEGER NOT NULL DEFAULT 0,
   tier_updated_at TEXT,
+  referred_by INTEGER,                         -- 2026-10-26 拉新：邀请人 user_id
+  invite_code TEXT,                            -- 2026-10-26 拉新：本会员专属邀请码（惰性生成，全库唯一）
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(club_id, user_id),
   FOREIGN KEY (club_id) REFERENCES clubs(id),
@@ -160,6 +163,8 @@ CREATE TABLE IF NOT EXISTS activities (
   club_points_max_discount_percent REAL NOT NULL DEFAULT 100,
   accept_gear_points INTEGER NOT NULL DEFAULT 1,
   gear_points_max_discount_amount REAL,
+  -- 2026-10-26 会员活动折扣：该活动是否参与「会员等级折扣」（前提条件，等级里还要配了折扣才生效）
+  member_discount_enabled INTEGER NOT NULL DEFAULT 0,
   club_points_earn_rate_override REAL,
   refund_enabled INTEGER NOT NULL DEFAULT 1,
   refund_policy_json TEXT,
@@ -618,6 +623,8 @@ CREATE TABLE IF NOT EXISTS checkout_intents (
   platform_point_subsidy REAL NOT NULL DEFAULT 0,
   club_benefit_discount REAL NOT NULL DEFAULT 0,
   platform_benefit_subsidy REAL NOT NULL DEFAULT 0,
+  member_discount REAL NOT NULL DEFAULT 0,      -- 2026-10-26 会员等级活动折扣立减金额（快照）
+  member_discount_rate REAL NOT NULL DEFAULT 0, -- 成交当时折扣率（90=9折，0=未享折扣）
   benefit_redemption_ids_json TEXT NOT NULL DEFAULT '[]',
   commerce_cart_id TEXT,
   commerce_order_id TEXT,
@@ -681,6 +688,7 @@ CREATE TABLE IF NOT EXISTS club_member_tiers (
   access_mode TEXT NOT NULL DEFAULT 'CONDITION',
   price REAL NOT NULL DEFAULT 0,               -- 购买型会员卡售价（¥），条件型恒 0
   valid_months INTEGER NOT NULL DEFAULT 12,    -- 购买型会员卡有效期（月）
+  activity_discount_percent REAL NOT NULL DEFAULT 0, -- 2026-10-26 活动报名折扣（90=9折；0=该等级不折扣；活动还需开启参与开关）
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -716,6 +724,7 @@ CREATE TABLE IF NOT EXISTS member_benefits (
   per_user_limit INTEGER NOT NULL DEFAULT 1,   -- 每人可领上限
   claimed_count INTEGER NOT NULL DEFAULT 0,     -- 已发放/已领取张数
   share_enabled INTEGER NOT NULL DEFAULT 1,    -- 是否允许分享给他人
+  face_json TEXT,                              -- 2026-10-26 券面自定义：{"c1","c2","ink"} 覆盖模板渐变色（null=用模板色）
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(owner_club_id) REFERENCES clubs(id),
@@ -779,6 +788,33 @@ CREATE TABLE IF NOT EXISTS coupon_gift_rules (
   FOREIGN KEY(club_id) REFERENCES clubs(id),
   FOREIGN KEY(benefit_id) REFERENCES member_benefits(id)
 );
+
+-- 2026-10-26 升级赠券：会员达到设定等级时自动赠送一张券。每个等级绑一张券；tier_gift_log
+-- 以 (user_id, tier_id) 唯一防重 —— 读触发的 refresh_all 高频重算也不会重复发。
+CREATE TABLE IF NOT EXISTS tier_gift_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  tier_id INTEGER NOT NULL,
+  benefit_id INTEGER NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(tier_id) REFERENCES club_member_tiers(id),
+  FOREIGN KEY(benefit_id) REFERENCES member_benefits(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tier_gift_rules_tier ON tier_gift_rules(club_id,tier_id);
+
+CREATE TABLE IF NOT EXISTS tier_gift_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  tier_id INTEGER NOT NULL,
+  benefit_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tier_gift_log_unique ON tier_gift_log(user_id,tier_id);
 
 -- 2026-10-26 积分商城：俱乐部用活动积分兑换的商品（优惠券/活动/服务/实物）。
 -- 履约模型：coupon 类兑换即发券到券包；activity/service/goods 类生成核销码，俱乐部扫码/输码核销。

@@ -1,6 +1,9 @@
 from __future__ import annotations
+import logging
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # 会员开通方式（2026-10-26）：
 # CONDITION = 条件开通 —— 达到俱乐部设定条件（消费金额/参加次数）后自动成为会员；
@@ -22,6 +25,11 @@ class MembershipEngine:
     ClubOS owns member qualification. Open-source customer-tier examples are references only;
     they must not collapse membership across clubs or mix Club Points with Gear Points.
     """
+
+    # 生命周期钩子（2026-10-26）：由 app.py 装配时注入 benefits 引擎的方法，
+    # 签名均为 (conn, *, club_id, user_id)。内部由调用方兜 try/except，钩子异常不阻断会员主流程。
+    on_member_created = None   # 新会员首次入会 → 发「邀请优惠券」（拉新）
+    on_upgrade = None          # 升级到新等级 → 发「升级赠券」
 
     def ensure_default_tiers(self, c, club_id: int):
         exists = c.execute('SELECT COUNT(*) FROM club_member_tiers WHERE club_id=?', (club_id,)).fetchone()[0]
@@ -64,26 +72,27 @@ class MembershipEngine:
         valid_months = max(1, int(payload.get('validMonths') or 12))
         if access_mode == 'PURCHASE' and price <= 0:
             raise ValueError('购买型会员卡必须设置售价')
-        # 装备折扣自 2026-10-23 起不再属于会员等级：等级只定义「怎么升级」，
-        # 折扣由总平台按俱乐部订阅的套餐统一控制（ai_credit_plans.gear_discount）。
-        # 老客户端传来的 gearDiscount 一律忽略，绝不落库。
+        # 活动报名折扣（2026-10-26）：90 = 9 折；0 = 该等级不折扣。是否生效还取决于活动
+        # 自己的 member_discount_enabled 开关（活动是前提条件）。
+        adp = payload.get('activityDiscountPercent')
+        activity_discount = 0.0 if adp in (None, '') else min(99.0, max(1.0, float(adp)))
         if tier_id:
             exists = c.execute('SELECT id FROM club_member_tiers WHERE id=? AND club_id=?', (tier_id, club_id)).fetchone()
             if not exists:
                 raise LookupError('会员等级不存在')
             c.execute('''UPDATE club_member_tiers SET name=?,rank=?,min_activity_spend=?,min_activity_count=?,
                          qualification_mode=?,benefits_json=?,access_mode=?,price=?,valid_months=?,
-                         status=?,updated_at=CURRENT_TIMESTAMP
+                         activity_discount_percent=?,status=?,updated_at=CURRENT_TIMESTAMP
                          WHERE id=? AND club_id=?''',
                       (name,rank,spend,count,mode,json.dumps(benefits,ensure_ascii=False),
-                       access_mode,price,valid_months,status,tier_id,club_id))
+                       access_mode,price,valid_months,activity_discount,status,tier_id,club_id))
             return tier_id
         c.execute('''INSERT INTO club_member_tiers(
             club_id,name,rank,min_activity_spend,min_activity_count,qualification_mode,benefits_json,
-            access_mode,price,valid_months,status)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+            access_mode,price,valid_months,activity_discount_percent,status)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (club_id,name,rank,spend,count,mode,json.dumps(benefits,ensure_ascii=False),
-                   access_mode,price,valid_months,status))
+                   access_mode,price,valid_months,activity_discount,status))
         return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
 
     def _qualifies(self, tier: dict[str, Any], *, spend: float, count: int) -> bool:
@@ -102,7 +111,12 @@ class MembershipEngine:
 
     def refresh_member(self, c, *, club_id: int, user_id: int) -> MemberStats:
         self.ensure_default_tiers(c, club_id)
-        c.execute('INSERT OR IGNORE INTO club_members(club_id,user_id) VALUES(?,?)', (club_id,user_id))
+        existed = c.execute('SELECT current_tier_id FROM club_members WHERE club_id=? AND user_id=?',
+                            (club_id, user_id)).fetchone()
+        is_new_member = existed is None
+        old_tier_id = int(existed['current_tier_id']) if (existed and existed['current_tier_id']) else None
+        if is_new_member:
+            c.execute('INSERT INTO club_members(club_id,user_id) VALUES(?,?)', (club_id,user_id))
         # v0.14: after single-participant refunds, membership spend follows active participant
         # allocations instead of the original order total. Platform-funded Gear Points/benefits
         # still count as spend; club-funded discounts do not.
@@ -144,7 +158,67 @@ class MembershipEngine:
         c.execute('''UPDATE club_members SET level=?, current_tier_id=?, lifetime_activity_spend=?, activity_count=?,
                      tier_updated_at=CURRENT_TIMESTAMP WHERE club_id=? AND user_id=?''',
                   (selected['name'],selected.get('id'),spend,count,club_id,user_id))
+        # 生命周期钩子（2026-10-26）：新会员入会 → 邀请券；升级到更高等级 → 升级赠券。
+        # 回调异常不阻断会员主流程；防重交给回调内部（tier_gift_log 唯一索引）。
+        new_tier_id = selected.get('id')
+        try:
+            if is_new_member and self.on_member_created is not None:
+                self.on_member_created(c, club_id=club_id, user_id=user_id)
+            if (self.on_upgrade is not None and new_tier_id
+                    and new_tier_id != old_tier_id and self._rank_of(c, new_tier_id) > self._rank_of(c, old_tier_id)):
+                self.on_upgrade(c, club_id=club_id, user_id=user_id, tier_id=int(new_tier_id))
+        except Exception:
+            logger.exception('membership lifecycle hook failed (club=%s user=%s)', club_id, user_id)
         return MemberStats(activity_count=count,lifetime_activity_spend=spend,level=selected['name'],tier_id=selected.get('id'))
+
+    @staticmethod
+    def _rank_of(c, tier_id) -> int:
+        if not tier_id:
+            return -1
+        row = c.execute('SELECT rank FROM club_member_tiers WHERE id=?', (int(tier_id),)).fetchone()
+        return int(row['rank']) if row else -1
+
+    # ── 拉新邀请（2026-10-26）────────────────────────────────────────────
+    def ensure_invite_code(self, c, *, club_id: int, user_id: int) -> str:
+        """取会员专属邀请码；没有就生成一个（IV + 6 位 hex），冲突重试。"""
+        row = c.execute('SELECT invite_code FROM club_members WHERE club_id=? AND user_id=?',
+                        (club_id, user_id)).fetchone()
+        if row and row['invite_code']:
+            return row['invite_code']
+        import secrets
+        for _ in range(5):
+            code = 'IV' + secrets.token_hex(3).upper()
+            clash = c.execute('SELECT 1 FROM club_members WHERE invite_code=?', (code,)).fetchone()
+            if clash:
+                continue
+            c.execute('UPDATE club_members SET invite_code=? WHERE club_id=? AND user_id=?',
+                      (code, club_id, user_id))
+            return code
+        raise RuntimeError('邀请码生成失败，请重试')
+
+    def join_with_invite(self, c, *, club_id: int, user_id: int, invite_code: str) -> dict[str, Any]:
+        """新会员填邀请码入会：记 referred_by，返回邀请人信息。已被邀请过 → 幂等返回。"""
+        code = str(invite_code or '').strip().upper()
+        if not code:
+            raise ValueError('请填写邀请码')
+        inviter = c.execute('''SELECT club_id,user_id,level FROM club_members
+                               WHERE invite_code=? AND club_id=?''', (code, club_id)).fetchone()
+        if not inviter:
+            raise LookupError('邀请码不存在，请核对后重试')
+        if int(inviter['user_id']) == int(user_id):
+            raise ValueError('不能填写自己的邀请码')
+        self.refresh_member(c, club_id=club_id, user_id=user_id)  # 确保已是会员
+        cur = c.execute('SELECT referred_by FROM club_members WHERE club_id=? AND user_id=?',
+                        (club_id, user_id)).fetchone()
+        if cur and cur['referred_by']:
+            inv = c.execute('SELECT level,invite_code FROM club_members WHERE club_id=? AND user_id=?',
+                            (club_id, int(cur['referred_by']))).fetchone()
+            return {'inviterUserId': int(cur['referred_by']), 'inviterLevel': inv['level'] if inv else None,
+                    'alreadyBound': True}
+        c.execute('UPDATE club_members SET referred_by=? WHERE club_id=? AND user_id=?',
+                  (int(inviter['user_id']), club_id, user_id))
+        return {'inviterUserId': int(inviter['user_id']), 'inviterLevel': inviter['level'],
+                'alreadyBound': False}
 
     # ── 购买会员（2026-10-26）─────────────────────────────────────────────
     @staticmethod

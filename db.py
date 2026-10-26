@@ -499,6 +499,37 @@ def _run_compat_migrations(c):
     _ensure_column(c,'club_member_tiers','valid_months','valid_months INTEGER NOT NULL DEFAULT 12')
     _ensure_column(c,'member_benefits','discount_percent','discount_percent REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'clubs','membership_purchase_enabled','membership_purchase_enabled INTEGER NOT NULL DEFAULT 0')
+    # 2026-10-26 第二批（会员折扣/升级赠券/拉新/券面自定义）：同样必须排在种子 INSERT 之前。
+    _ensure_column(c,'club_member_tiers','activity_discount_percent','activity_discount_percent REAL NOT NULL DEFAULT 0')
+    _ensure_column(c,'activities','member_discount_enabled','member_discount_enabled INTEGER NOT NULL DEFAULT 0')
+    _ensure_column(c,'member_benefits','face_json','face_json TEXT')
+    _ensure_column(c,'clubs','referral_coupon_benefit_id','referral_coupon_benefit_id INTEGER NOT NULL DEFAULT 0')
+    _ensure_column(c,'club_members','invite_code','invite_code TEXT')
+    _ensure_column(c,'club_members','referred_by','referred_by INTEGER')
+    _ensure_column(c,'checkout_intents','member_discount','member_discount REAL NOT NULL DEFAULT 0')
+    _ensure_column(c,'checkout_intents','member_discount_rate','member_discount_rate REAL NOT NULL DEFAULT 0')
+    c.execute('''CREATE TABLE IF NOT EXISTS tier_gift_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id INTEGER NOT NULL,
+      tier_id INTEGER NOT NULL,
+      benefit_id INTEGER NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(club_id) REFERENCES clubs(id),
+      FOREIGN KEY(tier_id) REFERENCES club_member_tiers(id),
+      FOREIGN KEY(benefit_id) REFERENCES member_benefits(id))''')
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tier_gift_rules_tier ON tier_gift_rules(club_id,tier_id)')
+    c.execute('''CREATE TABLE IF NOT EXISTS tier_gift_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      tier_id INTEGER NOT NULL,
+      benefit_id INTEGER NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(club_id) REFERENCES clubs(id),
+      FOREIGN KEY(user_id) REFERENCES users(id))''')
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tier_gift_log_unique ON tier_gift_log(user_id,tier_id)')
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_club_members_invite_code ON club_members(invite_code) WHERE invite_code IS NOT NULL')
     c.execute('CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_checkout ON benefit_redemptions(held_checkout_id,status)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_order ON benefit_redemptions(used_order_kind,used_order_id,status)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_participants_refund ON registration_participants(registration_id,refund_status)')

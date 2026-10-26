@@ -136,16 +136,26 @@ class BenefitEngine:
         valid_from=str(payload.get('validFrom') or '').strip() or None
         valid_to=str(payload.get('validTo') or '').strip() or None
         share_enabled=0 if payload.get('shareEnabled') is False else 1
+        # 券面自定义（2026-10-26）：{c1,c2,ink} 手填 #RRGGBB，空 = 跟随内置模板配色。
+        face=payload.get('face') if isinstance(payload.get('face'),dict) else None
+        face_json=None
+        if face:
+            import re as _re
+            def _hex(v):
+                v=str(v or '').strip()
+                return v.upper() if _re.fullmatch(r'#[0-9a-fA-F]{6}', v) else None
+            face_json=json.dumps({k:_hex(face.get(k)) for k in ('c1','c2','ink') if _hex(face.get(k))},
+                                 ensure_ascii=False) if any(_hex(face.get(k)) for k in ('c1','c2','ink')) else None
         c.execute('''INSERT INTO member_benefits(owner_type,owner_club_id,target_club_id,title,description,
                      benefit_type,points_type,points_cost,cash_value,stock,status,rules_json,
                      mode,discount_percent,threshold_amount,image_key,valid_from,valid_to,claim_mode,
-                     target_type,target_city,per_user_limit,claimed_count,share_enabled)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                     target_type,target_city,per_user_limit,claimed_count,share_enabled,face_json)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
             owner_type,owner_club_id,target_club_id,title,payload.get('description'),benefit_type,
             points_type,cost,cash_value,stock,payload.get('status','active'),
             json.dumps(payload.get('rules') or {},ensure_ascii=False),
             mode,discount_percent,threshold,image_key,valid_from,valid_to,claim_mode,
-            target_type,target_city,per_user_limit,0,share_enabled))
+            target_type,target_city,per_user_limit,0,share_enabled,face_json))
         return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
 
     def list_for_club(self,c,*,club_id:int,include_inactive:bool=False)->list[dict[str,Any]]:
@@ -203,7 +213,7 @@ class BenefitEngine:
         # 券包是「用户维度的钱包」，不再按俱乐部切：平台券可以跨俱乐部用，
         # 定向发到某俱乐部的券也该在用户自己的券包里看到。
         return [dict(r) for r in c.execute('''SELECT r.*,b.title,b.description,b.benefit_type,b.owner_type,b.target_club_id,
-                     b.mode,b.discount_percent,b.threshold_amount,b.image_key,b.valid_from,b.valid_to,b.share_enabled,b.target_type,b.target_city
+                     b.mode,b.discount_percent,b.threshold_amount,b.image_key,b.valid_from,b.valid_to,b.share_enabled,b.target_type,b.target_city,b.face_json
                     FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
                     WHERE r.user_id=? ORDER BY r.id DESC''',(user_id,)).fetchall()]
 
@@ -213,7 +223,7 @@ class BenefitEngine:
         benefit_type='activity_coupon' if kind=='activity' else 'gear_coupon'
         rows=c.execute('''SELECT r.*,b.title,b.description,b.benefit_type,b.owner_type,b.owner_club_id,b.target_club_id,
                                  b.mode,b.discount_percent,b.threshold_amount,b.image_key,b.valid_from,b.valid_to,
-                                 b.target_type,b.target_city,b.share_enabled
+                                 b.target_type,b.target_city,b.share_enabled,b.face_json
                           FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
                           WHERE r.user_id=? AND r.status='issued' AND b.status='active' AND b.benefit_type=?
                           ORDER BY r.id DESC''',(user_id,benefit_type)).fetchall()
@@ -430,7 +440,7 @@ class BenefitEngine:
         """分享用：按券码查券（只暴露展示信息，不带领取者隐私）。"""
         r = c.execute("""SELECT r.voucher_code,r.status,r.cash_value,r.created_at,r.used_at,
                                 b.title,b.description,b.benefit_type,b.mode,b.threshold_amount,b.image_key,
-                                b.valid_from,b.valid_to,b.share_enabled,b.target_type,b.target_city,b.owner_type
+                                b.valid_from,b.valid_to,b.share_enabled,b.target_type,b.target_city,b.owner_type,b.face_json
                          FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
                          WHERE r.voucher_code=?""", (str(code or '').strip(),)).fetchone()
         return dict(r) if r else None
@@ -531,3 +541,131 @@ class BenefitEngine:
             except Exception:
                 continue
         return out
+
+    # ── 升级赠券（2026-10-26）────────────────────────────────────────────
+    # 俱乐部为某个会员等级绑定一张券；会员升级到该等级时系统自动赠送。
+    # tier_gift_log 以 (user_id, tier_id) 唯一防重 —— refresh_all 读触发的重算不会重复发。
+
+    def tier_gift_rules(self, c, *, club_id: int, include_disabled: bool = True) -> list[dict[str, Any]]:
+        q = '''SELECT g.*, t.name tier_name, t.rank tier_rank,
+                      b.title benefit_title, b.mode, b.threshold_amount benefit_threshold,
+                      b.discount_percent, b.cash_value benefit_cash_value, b.stock benefit_stock, b.status benefit_status
+               FROM tier_gift_rules g
+               JOIN club_member_tiers t ON t.id=g.tier_id
+               JOIN member_benefits b ON b.id=g.benefit_id
+               WHERE g.club_id=?'''
+        if not include_disabled:
+            q += ' AND g.enabled=1'
+        q += ' ORDER BY t.rank ASC, g.id DESC'
+        return [dict(r) for r in c.execute(q, (club_id,)).fetchall()]
+
+    def create_tier_gift_rule(self, c, *, club_id: int, payload: dict[str, Any]) -> int:
+        tier_id = int(payload.get('tierId') or 0)
+        benefit_id = int(payload.get('benefitId') or 0)
+        t = c.execute('SELECT * FROM club_member_tiers WHERE id=? AND club_id=?', (tier_id, club_id)).fetchone()
+        if not t:
+            raise LookupError('会员等级不存在')
+        b = self._coupon_row(c, benefit_id)
+        if not b:
+            raise LookupError('要赠送的优惠券不存在')
+        if b['owner_type'] != 'CLUB' or int(b['owner_club_id']) != int(club_id) or b['benefit_type'] != 'activity_coupon':
+            raise ValueError('只能赠送本俱乐部创建的活动优惠券（不能涉及装备）')
+        if str(b.get('status') or 'active') != 'active':
+            raise ValueError('该券已下架，不能用于赠送')
+        if b['stock'] is not None and int(b['stock']) <= 0:
+            raise ValueError('该券库存为 0，必须先备库存才能设置赠送')
+        enabled = 0 if payload.get('enabled') is False else 1
+        c.execute('''INSERT INTO tier_gift_rules(club_id,tier_id,benefit_id,enabled) VALUES(?,?,?,?)
+                     ON CONFLICT(club_id,tier_id) DO UPDATE SET benefit_id=excluded.benefit_id,
+                     enabled=excluded.enabled''', (club_id, tier_id, benefit_id, enabled))
+        return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+
+    def update_tier_gift_rule(self, c, *, club_id: int, rule_id: int, payload: dict[str, Any]) -> None:
+        row = c.execute('SELECT * FROM tier_gift_rules WHERE id=? AND club_id=?', (int(rule_id), club_id)).fetchone()
+        if not row:
+            raise LookupError('升级赠券规则不存在')
+        if 'enabled' in payload:
+            c.execute('UPDATE tier_gift_rules SET enabled=? WHERE id=? AND club_id=?',
+                      (1 if payload.get('enabled') else 0, int(rule_id), club_id))
+
+    def delete_tier_gift_rule(self, c, *, club_id: int, rule_id: int) -> None:
+        c.execute('DELETE FROM tier_gift_rules WHERE id=? AND club_id=?', (int(rule_id), club_id))
+
+    def process_tier_gifts(self, c, *, club_id: int, user_id: int, tier_id: int) -> list[dict[str, Any]]:
+        """membership.on_upgrade 回调：会员升级到 tier_id 时自动送券（幂等）。"""
+        out = []
+        rules = [dict(r) for r in c.execute(
+            'SELECT * FROM tier_gift_rules WHERE club_id=? AND tier_id=? AND enabled=1',
+            (club_id, int(tier_id))).fetchall()]
+        for g in rules:
+            # 先抢防重位：INSERT OR IGNORE 成功（changes=1）才发券，失败说明已发过。
+            cur = c.execute('''INSERT OR IGNORE INTO tier_gift_log(club_id,user_id,tier_id,benefit_id)
+                               VALUES(?,?,?,?)''', (club_id, user_id, int(tier_id), int(g['benefit_id'])))
+            if cur.rowcount != 1:
+                continue
+            try:
+                b = self._coupon_row(c, int(g['benefit_id']))
+                if not b or str(b.get('status') or 'active') != 'active':
+                    c.execute('DELETE FROM tier_gift_log WHERE club_id=? AND user_id=? AND tier_id=?',
+                              (club_id, user_id, int(tier_id)))
+                    continue
+                if b['stock'] is not None and int(b['stock']) <= 0:
+                    # 没库存：释放防重位，等下次有库存时补发。
+                    c.execute('DELETE FROM tier_gift_log WHERE club_id=? AND user_id=? AND tier_id=?',
+                              (club_id, user_id, int(tier_id)))
+                    continue
+                tier = c.execute('SELECT name FROM club_member_tiers WHERE id=?', (int(tier_id),)).fetchone()
+                issued = self._issue(c, b, user_id, club_id, funding='CLUB',
+                                     note=f"达到「{tier['name'] if tier else '会员'}」等级自动赠送")
+                issued['ruleId'] = int(g['id'])
+                out.append(issued)
+            except Exception:
+                c.execute('DELETE FROM tier_gift_log WHERE club_id=? AND user_id=? AND tier_id=?',
+                          (club_id, user_id, int(tier_id)))
+        return out
+
+    # ── 拉新邀请（2026-10-26）────────────────────────────────────────────
+    def welcome_new_member(self, c, *, club_id: int, user_id: int) -> dict[str, Any] | None:
+        """membership.on_member_created 回调：新会员注册即得一张「邀请优惠券」。
+        券由俱乐部在「拉新设定」里选定（clubs.referral_coupon_benefit_id）；未设定时静默跳过。"""
+        row = c.execute('SELECT referral_coupon_benefit_id FROM clubs WHERE id=?', (club_id,)).fetchone()
+        if not row or not row['referral_coupon_benefit_id']:
+            return None
+        b = self._coupon_row(c, int(row['referral_coupon_benefit_id']))
+        if not b or str(b.get('status') or 'active') != 'active' or b['benefit_type'] != 'activity_coupon':
+            return None
+        try:
+            return self._issue(c, b, user_id, club_id, funding='CLUB', note='注册俱乐部会员自动赠送')
+        except Exception:
+            return None
+
+    def transfer_coupon(self, c, *, club_id: int, code: str, to_user_id: int) -> dict[str, Any]:
+        """券转赠：好友把券码输入领取 —— 校验券可转、接收方是本俱乐部会员，然后转移归属。"""
+        code = str(code or '').strip()
+        r = c.execute('''SELECT r.*,b.title,b.benefit_type,b.owner_type,b.owner_club_id,b.share_enabled,
+                                b.valid_from,b.valid_to,b.mode,b.discount_percent,b.threshold_amount,b.image_key,b.face_json
+                         FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
+                         WHERE r.voucher_code=?''', (code,)).fetchone()
+        if not r:
+            raise LookupError('券码不存在，请核对后重试')
+        v = dict(r)
+        if not int(v.get('share_enabled') or 0):
+            raise ValueError('该券不允许转赠')
+        if v['status'] != 'issued':
+            raise ValueError('该券已被使用或被锁定，无法转赠')
+        if self._expired(v):
+            raise ValueError('该券已过期，无法转赠')
+        if v['owner_type'] == 'CLUB' and int(v['owner_club_id'] or 0) != int(club_id):
+            raise ValueError('该券不属于本俱乐部')
+        to_user_id = int(to_user_id)
+        is_member = c.execute('SELECT 1 FROM club_members WHERE club_id=? AND user_id=?',
+                              (club_id, to_user_id)).fetchone()
+        if not is_member:
+            raise ValueError('好友需要先注册本俱乐部会员才能领取')
+        cur = c.execute('''UPDATE benefit_redemptions SET user_id=?, display_club_id=?, gift_note='好友转赠'
+                           WHERE voucher_code=? AND status='issued' ''', (to_user_id, club_id, code))
+        if cur.rowcount != 1:
+            raise ValueError('该券刚刚已被转出或使用')
+        return {'voucherCode': code, 'title': v['title'], 'mode': v.get('mode'),
+                'cashValue': float(v.get('cash_value') or 0),
+                'discountPercent': float(v.get('discount_percent') or 0)}
