@@ -307,12 +307,23 @@ class CheckoutEngine:
         member=None
         if self.membership:
             member=self.membership.refresh_member(c,club_id=int(activity['club_id']),user_id=int(intent['user_id']))
+        # 消费送券（2026-10-26）：单笔活动实付达到俱乐部设定的门槛后自动赠送优惠券。
+        # 赠券异常绝不阻断支付主流程 —— 券没库存等情况下规则静默跳过。
+        coupon_gifts=[]
+        if self.benefits:
+            try:
+                coupon_gifts=self.benefits.process_coupon_gifts(
+                    c,club_id=int(activity['club_id']),user_id=int(intent['user_id']),
+                    cash_paid=float(intent['cash_amount']))
+            except Exception as _ge:
+                logger.warning("coupon gift failed checkout=%s: %s", intent['id'], _ge)
         c.execute('UPDATE checkout_intents SET result_id=? WHERE id=?',(str(rid),intent['id']))
         result={'ok':True,'kind':'activity','checkoutId':intent['id'],'registrationId':rid,'clubPointsEarned':earned,
                 'cashPaid':intent['cash_amount'],'commerceOrderId':commerce_order_id,'pointsPolicy':policy_snapshot,
                 'clubBenefitDiscount':float(intent.get('club_benefit_discount') or 0),
                 'platformBenefitSubsidy':float(intent.get('platform_benefit_subsidy') or 0),
-                'memberLevel':(member.level if member else None),'participantCount':participant_count,'participantIds':participant_ids}
+                'memberLevel':(member.level if member else None),'participantCount':participant_count,'participantIds':participant_ids,
+                'couponGifts':coupon_gifts}
         # Persist the confirmed result so async payment polling (get_checkout) can hand back the
         # same receipt shape the synchronous /pay path returns.
         c.execute('UPDATE checkout_intents SET result_json=? WHERE id=?',(json.dumps(result,ensure_ascii=False),intent['id']))

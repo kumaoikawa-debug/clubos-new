@@ -492,6 +492,13 @@ def _run_compat_migrations(c):
     _ensure_column(c,'refund_requests','commerce_refund_status',"commerce_refund_status TEXT NOT NULL DEFAULT 'not_required'")
     _ensure_column(c,'refund_requests','commerce_refund_id','commerce_refund_id TEXT')
     _ensure_column(c,'refund_requests','commerce_refund_error','commerce_refund_error TEXT')
+    # 2026-10-26 会员开通方式（购买/条件）+ 券折扣形态：补列必须排在任何会写这些列的
+    # INSERT（种子等级、建券、建规则）之前 —— 存量库启动才不会撞 OperationalError。
+    _ensure_column(c,'club_member_tiers','access_mode',"access_mode TEXT NOT NULL DEFAULT 'CONDITION'")
+    _ensure_column(c,'club_member_tiers','price','price REAL NOT NULL DEFAULT 0')
+    _ensure_column(c,'club_member_tiers','valid_months','valid_months INTEGER NOT NULL DEFAULT 12')
+    _ensure_column(c,'member_benefits','discount_percent','discount_percent REAL NOT NULL DEFAULT 0')
+    _ensure_column(c,'clubs','membership_purchase_enabled','membership_purchase_enabled INTEGER NOT NULL DEFAULT 0')
     c.execute('CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_checkout ON benefit_redemptions(held_checkout_id,status)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_order ON benefit_redemptions(used_order_kind,used_order_id,status)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_participants_refund ON registration_participants(registration_id,refund_status)')

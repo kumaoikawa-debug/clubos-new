@@ -115,7 +115,7 @@ def main():
     print('\n── ④ 券图模板与分享 ──')
     imgs = c.get('/api/platform/coupon-images').json()
     ok(len(imgs.get('keys', [])) >= 6, '内置通用券图模板 ≥6 款', str(imgs.get('keys')))
-    ok(set(imgs.get('modes', [])) == {'fixed', 'threshold'}, '券形态枚举齐全')
+    ok(set(imgs.get('modes', [])) == {'fixed', 'threshold', 'discount'}, '券形态枚举齐全')
     share = c.get(f'/api/public/coupons/{code}')
     ok(share.status_code == 200, '按券码可查（分享链接）', share.text[:100])
     ok(share.json().get('title') == '成都区域活动券', '分享页含券名')

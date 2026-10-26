@@ -87,7 +87,7 @@
     var st = x.stats || {};
     var tpl = window.uxCouponTpl ? window.uxCouponTpl(x.image_key) : null;
     var amt = window.uxCouponAmountText
-      ? window.uxCouponAmountText(x.cash_value, x.threshold_amount)
+      ? window.uxCouponAmountText(x.cash_value, x.threshold_amount, { mode: x.mode, discountPercent: x.discount_percent })
       : { amount: money(x.cash_value), sub: '无门槛' };
     var from = tpl ? tpl.from : '#FF9A5A';
     var to = tpl ? tpl.to : '#EF6236';

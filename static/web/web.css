@@ -2181,3 +2181,13 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 .me-cpnitem{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .me-cpnitem .ux-cpn{flex:1 1 260px;min-width:240px;max-width:420px}
 .me-cpnitem__ops{flex:0 0 auto}
+
+/* ── 积分商城（2026-10-26）：可用积分二级页 ─────────────────────────── */
+.web-shell .me-mall__tabs{display:flex;gap:8px;overflow-x:auto;padding:4px 0 10px;-webkit-overflow-scrolling:touch}
+.web-shell .me-mall__tab{flex:0 0 auto;border:1px solid var(--w-line);background:#fff;color:var(--w-ink-2,#5b6b60);border-radius:999px;padding:6px 14px;font-size:12.5px;font-weight:600;cursor:pointer}
+.web-shell .me-mall__tab.on{background:var(--w-accent,#153d2c);border-color:var(--w-accent,#153d2c);color:#fff}
+.web-shell .me-mall__list{margin-top:2px}
+.web-shell .me-mall__rec{background:#fff;border:1px solid var(--w-line);border-radius:12px;padding:11px 14px;margin-bottom:8px}
+.web-shell .me-mall__rec__hd{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.web-shell .me-mall__rec__hd b{font-size:13.5px}
+.web-shell .me-mall__rec__sub{font-size:12px;color:var(--w-muted);margin-top:4px;line-height:1.6}

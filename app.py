@@ -161,6 +161,9 @@ gear_points_policy=GearPointsPolicyService(setting)
 activity_refund_policy=ActivityRefundPolicyService()
 membership_engine=MembershipEngine()
 benefit_engine=BenefitEngine(wallet_snapshot)
+# 积分商城（2026-10-26）：俱乐部用活动积分上架优惠券/活动/服务/实物兑换。
+from clubos_domain.points_mall import PointsMallEngine
+points_mall_engine=PointsMallEngine(benefit_engine)
 participant_service=ParticipantService()
 execution_service=ActivityExecutionService()
 commission_engine=CommissionSettlementEngine(setting)
@@ -2482,6 +2485,61 @@ def club_recalculate_membership(club_id:int):
     with conn() as c: count=membership_engine.refresh_all(c,club_id)
     return {'ok':True,'membersUpdated':count}
 
+# ── 购买会员（2026-10-26）────────────────────────────────────────────────
+# 前提：俱乐部开通了「购买会员」功能（clubs.membership_purchase_enabled）。
+# 俱乐部自定义会员等级卡（价格 + 有效期 + 权益），C 端付费购买，购买订单俱乐部可查。
+@app.get('/api/club/{club_id}/membership/purchase-enabled')
+def club_membership_purchase_enabled(club_id:int):
+    x=club_or_404(club_id)
+    return {'enabled':bool(x.get('membership_purchase_enabled'))}
+
+@app.post('/api/club/{club_id}/membership/purchase-enabled')
+def club_membership_purchase_toggle(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    enabled=1 if payload.get('enabled') else 0
+    with conn() as c:
+        c.execute('UPDATE clubs SET membership_purchase_enabled=? WHERE id=?',(enabled,club_id))
+    return {'ok':True,'enabled':bool(enabled)}
+
+@app.get('/api/club/{club_id}/member-orders')
+def club_member_orders(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return rows(c.execute('''SELECT o.*, u.name user_name, u.phone user_phone
+                                 FROM member_orders o JOIN users u ON u.id=o.user_id
+                                 WHERE o.club_id=? ORDER BY o.id DESC LIMIT 200''',(club_id,)))
+
+@app.get('/api/public/clubs/{club_id}/membership/purchasable')
+def public_purchasable_tiers(club_id:int,user_id:int=1):
+    """C 端可购买的会员卡 + 当前用户的有效购买记录（俱乐部未开通时返回空列表）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        x=club_or_404(club_id)
+        if not x.get('membership_purchase_enabled'):
+            return {'enabled':False,'tiers':[],'activePurchase':None}
+        tiers=membership_engine.purchasable_tiers(c,club_id)
+        purchase=membership_engine.active_purchase(c,club_id=club_id,user_id=user_id)
+    return {'enabled':True,'tiers':tiers,'activePurchase':purchase}
+
+@app.post('/api/public/clubs/{club_id}/membership/purchase')
+def public_purchase_membership(club_id:int,payload:dict=Body(...)):
+    """购买会员卡：写购买订单并立即生效（演示支付通道；接微信支付后在此换真实收单）。"""
+    club_or_404(club_id)
+    user_id=int(payload.get('userId',1))
+    tier_id=int(payload.get('tierId') or 0)
+    with conn() as c:
+        x=club_or_404(club_id)
+        if not x.get('membership_purchase_enabled'):
+            raise HTTPException(409,'该俱乐部未开通购买会员功能')
+        try:
+            result=membership_engine.purchase_tier(c,club_id=club_id,user_id=user_id,tier_id=tier_id)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+        member=row(c.execute('''SELECT m.*,u.name,u.phone FROM club_members m JOIN users u ON u.id=m.user_id
+                                WHERE m.club_id=? AND m.user_id=?''',(club_id,user_id)))
+        wallet=wallet_snapshot(c,user_id,club_id)
+    return {'ok':True,**result,'member':member,'wallet':wallet}
+
 @app.get('/api/club/{club_id}/gear-discount')
 def club_gear_discount(club_id:int):
     """本俱乐部当前生效的装备商城会员折扣（只读）。
@@ -2513,6 +2571,105 @@ def club_benefit_redemptions(club_id:int):
     with conn() as c:return rows(c.execute('''SELECT r.*,b.title,u.name user_name FROM benefit_redemptions r
         JOIN member_benefits b ON b.id=r.benefit_id JOIN users u ON u.id=r.user_id
         WHERE r.display_club_id=? ORDER BY r.id DESC''',(club_id,)))
+
+# ── 消费送券（2026-10-26）────────────────────────────────────────────────
+# 单笔活动消费满 X 元自动赠送某张券；只能送本俱乐部的活动券且券须已有库存。
+@app.get('/api/club/{club_id}/coupon-gift-rules')
+def club_coupon_gift_rules(club_id:int):
+    club_or_404(club_id)
+    with conn() as c: return benefit_engine.gift_rules(c,club_id=club_id)
+
+@app.post('/api/club/{club_id}/coupon-gift-rules')
+def club_add_coupon_gift_rule(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        try: rid=benefit_engine.create_gift_rule(c,club_id=club_id,payload=payload)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'ruleId':rid}
+
+@app.patch('/api/club/{club_id}/coupon-gift-rules/{rule_id}')
+def club_update_coupon_gift_rule(club_id:int,rule_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        try: benefit_engine.update_gift_rule(c,club_id=club_id,rule_id=rule_id,payload=payload)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True}
+
+@app.delete('/api/club/{club_id}/coupon-gift-rules/{rule_id}')
+def club_delete_coupon_gift_rule(club_id:int,rule_id:int):
+    club_or_404(club_id)
+    with conn() as c: benefit_engine.delete_gift_rule(c,club_id=club_id,rule_id=rule_id)
+    return {'ok':True}
+
+# ── 积分商城（2026-10-26）────────────────────────────────────────────────
+# 俱乐部用活动积分上架兑换商品：优惠券（需提前在优惠券中设计好）/ 活动 / 服务 / 实物。
+@app.get('/api/club/{club_id}/points-mall')
+def club_points_mall(club_id:int):
+    club_or_404(club_id)
+    with conn() as c: return points_mall_engine.list_items(c,club_id=club_id)
+
+@app.post('/api/club/{club_id}/points-mall')
+def club_points_mall_add(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        try: iid=points_mall_engine.create_item(c,club_id=club_id,payload=payload)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'itemId':iid}
+
+@app.patch('/api/club/{club_id}/points-mall/{item_id}')
+def club_points_mall_update(club_id:int,item_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        try: points_mall_engine.update_item(c,club_id=club_id,item_id=item_id,payload=payload)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True}
+
+@app.delete('/api/club/{club_id}/points-mall/{item_id}')
+def club_points_mall_delete(club_id:int,item_id:int):
+    club_or_404(club_id)
+    with conn() as c: points_mall_engine.delete_item(c,club_id=club_id,item_id=item_id)
+    return {'ok':True}
+
+@app.get('/api/club/{club_id}/points-mall/redemptions')
+def club_points_mall_redemptions(club_id:int):
+    club_or_404(club_id)
+    with conn() as c: return points_mall_engine.redemption_records(c,club_id=club_id)
+
+@app.post('/api/club/{club_id}/points-mall/verify')
+def club_points_mall_verify(club_id:int,payload:dict=Body(...)):
+    """核销兑换码（活动/服务/实物类履约）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        try: r=points_mall_engine.verify(c,club_id=club_id,code=str(payload.get('code') or ''),operator='club')
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(409,str(e))
+    return {'ok':True,'redemption':r}
+
+@app.get('/api/public/clubs/{club_id}/points-mall')
+def public_points_mall(club_id:int,user_id:int=1):
+    """C 端积分商城：可兑换商品 + 我的兑换记录 + 当前积分。"""
+    club_or_404(club_id)
+    with conn() as c:
+        items=points_mall_engine.list_items(c,club_id=club_id,include_inactive=False)
+        redemptions=points_mall_engine.my_redemptions(c,club_id=club_id,user_id=user_id)
+        wallet=wallet_snapshot(c,user_id,club_id)
+    return {'items':items,'redemptions':redemptions,'wallet':wallet}
+
+@app.post('/api/public/clubs/{club_id}/points-mall/{item_id}/redeem')
+def public_points_mall_redeem(club_id:int,item_id:int,payload:dict=Body(...)):
+    user_id=int(payload.get('userId',1))
+    with conn() as c:
+        try:
+            result=points_mall_engine.redeem(c,club_id=club_id,item_id=item_id,user_id=user_id)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except OverflowError as e: raise HTTPException(409,str(e))
+        except ValueError as e: raise HTTPException(409,str(e))
+        wallet=wallet_snapshot(c,user_id,club_id)
+    return {'ok':True,**result,'wallet':wallet}
 
 # ---- 会员深度管理（2026-10-22 用户截图反馈：点进会员要看全量信息 + 调积分 + 赠券）----
 # 脱敏纪律同 _public_leaders：这里全是俱乐部自己建档/收单的数据，俱乐部后台可见；
@@ -4308,8 +4465,14 @@ def public_member_center(club_id:int,user_id:int=1):
         # 装备折扣随俱乐部订阅套餐（平台控制，等级不参与）：C 端会员中心直接展示这一个值。
         grate,gname,gcode=ai_credit_engine.plan_gear_rate(c,club_id)
         gear_discount={'rate':round(grate,4),'discountZhe':round(grate*10,2),'planName':gname,'planCode':gcode}
+        # 购买会员（2026-10-26）：俱乐部开通后 C 端展示可购买的会员卡与当前有效卡。
+        club_row=c.execute('SELECT membership_purchase_enabled FROM clubs WHERE id=?',(club_id,)).fetchone()
+        purchase_enabled=bool(club_row and club_row['membership_purchase_enabled'])
+        purchasable=membership_engine.purchasable_tiers(c,club_id) if purchase_enabled else []
+        active_purchase=membership_engine.active_purchase(c,club_id=club_id,user_id=user_id) if purchase_enabled else None
     return {'member':member,'wallet':wallet,'benefits':benefits,'redemptions':redemptions,'tiers':tiers,
-            'activityHistory':history,'gearOwned':owned,'gearDiscount':gear_discount}
+            'activityHistory':history,'gearOwned':owned,'gearDiscount':gear_discount,
+            'membershipPurchase':{'enabled':purchase_enabled,'tiers':purchasable,'activePurchase':active_purchase}}
 
 @app.post('/api/public/clubs/{club_id}/benefits/{benefit_id}/redeem')
 def public_redeem_benefit(club_id:int,benefit_id:int,payload:dict=Body(...)):

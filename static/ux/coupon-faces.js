@@ -49,10 +49,17 @@
     return TEMPLATES[0];
   };
 
-  /* 面额 + 门槛文案：{amount:'¥50', sub:'无门槛' | '满 200 可用'} */
-  window.uxCouponAmountText = function (cashValue, thresholdAmount) {
-    var value = Number(cashValue || 0);
+  /* 面额 + 门槛文案：{amount:'¥50', sub:'无门槛' | '满 200 可用'}
+     折扣券（2026-10-26）：amount 显示「9 折」，sub 显示门槛或「无门槛」 */
+  window.uxCouponAmountText = function (cashValue, thresholdAmount, opts) {
+    var o = opts || {};
+    var mode = String(o.mode || '');
     var threshold = Number(thresholdAmount || 0);
+    if (mode === 'discount') {
+      var zhe = Number(o.discountPercent != null ? o.discountPercent : (o.discount_percent || 0)) / 10;
+      return { amount: (Math.round(zhe * 10) / 10) + ' 折', sub: threshold > 0 ? ('满 ' + money(threshold) + ' 可用') : '无门槛' };
+    }
+    var value = Number(cashValue || 0);
     return {
       amount: money(value),
       sub: threshold > 0 ? ('满 ' + money(threshold) + ' 可用') : '无门槛'
@@ -68,8 +75,8 @@
     if (!tpl) tpl = TEMPLATES[0];
     var threshold = Number(o.thresholdAmount != null ? o.thresholdAmount : (o.threshold_amount || 0));
     var value = Number(o.cashValue != null ? o.cashValue : (o.cash_value || 0));
-    var amt = threshold > 0 ? money(value) : money(value);
-    var sub = threshold > 0 ? ('满 ' + money(threshold) + ' 可用') : '无门槛';
+    var amtObj = window.uxCouponAmountText(value, threshold, { mode: o.mode, discountPercent: (o.discountPercent != null ? o.discountPercent : o.discount_percent) });
+    var amt = amtObj.amount, sub = amtObj.sub;
     var meta = [];
     if (o.validTo || o.valid_to) meta.push('有效期至 ' + esc(o.validTo || o.valid_to));
     else meta.push('长期有效');

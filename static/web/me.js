@@ -74,6 +74,7 @@ const meWallet   =()=> (ME.mc&&ME.mc.wallet)||{};
 const meTiers    =()=> (ME.mc&&ME.mc.tiers)||[];
 const meBenefits =()=> (ME.mc&&ME.mc.benefits)||[];
 const meGearDiscount=()=> (ME.mc&&ME.mc.gearDiscount)||null;
+const mePurchase=()=> (ME.mc&&ME.mc.membershipPurchase)||{};
 const meActivity =()=> (ME.oc&&ME.oc.activityOrders)||[];
 const meGear     =()=> (ME.oc&&ME.oc.gearOrders)||[];
 const mePending  =()=> (ME.oc&&ME.oc.pendingOrders)||[];
@@ -204,7 +205,7 @@ window.loadOrders=loadOrders;
 /* ── 二级页栈 ─────────────────────────────────────────────────────────── */
 const meStack=[];
 const SUB_ME={};
-const SUB_ME_TITLE={myregs:'我的报名',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息'};
+const SUB_ME_TITLE={myregs:'我的报名',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息',pointsmall:'积分商城'};
 const SUB_ME_AFTER={};
 function meStackOpen(){return meStack.length>0;}
 function meEnsureStack(){
@@ -372,7 +373,8 @@ function meCouponFace(v,claimable){
     title:v.title,imageKey:v.image_key||v.imageKey,
     cashValue:(v.cash_value!=null?v.cash_value:v.cashValue),
     thresholdAmount:(v.threshold_amount!=null?v.threshold_amount:v.thresholdAmount),
-    mode:v.mode,benefitType:v.benefit_type||v.benefitType,
+    mode:v.mode,discountPercent:(v.discount_percent!=null?v.discount_percent:v.discountPercent),
+    benefitType:v.benefit_type||v.benefitType,
     targetType:v.target_type||v.targetType,targetCity:v.target_city||v.targetCity,
     validTo:v.valid_to||v.validTo,voucherCode:v.voucher_code||v.voucherCode,
     status:v.expired?'expired':(v.status==='used'?'used':'')
@@ -557,11 +559,89 @@ SUB_ME.membercard=function(){
           <div class="me-info__row"><span>可用积分</span><b>${w.clubPoints??0}</b></div>
           <div class="me-info__row"><span>装备积分</span><b>${w.gearPoints??0}</b></div>
           <div class="me-info__row"><span>已参加活动</span><b>${w.activityCount||0} 场</b></div>
+          ${(()=>{const p=mePurchase();return (p.activePurchase)?`<div class="me-info__row"><span>购买会员有效期至</span><b>${esc(String(p.activePurchase.valid_to||'').slice(0,10))}</b></div>`:''})()}
         </div>
       </div>
+      ${(()=>{const p=mePurchase();
+        if(!p.enabled||!(p.tiers||[]).length) return '';
+        return `<div class="me-sec-t" style="margin-top:14px">可购买的会员卡</div>`
+          +p.tiers.map(t=>`<div class="me-bnf">
+              <div class="me-bnf__hd"><b>${esc(t.name)} 会员卡</b></div>
+              <div class="me-bnf__cost"><b>${money(t.price||0)}</b> / ${t.valid_months||12} 个月</div>
+              <div class="me-bnf__ft"><span class="me-note">购买后立即生效，有效期内享受该等级权益</span>
+                <button class="me-btn" onclick="meBuyTier(${t.id},'${esc(t.name)}',${Number(t.price||0)})">立即购买</button></div>
+            </div>`).join('');
+      })()}
     </div>`;
 };
+async function meBuyTier(tierId,name,price){
+  if(!(await showConfirm({title:`购买「${name}」会员卡`,message:`确认支付 ${money(price)} 购买？购买后立即生效。`})))return;
+  try{
+    const r=await api(`/api/public/clubs/${CLUB}/membership/purchase`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:USER,tierId})});
+    toast(`购买成功，已升级为「${(r.tier&&r.tier.name)||name}」`);
+    ME.ts=0; await meLoadAll(true); renderMeSub();
+  }catch(e){ toast((e&&e.message)||e); }
+}
 SUB_ME_AFTER.membercard=function(){ drawMeQr('meMcQr', location.origin+'/web?club_id='+CLUB+'&user='+USER+'#member'); };
+
+/* ── 积分商城（2026-10-26）：点首页「可用积分」进入的二级页 ──────────────
+   顾客用活动积分兑换：优惠券（兑换即进券包）/ 活动 / 服务 / 实物（生成核销码）。
+   下单可获得积分、下单可用积分抵扣 —— 兑换是积分的第三个出口。 */
+window._mallFilter='all';
+SUB_ME.pointsmall=function(){
+  return `<div id="meMallBody"><div class="me-empty">正在加载积分商城…</div></div>`;
+};
+SUB_ME_AFTER.pointsmall=async function(){
+  const box=document.getElementById('meMallBody'); if(!box)return;
+  try{
+    const d=await api(`/api/public/clubs/${CLUB}/points-mall?user_id=${USER}`);
+    window._mallData=d;
+    box.innerHTML=meMallPaint(d);
+  }catch(e){ box.innerHTML=empty('积分商城加载失败',(e&&e.message)||'请稍后再试'); }
+};
+function meMallType(t){
+  return ({coupon:'优惠券',activity:'活动',service:'服务',goods:'实物'}[t]||t);
+}
+function meMallPaint(d){
+  const items=(d.items||[]); const mine=(d.redemptions||[]);
+  const w=d.wallet||{};
+  const filters=[['all','全部'],['coupon','优惠券'],['activity','活动'],['service','服务'],['goods','实物']];
+  const shown=items.filter(x=>window._mallFilter==='all'||x.item_type===window._mallFilter);
+  const head=`<div class="me-gd"><b>${w.clubPoints??0}</b> 可用积分<span>报名付款可获得积分，报名时也可用积分抵扣；100 积分 = ¥1</span></div>`;
+  const chips=`<div class="me-mall__tabs">${filters.map(([k,t])=>`<button class="me-mall__tab${window._mallFilter===k?' on':''}" onclick="meMallFilter('${k}')">${t}</button>`).join('')}</div>`;
+  const list=shown.length?shown.map(x=>{
+    const off=x.stock!=null&&Number(x.stock)<=0;
+    const can=(w.clubPoints??0)>=Number(x.points_cost||0)&&!off;
+    return `<div class="me-bnf">
+      <div class="me-bnf__hd"><b>${esc(x.title)}</b>${meBadge(meMallType(x.item_type),'info')}</div>
+      ${x.description?`<p>${esc(x.description)}</p>`:''}
+      ${x.item_type==='coupon'&&x.refTitle?`<p>关联券：${esc(x.refTitle)}</p>`:''}
+      <div class="me-bnf__ft">
+        <div class="me-bnf__cost"><b>${x.points_cost}</b> 活动积分${x.stock!=null?` · 剩 ${x.stock}`:''}</div>
+        ${off?meBadge('已兑完','off'):`<button class="me-btn" ${can?'':'disabled'} onclick="meRedeemMall(${x.id},'${esc(x.title)}',${Number(x.points_cost||0)})">兑换</button>`}
+      </div>
+    </div>`;
+  }).join(''):empty('该分类暂无可兑换商品','换一个分类看看');
+  const mineHtml=mine.length?`<div class="me-sec-t">我的兑换</div>`+mine.map(r=>`<div class="me-mall__rec">
+      <div class="me-mall__rec__hd"><b>${esc(r.item_title)}</b>${meBadge(r.status==='verified'?'已核销':'待核销',r.status==='verified'?'ok':'warn')}</div>
+      <div class="me-mall__rec__sub">${meMallType(r.item_type)} · ${r.points_spent} 积分 · ${esc(String(r.created_at||'').slice(0,10))}${r.code?` · 核销码 <b>${esc(r.code)}</b>`:' · 券已发到「优惠券」'}</div>
+    </div>`).join(''):'';
+  return head+chips+`<div class="me-mall__list">${list}</div>`+mineHtml;
+}
+function meMallFilter(k){ window._mallFilter=k; const box=document.getElementById('meMallBody'); if(box&&window._mallData)box.innerHTML=meMallPaint(window._mallData); }
+async function meRedeemMall(id,title,points){
+  if(!(await showConfirm({title:'确认兑换',message:`用 ${points} 活动积分兑换「${title}」？积分一旦兑换不可退回。`})))return;
+  try{
+    const r=await api(`/api/public/clubs/${CLUB}/points-mall/${id}/redeem`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:USER})});
+    if(r.coupon) toast(`兑换成功，「${title}」已发到你的优惠券`);
+    else if(r.code) showAlert({title:'兑换成功',message:`核销码：${r.code}\n请凭核销码到店使用，也可在「我的兑换」中随时查看。`});
+    else toast('兑换成功');
+    ME.ts=0; await meLoadAll(true);
+    const box=document.getElementById('meMallBody');
+    if(box){ const d=await api(`/api/public/clubs/${CLUB}/points-mall?user_id=${USER}`); window._mallData=d; box.innerHTML=meMallPaint(d); }
+    mePaintHome();
+  }catch(e){ toast((e&&e.message)||e); }
+}
 
 /* ── 地址 CRUD ─────────────────────────────────────────────────────────── */
 async function meAddAddr(){
@@ -607,6 +687,8 @@ async function meLogout(){
 window.pushMe=pushMe; window.popMe=popMe; window.meSetTab=meSetTab;
 window.meAddAddr=meAddAddr; window.meEditAddr=meEditAddr; window.meDelAddr=meDelAddr; window.meDefaultAddr=meDefaultAddr;
 window.meLogout=meLogout;
+/* 积分商城 / 购买会员（inline onclick 引用，必须挂 window —— me.js 整体是 IIFE，裸 function 不上 window） */
+window.meBuyTier=meBuyTier; window.meRedeemMall=meRedeemMall; window.meMallFilter=meMallFilter;
 
 /* 若脚本在 我的 已激活后注入，立即刷新一次 */
 if(document.getElementById('wme') && !document.getElementById('wme').hasAttribute('hidden')===false){

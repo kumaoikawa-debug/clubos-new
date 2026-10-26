@@ -153,3 +153,9 @@ python tests/club_miniprogram_smoke.py
 # （resolve=min(谈判价,商品上限)，原因写明封顶）、期初库存 skuStock 按颜色×尺码
 # 逐格落库自动汇总 + 仓库字段。自带临时库隔离。
 python tests/platform_gear_editor_smoke.py
+
+# 会员开通方式 / 俱乐部营销 / 积分商城（2026-10-26 用户文档需求）：
+# 购买会员（等级卡定价+有效期+购买订单+俱乐部开关）、折扣券（活动专用，剩余金额打折）、
+# 消费送券（满额自动送券，券须有库存）、积分商城（券/活动/服务/实物兑换+核销）。
+# 自带临时库隔离。
+python tests/member_coupon_mall_smoke.py

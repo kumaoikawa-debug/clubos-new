@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS clubs (
   slogan TEXT,
   biz_section_json TEXT,
   home_banners_json TEXT,
+  membership_purchase_enabled INTEGER NOT NULL DEFAULT 0, -- 2026-10-26 是否开通「购买会员」（0 关 / 1 开）
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -675,6 +676,11 @@ CREATE TABLE IF NOT EXISTS club_member_tiers (
   -- ★ 已弃用（2026-10-23）：装备折扣改由 ai_credit_plans.gear_discount（俱乐部订阅套餐）决定，
   --   会员等级不再参与。列仅为兼容保留，不再读写。
   gear_discount REAL,
+  -- ↓ 2026-10-26 会员开通方式：CONDITION=条件开通（达到消费/次数自动升级）
+  --   PURCHASE=购买开通（俱乐部自定义会员卡价格与有效期，用户付费购买）
+  access_mode TEXT NOT NULL DEFAULT 'CONDITION',
+  price REAL NOT NULL DEFAULT 0,               -- 购买型会员卡售价（¥），条件型恒 0
+  valid_months INTEGER NOT NULL DEFAULT 12,    -- 购买型会员卡有效期（月）
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -698,7 +704,8 @@ CREATE TABLE IF NOT EXISTS member_benefits (
   status TEXT NOT NULL DEFAULT 'active',
   rules_json TEXT NOT NULL DEFAULT '{}',
   -- ↓ 2026-10-24 优惠券体系：形态、门槛、有效期、投放范围、券图、领取方式
-  mode TEXT NOT NULL DEFAULT 'fixed',          -- fixed=直接抵 / threshold=满多少减多少
+  mode TEXT NOT NULL DEFAULT 'fixed',          -- fixed=直接抵 / threshold=满多少减多少 / discount=折扣券（2026-10-26）
+  discount_percent REAL NOT NULL DEFAULT 0,    -- 折扣券折后百分比：90 = 9折（只收 1~99，仅 activity_coupon）
   threshold_amount REAL NOT NULL DEFAULT 0,    -- 满减门槛，0 = 无门槛（后台自由设定的抵扣基数）
   image_key TEXT NOT NULL DEFAULT 'sunrise',   -- 通用券图模板 key（内置若干款，不做上传）
   valid_from TEXT,                             -- 生效时间
@@ -738,6 +745,80 @@ CREATE TABLE IF NOT EXISTS benefit_redemptions (
   FOREIGN KEY(display_club_id) REFERENCES clubs(id)
 );
 CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_user ON benefit_redemptions(user_id,display_club_id,created_at DESC);
+
+-- 2026-10-26 会员购买订单：用户付费购买俱乐部会员卡（前提：俱乐部开通了购买会员）
+CREATE TABLE IF NOT EXISTS member_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  tier_id INTEGER NOT NULL,
+  tier_name TEXT NOT NULL,
+  amount REAL NOT NULL DEFAULT 0,              -- 成交价快照（¥）
+  months INTEGER NOT NULL DEFAULT 12,          -- 有效期快照（月）
+  status TEXT NOT NULL DEFAULT 'paid',
+  valid_from TEXT NOT NULL,
+  valid_to TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(user_id) REFERENCES users(id),
+  FOREIGN KEY(tier_id) REFERENCES club_member_tiers(id)
+);
+CREATE INDEX IF NOT EXISTS idx_member_orders_club_user ON member_orders(club_id,user_id,created_at DESC);
+
+-- 2026-10-26 消费送券规则：单笔活动消费满 threshold_amount 自动赠送某张券。
+-- 只能关联本俱乐部的活动券（满减/折扣/直抵），且该券必须已有库存才能被赠送。
+CREATE TABLE IF NOT EXISTS coupon_gift_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  threshold_amount REAL NOT NULL,
+  benefit_id INTEGER NOT NULL,
+  per_user_limit INTEGER NOT NULL DEFAULT 1,   -- 每位用户最多被赠送次数
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(benefit_id) REFERENCES member_benefits(id)
+);
+
+-- 2026-10-26 积分商城：俱乐部用活动积分兑换的商品（优惠券/活动/服务/实物）。
+-- 履约模型：coupon 类兑换即发券到券包；activity/service/goods 类生成核销码，俱乐部扫码/输码核销。
+CREATE TABLE IF NOT EXISTS points_mall_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  item_type TEXT NOT NULL DEFAULT 'goods',     -- coupon/activity/service/goods
+  title TEXT NOT NULL,
+  description TEXT,
+  image_url TEXT,
+  points_cost INTEGER NOT NULL DEFAULT 0,      -- 所需活动积分（100 分 = ¥1）
+  stock INTEGER,                               -- NULL = 不限库存
+  ref_type TEXT,                               -- coupon 时 = member_benefits.id 关联
+  ref_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'active',
+  sort INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_points_mall_items_club ON points_mall_items(club_id,status,sort);
+
+CREATE TABLE IF NOT EXISTS points_mall_redemptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  item_id INTEGER NOT NULL,
+  item_title TEXT NOT NULL,
+  item_type TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  points_spent INTEGER NOT NULL DEFAULT 0,
+  code TEXT UNIQUE,                            -- 核销码（coupon 类为空，券已进券包）
+  status TEXT NOT NULL DEFAULT 'issued',       -- issued=待核销 / verified=已核销
+  verified_at TEXT,
+  verified_by TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(item_id) REFERENCES points_mall_items(id),
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+CREATE INDEX IF NOT EXISTS idx_points_mall_redemptions_club ON points_mall_redemptions(club_id,created_at DESC);
 
 CREATE TABLE IF NOT EXISTS ai_credit_adjustment_debt (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

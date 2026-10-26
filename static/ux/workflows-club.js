@@ -55,8 +55,97 @@ window.addExecutionGroup=async oid=>uxTask(async()=>{const d=await uxForm({title
 window.assignVehicle=async(oid,pid)=>uxTask(async()=>{const r=await api('/api/club/'+CLUB+'/occurrences/'+oid+'/execution'),gs=(r.groups||[]).filter(g=>g.group_type==='vehicle');if(!gs.length){toast('请先创建车辆分组');return}const d=await uxForm({title:'为参加人分配车辆',fields:[{name:'groupId',label:'选择车辆',type:'select',required:true,full:true,options:gs.map(g=>({value:g.id,label:g.name+' · '+(g.assigned_count||0)+'/'+(g.capacity||'不限')}))}],submitText:'确认分车'});if(!d)return;await post('/api/club/'+CLUB+'/execution-groups/'+d.groupId+'/assign',{participantId:pid});toast('已分配车辆');openExecution(oid)});
 window.quickCheckin=async(oid,pid,current)=>uxTask(async()=>{const d=await uxForm({title:'更新参加人签到',fields:[{name:'status',label:'签到状态',type:'select',required:true,full:true,value:current||'pending',options:[{value:'checked_in',label:'已签到'},{value:'no_show',label:'未到场'},{value:'cancelled',label:'取消参加'},{value:'pending',label:'等待签到'}]}],submitText:'保存签到'});if(!d)return;await patch('/api/club/'+CLUB+'/occurrences/'+oid+'/participants/'+pid+'/checkin',d);toast('签到已更新');openExecution(oid)});
 window.addExecutionNotice=async oid=>uxTask(async()=>{const d=await uxForm({title:'活动通知',subtitle:'点「标记发送」后，报了名的顾客会立刻在自己的订单「出行指引」里看到这条通知；短信 / 微信渠道后续接入后才会真正发到手机上。',fields:[{name:'title',label:'通知标题',full:true,required:true,value:'出发前集合通知'},{name:'content',label:'通知内容',type:'textarea',full:true,required:true,value:'请按时到达集合点，并携带活动所需装备。'},{name:'channel',label:'通知渠道',type:'select',required:true,options:[{value:'manual',label:'站内同步（订单内展示）'},{value:'sms',label:'短信（需渠道接入）'},{value:'wechat',label:'微信（需渠道接入）'}]}],submitText:'创建通知'});if(!d)return;await post('/api/club/'+CLUB+'/occurrences/'+oid+'/notices',{...d,audience:'all'});toast('通知已创建');openExecution(oid)});
-window.addTier=async()=>uxTask(async()=>{const d=await uxForm({title:'创建会员等级',subtitle:'等级归属于当前俱乐部，不影响其他俱乐部会员。',fields:[{name:'name',label:'等级名称',required:true,value:'钻石会员'},{name:'rank',label:'等级顺序',type:'number',min:1,step:1,value:30,required:true},{name:'minActivitySpend',label:'累计活动消费（元）',type:'number',min:0,step:1,value:5000,required:true},{name:'minActivityCount',label:'累计活动次数',type:'number',min:0,step:1,value:10,required:true}],submitText:'保存会员等级'});if(!d)return;await post('/api/club/'+CLUB+'/membership/tiers',{...d,qualificationMode:'ANY',benefits:['专属会员权益']});toast('等级已新增');loadMembers()});
-window.addClubBenefit=async()=>uxTask(async()=>{const d=await uxForm({title:'创建俱乐部福利',subtitle:'只使用本俱乐部的 Club Points，成本由本俱乐部承担。',fields:[{name:'title',label:'福利名称',required:true,full:true,value:'活动 ¥30 抵扣券'},{name:'benefitType',label:'福利类型',required:true,type:'select',options:[{value:'activity_coupon',label:'活动现金抵扣券'},{value:'service',label:'非现金服务福利'}]},{name:'pointsCost',label:'兑换所需活动积分',type:'number',min:1,step:1,value:3000,required:true},{name:'cashValue',label:'现金抵扣金额（非抵扣券填 0）',type:'number',min:0,step:.01,value:30,required:true},{name:'stock',label:'可兑换数量',type:'number',min:0,step:1,value:50,required:true},{name:'description',label:'福利说明',full:true,value:'本俱乐部会员专属福利'}],submitText:'创建福利'});if(!d)return;await post('/api/club/'+CLUB+'/benefits',{...d,cashValue:d.benefitType==='activity_coupon'?d.cashValue:0,pointsType:'club'});toast('福利已创建');loadMembers()});
+window.addTier=async()=>uxTask(async()=>{const d=await uxForm({title:'创建会员等级',subtitle:'开通方式二选一：条件开通（消费/次数达标自动升级）或购买开通（顾客付费购买会员卡）。等级归属于当前俱乐部，不影响其他俱乐部会员。',fields:[{name:'name',label:'等级名称',required:true,value:'钻石会员'},{name:'rank',label:'等级顺序（越大越高）',type:'number',min:1,step:1,value:30,required:true},{name:'accessMode',label:'开通方式',type:'select',full:true,value:'CONDITION',options:[{value:'CONDITION',label:'条件开通（消费 / 次数达标自动升级）'},{value:'PURCHASE',label:'购买开通（顾客付费购买会员卡）'}]},{name:'price',label:'会员卡售价（元，仅购买开通生效）',type:'number',min:0,step:.01,value:399},{name:'validMonths',label:'会员卡有效期（月，仅购买开通生效）',type:'number',min:1,step:1,value:12},{name:'minActivitySpend',label:'累计活动消费（元，仅条件开通生效）',type:'number',min:0,step:1,value:5000,required:true},{name:'minActivityCount',label:'累计活动次数（仅条件开通生效）',type:'number',min:0,step:1,value:10,required:true}],submitText:'保存会员等级'});if(!d)return;await post('/api/club/'+CLUB+'/membership/tiers',{...d,qualificationMode:'ANY',benefits:['专属会员权益'],accessMode:d.accessMode||'CONDITION',price:Number(d.price||0),validMonths:Number(d.validMonths||12)});toast('等级已新增');loadMembers()});
+/* 俱乐部营销 · 优惠券（2026-10-26）：满减 / 折扣 / 直抵三种形态，只能用于活动报名。 */
+window.addClubBenefit=window.addClubCoupon=async()=>uxTask(async()=>{
+  const d=await uxForm({title:'创建俱乐部优惠券',subtitle:'券只能用于本俱乐部活动报名，不能涉及装备商城；成本由本俱乐部承担。顾客可用活动积分兑换，也可由「消费送券」自动赠送。',
+    fields:[
+      {name:'title',label:'券名称',required:true,full:true,value:'活动满 200 减 30 券'},
+      {name:'mode',label:'券形态',type:'select',full:true,required:true,value:'threshold',options:[{value:'threshold',label:'满减券（满指定金额立减）'},{value:'discount',label:'折扣券（订单打 N 折）'},{value:'fixed',label:'直抵券（无门槛直接抵）'}]},
+      {name:'thresholdAmount',label:'满减门槛（元，仅满减券填写）',type:'number',min:0,step:.01,value:200},
+      {name:'cashValue',label:'抵扣金额（元，仅满减/直抵券填写）',type:'number',min:0,step:.01,value:30},
+      {name:'discountPercent',label:'折扣（填折后百分比：90 = 9 折，仅折扣券填写）',type:'number',min:1,max:99,step:1,value:90},
+      {name:'pointsCost',label:'兑换所需活动积分',type:'number',min:1,step:1,value:300,required:true},
+      {name:'stock',label:'券库存（消费送券要求已有库存）',type:'number',min:0,step:1,value:50,required:true},
+      {name:'description',label:'使用说明',full:true,value:'本俱乐部活动报名专用'}
+    ],submitText:'创建优惠券'});
+  if(!d)return;
+  const mode=String(d.mode||'threshold');
+  await post('/api/club/'+CLUB+'/benefits',{title:d.title,benefitType:'activity_coupon',mode,
+    thresholdAmount:mode==='threshold'?Number(d.thresholdAmount||0):0,
+    cashValue:(mode==='discount')?0:Number(d.cashValue||0),
+    discountPercent:(mode==='discount')?Number(d.discountPercent||0):0,
+    pointsCost:Number(d.pointsCost||0),stock:d.stock===''?null:Number(d.stock),
+    description:d.description,pointsType:'club',claimMode:'grant'});
+  toast('优惠券已创建');loadMembers()});
+/* 消费送券规则（2026-10-26）：单笔活动消费满 X 元自动送一张券（券须已有库存）。 */
+window.addGiftRule=async()=>uxTask(async()=>{
+  let benefits=[];try{benefits=await api(`/api/club/${CLUB}/benefits`)}catch(e){benefits=[]}
+  const pool=(benefits||[]).filter(b=>b.owner_type==='CLUB'&&b.benefit_type==='activity_coupon'&&b.status==='active');
+  if(!pool.length){showAlert({title:'先创建优惠券',message:'消费送券只能赠送本俱乐部已创建的活动优惠券，请先在「俱乐部营销 · 优惠券」里建券。'});return}
+  const d=await uxForm({title:'新增消费送券规则',
+    subtitle:'顾客单笔活动实付达到门槛后，自动把选中的券送进TA的券包。只能送满减券 / 折扣券 / 直抵券，且券必须有库存。',
+    fields:[
+      {name:'benefitId',label:'赠送哪张券',type:'select',required:true,full:true,
+       options:pool.map(b=>({value:b.id,label:`${b.title} · ${String(b.mode||'fixed')==='discount'?(Number(b.discount_percent||0)/10)+' 折':(String(b.mode||'fixed')==='threshold'?`满${money(b.threshold_amount)}减${money(b.cash_value)}`:`直抵${money(b.cash_value)}`)} · 库存 ${b.stock==null?'不限':b.stock}`}))},
+      {name:'thresholdAmount',label:'单笔消费满（元）',type:'number',min:.01,step:.01,value:500,required:true},
+      {name:'perUserLimit',label:'每人最多被赠送（次）',type:'number',min:1,step:1,value:1,required:true}
+    ],submitText:'创建规则'});
+  if(!d)return;
+  await post('/api/club/'+CLUB+'/coupon-gift-rules',{benefitId:Number(d.benefitId),thresholdAmount:Number(d.thresholdAmount),perUserLimit:Number(d.perUserLimit)});
+  toast('送券规则已创建');loadMembers()});
+window.toggleGiftRule=async(id,enabled)=>uxTask(async()=>{await api(`/api/club/${CLUB}/coupon-gift-rules/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!enabled})});toast(enabled?'规则已启用':'规则已停用');loadMembers()});
+window.delGiftRule=async id=>uxTask(async()=>{if(!await uxConfirm({title:'删除送券规则',message:'删除后，已赠送出去的券不受影响，只是不再自动赠送。'}))return;await api(`/api/club/${CLUB}/coupon-gift-rules/${id}`,{method:'DELETE'});toast('规则已删除');loadMembers()});
+window.togglePurchaseEnabled=async enabled=>uxTask(async()=>{await post('/api/club/'+CLUB+'/membership/purchase-enabled',{enabled:!!enabled});toast(enabled?'已开通「购买会员」：C 端会员中心会出现可购买的会员卡':'已关闭「购买会员」');loadMembers()});
+/* 积分商城（2026-10-26）：顾客在 C 端用活动积分兑换优惠券/活动/服务/实物。 */
+window.addMallItem=async()=>uxTask(async()=>{
+  let benefits=[];try{benefits=await api(`/api/club/${CLUB}/benefits`)}catch(e){benefits=[]}
+  const coupons=(benefits||[]).filter(b=>b.owner_type==='CLUB'&&b.benefit_type==='activity_coupon'&&b.status==='active');
+  const d=await uxForm({title:'上架积分兑换商品',
+    subtitle:'顾客在 C 端点「可用积分」进入积分商城，用活动积分兑换。优惠券需提前在「俱乐部营销 · 优惠券」中设计好；活动/服务/实物兑换后生成核销码，在本页核销。',
+    fields:[
+      {name:'itemType',label:'兑换类型',type:'select',full:true,required:true,value:'coupon',options:[{value:'coupon',label:'优惠券（兑换即发到顾客券包）'},{value:'activity',label:'活动（生成核销码）'},{value:'service',label:'一次服务（生成核销码）'},{value:'goods',label:'实物（生成核销码）'}]},
+      {name:'refId',label:'关联优惠券（仅优惠券类型）',type:'select',full:true,options:coupons.length?coupons.map(b=>({value:b.id,label:b.title})):[]},
+      {name:'title',label:'商品名称',required:true,full:true,value:'露营灯兑换'},
+      {name:'pointsCost',label:'所需活动积分（100 分 = ¥1）',type:'number',min:1,step:1,value:500,required:true},
+      {name:'stock',label:'库存（留空 = 不限）',type:'number',min:0,step:1,value:20},
+      {name:'description',label:'兑换说明',full:true,value:'凭核销码到店领取'}
+    ],submitText:'上架'});
+  if(!d)return;
+  const type=String(d.itemType||'goods');
+  await post('/api/club/'+CLUB+'/points-mall',{itemType:type,title:d.title,
+    refId:type==='coupon'?Number(d.refId||0):null,
+    pointsCost:Number(d.pointsCost),stock:d.stock===''?null:Number(d.stock),description:d.description});
+  toast('兑换商品已上架');loadMembers()});
+window.editMallItem=async id=>{
+  let mall=[];try{mall=await api(`/api/club/${CLUB}/points-mall`)}catch(e){mall=[]}
+  const r=(mall||[]).find(x=>Number(x.id)===Number(id));
+  if(!r){showAlert({title:'读取失败',message:'请重新打开「客户会员」再试'});return}
+  const d=await uxForm({title:'编辑兑换商品 · '+(r.title||''),fields:[
+    {name:'title',label:'商品名称',required:true,full:true,value:r.title||''},
+    {name:'pointsCost',label:'所需活动积分',type:'number',min:1,step:1,value:r.points_cost||1,required:true},
+    {name:'stock',label:'库存（留空 = 不限）',type:'number',min:0,step:1,value:r.stock==null?'':r.stock},
+    {name:'status',label:'状态',type:'select',full:true,value:r.status||'active',options:[{value:'active',label:'上架中'},{value:'inactive',label:'已下架'}]},
+    {name:'description',label:'兑换说明',full:true,value:r.description||''}
+  ],submitText:'保存'});
+  if(!d)return;
+  await uxFlow('editMallItem',async()=>{
+    await api(`/api/club/${CLUB}/points-mall/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({title:d.title,pointsCost:Number(d.pointsCost),stock:d.stock===''?null:Number(d.stock),status:d.status,description:d.description})});
+    toast('兑换商品已更新');await loadMembers();
+  });
+};
+window.delMallItem=async id=>uxTask(async()=>{if(!await uxConfirm({title:'删除兑换商品',message:'删除后 C 端积分商城立刻不可见；已产生的兑换记录保留。'}))return;await api(`/api/club/${CLUB}/points-mall/${id}`,{method:'DELETE'});toast('已删除');loadMembers()});
+window.verifyMallCode=async()=>{
+  const d=await uxForm({title:'核销积分商城兑换码',subtitle:'顾客出示 PM- 开头的核销码（活动/服务/实物类兑换），输入即可核销。优惠券类兑换直接进了顾客券包，无需核销。',
+    fields:[{name:'code',label:'核销码',required:true,full:true,placeholder:'如 PM-1A2B3C4D'}],submitText:'核销'});
+  if(!d)return;
+  await uxFlow('verifyMallCode',async()=>{
+    const r=await post('/api/club/'+CLUB+'/points-mall/verify',{code:d.code});
+    showAlert({title:'核销成功',message:`「${r.redemption.item_title}」已核销（${r.redemption.points_spent} 积分 · ${r.redemption.item_type==='activity'?'活动':r.redemption.item_type==='service'?'服务':'实物'}）`});
+    await loadMembers();
+  });
+};
 /* 同意之后状态是 processing（等待支付渠道退回）。渠道侧失败/回调丢失时，这一条会一直挂在那儿，
    后台没有任何可操作的东西 —— 之前 processing 只显示「等待支付渠道退款」一句静态文字。
    补一个重试入口：后端 retry-provider 会重新把退款推给支付渠道，本地通道会回
@@ -91,7 +180,7 @@ window.adjustMemberPoints=async(userId,kind)=>uxTask(async()=>{
 window.giftMemberVoucher=async userId=>uxTask(async()=>{
   let benefits=[];try{benefits=await api(`/api/club/${CLUB}/benefits`)}catch(e){benefits=[]}
   const giftof=(benefits||[]).filter(b=>b.owner_type==='CLUB'&&b.status==='active'&&(b.stock==null||Number(b.stock)>0));
-  if(!giftof.length){toast('营销里还没有可赠送的券，请先在本页面「本俱乐部福利」创建');return}
+  if(!giftof.length){toast('还没有可赠送的券，请先在「俱乐部营销 · 优惠券」创建');return}
   const d=await uxForm({title:'赠送优惠券',
     subtitle:'顾客立刻在自己账户里收到这张券，报名付款时可直接抵扣；券库存会相应扣减。',
     fields:[{name:'benefitId',label:'选择优惠券',type:'select',required:true,full:true,

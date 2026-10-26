@@ -825,19 +825,42 @@ async function showParticipants(regId){
 
 async function loadMembers(){skel('#tierList',3);
   try{
-  let [a,tiers,benefits,reds,gd]=await Promise.all([
+  let [a,tiers,benefits,reds,gd,pe,orders,rules,mall,mallReds]=await Promise.all([
     api(`/api/club/${CLUB}/members`),api(`/api/club/${CLUB}/membership/tiers`),
     api(`/api/club/${CLUB}/benefits`),api(`/api/club/${CLUB}/benefits/redemptions`),
-    api(`/api/club/${CLUB}/gear-discount`)
+    api(`/api/club/${CLUB}/gear-discount`),
+    api(`/api/club/${CLUB}/membership/purchase-enabled`).catch(()=>({enabled:false})),
+    api(`/api/club/${CLUB}/member-orders`).catch(()=>[]),
+    api(`/api/club/${CLUB}/coupon-gift-rules`).catch(()=>[]),
+    api(`/api/club/${CLUB}/points-mall`).catch(()=>[]),
+    api(`/api/club/${CLUB}/points-mall/redemptions`).catch(()=>[])
   ]);
   $('#memberRows').innerHTML=a.map(x=>`<tr class="member-row" onclick="openMember(${x.user_id})"><td>${esc(x.name)}</td><td><strong>${esc(x.level)}</strong></td><td>${x.activity_count||0}</td><td>${money(x.lifetime_activity_spend||0)}</td><td>${x.club_points_balance}</td><td>${x.gear_points}</td><td>${esc(x.phone||'')}</td><td><span class="sub">查看详情 ›</span></td></tr>`).join('')||'<tr><td colspan="8" class="empty">暂无会员</td></tr>';
   _tiers=tiers;_gearDiscount=gd||null;
-  /* 2026-10-23 起等级规则不含装备折扣：折扣由总平台按俱乐部订阅的套餐统一控制，
-     这里只展示一个套餐口径的说明，不再逐等级配/展示折扣。 */
-  $('#tierList').innerHTML=`<div class="sub" style="margin:-4px 0 13px;line-height:1.6">等级只定义「怎么升级」。装备商城折扣不随等级配置 —— 由总平台按本俱乐部订阅的套餐统一控制${gd&&gd.rate<1?`（当前 <strong>${esc(gd.planName||gd.planCode||'套餐')}</strong> ${esc(gd.discountZhe)} 折）`:''}。</div>`
-    +tiers.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)} <span class="tag">Rank ${x.rank}</span></div><div class="list-row__sub">活动消费 ≥ ${money(x.min_activity_spend)} · 活动次数 ≥ ${x.min_activity_count} · ${x.qualification_mode==='ALL'?'同时满足':'任一满足'}</div></div><div class="list-row__end"><button class="btn ghost" onclick="editTier(${x.id})">编辑</button></div></div>`).join('');
-  $('#clubBenefitList').innerHTML=benefits.filter(x=>x.owner_type==='CLUB').map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${x.points_cost} 活动积分 · ${x.benefit_type==='activity_coupon'?`活动抵扣 ${money(x.cash_value)}`:esc(x.benefit_type)} · 成本由俱乐部承担 · 库存 ${x.stock==null?'不限':x.stock}</div></div></div>`).join('')||'<div class="empty">还没有俱乐部福利</div>';
-  $('#clubBenefitRedemptions').innerHTML=reds.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name)}</div> · ${esc(x.title)}<div class="list-row__sub">${x.points_spent} ${x.point_type==='club'?'活动积分':'装备积分'} · ${x.funding_owner==='CLUB'?'俱乐部承担':'平台承担'} · ${esc(x.voucher_code||'')}</div></div></div>`).join('')||'<div class="empty">暂无兑换记录</div>';
+  const peBox=document.getElementById('purchaseEnabled'); if(peBox)peBox.checked=!!(pe&&pe.enabled);
+  /* 2026-10-23 起等级规则不含装备折扣：折扣由总平台按俱乐部订阅的套餐统一控制。
+     2026-10-26 起等级分两种开通方式：条件开通（消费/次数）/ 购买开通（会员卡）。 */
+  $('#tierList').innerHTML=`<div class="sub" style="margin:-4px 0 13px;line-height:1.6">开通方式分两种：<b>条件开通</b>=达到消费/次数自动升级；<b>购买开通</b>=顾客付费购买会员卡（需在上方开通「购买会员」）。装备商城折扣由总平台按套餐统一控制，不随等级${gd&&gd.rate<1?`（当前 <strong>${esc(gd.planName||gd.planCode||'套餐')}</strong> ${esc(gd.discountZhe)} 折）`:''}。</div>`
+    +tiers.map(x=>{
+      const buy=String(x.access_mode||'CONDITION')==='PURCHASE';
+      const cond=buy?`<span class="tag">购买 ¥${Number(x.price||0).toFixed(2).replace(/\.00$/,'')} · ${x.valid_months||12} 个月</span>`
+                    :`<span class="tag">条件开通</span> 活动消费 ≥ ${money(x.min_activity_spend)} · 活动次数 ≥ ${x.min_activity_count} · ${x.qualification_mode==='ALL'?'同时满足':'任一满足'}`;
+      return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)} <span class="tag">Rank ${x.rank}</span>${x.status!=='active'?' <span class="tag orange">已停用</span>':''}</div><div class="list-row__sub">${cond}</div></div><div class="list-row__end"><button class="btn ghost" onclick="editTier(${x.id})">编辑</button></div></div>`;
+    }).join('');
+  const couponText=x=>{
+    if(x.benefit_type!=='activity_coupon')return esc(x.benefit_type==='service'?'非现金服务福利':(x.benefit_type||'福利'));
+    const m=String(x.mode||'fixed');
+    if(m==='discount')return `${Number(x.discount_percent||0)/10} 折活动券${x.threshold_amount>0?`（满 ${money(x.threshold_amount)} 可用）`:''}`;
+    if(m==='threshold')return `满 ${money(x.threshold_amount)} 减 ${money(x.cash_value)}`;
+    return `活动直抵 ${money(x.cash_value)}`;
+  };
+  $('#clubBenefitList').innerHTML=benefits.filter(x=>x.owner_type==='CLUB').map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</div><div class="list-row__sub">${couponText(x)} · 兑换 ${x.points_cost} 活动积分 · 库存 ${x.stock==null?'不限':x.stock} · 成本由俱乐部承担</div></div></div>`).join('')||'<div class="empty">还没有优惠券，点右上角「＋ 优惠券」创建</div>';
+  $('#giftRuleList').innerHTML=(rules||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">单笔消费满 <b>${money(x.threshold_amount)}</b> 送「${esc(x.benefit_title||'')}」${x.enabled?'':' <span class="tag orange">已停用</span>'}</div><div class="list-row__sub">每人限送 ${x.per_user_limit} 次 · 券库存 ${x.benefit_stock==null?'不限':x.benefit_stock}${x.enabled&&x.benefit_stock!=null&&Number(x.benefit_stock)<=0?' · <b>库存为 0，暂不会触发赠送</b>':''}</div></div><div class="list-row__end"><button class="btn ghost" onclick="toggleGiftRule(${x.id},${x.enabled?0:1})">${x.enabled?'停用':'启用'}</button><button class="btn ghost" onclick="delGiftRule(${x.id})">删除</button></div></div>`).join('')||'<div class="empty">还没有送券规则</div>';
+  $('#mallItemList').innerHTML=(mall||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)} <span class="tag">${esc(x.typeName||x.item_type)}</span>${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</div><div class="list-row__sub">${x.points_cost} 活动积分 · 库存 ${x.stock==null?'不限':x.stock}${x.item_type==='coupon'&&x.refTitle?` · 关联券「${esc(x.refTitle)}」`:''}${x.description?` · ${esc(x.description)}`:''}</div></div><div class="list-row__end"><button class="btn ghost" onclick="editMallItem(${x.id})">编辑</button><button class="btn ghost" onclick="delMallItem(${x.id})">删除</button></div></div>`).join('')||'<div class="empty">还没有兑换商品，点「＋ 兑换商品」上架</div>';
+  $('#memberOrderList').innerHTML=(orders||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name||'用户')} · 「${esc(x.tier_name)}」会员卡 <span class="tag">${money(x.amount)}</span></div><div class="list-row__sub">有效期 ${esc((x.valid_from||'').slice(0,10))} 至 ${esc((x.valid_to||'').slice(0,10))} · ${x.months} 个月 · 订单 #${x.id}</div></div></div>`).join('')||'<div class="empty">还没有购买记录（开通「购买会员」并为等级设置购买开通后，顾客即可在 C 端购买）</div>';
+  $('#clubBenefitRedemptions').innerHTML=reds.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name)} · ${esc(x.title)}</div><div class="list-row__sub">${x.points_spent?`${x.points_spent} 活动积分 · `:''}${x.funding_owner==='CLUB'?'俱乐部承担':'平台承担'} · ${esc(x.voucher_code||'')}${x.gift_note?` · ${esc(x.gift_note)}`:''}</div></div></div>`).join('')
+    +(mallReds||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name||'顾客')} · 积分商城「${esc(x.item_title)}」<span class="tag">${x.status==='verified'?'已核销':'待核销'}</span></div><div class="list-row__sub">${x.points_spent} 活动积分 · ${esc(String(x.created_at||'').slice(0,10))} · 核销码 <b>${esc(x.code||'')}</b>${x.verified_at?` · 核销于 ${esc(String(x.verified_at).slice(0,16))}`:''}</div></div></div>`).join('')
+    ||'<div class="empty">暂无兑换记录</div>';
   }catch(e){loaderError('#tierList',e,'客户与会员加载失败')}
 }
 async function recalcMembership(){await api(`/api/club/${CLUB}/membership/recalculate`,{method:'POST'});toast('会员等级已重新计算');loadMembers()}
@@ -909,7 +932,7 @@ async function renderMemberDetail(ov,userId){
     <div class="grid g2 section">
       <div class="card">
         <div class="panel-title"><h3>优惠券</h3><button class="btn secondary" onclick="giftMemberVoucher(${m.user_id})">＋ 赠送优惠券</button></div>
-        <div class="sub" style="margin-bottom:10px">赠送本俱乐部在「本俱乐部福利」里已生成的券；顾客报名付款时可直接抵扣。</div>
+        <div class="sub" style="margin-bottom:10px">赠送本俱乐部在「俱乐部营销 · 优惠券」里已生成的券；顾客报名付款时可直接抵扣。</div>
         ${vouchers.map(v=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(v.title||'')} <span class="tag">${v.benefit_type==='activity_coupon'?`抵扣 ${money(v.cash_value||0)}`:'非现金福利'}</span>${v.points_spent===0?' <span class="tag orange">获赠</span>':''}</div><div class="list-row__sub">${esc(v.voucher_code||'')}${v.gift_note?` · ${esc(v.gift_note)}`:''} · 领取于 ${esc((v.created_at||'').slice(0,10))}</div></div><div class="list-row__end"><span class="tag ${v.status==='issued'?'':'orange'}">${voucherStatusCn[v.status]||esc(v.status)}</span></div></div>`).join('')||'<div class="empty">暂无优惠券</div>'}
       </div>
       <div class="card">
@@ -2032,13 +2055,18 @@ let _gearDiscount=null;
 async function editTier(tierId){
   const r=(_tiers||[]).find(x=>Number(x.id)===Number(tierId));
   if(!r){showAlert({title:'读取等级失败',message:'请重新打开「客户会员」再试'});return}
+  const isBuy=String(r.access_mode||'CONDITION')==='PURCHASE';
   const d=await uxForm({title:'编辑会员等级 · '+(r.name||''),
-    subtitle:'等级只定义升级条件（活动消费 / 次数）。装备商城折扣由总平台按俱乐部订阅的套餐统一控制，不在等级里配置。',
+    subtitle:'开通方式二选一：条件开通=达到消费/次数自动升级；购买开通=顾客付费购买的会员卡（卡价与有效期只对购买型生效）。',
     fields:[
       {name:'name',label:'等级名称',type:'text',required:true,value:r.name||''},
       {name:'rank',label:'等级顺序（数字越大等级越高）',type:'number',min:0,step:1,value:r.rank||0},
-      {name:'minActivitySpend',label:'累计活动消费（元）',type:'number',min:0,step:1,value:r.min_activity_spend||0},
-      {name:'minActivityCount',label:'累计活动次数',type:'number',min:0,step:1,value:r.min_activity_count||0},
+      {name:'accessMode',label:'开通方式',type:'select',full:true,value:String(r.access_mode||'CONDITION'),
+        options:[{value:'CONDITION',label:'条件开通（消费 / 次数达标自动升级）'},{value:'PURCHASE',label:'购买开通（顾客付费购买会员卡）'}]},
+      {name:'price',label:'会员卡售价（元，仅购买开通生效）',type:'number',min:0,step:.01,value:r.price||399},
+      {name:'validMonths',label:'会员卡有效期（月，仅购买开通生效）',type:'number',min:1,step:1,value:r.valid_months||12},
+      {name:'minActivitySpend',label:'累计活动消费（元，仅条件开通生效）',type:'number',min:0,step:1,value:r.min_activity_spend||0},
+      {name:'minActivityCount',label:'累计活动次数（仅条件开通生效）',type:'number',min:0,step:1,value:r.min_activity_count||0},
       {name:'qualificationMode',label:'升级条件',type:'select',full:true,value:r.qualification_mode||'ANY',
         options:[{value:'ANY',label:'任一满足'},{value:'ALL',label:'同时满足'}]}
     ],submitText:'保存'});
@@ -2049,7 +2077,8 @@ async function editTier(tierId){
     await api(`/api/club/${CLUB}/membership/tiers/${tierId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({name:d.name,rank:d.rank,minActivitySpend:d.minActivitySpend,
         minActivityCount:d.minActivityCount,
-        qualificationMode:d.qualificationMode,benefits})});
+        qualificationMode:d.qualificationMode,benefits,
+        accessMode:d.accessMode,price:Number(d.price||0),validMonths:Number(d.validMonths||12)})});
     toast('会员等级已更新');
     await loadMembers();
   });

@@ -19,8 +19,8 @@ class BenefitEngine:
     TARGET_TYPES = ('all_clubs', 'all_users', 'club', 'city')
     # 发放方式：后台直接发放 / 用户自己领取
     CLAIM_MODES = ('grant', 'claim')
-    # 券形态：直接抵（无门槛）/ 满多少减多少
-    COUPON_MODES = ('fixed', 'threshold')
+    # 券形态：直接抵（无门槛）/ 满多少减多少 / 折扣券（2026-10-26，订单打 N 折）
+    COUPON_MODES = ('fixed', 'threshold', 'discount')
 
     def __init__(self, wallet_snapshot):
         self.wallet_snapshot = wallet_snapshot
@@ -102,16 +102,24 @@ class BenefitEngine:
         stock=payload.get('stock')
         stock=None if stock in (None,'') else max(0,int(stock))
         benefit_type=str(payload.get('benefitType') or 'gift')
-        cash_value=max(0,float(payload.get('cashValue') or 0))
-        if benefit_type in {'activity_coupon','gear_coupon'} and cash_value <= 0:
-            raise ValueError('抵扣券的权益价值必须大于0')
-        # 券形态：直接抵 / 满减（满减必须给门槛）
+        # 券形态：直接抵 / 满减 / 折扣（2026-10-26）
+        # 折扣券只允许活动报名券 —— 券的适用边界就是俱乐部活动，不涉及装备商城。
         mode=str(payload.get('mode') or 'fixed').strip()
-        if mode not in self.COUPON_MODES: raise ValueError('券形态只能是直接抵或满减')
+        if mode not in self.COUPON_MODES: raise ValueError('券形态只能是直接抵、满减或折扣')
         threshold=max(0,float(payload.get('thresholdAmount') or 0))
+        discount_percent=0.0
+        if mode=='discount':
+            if benefit_type!='activity_coupon':
+                raise ValueError('折扣券只支持活动报名使用，不能涉及装备')
+            discount_percent=float(payload.get('discountPercent') or 0)
+            if not (1 <= discount_percent < 100):
+                raise ValueError('折扣力度必须在 1~99 之间（如 90 表示 9 折）')
         if mode=='threshold' and threshold<=0:
             raise ValueError('满减券必须设置使用门槛')
         if mode=='fixed': threshold=0
+        cash_value=max(0,float(payload.get('cashValue') or 0))
+        if benefit_type in {'activity_coupon','gear_coupon'} and mode!='discount' and cash_value <= 0:
+            raise ValueError('抵扣券的权益价值必须大于0')
         # 投放范围
         target_type=str(payload.get('targetType') or ('club' if owner_type=='CLUB' else 'all_clubs')).strip()
         if target_type not in self.TARGET_TYPES: raise ValueError('投放范围不合法')
@@ -130,13 +138,13 @@ class BenefitEngine:
         share_enabled=0 if payload.get('shareEnabled') is False else 1
         c.execute('''INSERT INTO member_benefits(owner_type,owner_club_id,target_club_id,title,description,
                      benefit_type,points_type,points_cost,cash_value,stock,status,rules_json,
-                     mode,threshold_amount,image_key,valid_from,valid_to,claim_mode,
+                     mode,discount_percent,threshold_amount,image_key,valid_from,valid_to,claim_mode,
                      target_type,target_city,per_user_limit,claimed_count,share_enabled)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
             owner_type,owner_club_id,target_club_id,title,payload.get('description'),benefit_type,
             points_type,cost,cash_value,stock,payload.get('status','active'),
             json.dumps(payload.get('rules') or {},ensure_ascii=False),
-            mode,threshold,image_key,valid_from,valid_to,claim_mode,
+            mode,discount_percent,threshold,image_key,valid_from,valid_to,claim_mode,
             target_type,target_city,per_user_limit,0,share_enabled))
         return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
 
@@ -195,7 +203,7 @@ class BenefitEngine:
         # 券包是「用户维度的钱包」，不再按俱乐部切：平台券可以跨俱乐部用，
         # 定向发到某俱乐部的券也该在用户自己的券包里看到。
         return [dict(r) for r in c.execute('''SELECT r.*,b.title,b.description,b.benefit_type,b.owner_type,b.target_club_id,
-                     b.mode,b.threshold_amount,b.image_key,b.valid_from,b.valid_to,b.share_enabled,b.target_type,b.target_city
+                     b.mode,b.discount_percent,b.threshold_amount,b.image_key,b.valid_from,b.valid_to,b.share_enabled,b.target_type,b.target_city
                     FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
                     WHERE r.user_id=? ORDER BY r.id DESC''',(user_id,)).fetchall()]
 
@@ -204,7 +212,7 @@ class BenefitEngine:
         if kind not in {'activity','gear'}: raise ValueError('kind must be activity or gear')
         benefit_type='activity_coupon' if kind=='activity' else 'gear_coupon'
         rows=c.execute('''SELECT r.*,b.title,b.description,b.benefit_type,b.owner_type,b.owner_club_id,b.target_club_id,
-                                 b.mode,b.threshold_amount,b.image_key,b.valid_from,b.valid_to,
+                                 b.mode,b.discount_percent,b.threshold_amount,b.image_key,b.valid_from,b.valid_to,
                                  b.target_type,b.target_city,b.share_enabled
                           FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
                           WHERE r.user_id=? AND r.status='issued' AND b.status='active' AND b.benefit_type=?
@@ -254,7 +262,13 @@ class BenefitEngine:
             threshold=max(0.0,float(v.get('threshold_amount') or 0))
             if threshold>0 and remaining < threshold:
                 raise ValueError(f'该券需订单满 ¥{threshold:.0f} 才能使用')
-            value=min(remaining,max(0.0,float(v['cash_value'] or 0)))
+            if str(v.get('mode') or 'fixed')=='discount':
+                # 折扣券（2026-10-26）：按当前未抵扣余额打 N 折，立减 10% 的那部分。
+                # 一张折扣券只对剩余金额生效一次，剩余金额继续参与后续券的满减判断。
+                dp=max(1.0,min(99.0,float(v.get('discount_percent') or 0)))
+                value=min(remaining,round(remaining*(100.0-dp)/100.0,2))
+            else:
+                value=min(remaining,max(0.0,float(v['cash_value'] or 0)))
             if value<=0: continue
             funding=str(v['funding_owner'])
             if funding=='CLUB': club_discount += value
@@ -330,23 +344,26 @@ class BenefitEngine:
             out.append(b)
         return out
 
-    def _issue(self, c, benefit: dict[str, Any], user_id: int, display_club_id: int) -> dict[str, Any]:
-        """发一张券到用户券包（积分成本为 0，成本由总平台承担）。"""
+    def _issue(self, c, benefit: dict[str, Any], user_id: int, display_club_id: int,
+               *, funding: str = 'PLATFORM', note: str | None = None) -> dict[str, Any]:
+        """发一张券到用户券包（积分成本为 0；平台券成本总平台承担，俱乐部券成本俱乐部承担）。"""
+        funding = 'CLUB' if funding == 'CLUB' else 'PLATFORM'
         code = 'CPN-' + secrets.token_hex(4).upper()
         c.execute("""INSERT INTO benefit_redemptions(benefit_id,user_id,display_club_id,point_type,points_spent,
                      funding_owner,cash_value,status,voucher_code,gift_note) VALUES(?,?,?,?,?,?,?,?,?,?)""",
                    (int(benefit['id']), int(user_id), (int(display_club_id) if display_club_id else None),
-                    str(benefit.get('points_type') or 'gear'), 0, 'PLATFORM',
+                    str(benefit.get('points_type') or 'gear'), 0, funding,
                     float(benefit.get('cash_value') or 0), 'issued', code,
-                    '总平台发放；成本由总平台承担'))
+                    note or ('总平台发放；成本由总平台承担' if funding == 'PLATFORM' else '俱乐部发放；成本由俱乐部承担')))
         rid = int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         c.execute('UPDATE member_benefits SET claimed_count=claimed_count+1,updated_at=CURRENT_TIMESTAMP WHERE id=?',
                   (int(benefit['id']),))
         if benefit.get('stock') is not None:
             c.execute('UPDATE member_benefits SET stock=stock-1 WHERE id=?', (int(benefit['id']),))
         return {'redemptionId': rid, 'voucherCode': code, 'title': benefit.get('title'),
-                'cashValue': float(benefit.get('cash_value') or 0), 'fundingOwner': 'PLATFORM',
-                'benefitType': benefit.get('benefit_type'), 'imageKey': benefit.get('image_key')}
+                'cashValue': float(benefit.get('cash_value') or 0), 'fundingOwner': funding,
+                'benefitType': benefit.get('benefit_type'), 'imageKey': benefit.get('image_key'),
+                'mode': benefit.get('mode'), 'discountPercent': float(benefit.get('discount_percent') or 0)}
 
     def claim_coupon(self, c, *, benefit_id: int, user_id: int, city=None, club_id=None) -> dict[str, Any]:
         """用户自己领券（城市 / 俱乐部定向投放都走这里）。"""
@@ -423,3 +440,94 @@ class BenefitEngine:
         cur=c.execute('''UPDATE benefit_redemptions SET status='issued',used_at=NULL,used_order_kind=NULL,used_order_id=NULL
                          WHERE used_order_kind=? AND used_order_id=? AND status='used' ''',(order_kind,str(order_id)))
         return int(cur.rowcount or 0)
+
+    # ── 消费送券（2026-10-26）────────────────────────────────────────────
+    # 俱乐部设定「单笔活动消费满 X 元自动赠送某张券」。规则约束（按文档）：
+    #   1. 只能赠送 满减券 / 折扣券 / 直抵券 —— 且必须是本俱乐部自己的活动券（不涉及装备）；
+    #   2. 前提：被赠送的券「已有库存」（stock 不为 NULL 且 >0），无库存规则不触发；
+    #   3. 每位用户受 per_user_limit 限制，达到上限后不再自动赠送。
+
+    def gift_rules(self, c, *, club_id: int, include_disabled: bool = True) -> list[dict[str, Any]]:
+        q = '''SELECT g.*, b.title benefit_title, b.mode, b.threshold_amount benefit_threshold,
+                      b.discount_percent, b.cash_value benefit_cash_value, b.stock benefit_stock,
+                      b.status benefit_status, b.claimed_count benefit_claimed
+               FROM coupon_gift_rules g JOIN member_benefits b ON b.id=g.benefit_id
+               WHERE g.club_id=?'''
+        if not include_disabled:
+            q += ' AND g.enabled=1'
+        q += ' ORDER BY g.threshold_amount ASC, g.id DESC'
+        return [dict(r) for r in c.execute(q, (club_id,)).fetchall()]
+
+    def create_gift_rule(self, c, *, club_id: int, payload: dict[str, Any]) -> int:
+        threshold = max(0.0, float(payload.get('thresholdAmount') or 0))
+        if threshold <= 0:
+            raise ValueError('赠送门槛必须大于 0 元')
+        benefit_id = int(payload.get('benefitId') or 0)
+        b = c.execute('SELECT * FROM member_benefits WHERE id=?', (benefit_id,)).fetchone()
+        if not b:
+            raise LookupError('要赠送的优惠券不存在')
+        b = dict(b)
+        if b['owner_type'] != 'CLUB' or int(b['owner_club_id']) != int(club_id) or b['benefit_type'] != 'activity_coupon':
+            raise ValueError('只能赠送本俱乐部创建的活动优惠券（不能涉及装备）')
+        if str(b.get('status') or 'active') != 'active':
+            raise ValueError('该券已下架，不能用于赠送')
+        # 文档硬约束：赠送的券必须已有库存 —— 不限库存（NULL）视作永远有货。
+        if b['stock'] is not None and int(b['stock']) <= 0:
+            raise ValueError('该券库存为 0，必须先备库存才能设置赠送')
+        per_user_limit = max(1, int(payload.get('perUserLimit') or 1))
+        enabled = 0 if payload.get('enabled') is False else 1
+        c.execute('''INSERT INTO coupon_gift_rules(club_id,threshold_amount,benefit_id,per_user_limit,enabled)
+                     VALUES(?,?,?,?,?)''', (club_id, threshold, benefit_id, per_user_limit, enabled))
+        return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+
+    def update_gift_rule(self, c, *, club_id: int, rule_id: int, payload: dict[str, Any]) -> None:
+        row = c.execute('SELECT * FROM coupon_gift_rules WHERE id=? AND club_id=?', (int(rule_id), club_id)).fetchone()
+        if not row:
+            raise LookupError('赠送规则不存在')
+        sets = {}
+        if 'thresholdAmount' in payload:
+            threshold = max(0.0, float(payload.get('thresholdAmount') or 0))
+            if threshold <= 0:
+                raise ValueError('赠送门槛必须大于 0 元')
+            sets['threshold_amount'] = threshold
+        if 'perUserLimit' in payload:
+            sets['per_user_limit'] = max(1, int(payload.get('perUserLimit') or 1))
+        if 'enabled' in payload:
+            sets['enabled'] = 1 if payload.get('enabled') else 0
+        if not sets:
+            return
+        cols = ','.join(f'{k}=?' for k in sets)
+        c.execute(f'UPDATE coupon_gift_rules SET {cols} WHERE id=? AND club_id=?', (*sets.values(), int(rule_id), club_id))
+
+    def delete_gift_rule(self, c, *, club_id: int, rule_id: int) -> None:
+        c.execute('DELETE FROM coupon_gift_rules WHERE id=? AND club_id=?', (int(rule_id), club_id))
+
+    def process_coupon_gifts(self, c, *, club_id: int, user_id: int, cash_paid: float) -> list[dict[str, Any]]:
+        """活动订单支付成功后触发：满足门槛的规则自动送券。异常不阻断支付主流程。"""
+        if cash_paid <= 0:
+            return []
+        out = []
+        try:
+            rules = self.gift_rules(c, club_id=club_id, include_disabled=False)
+        except Exception:
+            return []
+        for g in rules:
+            if cash_paid < float(g['threshold_amount'] or 0):
+                continue
+            b = self._coupon_row(c, int(g['benefit_id']))
+            if not b or str(b.get('status') or 'active') != 'active':
+                continue
+            if b['stock'] is not None and int(b['stock']) <= 0:
+                continue  # 券没库存了：规则静默跳过，不报错不打断顾客
+            gifted = int(c.execute("SELECT COUNT(*) FROM benefit_redemptions WHERE benefit_id=? AND user_id=? AND points_spent=0 AND gift_note LIKE '消费满%'",
+                                   (int(g['benefit_id']), user_id)).fetchone()[0] or 0)
+            if gifted >= int(g['per_user_limit'] or 1):
+                continue
+            try:
+                issued = self._issue(c, b, user_id, club_id, funding='CLUB',
+                                     note=f"消费满 ¥{float(g['threshold_amount']):g} 自动赠送")
+                issued['ruleId'] = int(g['id'])
+                out.append(issued)
+            except Exception:
+                continue
+        return out
