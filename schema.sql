@@ -816,6 +816,34 @@ CREATE TABLE IF NOT EXISTS tier_gift_log (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tier_gift_log_unique ON tier_gift_log(user_id,tier_id);
 
+-- 2026-10-27 升级奖励 v2：老表 benefit_id NOT NULL 装不下「纯积分奖励」，
+-- 新表允许券可空 + points_award，一个等级可「送券 + 送积分」任意组合。
+CREATE TABLE IF NOT EXISTS tier_reward_rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  tier_id INTEGER NOT NULL,
+  benefit_id INTEGER,                              -- 送券，可空（纯积分奖励时为空）
+  points_award INTEGER NOT NULL DEFAULT 0,         -- 送活动积分
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(tier_id) REFERENCES club_member_tiers(id),
+  FOREIGN KEY(benefit_id) REFERENCES member_benefits(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tier_reward_rules_tier ON tier_reward_rules(club_id,tier_id);
+
+CREATE TABLE IF NOT EXISTS tier_reward_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  tier_id INTEGER NOT NULL,
+  benefit_id INTEGER,
+  points_award INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id,tier_id)                          -- 同一等级终身只发一次（防重靠它）
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tier_reward_log_unique ON tier_reward_log(user_id,tier_id);
+
 -- 2026-10-26 积分商城：俱乐部用活动积分兑换的商品（优惠券/活动/服务/实物）。
 -- 履约模型：coupon 类兑换即发券到券包；activity/service/goods 类生成核销码，俱乐部扫码/输码核销。
 CREATE TABLE IF NOT EXISTS points_mall_items (

@@ -529,6 +529,36 @@ def _run_compat_migrations(c):
       FOREIGN KEY(club_id) REFERENCES clubs(id),
       FOREIGN KEY(user_id) REFERENCES users(id))''')
     c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tier_gift_log_unique ON tier_gift_log(user_id,tier_id)')
+    # 2026-10-27 升级奖励 v2（用户反馈「达到等级条件之后可以获得优惠券或某种奖励，也可以赠送积分」）：
+    # 老表 tier_gift_rules.benefit_id 是 NOT NULL + 外键，纯积分奖励塞不进去；SQLite 改不了约束，
+    # 故新建 tier_reward_rules（benefit_id 可空 + points_award）并把老数据一次性搬过来（幂等）。
+    # 老表 tier_gift_rules / tier_gift_log 从此冻结只读，真身是 tier_reward_*。
+    c.execute('''CREATE TABLE IF NOT EXISTS tier_reward_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id INTEGER NOT NULL,
+      tier_id INTEGER NOT NULL,
+      benefit_id INTEGER,
+      points_award INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(club_id) REFERENCES clubs(id),
+      FOREIGN KEY(tier_id) REFERENCES club_member_tiers(id),
+      FOREIGN KEY(benefit_id) REFERENCES member_benefits(id))''')
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tier_reward_rules_tier ON tier_reward_rules(club_id,tier_id)')
+    c.execute('''CREATE TABLE IF NOT EXISTS tier_reward_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      tier_id INTEGER NOT NULL,
+      benefit_id INTEGER,
+      points_award INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(user_id,tier_id))''')
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_tier_reward_log_unique ON tier_reward_log(user_id,tier_id)')
+    c.execute('''INSERT OR IGNORE INTO tier_reward_rules(club_id,tier_id,benefit_id,points_award,enabled)
+                 SELECT club_id,tier_id,benefit_id,0,enabled FROM tier_gift_rules''')
+    c.execute('''INSERT OR IGNORE INTO tier_reward_log(club_id,user_id,tier_id,benefit_id,points_award)
+                 SELECT club_id,user_id,tier_id,benefit_id,0 FROM tier_gift_log''')
     c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_club_members_invite_code ON club_members(invite_code) WHERE invite_code IS NOT NULL')
     c.execute('CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_checkout ON benefit_redemptions(held_checkout_id,status)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_order ON benefit_redemptions(used_order_kind,used_order_id,status)')

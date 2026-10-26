@@ -137,14 +137,14 @@ def main():
         cc.execute("INSERT INTO registration_participants(registration_id,activity_id,occurrence_id,club_id,payer_user_id,name,status) "
                    "VALUES(?,?,?,?,?,?, 'active')", (_reg, aid, oid, 1, uid5, '达标新会员'))
         app.membership_engine.refresh_member(cc, club_id=1, user_id=uid5)
-        log = cc.execute('SELECT COUNT(*) FROM tier_gift_log WHERE user_id=? AND tier_id=?', (uid5, gold_tier)).fetchone()[0]
-        ok(log == 1, '新达标会员升级 → tier_gift_log 落 1 条')
+        log = cc.execute('SELECT COUNT(*) FROM tier_reward_log WHERE user_id=? AND tier_id=?', (uid5, gold_tier)).fetchone()[0]
+        ok(log == 1, '新达标会员升级 → tier_reward_log 落 1 条')
         issued = cc.execute("SELECT COUNT(*) FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id "
                             "WHERE r.user_id=? AND b.id=? AND r.gift_note LIKE '达到%'", (uid5, gift_coupon)).fetchone()[0]
         ok(issued == 1, '升级赠券自动到账（1 张）')
         app.membership_engine.refresh_member(cc, club_id=1, user_id=uid5)
         app.membership_engine.refresh_member(cc, club_id=1, user_id=uid5)
-        log2 = cc.execute('SELECT COUNT(*) FROM tier_gift_log WHERE user_id=? AND tier_id=?', (uid5, gold_tier)).fetchone()[0]
+        log2 = cc.execute('SELECT COUNT(*) FROM tier_reward_log WHERE user_id=? AND tier_id=?', (uid5, gold_tier)).fetchone()[0]
         issued2 = cc.execute("SELECT COUNT(*) FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id "
                              "WHERE r.user_id=? AND b.id=? AND r.gift_note LIKE '达到%'", (uid5, gift_coupon)).fetchone()[0]
         ok(log2 == 1 and issued2 == 1, '重复重算不重复发（防重唯一索引生效）')
@@ -238,17 +238,17 @@ def main():
     cssf = (ROOT / 'static' / 'ux' / 'coupon-faces.css').read_text()
     ok('ux-cpn-designer' in cssf and 'ux-cpn__wm' in cssf, 'coupon-faces.css：设计器样式/水印样式')
     clubjs = (ROOT / 'static' / 'club' / 'club.js').read_text()
-    ok('tierGiftList' in clubjs and 'member-discount' in clubjs and 'activity_discount_percent' in clubjs,
-       'club.js：升级赠券卡/活动开关/等级折扣')
+    ok('tierRewardList' in clubjs and 'tierRewardOf' in clubjs and 'activity_discount_percent' in clubjs,
+       'club.js：升级奖励总览/等级折扣')
     webjs = (ROOT / 'static' / 'web' / 'web.js').read_text()
     ok('memberDiscount' in webjs, 'web.js：订单摘要会员折扣行')
     clubhtml = (ROOT / 'static' / 'club' / 'index.html').read_text()
-    ok('tierGiftList' in clubhtml and 'referralState' in clubhtml and 'coupon-faces.js?v=20261027c' in clubhtml,
-       'club/index.html：新卡 + 设计器脚本引用')
+    ok('tierRewardList' in clubhtml and 'cardList' in clubhtml and 'referralState' in clubhtml and 'coupon-faces.js?v=' in clubhtml,
+       'club/index.html：升级奖励卡 + 会员卡块 + 设计器脚本引用')
     webhtml = (ROOT / 'static' / 'web' / 'index.html').read_text()
-    ok("pushMe('invite')" in webhtml and 'me.js?v=20261027c' in webhtml, 'web/index.html：邀请入口 + 版本号 c')
+    ok("pushMe('invite')" in webhtml and 'me.js?v=' in webhtml, 'web/index.html：邀请入口 + 带版本号')
     plathtml = (ROOT / 'static' / 'platform' / 'index.html').read_text()
-    ok('coupon-faces.js?v=20261027c' in plathtml, 'platform/index.html：券面版本号 c')
+    ok('coupon-faces.js?v=' in plathtml, 'platform/index.html：券面带版本号')
 
     print('\n' + '=' * 60)
     if FAILS:

@@ -198,7 +198,11 @@ html = (ROOT / 'static/club/index.html').read_text(encoding='utf-8')
 check('设置页有三个新 tab', all(f"setTab('{t}')" in html for t in ('mpinfo', 'mpstaff', 'mpset')))
 check('三个 pane 骨架存在', all(f'id="pane-{p}"' in html for p in ('mpinfo', 'mpstaff', 'mpset')))
 check('员工/角色双子tab与容器', 'mpStaffTabs' in html and 'id="mpStaffBody"' in html and 'id="mpRolesBody"' in html)
-check('club.js 版本 20261026d', 'club.js?v=20261026d' in html)
+# 版本号每次发版都会变 —— 只断言「带缓存版本号」，别写死某个日期（2026-10-27 修）。
+_pat = 'src="/static/club/club.js?v='
+_idx = html.find(_pat)
+_ver = html[(_idx + len(_pat)):_idx + len(_pat) + 14].split('"')[0] if _idx >= 0 else ''
+check('club.js 带缓存版本号 %s' % (_ver or '缺失'), bool(_ver))
 js = (ROOT / 'static/club/club.js').read_text(encoding='utf-8')
 check('club.js 含三大板块函数', all(k in js for k in ('loadMpInfo', 'loadMpStaff', 'loadMpRoles', 'loadMpSettings', 'mpInfoEdit', 'saveMpInfo', 'mpStaffForm', 'mpRoleForm', 'saveMpSetGroup')))
 check('club.js setTab pane 数组含新板块', "'mpinfo','mpstaff','mpset'" in js)

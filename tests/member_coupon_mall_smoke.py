@@ -18,6 +18,7 @@
 自带临时库隔离，不碰项目真库。
 """
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -197,12 +198,15 @@ def main():
     ok('purchaseEnabled' in club_html and 'memberOrderList' in club_html, '购买会员开关 + 购买订单区块')
     club_js = (ROOT / 'static/club/club.js').read_text(encoding='utf-8')
     ok('accessMode' in club_js and 'validMonths' in club_js, '等级编辑带开通方式/价格/有效期')
-    ok('club.js?v=20261027a' in club_html, 'club.js 版本 20261027a')
+    # 版本号每次发版都会变 —— 只断言「带版本号且不是旧的硬编码」，避免回归必红（2026-10-27）。
+    _m = re.search(r'src="/static/club/club\.js\?v=([0-9A-Za-z]+)"', club_html)
+    ok(bool(_m), 'club.js 带缓存版本号 %s' % (_m.group(1) if _m else '缺失'))
     wf = (ROOT / 'static/ux/workflows-club.js').read_text(encoding='utf-8')
     ok('verifyMallCode' in wf and 'discountPercent' in wf, 'workflows-club 带核销与折扣券表单')
     web_html = (ROOT / 'static/web/index.html').read_text(encoding='utf-8')
     ok("pushMe('pointsmall')" in web_html, 'C 端「可用积分」点击进积分商城')
-    ok('me.js?v=20261027a' in web_html, 'me.js 版本 20261027a')
+    _m2 = re.search(r'src="/static/web/me\.js\?v=([0-9A-Za-z]+)"', web_html)
+    ok(bool(_m2), 'me.js 带缓存版本号 %s' % (_m2.group(1) if _m2 else '缺失'))
     me_js = (ROOT / 'static/web/me.js').read_text(encoding='utf-8')
     ok('SUB_ME.pointsmall' in me_js and 'meMallPaint' in me_js, '积分商城二级页实现')
     ok('meBuyTier' in me_js and 'membershipPurchase' in me_js, '会员卡购买入口')

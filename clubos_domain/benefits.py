@@ -592,6 +592,10 @@ class BenefitEngine:
         c.execute('DELETE FROM tier_gift_rules WHERE id=? AND club_id=?', (int(rule_id), club_id))
 
     def process_tier_gifts(self, c, *, club_id: int, user_id: int, tier_id: int) -> list[dict[str, Any]]:
+        """兼容入口（2026-10-27 起真身在 process_tier_rewards）。"""
+        return self.process_tier_rewards(c, club_id=club_id, user_id=user_id, tier_id=tier_id)
+
+    def _legacy_process_tier_gifts(self, c, *, club_id: int, user_id: int, tier_id: int) -> list[dict[str, Any]]:
         """membership.on_upgrade 回调：会员升级到 tier_id 时自动送券（幂等）。"""
         out = []
         rules = [dict(r) for r in c.execute(
@@ -622,6 +626,131 @@ class BenefitEngine:
             except Exception:
                 c.execute('DELETE FROM tier_gift_log WHERE club_id=? AND user_id=? AND tier_id=?',
                           (club_id, user_id, int(tier_id)))
+        return out
+
+    # ── 升级奖励 v2（2026-10-27）──────────────────────────────────────────
+    # 用户要求「达到会员等级条件之后可以获得优惠券或某种奖励，也可以赠送积分」：
+    # 同一等级一条规则，可只送券、只送积分、或两者都给。
+    # 防重仍按 (user_id,tier_id) 唯一 —— 同一等级终身只发一次，读触发的重算不会重复发。
+
+    def tier_reward_rules(self, c, *, club_id: int, include_disabled: bool = True) -> list[dict[str, Any]]:
+        q = '''SELECT g.*, t.name tier_name, t.rank tier_rank, t.access_mode, t.status tier_status,
+                      b.title benefit_title, b.mode, b.threshold_amount benefit_threshold,
+                      b.discount_percent, b.cash_value benefit_cash_value,
+                      b.stock benefit_stock, b.status benefit_status
+               FROM tier_reward_rules g
+               JOIN club_member_tiers t ON t.id=g.tier_id
+               LEFT JOIN member_benefits b ON b.id=g.benefit_id
+               WHERE g.club_id=?'''
+        if not include_disabled:
+            q += ' AND g.enabled=1'
+        q += ' ORDER BY t.rank ASC, g.id DESC'
+        return [dict(r) for r in c.execute(q, (club_id,)).fetchall()]
+
+    def _validate_reward_coupon(self, c, club_id: int, benefit_id: int) -> dict[str, Any]:
+        b = self._coupon_row(c, benefit_id)
+        if not b:
+            raise LookupError('要赠送的优惠券不存在')
+        if b['owner_type'] != 'CLUB' or int(b['owner_club_id']) != int(club_id) or b['benefit_type'] != 'activity_coupon':
+            raise ValueError('只能赠送本俱乐部创建的活动优惠券（不能涉及装备）')
+        if str(b.get('status') or 'active') != 'active':
+            raise ValueError('该券已下架，不能用于赠送')
+        if b['stock'] is not None and int(b['stock']) <= 0:
+            raise ValueError('该券库存为 0，必须先备库存才能设置赠送')
+        return b
+
+    def create_tier_reward_rule(self, c, *, club_id: int, payload: dict[str, Any]) -> int:
+        tier_id = int(payload.get('tierId') or 0)
+        benefit_id = int(payload.get('benefitId') or 0)
+        points = int(payload.get('pointsAward') or 0)
+        t = c.execute('SELECT * FROM club_member_tiers WHERE id=? AND club_id=?', (tier_id, club_id)).fetchone()
+        if not t:
+            raise LookupError('会员等级不存在')
+        if points < 0:
+            raise ValueError('赠送积分不能为负数')
+        if benefit_id:
+            self._validate_reward_coupon(c, club_id, benefit_id)
+        if not benefit_id and points <= 0:
+            raise ValueError('请至少设置一项奖励：送一张券，或送活动积分')
+        enabled = 0 if payload.get('enabled') is False else 1
+        c.execute('''INSERT INTO tier_reward_rules(club_id,tier_id,benefit_id,points_award,enabled)
+                     VALUES(?,?,?,?,?)
+                     ON CONFLICT(club_id,tier_id) DO UPDATE SET benefit_id=excluded.benefit_id,
+                     points_award=excluded.points_award, enabled=excluded.enabled''',
+                  (club_id, tier_id, benefit_id or None, points, enabled))
+        row = c.execute('SELECT id FROM tier_reward_rules WHERE club_id=? AND tier_id=?', (club_id, tier_id)).fetchone()
+        return int(row['id']) if row else 0
+
+    def update_tier_reward_rule(self, c, *, club_id: int, rule_id: int, payload: dict[str, Any]) -> None:
+        row = c.execute('SELECT * FROM tier_reward_rules WHERE id=? AND club_id=?', (int(rule_id), club_id)).fetchone()
+        if not row:
+            raise LookupError('升级奖励规则不存在')
+        sets, args = [], []
+        if 'enabled' in payload:
+            sets.append('enabled=?'); args.append(1 if payload.get('enabled') else 0)
+        if 'pointsAward' in payload:
+            pts = int(payload.get('pointsAward') or 0)
+            if pts < 0:
+                raise ValueError('赠送积分不能为负数')
+            sets.append('points_award=?'); args.append(pts)
+        if 'benefitId' in payload:
+            bid = int(payload.get('benefitId') or 0)
+            if bid:
+                self._validate_reward_coupon(c, club_id, bid)
+            sets.append('benefit_id=?'); args.append(bid or None)
+        if not sets:
+            return
+        args += [int(rule_id), club_id]
+        c.execute(f"UPDATE tier_reward_rules SET {','.join(sets)} WHERE id=? AND club_id=?", args)
+
+    def delete_tier_reward_rule(self, c, *, club_id: int, rule_id: int) -> None:
+        c.execute('DELETE FROM tier_reward_rules WHERE id=? AND club_id=?', (int(rule_id), club_id))
+
+    def process_tier_rewards(self, c, *, club_id: int, user_id: int, tier_id: int) -> list[dict[str, Any]]:
+        """membership.on_upgrade 回调：升到 tier_id 时按规则发券 / 发活动积分（幂等）。"""
+        out: list[dict[str, Any]] = []
+        rules = [dict(r) for r in c.execute(
+            'SELECT * FROM tier_reward_rules WHERE club_id=? AND tier_id=? AND enabled=1',
+            (club_id, int(tier_id))).fetchall()]
+        for g in rules:
+            # 先抢防重位：INSERT OR IGNORE 命中唯一索引说明已经发过。
+            cur = c.execute('''INSERT OR IGNORE INTO tier_reward_log(club_id,user_id,tier_id,benefit_id,points_award)
+                               VALUES(?,?,?,?,?)''',
+                            (club_id, user_id, int(tier_id), g.get('benefit_id'), int(g.get('points_award') or 0)))
+            if cur.rowcount != 1:
+                continue
+            tier = c.execute('SELECT name FROM club_member_tiers WHERE id=?', (int(tier_id),)).fetchone()
+            tname = tier['name'] if tier else '会员'
+            got: list[dict[str, Any]] = []
+            try:
+                bid = int(g.get('benefit_id') or 0)
+                if bid:
+                    b = self._coupon_row(c, bid)
+                    if b and str(b.get('status') or 'active') == 'active' and (
+                            b['stock'] is None or int(b['stock']) > 0):
+                        issued = self._issue(c, b, user_id, club_id, funding='CLUB',
+                                             note=f"达到「{tname}」等级自动赠送")
+                        issued['ruleId'] = int(g['id'])
+                        got.append(issued)
+                pts = int(g.get('points_award') or 0)
+                if pts > 0:
+                    c.execute('UPDATE club_members SET club_points_balance=club_points_balance+? '
+                              'WHERE club_id=? AND user_id=?', (pts, club_id, user_id))
+                    c.execute('INSERT INTO club_point_ledger(club_id,user_id,type,amount,source_type,source_id,note) '
+                              'VALUES(?,?,?,?,?,?,?)',
+                              (club_id, user_id, 'earn', pts, 'tier_reward', str(tier_id),
+                               f"达到「{tname}」等级奖励活动积分；成本由俱乐部承担"))
+                    got.append({'pointsAwarded': pts, 'ruleId': int(g['id'])})
+            except Exception:
+                c.execute('DELETE FROM tier_reward_log WHERE club_id=? AND user_id=? AND tier_id=?',
+                          (club_id, user_id, int(tier_id)))
+                continue
+            if not got:
+                # 券不可用（下架/没库存）且没配积分 —— 释放防重位，等条件恢复后补发。
+                c.execute('DELETE FROM tier_reward_log WHERE club_id=? AND user_id=? AND tier_id=?',
+                          (club_id, user_id, int(tier_id)))
+                continue
+            out.extend(got)
         return out
 
     # ── 拉新邀请（2026-10-26）────────────────────────────────────────────

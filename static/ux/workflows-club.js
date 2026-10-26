@@ -55,7 +55,42 @@ window.addExecutionGroup=async oid=>uxTask(async()=>{const d=await uxForm({title
 window.assignVehicle=async(oid,pid)=>uxTask(async()=>{const r=await api('/api/club/'+CLUB+'/occurrences/'+oid+'/execution'),gs=(r.groups||[]).filter(g=>g.group_type==='vehicle');if(!gs.length){toast('请先创建车辆分组');return}const d=await uxForm({title:'为参加人分配车辆',fields:[{name:'groupId',label:'选择车辆',type:'select',required:true,full:true,options:gs.map(g=>({value:g.id,label:g.name+' · '+(g.assigned_count||0)+'/'+(g.capacity||'不限')}))}],submitText:'确认分车'});if(!d)return;await post('/api/club/'+CLUB+'/execution-groups/'+d.groupId+'/assign',{participantId:pid});toast('已分配车辆');openExecution(oid)});
 window.quickCheckin=async(oid,pid,current)=>uxTask(async()=>{const d=await uxForm({title:'更新参加人签到',fields:[{name:'status',label:'签到状态',type:'select',required:true,full:true,value:current||'pending',options:[{value:'checked_in',label:'已签到'},{value:'no_show',label:'未到场'},{value:'cancelled',label:'取消参加'},{value:'pending',label:'等待签到'}]}],submitText:'保存签到'});if(!d)return;await patch('/api/club/'+CLUB+'/occurrences/'+oid+'/participants/'+pid+'/checkin',d);toast('签到已更新');openExecution(oid)});
 window.addExecutionNotice=async oid=>uxTask(async()=>{const d=await uxForm({title:'活动通知',subtitle:'点「标记发送」后，报了名的顾客会立刻在自己的订单「出行指引」里看到这条通知；短信 / 微信渠道后续接入后才会真正发到手机上。',fields:[{name:'title',label:'通知标题',full:true,required:true,value:'出发前集合通知'},{name:'content',label:'通知内容',type:'textarea',full:true,required:true,value:'请按时到达集合点，并携带活动所需装备。'},{name:'channel',label:'通知渠道',type:'select',required:true,options:[{value:'manual',label:'站内同步（订单内展示）'},{value:'sms',label:'短信（需渠道接入）'},{value:'wechat',label:'微信（需渠道接入）'}]}],submitText:'创建通知'});if(!d)return;await post('/api/club/'+CLUB+'/occurrences/'+oid+'/notices',{...d,audience:'all'});toast('通知已创建');openExecution(oid)});
-window.addTier=async()=>uxTask(async()=>{const d=await uxForm({title:'创建会员等级',subtitle:'开通方式二选一：条件开通（消费/次数达标自动升级）或购买开通（顾客付费购买会员卡）。等级归属于当前俱乐部，不影响其他俱乐部会员。',fields:[{name:'name',label:'等级名称',required:true,value:'钻石会员'},{name:'rank',label:'等级顺序（越大越高）',type:'number',min:1,step:1,value:30,required:true},{name:'accessMode',label:'开通方式',type:'select',full:true,value:'CONDITION',options:[{value:'CONDITION',label:'条件开通（消费 / 次数达标自动升级）'},{value:'PURCHASE',label:'购买开通（顾客付费购买会员卡）'}]},{name:'price',label:'会员卡售价（元，仅购买开通生效）',type:'number',min:0,step:.01,value:399},{name:'validMonths',label:'会员卡有效期（月，仅购买开通生效）',type:'number',min:1,step:1,value:12},{name:'minActivitySpend',label:'累计活动消费（元，仅条件开通生效）',type:'number',min:0,step:1,value:5000,required:true},{name:'minActivityCount',label:'累计活动次数（仅条件开通生效）',type:'number',min:0,step:1,value:10,required:true},{name:'activityDiscountPercent',label:'活动报名折扣（填折后百分比：90 = 9 折，0 = 该等级不折扣）',type:'number',min:0,max:99,step:1,value:0,full:true,help:'该等级会员报名「参与了会员优惠」的活动时按此折扣立减；每个活动还要自己打开「参与会员优惠」开关才生效。'}],submitText:'保存会员等级'});if(!d)return;await post('/api/club/'+CLUB+'/membership/tiers',{...d,qualificationMode:'ANY',benefits:['专属会员权益'],accessMode:d.accessMode||'CONDITION',price:Number(d.price||0),validMonths:Number(d.validMonths||12),activityDiscountPercent:Number(d.activityDiscountPercent||0)});toast('等级已新增');loadMembers()});
+/* 2026-10-27（用户要求）：条件开通与购买开通彻底分开 —— 入口不同、字段不同，绝不混在一个弹窗。
+   折扣统一按「折」输入（8 = 8 折），保存时 ×10 存成 activity_discount_percent（90 制）。 */
+window.addTier=async mode=>{
+  const buy=String(mode||'CONDITION')==='PURCHASE';
+  const zheField={name:'discountZhe',label:'活动报名折扣（折）',type:'number',min:0,max:9.9,step:.1,value:0,full:true,
+    help:'填 8 = 打 8 折，填 0 = 该等级不打折。会员报名「开启了会员优惠」的活动时按此价立减，活动上还要打开开关才生效。'};
+  return uxTask(async()=>{
+    const d=await uxForm({
+      title: buy?'新建付费会员卡':'新建等级会员',
+      subtitle: buy?'购买开通：顾客在 C 端付费购买这张卡，到期自动失效。卡价与有效期只在这里填。'
+                  :'条件开通：会员累计活动消费 / 活动次数达标后自动升级，不需要付费。',
+      fields: buy?[
+        {name:'name',label:'会员卡名称',required:true,value:'年卡会员'},
+        {name:'rank',label:'卡等级顺序（越大越高）',type:'number',min:1,step:1,value:30,required:true},
+        {name:'price',label:'售价（元）',type:'number',min:0,step:.01,value:399},
+        {name:'validMonths',label:'有效期（月）',type:'number',min:1,step:1,value:12},
+        zheField
+      ]:[
+        {name:'name',label:'等级名称',required:true,value:'新等级'},
+        {name:'rank',label:'等级顺序（越大越高）',type:'number',min:1,step:1,value:30,required:true},
+        {name:'minActivitySpend',label:'累计活动消费 ≥（元）',type:'number',min:0,step:1,value:5000,required:true},
+        {name:'minActivityCount',label:'累计活动次数 ≥',type:'number',min:0,step:1,value:10,required:true},
+        zheField
+      ],
+      submitText: buy?'保存会员卡':'保存等级'});
+    if(!d)return;
+    await post('/api/club/'+CLUB+'/membership/tiers',{...d,
+      qualificationMode:'ANY',benefits:['专属会员权益'],
+      accessMode: buy?'PURCHASE':'CONDITION',
+      price: buy?Number(d.price||0):0,
+      validMonths:Number(d.validMonths||12),
+      activityDiscountPercent:Math.round(Number(d.discountZhe||0)*10)});
+    toast(buy?'会员卡已新增':'等级已新增');
+    loadMembers();
+  });
+};
 /* 俱乐部营销 · 优惠券（2026-10-26）：满减 / 折扣 / 直抵三种形态，只能用于活动报名。
    两步创建：先填券的业务信息，再进「券面设计器」挑模板或自定义渐变配色（实时预览）。 */
 window.addClubBenefit=window.addClubCoupon=async()=>uxTask(async()=>{
@@ -159,7 +194,7 @@ window.addTierGift=async()=>{
   let tiers=[],benefits=[];
   try{[tiers,benefits]=await Promise.all([api(`/api/club/${CLUB}/membership/tiers`),api(`/api/club/${CLUB}/benefits`)])}catch(e){}
   const coupons=(benefits||[]).filter(b=>b.owner_type==='CLUB'&&b.benefit_type==='activity_coupon'&&b.status==='active');
-  if(!(tiers||[]).length){showAlert({title:'先创建会员等级',message:'请先在「会员等级规则」里创建至少一个等级，再设置升级赠券。'});return}
+  if(!(tiers||[]).length){showAlert({title:'先创建会员等级',message:'请先在「等级会员 · 条件开通」里创建至少一个等级，再设置升级奖励。'});return}
   if(!coupons.length){showAlert({title:'先创建优惠券',message:'升级赠券只能赠送本俱乐部已创建且启用中的活动优惠券，请先在「俱乐部营销 · 优惠券」里建券并备好库存。'});return}
   const d=await uxForm({title:'设置升级赠券',
     subtitle:'会员升级到选定等级时，系统自动把券送进TA的券包（每个等级绑一张券，每位会员同一等级只送一次）。券必须有库存。',

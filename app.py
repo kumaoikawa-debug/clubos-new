@@ -162,9 +162,9 @@ activity_refund_policy=ActivityRefundPolicyService()
 membership_engine=MembershipEngine()
 benefit_engine=BenefitEngine(wallet_snapshot)
 # 会员生命周期钩子（2026-10-26）：新会员入会自动发「邀请优惠券」，升级到设定等级自动发「升级赠券」。
-# 防重由 benefits 层负责（tier_gift_log 唯一索引 / referral 每人一张），异常在 membership 层兜底。
+# 防重由 benefits 层负责（tier_reward_log 唯一索引 / referral 每人一张），异常在 membership 层兜底。
 membership_engine.on_member_created=benefit_engine.welcome_new_member
-membership_engine.on_upgrade=benefit_engine.process_tier_gifts
+membership_engine.on_upgrade=benefit_engine.process_tier_rewards
 # 积分商城（2026-10-26）：俱乐部用活动积分上架优惠券/活动/服务/实物兑换。
 from clubos_domain.points_mall import PointsMallEngine
 points_mall_engine=PointsMallEngine(benefit_engine)
@@ -2695,18 +2695,55 @@ def public_points_mall_redeem(club_id:int,item_id:int,payload:dict=Body(...)):
 
 # ---- 升级赠券 / 拉新邀请 / 券转赠（2026-10-26）--------------------------------
 
-@app.get('/api/club/{club_id}/tier-gift-rules')
-def club_tier_gift_rules(club_id:int):
+# 2026-10-27 升级奖励 v2：一个等级一条规则，可只送券 / 只送积分 / 两者都给。
+# 老接口 /tier-gift-rules 保留但转发到新表（老客户端与老用例继续可用）。
+
+@app.get('/api/club/{club_id}/tier-reward-rules')
+def club_tier_reward_rules(club_id:int):
     club_or_404(club_id)
     with conn() as c:
-        return benefit_engine.tier_gift_rules(c,club_id=club_id)
+        return benefit_engine.tier_reward_rules(c,club_id=club_id)
+
+@app.post('/api/club/{club_id}/tier-reward-rules')
+def club_create_tier_reward_rule(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        try:
+            rid=benefit_engine.create_tier_reward_rule(c,club_id=club_id,payload=payload)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'ruleId':rid}
+
+@app.patch('/api/club/{club_id}/tier-reward-rules/{rule_id}')
+def club_update_tier_reward_rule(club_id:int,rule_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        try:
+            benefit_engine.update_tier_reward_rule(c,club_id=club_id,rule_id=rule_id,payload=payload)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
+    return {'ok':True}
+
+@app.delete('/api/club/{club_id}/tier-reward-rules/{rule_id}')
+def club_delete_tier_reward_rule(club_id:int,rule_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        benefit_engine.delete_tier_reward_rule(c,club_id=club_id,rule_id=rule_id)
+    return {'ok':True}
+
+@app.get('/api/club/{club_id}/tier-gift-rules')
+def club_tier_gift_rules(club_id:int):
+    """兼容入口：2026-10-27 起真身是 tier-reward-rules。"""
+    club_or_404(club_id)
+    with conn() as c:
+        return benefit_engine.tier_reward_rules(c,club_id=club_id)
 
 @app.post('/api/club/{club_id}/tier-gift-rules')
 def club_create_tier_gift_rule(club_id:int,payload:dict=Body(...)):
     club_or_404(club_id)
     with conn() as c:
         try:
-            rid=benefit_engine.create_tier_gift_rule(c,club_id=club_id,payload=payload)
+            rid=benefit_engine.create_tier_reward_rule(c,club_id=club_id,payload=payload)
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(400,str(e))
     return {'ok':True,'ruleId':rid}
@@ -2716,15 +2753,16 @@ def club_update_tier_gift_rule(club_id:int,rule_id:int,payload:dict=Body(...)):
     club_or_404(club_id)
     with conn() as c:
         try:
-            benefit_engine.update_tier_gift_rule(c,club_id=club_id,rule_id=rule_id,payload=payload)
+            benefit_engine.update_tier_reward_rule(c,club_id=club_id,rule_id=rule_id,payload=payload)
         except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
     return {'ok':True}
 
 @app.delete('/api/club/{club_id}/tier-gift-rules/{rule_id}')
 def club_delete_tier_gift_rule(club_id:int,rule_id:int):
     club_or_404(club_id)
     with conn() as c:
-        benefit_engine.delete_tier_gift_rule(c,club_id=club_id,rule_id=rule_id)
+        benefit_engine.delete_tier_reward_rule(c,club_id=club_id,rule_id=rule_id)
     return {'ok':True}
 
 @app.get('/api/club/{club_id}/referral-coupon')
