@@ -31,12 +31,51 @@ async function loadPlatformAttention(){
       : `<div class="notice">暂无待处理事项。</div>`;
   }catch(e){box.innerHTML=`<div class="notice warn">待处理事项加载失败：${esc(e.message)}</div>`}
 }
-async function loadClubs(){try{skel('#clubRows',4);let [a,cr]=await Promise.all([api('/api/platform/clubs'),api('/api/platform/commission-rates').catch(()=>null)]);
+async function loadClubs(){try{skel('#clubRows',4);loadApplications();let [a,cr]=await Promise.all([api('/api/platform/clubs'),api('/api/platform/commission-rates').catch(()=>null)]);
   const rateMap={};((cr&&cr.clubs)||[]).forEach(x=>rateMap[x.clubId]=x);
-  const defPct=Number((cr&&cr.productDefaultRatePercent)||8);$('#clubRows').innerHTML=a.map(x=>`<tr><td><div class="plat-club-cell"><span class="plat-club-logo">${clubLogoHtml(x)}</span><span><strong>${esc(x.name)}</strong><div class="sub">${esc(x.city||'')} ${esc(x.contact_name||'')} ${esc(x.contact_phone||'')}</div></span></div></td><td>${esc(x.subscription_plan||x.plan||'—')}<div class="sub">${esc(enumCn(x.subscription_status,'未开通'))}</div></td><td><span class="tag ${x.status==='pending'||x.status==='disabled'?'orange':''}">${esc(enumCn(x.status))}</span></td><td>${(()=>{const r=rateMap[x.id];if(!r)return '<span class="sub">—</span>';
+  const defPct=Number((cr&&cr.productDefaultRatePercent)||8);$('#clubRows').innerHTML=a.map(x=>`<tr><td><div class="plat-club-cell"><span class="plat-club-logo">${clubLogoHtml(x)}</span><span><strong>${esc(x.name)}</strong>${x.source==='website'?' <span class="tag">官网申请</span>':''}<div class="sub">${esc(x.city||'')} ${esc(x.contact_name||'')} ${esc(x.contact_phone||'')}</div></span></div></td><td>${esc(x.subscription_plan||x.plan||'—')}<div class="sub">${esc(enumCn(x.subscription_status,'未开通'))}</div></td><td><span class="tag ${x.status==='pending'||x.status==='disabled'?'orange':''}">${esc(enumCn(x.status))}</span></td><td>${(()=>{const r=rateMap[x.id];if(!r)return '<span class="sub">—</span>';
    const pct=Number(r.ratePercent||0);const own=!!r.hasClubOverride;
    const dis=!r.enabled;
    return `<div class="plat-rate-cell"><strong>${dis?'0':pct}%</strong>${own?'<span class="tag">已单独设定</span>':'<span class="sub">商品默认</span>'}${dis?'<span class="tag orange">已停发</span>':''}${own?`<div class="sub">默认 ${Number(r.productRatePercent||defPct)}%</div>`:''}</div>`})()}</td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" onclick="setClubCommissionRate(${x.id})">佣金率</button></div></td><td><div class="plat-credits-cell"><strong>${x.ai_credits}</strong>${Number(x.ai_credit_debt||0)>0?`<div class="sub">欠账 ${x.ai_credit_debt}</div>`:''}<div class="plat-credits-ops"><button class="btn ghost sm" title="扣减 100 Credits" onclick="quickCredits(${x.id},-100)">−100</button><button class="btn ghost sm" title="增加 100 Credits" onclick="quickCredits(${x.id},100)">+100</button><button class="btn ghost sm" onclick="adjust(${x.id})">调整</button></div></div></td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn secondary" onclick="clubStatus(${x.id},'${x.status==='active'?'disabled':'active'}')">${x.status==='active'?'停用':'启用'}</button><button class="btn ghost" onclick="assignPlan(${x.id})">套餐</button>${x.status==='pending'?`<button class="btn ghost" onclick="clubStatus(${x.id},'rejected')">拒绝</button>`:''}</div></td></tr>`).join('')}catch(e){loaderError('#clubRows',e,'loadClubs 加载失败')}}
+
+/* ── 官网申请明细（2026-10-26）────────────────────────────────────
+   官网「申请体验」表单经 server.js 代理写入 clubs 表（source='website'），
+   平台手动「新增入驻」是 source='platform'。这里给「官网申请明细」面板
+   出数据：状态统计 chips + 待处理排最前的明细表，审核动作复用 clubStatus /
+   assignPlan（它们完成后调 loadClubs()，联动刷新明细）。 */
+let applyState={status:'all'},applyCache=[],applyStats={};
+async function loadApplications(){try{
+  const r=await api('/api/platform/club-applications?status='+applyState.status);
+  applyCache=Array.isArray(r.items)?r.items:[];applyStats=r.stats||{};
+  renderApplications();
+}catch(e){loaderError('#applyRows',e,'申请明细加载失败')}}
+function applyFilterSet(st){
+  applyState.status=st;
+  document.querySelectorAll('#applyFilters [data-af]').forEach(b=>b.classList.toggle('is-on',b.getAttribute('data-af')===st));
+  loadApplications();
+}
+function renderApplications(){
+  const s=applyStats||{};
+  $('#applyStats').innerHTML=[['pending','待处理'],['active','已启用'],['rejected','已拒绝'],['disabled','已停用']]
+    .map(x=>`<span class="plat-apply-stat${s[x[0]]?'':' is-zero'}">${x[1]} <b>${s[x[0]]||0}</b></span>`).join('');
+  $('#applyRows').innerHTML=(applyCache||[]).map(x=>`<tr>
+    <td><div class="plat-club-cell"><span class="plat-club-logo">${clubLogoHtml(x)}</span><span><strong>${esc(x.name)}</strong><div class="sub">${esc(x.city||'')}</div></span></div></td>
+    <td>${esc(x.contact_name||'—')}<div class="sub">${esc(x.contact_phone||'')}</div></td>
+    <td class="plat-apply-note" title="${esc(x.application_note||'')}">${esc(x.application_note||'—')}</td>
+    <td>${x.source==='website'?'<span class="tag">官网申请</span>':'<span class="sub">平台新增</span>'}</td>
+    <td><span class="tag ${x.status==='pending'||x.status==='disabled'?'orange':''}">${esc(enumCn(x.status))}</span></td>
+    <td class="sub">${esc(String(x.created_at||'').slice(0,16).replace('T',' '))}</td>
+    <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+      ${x.status==='pending'?`<button class="btn secondary sm" onclick="clubStatus(${x.id},'active')">启用</button><button class="btn ghost sm" onclick="clubStatus(${x.id},'rejected')">拒绝</button>`:''}
+      ${x.status==='active'?`<button class="btn ghost sm" onclick="assignPlan(${x.id})">套餐</button><button class="btn ghost sm" onclick="clubStatus(${x.id},'disabled')">停用</button>`:''}
+      ${x.status==='disabled'?`<button class="btn secondary sm" onclick="clubStatus(${x.id},'active')">启用</button>`:''}
+    </div></td></tr>`).join('')||'<tr><td colspan="7" class="empty">暂无申请记录</td></tr>';
+}
+/* 筛选按钮事件委托：面板 HTML 是静态的，但绑 document 最稳（与 platLogoFallback 同思路）。 */
+document.addEventListener('click',e=>{
+  const b=e.target&&e.target.closest?e.target.closest('#applyFilters [data-af]'):null;
+  if(b)applyFilterSet(b.getAttribute('data-af'));
+});
 
 /* 俱乐部 logo：平台端用 /api/platform/clubs/{id}/logo.png 代理（后端已把
    clubs.logo_url 的原始路径换算过来）。没设 logo 的俱乐部不能显示裂图，

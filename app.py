@@ -4230,8 +4230,10 @@ def public_club_application(payload:dict=Body(...)):
     name=str(payload.get('name') or '').strip()
     if not name: raise HTTPException(400,'俱乐部名称必填')
     with conn() as c:
-        c.execute('''INSERT INTO clubs(name,status,plan,contact_name,contact_phone,city,application_note,business_license_ref)
-                     VALUES(?,?,?,?,?,?,?,?)''',(name,'pending','starter',payload.get('contactName'),payload.get('contactPhone'),payload.get('city'),payload.get('applicationNote'),payload.get('businessLicenseRef')))
+        # source='website'：官网「申请体验」提交的申请（server.js 同源代理转发）。
+        # 平台端「俱乐部入驻」按它区分来源并单列官网申请明细（platform_club_applications）。
+        c.execute('''INSERT INTO clubs(name,status,plan,contact_name,contact_phone,city,application_note,business_license_ref,source)
+                     VALUES(?,?,?,?,?,?,?,?,'website')''',(name,'pending','starter',payload.get('contactName'),payload.get('contactPhone'),payload.get('city'),payload.get('applicationNote'),payload.get('businessLicenseRef')))
         cid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0]);ai_credit_engine.ensure_account(c,cid)
     return {'applicationId':cid,'status':'pending'}
 
@@ -4275,6 +4277,38 @@ def platform_clubs():
     return data
 
 
+@app.get('/api/platform/club-applications')
+def platform_club_applications(status:str='all',source:str='all'):
+    """俱乐部入驻申请明细（2026-10-26）。
+
+    官网「申请体验」表单（server.js 代理到 /api/public/club-applications）与
+    平台手动「新增入驻」都写 clubs 表，用 clubs.source 区分来源：
+      website  = 官网申请（潜在客户线索）
+      platform = 平台手动新增（运营代录入）
+    这里是平台端「官网申请明细」面板的专属数据源：带状态统计 + 按来源/状态
+    筛选，待处理排最前、其余按申请时间倒序，方便运营优先处理新线索。
+    """
+    with conn() as c:
+        conds=[];args=[]
+        if source in ('website','platform'):
+            conds.append('cl.source=?');args.append(source)
+        if status in ('pending','active','disabled','rejected'):
+            conds.append('cl.status=?');args.append(status)
+        where=('WHERE '+' AND '.join(conds)) if conds else ''
+        data=rows(c.execute(f'''SELECT cl.id,cl.name,cl.status,cl.plan,cl.contact_name,cl.contact_phone,
+                   cl.city,cl.application_note,cl.source,cl.created_at,cl.reviewed_at,cl.reviewed_by,cl.disabled_reason,cl.logo_url
+                   FROM clubs cl {where}
+                   ORDER BY CASE WHEN cl.status='pending' THEN 0 ELSE 1 END, cl.id DESC''',args))
+        stat_sql=f"SELECT status,COUNT(*) n FROM clubs cl {where} GROUP BY status"
+        stats={r['status']:int(r['n']) for r in rows(c.execute(stat_sql,args))}
+        total=int(c.execute(f'SELECT COUNT(*) FROM clubs cl {where}',args).fetchone()[0])
+    # logoUrl 与 platform_clubs 同款：把登录态代理地址换算成平台专属代理
+    # （待审核俱乐部的 logo 也要看得见）。
+    for x in data:
+        m=_LOGO_URL_RE.match(str(x.get('logo_url') or ''))
+        x['logoUrl']=f'/api/platform/clubs/{x["id"]}/logo{m.group(2)}' if m else ''
+    return {'items':data,'stats':stats,'total':total}
+
 @app.get('/api/platform/clubs/{club_id}/logo.{ext}')
 def platform_club_logo(club_id:int,ext:str):
     """总平台查看任意俱乐部 logo（含待审核/已停用）—— 仅平台角色可访问。"""
@@ -4285,8 +4319,8 @@ def platform_add_club(payload:dict=Body(...)):
     name=str(payload.get('name') or '').strip()
     if not name: raise HTTPException(400,'俱乐部名称必填')
     with conn() as c:
-        c.execute('''INSERT INTO clubs(name,status,plan,contact_name,contact_phone,city,application_note,business_license_ref)
-                     VALUES(?,?,?,?,?,?,?,?)''',(name,'pending',payload.get('plan','pro'),payload.get('contactName'),payload.get('contactPhone'),payload.get('city'),payload.get('applicationNote'),payload.get('businessLicenseRef')))
+        c.execute('''INSERT INTO clubs(name,status,plan,contact_name,contact_phone,city,application_note,business_license_ref,source)
+                     VALUES(?,?,?,?,?,?,?,?,'platform')''',(name,'pending',payload.get('plan','pro'),payload.get('contactName'),payload.get('contactPhone'),payload.get('city'),payload.get('applicationNote'),payload.get('businessLicenseRef')))
         cid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0]);ai_credit_engine.ensure_account(c,cid)
     return {'id':cid,'status':'pending'}
 

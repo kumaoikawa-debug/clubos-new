@@ -529,3 +529,16 @@
 .plat-lgt__ev.is-first::before{background:var(--brand)}
 .plat-lgt__ev b{font-size:12.5px;display:block;line-height:1.6}
 .plat-lgt__ev span{font-size:11.5px;color:var(--muted)}
+
+/* ── 俱乐部入驻 · 官网申请明细（2026-10-26）────────────────────────────── */
+/* panel-title 里的筛选按钮组：不设 flex:0 0 auto 会被左侧文字挤成两行（页头规范）。 */
+.plat-apply-panel{margin-bottom:14px}
+.plat-apply-filters{display:flex;gap:6px;flex-wrap:wrap;flex:0 0 auto}
+.plat-apply-filters .btn.is-on{border-color:var(--brand);color:var(--brand);background:#eef6f2;font-weight:700}
+.plat-apply-stats{display:flex;flex-wrap:wrap;gap:8px;margin:2px 0 12px}
+.plat-apply-stat{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:#f4f7f5;border:1px solid var(--line);border-radius:999px;padding:4px 11px}
+.plat-apply-stat b{font-variant-numeric:tabular-nums;color:var(--text)}
+.plat-apply-stat:first-child b{color:var(--brand)}
+.plat-apply-stat.is-zero{opacity:.55}
+.plat-apply-note{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--muted)}
+@media (max-width:900px){.plat-apply-note{max-width:160px}}

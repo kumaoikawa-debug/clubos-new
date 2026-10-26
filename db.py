@@ -199,6 +199,13 @@ def _run_compat_migrations(c):
     _ensure_column(c,'clubs','reviewed_at','reviewed_at TEXT')
     _ensure_column(c,'clubs','reviewed_by','reviewed_by TEXT')
     _ensure_column(c,'clubs','disabled_reason','disabled_reason TEXT')
+    # 入驻来源（2026-10-26）：官网「申请体验」表单提交的申请与平台手动
+    # 「新增入驻」共用 clubs 表，用 source 区分（website / platform），
+    # 平台端「俱乐部入驻」里据此显示来源徽标并单列官网申请明细。
+    # 存量行 ADD COLUMN 自动落默认值 'platform'（历史数据无来源概念）。
+    # 注意：public_club_application / platform_add_club 的 INSERT 会写该列，
+    # 补列必须留在 _run_compat_migrations（init_db 第一个调用）里，天然在前。
+    _ensure_column(c,'clubs','source',"source TEXT NOT NULL DEFAULT 'platform'")
     _ensure_column(c,'ai_credit_adjustment_debt','resolved_amount','resolved_amount INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'ai_credit_adjustment_debt','resolved_at','resolved_at TEXT')
     _ensure_column(c,'registrations','commerce_order_id','commerce_order_id TEXT')

@@ -133,3 +133,10 @@ python tests/coupon_smoke.py
 # 溢出 flex 行自动换行 + 同档大字号统一缩小 + 纯数字不拆行；四端 shared.js 版本一致。
 # 纯静态断言（只读 static/*），不建库不碰真库。
 python tests/promo_responsive_smoke.py
+
+# 俱乐部入驻申请来源链路（2026-10-26 用户需求）：官网「申请体验」与平台手动
+# 新增用 clubs.source 区分（website/platform），平台端「官网申请明细」面板。
+# 守住：来源列默认值、明细接口 items/stats/筛选/排序/权限、平台端前端护栏
+# （面板 DOM、筛选按钮、明细样式、platform.js/css 版本 20261026b）。
+# production 模式真鉴权 + 临时库隔离，公开申请只发 1 次（线上 IP 限速 3/h）。
+python tests/club_source_applications_smoke.py
