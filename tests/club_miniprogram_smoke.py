@@ -188,9 +188,18 @@ html = (ROOT / 'static/club/index.html').read_text(encoding='utf-8')
 check('设置页有三个新 tab', all(f"setTab('{t}')" in html for t in ('mpinfo', 'mpstaff', 'mpset')))
 check('三个 pane 骨架存在', all(f'id="pane-{p}"' in html for p in ('mpinfo', 'mpstaff', 'mpset')))
 check('员工/角色双子tab与容器', 'mpStaffTabs' in html and 'id="mpStaffBody"' in html and 'id="mpRolesBody"' in html)
-check('club.js 版本 20261026b', 'club.js?v=20261026b' in html)
+check('club.js 版本 20261026c', 'club.js?v=20261026c' in html)
 js = (ROOT / 'static/club/club.js').read_text(encoding='utf-8')
 check('club.js 含三大板块函数', all(k in js for k in ('loadMpInfo', 'loadMpStaff', 'loadMpRoles', 'loadMpSettings', 'mpInfoEdit', 'saveMpInfo', 'mpStaffForm', 'mpRoleForm', 'saveMpSetGroup')))
 check('club.js setTab pane 数组含新板块', "'mpinfo','mpstaff','mpset'" in js)
+# 2026-10-26 用户反馈：认证状态/版本号/体验者等由微信侧自动同步，老板不手填
+check('编辑表单已移除系统自动字段（实名/版本/备案/发布/体验者）',
+      'realnameStatus' not in js[js.index('function mpInfoEdit'):js.index('async function saveMpInfo')]
+      and 'currentVersion' not in js[js.index('function mpInfoEdit'):js.index('async function saveMpInfo')]
+      and 'mpTesters' not in js[js.index('function mpInfoEdit'):js.index('async function saveMpInfo')])
+check('小程序码系统自动生成（ClubOSQR 本地生成，无上传按钮）',
+      'ClubOSQR.draw' in js and js.count("mpUploadImage('qrcode'") == 0)
+check('头像自动回落俱乐部 Logo + 恢复自动', 'MP_LOGO' in js and 'avatarClear' in js and 'mpClearAvatar' in js)
+check('自动同步态展示（不显示「未填写」语气）', '微信授权后自动同步' in js)
 
 print(f'\nALL PASS ({len(PASS)} checks)')

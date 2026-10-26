@@ -2368,92 +2368,91 @@ const MP_PERMS={activities:'活动管理',registrations:'报名管理',content:'
 let MP_STAFF_TAB='staff';
 
 /* ── 小程序信息 ─────────────────────────────────────────────────────────── */
+/* 设计原则（2026-10-26 用户反馈）：老板只填「名字、简介、AppID、主体、类目、
+   支付品牌」这类自己的信息；认证状态、版本号、备案、体验者这些是微信侧
+   自动同步的，不该让老板手填；头像自动继承俱乐部 Logo；小程序码系统自动
+   生成（扫码直达本俱乐部 C 端）。 */
+let MP_LOGO='';
 async function loadMpInfo(){
   const box=$('#mpInfoBody');if(!box)return;
   box.innerHTML='<div class="empty">正在加载小程序信息…</div>';
   let info;
   try{info=await api(`/api/club/${CLUB}/miniprogram`,{cache:'no-store'})}
   catch(e){loaderError('#mpInfoBody',e,'小程序信息读取失败');return}
-  const avatar=info.avatarUrl?`<img src="${esc(info.avatarUrl)}${info.avatarUrl.indexOf('?')<0?'?t='+Date.now():''}" alt="头像" style="width:88px;height:88px;border-radius:50%;object-fit:cover">`:`<span style="width:88px;height:88px;border-radius:50%;background:var(--bg-soft,#f2f0ea);display:inline-flex;align-items:center;justify-content:center;font-size:26px"> squirrel</span>`;
-  const qr=info.qrcodeUrl?`<img src="${esc(info.qrcodeUrl)}${info.qrcodeUrl.indexOf('?')<0?'?t='+Date.now():''}" alt="小程序码" style="width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`:'<span class="sub">未上传</span>';
-  const row=(k,v)=>`<div style="display:flex;gap:14px;padding:9px 0;border-bottom:1px dashed var(--line)"><span class="sub" style="flex:0 0 110px">${k}</span><div style="flex:1;min-width:0">${v||'<span class="sub">未填写</span>'}</div></div>`;
-  const tag=(v,ok)=>v?`<span class="tag${ok?'':' orange'}">${esc(v)}</span>`:'<span class="sub">未登记</span>';
+  try{const s=await api(`/api/club/${CLUB}/settings`,{cache:'no-store'});MP_LOGO=s.logoUrl||''}catch(e){MP_LOGO=MP_LOGO||''}
+  const avatarSrc=info.avatarUrl?info.avatarUrl+(info.avatarUrl.indexOf('?')<0?'?t='+Date.now():''):MP_LOGO;
+  const avatar=avatarSrc?`<img src="${esc(avatarSrc)}" alt="头像" style="width:88px;height:88px;border-radius:50%;object-fit:cover">`:`<span style="width:88px;height:88px;border-radius:50%;background:var(--bg-soft,#f2f0ea);display:inline-flex;align-items:center;justify-content:center;font-size:26px">⛰</span>`;
+  const autoRow=(k,v)=>`<div style="display:flex;gap:14px;padding:9px 0;border-bottom:1px dashed var(--line)"><span class="sub" style="flex:0 0 130px">${k} <span class="tag">自动同步</span></span><div style="flex:1;min-width:0">${v?esc(v):'<span class="sub">微信授权后自动同步，无需填写</span>'}</div></div>`;
+  const fillRow=(k,v)=>`<div style="display:flex;gap:14px;padding:9px 0;border-bottom:1px dashed var(--line)"><span class="sub" style="flex:0 0 110px">${k}</span><div style="flex:1;min-width:0">${v||'<span class="sub">未填写</span>'}</div></div>`;
   const cats=(info.serviceCategories||[]).map(c=>`<span class="tag">${esc(c)}</span>`).join(' ');
   const testers=(info.testers||[]);
+  const payBrand=info.payBrandName?`${esc(info.payBrandName)}${info.payBrandId?`（ID:${esc(info.payBrandId)}）`:''}`:'';
   box.innerHTML=`
   <div class="card section">
     <div class="panel-title"><h3>认证信息</h3><button class="btn secondary" type="button" onclick="mpInfoEdit()">编辑信息</button></div>
     <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;padding:6px 0 14px">
-      <div style="text-align:center">${avatar}<div class="sub" style="margin-top:6px">小程序头像</div><label class="btn ghost sm" style="cursor:pointer;margin-top:4px;display:inline-block">上传<input type="file" accept="image/*" style="display:none" onchange="mpUploadImage('avatar',this)"></label></div>
-      <div style="text-align:center">${qr}<div class="sub" style="margin-top:6px">小程序码</div><label class="btn ghost sm" style="cursor:pointer;margin-top:4px;display:inline-block">上传<input type="file" accept="image/*" style="display:none" onchange="mpUploadImage('qrcode',this)"></label></div>
+      <div style="text-align:center">${avatar}<div class="sub" style="margin-top:6px">${info.avatarUrl?'小程序头像（已自定义）':'小程序头像 = 俱乐部 Logo'}</div><div class="sub" style="max-width:120px">${info.avatarUrl?'<a href="javascript:void(0)" onclick="mpClearAvatar()">恢复自动</a>':'在「品牌与展示」里更换 Logo 自动同步'}</div>${info.avatarUrl?`<label class="btn ghost sm" style="cursor:pointer;margin-top:4px;display:inline-block">换图<input type="file" accept="image/*" style="display:none" onchange="mpUploadImage('avatar',this)"></label>`:''}</div>
+      <div style="text-align:center"><canvas id="mpQrCanvas" style="width:84px;height:84px;border-radius:8px;border:1px solid var(--line)"></canvas><div class="sub" style="margin-top:6px">小程序码 · 系统自动生成</div><div class="sub" style="max-width:120px">扫码直达本俱乐部</div></div>
       <div style="flex:1;min-width:280px">
-        ${row('小程序名称',esc(info.appName))}
-        ${row('AppID',`<code>${esc(info.appid)}</code>`)}
-        ${row('小程序简介',esc(info.appIntro))}
-        ${row('主体类型 / 名称',`${esc(info.subjectType)} ${info.subjectName&&info.subjectType?' / ':''}${esc(info.subjectName)}`)}
-        ${row('服务类目',cats)}
-        ${row('实名验证',tag(info.realnameStatus,info.realnameStatus==='实名验证成功'))}
-        ${row('资质认证',tag(info.qualificationStatus,!!info.qualificationStatus&&info.qualificationStatus.indexOf('未')<0))}
-        ${row('年审到期时间',esc(info.annualReviewAt))}
-        ${row('微信支付品牌',info.payBrandName?`${esc(info.payBrandName)}${info.payBrandId?`（ID:${esc(info.payBrandId)}）`:''}`:'')}
+        ${fillRow('小程序名称',esc(info.appName))}
+        ${fillRow('AppID',info.appid?`<code>${esc(info.appid)}</code>`:'')}
+        ${fillRow('小程序简介',esc(info.appIntro))}
+        ${fillRow('主体类型 / 名称',`${esc(info.subjectType)} ${info.subjectName&&info.subjectType?' / ':''}${esc(info.subjectName)}`)}
+        ${fillRow('服务类目',cats)}
+        ${fillRow('微信支付品牌',payBrand)}
       </div>
     </div>
   </div>
   <div class="card section">
-    <div class="panel-title"><div><h3>授权状态</h3><div class="sub">小程序授权托管后的版本与合规状态；未授权时填 AppID 也可先登记。</div></div><span class="tag ${info.authorized?'':'orange'}">${info.authorized?'已授权':'未授权'}</span></div>
-    ${row('当前版本号',esc(info.currentVersion))}
-    ${row('隐私设置保护指引',tag(info.privacyStatus,info.privacyStatus==='已配置'))}
-    ${row('地理位置接口权限',tag(info.geoPermission,info.geoPermission==='已开通'))}
-    ${row('小程序备案',tag(info.recordStatus,info.recordStatus==='已备案'))}
-    ${row('发布状态',tag(info.releaseStatus,info.releaseStatus==='已发布'))}
-    <div style="padding:10px 0 2px"><div class="sub" style="margin-bottom:6px">绑定体验者（${testers.length}）—— 体验者可体验未发布版本</div>
-    ${testers.length?testers.map(t=>`<span class="tag" style="margin:0 6px 6px 0">${esc(t.nickname)}${t.wxid?` · ${esc(t.wxid)}`:''}</span>`).join(''):'<span class="sub">暂无体验者</span>'}</div>
+    <div class="panel-title"><div><h3>认证与授权状态</h3><div class="sub">以下全部由微信侧自动同步（授权小程序给 ClubOS 后），不需要也不支持手动填写。</div></div><span class="tag ${info.authorized?'':'orange'}">${info.authorized?'已授权':'待微信授权'}</span></div>
+    ${autoRow('实名验证',info.realnameStatus)}
+    ${autoRow('资质认证',info.qualificationStatus)}
+    ${autoRow('年审到期时间',info.annualReviewAt)}
+    ${autoRow('当前版本号',info.currentVersion)}
+    ${autoRow('隐私设置保护指引',info.privacyStatus)}
+    ${autoRow('地理位置接口权限',info.geoPermission)}
+    ${autoRow('小程序备案',info.recordStatus)}
+    ${autoRow('发布状态',info.releaseStatus)}
+    <div style="padding:10px 0 2px"><div class="sub" style="margin-bottom:6px">体验者（${testers.length}）—— 微信授权后在微信公众平台绑定，自动同步</div>
+    ${testers.length?testers.map(t=>`<span class="tag" style="margin:0 6px 6px 0">${esc(t.nickname)}${t.wxid?` · ${esc(t.wxid)}`:''}</span>`).join(''):'<span class="sub">暂无</span>'}</div>
   </div>
   <div id="mpInfoFormBox"></div>`;
+  const cv=document.getElementById('mpQrCanvas');
+  if(cv&&window.ClubOSQR){try{ClubOSQR.draw(cv,location.origin+'/web?club_id='+CLUB)}catch(e){}}
+}
+async function mpClearAvatar(){
+  try{await api(`/api/club/${CLUB}/miniprogram`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({avatarClear:true})});toast('已恢复为俱乐部 Logo 自动同步');loadMpInfo()}
+  catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
 }
 function mpInfoEdit(){
   const box=$('#mpInfoFormBox');if(!box)return;
-  api(`/api/club/${CLUB}/miniprogram`,{cache:'no-store'}).then(info=>{
+  Promise.all([
+    api(`/api/club/${CLUB}/miniprogram`,{cache:'no-store'}),
+    api(`/api/club/${CLUB}/settings`,{cache:'no-store'}).catch(()=>({name:''}))
+  ]).then(([info,s])=>{
     const f=(id,label,ph,max)=>`<label style="display:block"><span class="sub">${label}</span><input id="${id}" maxlength="${max||60}" style="width:100%;margin-top:4px" value="${esc(info[id]||'')}" placeholder="${ph||''}"></label>`;
     box.innerHTML=`<div class="card section">
-    <div class="panel-title"><h3>编辑小程序信息</h3><span class="sub">与微信公众平台「小程序信息」逐项对应</span></div>
+    <div class="panel-title"><div><h3>编辑小程序信息</h3><div class="sub">只需填你自己的信息；认证状态与版本号等由微信授权后自动同步</div></div></div>
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
-      ${f('appid','AppID','wxc014caaaa15c0fb2',64)}
-      ${f('appName','小程序名称','远拓旅游Toptravel',40)}
+      ${f('appid','AppID','wxc014caaaa15c0fb2（微信公众平台「设置-基本设置」里复制）',64)}
+      ${f('appName','小程序名称',esc(s.name||'远拓户外')+'（默认用俱乐部名，可改）',40)}
       ${f('subjectType','主体类型','企业 / 个人 / 政府媒体或其他',20)}
-      ${f('subjectName','主体名称','成都远拓户外旅游有限公司',80)}
-      ${f('realnameStatus','实名验证状态','已认证 / 实名验证成功',20)}
-      ${f('qualificationStatus','资质认证状态','已认证 / 未认证',20)}
-      ${f('annualReviewAt','年审到期时间','2027-09-02 10:58:40',32)}
+      ${f('subjectName','主体名称','营业执照上的公司全称',80)}
       ${f('payBrandName','微信支付品牌','远拓旅游',60)}
       ${f('payBrandId','微信支付品牌 ID','18226',32)}
-      ${f('currentVersion','当前版本号','7.9.4',20)}
-      ${f('privacyStatus','隐私设置保护指引','已配置 / 未配置',20)}
-      ${f('geoPermission','地理位置接口权限','已开通 / 未开通',20)}
-      ${f('recordStatus','小程序备案','已备案 / 未备案',20)}
-      ${f('releaseStatus','发布状态','已发布 / 审核中 / 未发布',20)}
     </div>
-    <label style="display:block;margin-top:12px"><span class="sub">小程序简介</span><textarea id="appIntro" maxlength="300" rows="3" style="width:100%;margin-top:4px">${esc(info.appIntro||'')}</textarea></label>
+    <label style="display:block;margin-top:12px"><span class="sub">小程序简介</span><textarea id="appIntro" maxlength="300" rows="3" style="width:100%;margin-top:4px" placeholder="${esc(s.name||'')} 的活动与装备，都在这里。">${esc(info.appIntro||'')}</textarea></label>
     <label style="display:block;margin-top:12px"><span class="sub">服务类目（每行一个，最多 10 个）</span><textarea id="mpCats" rows="3" style="width:100%;margin-top:4px" placeholder="旅游服务>旅行社">${esc((info.serviceCategories||[]).join('\n'))}</textarea></label>
-    <label style="display:block;margin-top:12px"><span class="sub">绑定体验者（每行一个：昵称,微信号）</span><textarea id="mpTesters" rows="3" style="width:100%;margin-top:4px" placeholder="小野,xy_001">${esc((info.testers||[]).map(t=>[t.nickname,t.wxid].filter(Boolean).join(',')).join('\n'))}</textarea></label>
-    <label style="display:flex;align-items:center;gap:8px;margin-top:12px"><input type="checkbox" id="mpAuthed" ${info.authorized?'checked':''}><span>已授权该小程序给 ClubOS（授权托管后可代发布版本）</span></label>
     <div style="margin-top:14px;display:flex;gap:10px"><button class="btn" type="button" onclick="saveMpInfo()">保存信息</button><button class="btn ghost" type="button" onclick="$('#mpInfoFormBox').innerHTML=''">取消</button></div>
     </div>`;
   }).catch(e=>showAlert({title:'读取失败',message:e.message||'请重试'}));
 }
 async function saveMpInfo(){
   const cats=String($('#mpCats')?.value||'').split('\n').map(x=>x.trim()).filter(Boolean).slice(0,10);
-  const testers=String($('#mpTesters')?.value||'').split('\n').map(l=>l.trim()).filter(Boolean).slice(0,20).map(l=>{
-    const i=l.indexOf(',');const nick=(i<0?l:l.slice(0,i)).trim();const wx=(i<0?'':l.slice(i+1)).trim();
-    return {nickname:nick,wxid:wx,boundAt:''};}).filter(t=>t.nickname);
   const payload={appid:$('#appid')?.value||'',appName:$('#appName')?.value||'',appIntro:$('#appIntro')?.value||'',
     subjectType:$('#subjectType')?.value||'',subjectName:$('#subjectName')?.value||'',
-    realnameStatus:$('#realnameStatus')?.value||'',qualificationStatus:$('#qualificationStatus')?.value||'',
-    annualReviewAt:$('#annualReviewAt')?.value||'',payBrandName:$('#payBrandName')?.value||'',
-    payBrandId:$('#payBrandId')?.value||'',currentVersion:$('#currentVersion')?.value||'',
-    privacyStatus:$('#privacyStatus')?.value||'',geoPermission:$('#geoPermission')?.value||'',
-    recordStatus:$('#recordStatus')?.value||'',releaseStatus:$('#releaseStatus')?.value||'',
-    serviceCategories:cats,testers,authorized:!!$('#mpAuthed')?.checked};
+    payBrandName:$('#payBrandName')?.value||'',payBrandId:$('#payBrandId')?.value||'',
+    serviceCategories:cats};
   try{
     await api(`/api/club/${CLUB}/miniprogram`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     toast('小程序信息已保存');$('#mpInfoFormBox').innerHTML='';loadMpInfo();

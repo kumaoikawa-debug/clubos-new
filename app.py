@@ -1903,6 +1903,10 @@ def club_miniprogram_put(club_id:int,payload:dict=Body(...)):
         if len(v)>_MP_INFO_LEN[f]: raise HTTPException(400,f'{f} 超长（上限 {_MP_INFO_LEN[f]} 字）')
         fields[f]=v or None
     if 'authorized' in payload: fields['authorized']=1 if payload.get('authorized') else 0
+    if payload.get('avatarClear'):
+        # 「恢复自动」：清掉自定义头像，前端回落到俱乐部 Logo（2026-10-26 用户反馈：
+        # 老板设置 Logo 后小程序头像应该自动就有，自定义头像只是可覆盖项）
+        fields['avatar_url']=None
     if 'serviceCategories' in payload:
         cats=[str(x).strip()[:60] for x in (payload.get('serviceCategories') or []) if str(x).strip()]
         if len(cats)>10: raise HTTPException(400,'服务类目最多 10 个')
