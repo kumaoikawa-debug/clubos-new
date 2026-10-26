@@ -18,7 +18,14 @@
    3. 所有点击走编辑器根节点上的一个委托监听：底部操作栏与内容区是兄弟节点，
       绑在内容区上会漏掉「保存」按钮（这个坑在图片管理器里已经踩过一次）。
    4. 编辑已有商品时，规格只做「追加组合」：已有的 SKU 可能已经调过库存和条码，
-      整批重建会把它们冲掉，所以只提供「按颜色×尺码补生成」+ 跳转既有规格管理。
+      整批重建会把它们冲掉，所以卡里已有组合只显示库存、不再给数量框。
+
+   ★ 2026-10-26 第二轮（用户截图上原话「先建颜色，然后一个颜色后面可以建
+     多个尺码库存」）：规格区改成「颜色卡片 → 卡内尺码行（尺码 + 期初数量）」。
+     之前是「颜色列表 × 一条全局尺码串」的笛卡尔积，可现实里每个颜色的尺码并不
+     一样（黑色 S/M/L、白色只有 M/L），强行套同一串尺码就会凭空多出一堆 0 库存
+     的假 SKU，运营还得回头一个个删。现在每个颜色自带尺码表，后端按
+     color.sizes 逐色展开（见 app.py 的 _parse_color_dims）。
 */
 (function () {
   'use strict';
@@ -34,13 +41,6 @@
     ).join('');
   }
 
-  function readColors(root) {
-    return [...root.querySelectorAll('.plat-pe__chip')].map(chip => ({
-      name: (chip.querySelector('.plat-pe__chipname').value || '').trim(),
-      hex: platNormHex(chip.querySelector('.plat-pe__chiphex').value)
-    }));
-  }
-
   /* 手填色值的非法项（写了东西但不是 #RGB/#RRGGBB）——保存前用来拦一下，
      别把一个看不出错的串悄悄落库，C 端色块会渲染成透明。 */
   function badHexChips(root) {
@@ -50,94 +50,50 @@
     });
   }
 
-  function sizesOf(root) {
-    return (root.querySelector('#peSizes').value || '')
-      .split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  const norm = s => String(s == null ? '' : s).trim();
+  const intOf = v => Math.max(0, parseInt(v, 10) || 0);
+
+  /* ---------- 规格口径（渲染 / 汇总 / 提交三处共用一套） ----------
+     一个颜色的尺码来源只有一个：卡片里那几行尺码。
+     尺码名全空时按「均码」处理（size=''），数量取该颜色第一行填的数字。 */
+  function sizesOfColor(c) {
+    const seen = Object.create(null), out = [];
+    (c.sizes || []).forEach(s => {
+      const nm = norm(s.name);
+      if (!nm) return;
+      const k = nm.toLowerCase();
+      if (seen[k]) return;
+      seen[k] = 1;
+      out.push(nm);
+    });
+    return out;
   }
 
-  function mxPreview(root) {
-    const colors = readColors(root).filter(c => c.name);
-    const sizes = sizesOf(root);
-    const box = root.querySelector('#peMxPreview');
-    if (!box) return;
-    const n = Math.max(1, colors.length) * Math.max(1, sizes.length);
-    box.textContent = (colors.length || sizes.length)
-      ? `将生成 ${colors.length || 1} 色 × ${sizes.length || 1} 码 = ${n} 个 SKU：` +
-        (colors.slice(0, 3).map(c => c.name).join(' / ') || '默认色') +
-        ' × ' + (sizes.slice(0, 6).join(',') || '均码') + (sizes.length > 6 ? ' 等' : '')
-      : '未配置矩阵：只建一个「默认」规格，C 端照常可买';
-  }
-
-  /* 期初库存网格（2026-10-26 用户反馈）：不能手填总数，按 颜色×尺码 逐格填数量，
-     期初库存=全部数量之和，实时汇总到「期初库存（自动汇总）」只读框。
-     键用颜色 cid（稳定）+尺码名：改颜色名/删行都不会把已填数量串到别的颜色上。 */
-  function qtyOf(st, cid, sz) { return (st.qty[cid] && st.qty[cid][sz]) || 0; }
-
-  function paintQtyGrid(root, st, isEdit) {
-    const grid = root.querySelector('#peQtyGrid');
-    if (!grid) return;
-    const colors = st.colors.filter(c => (c.name || '').trim());
-    const sizes = sizesOf(root);
-    let html = '';
-    if (!colors.length && !sizes.length) {
-      /* 没配矩阵：只有一个「默认」规格，数量框就是它的期初库存 */
-      html = `<div class="plat-pe__qtyrow"><span class="plat-pe__qtyname">默认规格</span>
-        <label class="plat-pe__qtycell">数量<input class="plat-pe__qtyin" type="number" min="0" step="1" data-cid="" data-size="" value="${qtyOf(st, '', '')}"></label></div>`;
-    } else if (!colors.length) {
-      /* 只填了尺码没填颜色：全部组合落在默认色上 */
-      html = `<div class="plat-pe__qtyrow"><span class="plat-pe__qtyname">默认色</span>
-        ${sizes.map(sz => `<label class="plat-pe__qtycell">${esc(sz)}<input class="plat-pe__qtyin" type="number" min="0" step="1" data-cid="" data-size="${esc(sz)}" value="${qtyOf(st, '', sz)}"></label>`).join('')}</div>`;
-    } else {
-      const szs = sizes.length ? sizes : [''];
-      html = colors.map(c => `<div class="plat-pe__qtyrow">
-        <span class="plat-pe__qtyname">${c.hex ? `<i style="background:${esc(c.hex)}"></i>` : ''}${esc(c.name)}</span>
-        ${szs.map(sz => `<label class="plat-pe__qtycell">${esc(sz || '均码')}<input class="plat-pe__qtyin" type="number" min="0" step="1" data-cid="${esc(c.cid)}" data-size="${esc(sz)}" value="${qtyOf(st, c.cid, sz)}"></label>`).join('')}</div>`).join('');
+  function rowsOf(c) {
+    const named = sizesOfColor(c);
+    if (!named.length) {
+      const first = (c.sizes || [])[0];
+      return [{ size: '', qty: intOf(first && first.qty) }];
     }
-    grid.innerHTML = html || '<div class="sub">先添加颜色或尺码，再按格填数量</div>';
-    updateStockTotal(root, st, isEdit);
+    const qty = Object.create(null);
+    (c.sizes || []).forEach(s => {
+      const k = norm(s.name).toLowerCase();
+      if (k && qty[k] == null) qty[k] = intOf(s.qty);
+    });
+    return named.map(sz => ({ size: sz, qty: qty[sz.toLowerCase()] || 0 }));
   }
 
-  /* 汇总口径与后端 _build_variant_matrix 严格一致：只统计当前矩阵里
-     真正会生成的组合（已命名的颜色 × 尺码列表），改名/删行的残键不计数。 */
-  function stockTotal(root, st) {
-    const colors = st.colors.filter(c => (c.name || '').trim());
-    const sizes = sizesOf(root);
-    let t = 0;
-    if (!colors.length && !sizes.length) {
-      t = qtyOf(st, '', '');
-    } else {
-      const szs = sizes.length ? sizes : [''];
-      if (colors.length) colors.forEach(c => szs.forEach(sz => { t += qtyOf(st, c.cid, sz); }));
-      else szs.forEach(sz => { t += qtyOf(st, '', sz); });
-    }
-    return t;
-  }
+  const existKey = (color, size) => norm(color).toLowerCase() + '|' + norm(size).toLowerCase();
 
-  function updateStockTotal(root, st, isEdit) {
-    const t = stockTotal(root, st);
-    if (isEdit) {
-      const add = root.querySelector('#peAddTotal');
-      if (add) add.textContent = t;
-    } else {
-      const el = root.querySelector('#peStock');
-      if (el) el.value = t;
-    }
-  }
-
-  /* 颜色 chip：色块预览（只读）+ 颜色名 + 色值文本框 + 删除。
-     2026-10-25 用户要求「颜色只手动填写，不要系统色块选择器」——原来的
-     <input type="color"> 会把浏览器/系统的取色盘顶出来，取色盘只能给近似色，
-     运营手里有品牌色号（#2B2B2B 这种）时反而填不准。改成手填后，左边那个小方块
-     退化成纯预览：填对了它显示成什么色，一眼可验，但它不可点、不弹任何东西。 */
-  function chipHtml(c, i) {
-    const hex = platNormHex(c.hex);
-    return `<span class="plat-mx__chip plat-pe__chip" data-i="${i}" data-cid="${esc(c.cid || '')}">
-      <span class="plat-mx__swatch${hex ? '' : ' plat-mx__swatch--empty'}"${hex ? ` style="background:${hex}"` : ''} aria-hidden="true"></span>
-      <input class="plat-pe__chipname" type="text" value="${esc(c.name)}" placeholder="颜色名" aria-label="颜色名">
-      <input class="plat-pe__chiphex" type="text" value="${esc(hex)}" placeholder="#RRGGBB" maxlength="7"
-             spellcheck="false" autocomplete="off" aria-label="色值（手填，例如 #2B2B2B）">
-      <button type="button" data-act="delcolor" aria-label="删除该颜色">×</button>
-    </span>`;
+  /* 当前配置会生成哪些 SKU（不含「没填颜色名」的半成品卡） */
+  function skuList(st) {
+    const out = [];
+    st.colors.forEach(c => {
+      const nm = norm(c.name);
+      if (!nm) return;
+      rowsOf(c).forEach(r => out.push({ cid: c.cid, color: nm, hex: platNormHex(c.hex), size: r.size, qty: r.qty }));
+    });
+    return out;
   }
 
   window.openProductEditor = async function (opts) {
@@ -160,11 +116,18 @@
     const st = {
       cover: { url: '', blob: null, fromImageId: null },
       gallery: [],           // {key,id,url,blob,isNew,del}
-      colors: [],            // {cid,name,hex} —— cid 是稳定键，改名/删行不串库存数量
-      sizes: '',
-      qty: {},               // 期初库存：cid（''=默认色/默认规格）→ 尺码（''=均码）→ 数量
+      colors: [],            // {cid,name,hex,sizes:[{sid,name,qty}]} —— cid/sid 是稳定键，改名/删行不串数量
+      defaultQty: 0,         // 一个颜色都不配时的「默认规格」期初数量
       seq: 0
     };
+
+    /* 已有规格 → 键 (颜色|尺码)：编辑态用它标「已存在」，避免给已有组合再填一次数量
+       （矩阵接口对已存在的组合是 skip，填了也不会生效，给了输入框就是骗人）。 */
+    const existingMap = new Map();
+    (existingVariants || []).forEach(v => {
+      existingMap.set(existKey(v.color, v.size), Number(v.stock || 0));
+    });
+
     if (pid) {
       try {
         const data = await api(`/api/platform/products/${pid}/images`);
@@ -173,19 +136,21 @@
           st.gallery.push({ key: 'g' + (++st.seq), id: g.id, url: g.url, blob: null, isNew: false, del: false });
         });
       } catch (e) { /* 图片拉不到不影响编辑其他字段 */ }
-      /* 已有规格回填矩阵：颜色 / 尺码只是「待追加的候选」，保存时矩阵会跳过
-         已存在的组合，所以回填是安全的，同时让运营一眼看到现在有哪些维度。 */
-      const seenColor = new Set();
+      /* 已有规格回填成「颜色卡 + 卡内尺码」：这样运营一眼看到现在每个颜色有哪几码，
+         想加新码就在对应颜色里加一行，加错颜色也不会影响别的颜色。 */
+      const byColor = new Map();
       (existingVariants || []).forEach(v => {
-        const c = (v.color || '').trim();
-        if (c && !seenColor.has(c)) { seenColor.add(c); st.colors.push({ cid: 'c' + (++st.seq), name: c, hex: v.color_hex || '' }); }
+        const cn = norm(v.color);
+        if (!cn) return;                                  // 「默认」占位规格不画成颜色
+        const k = cn.toLowerCase();
+        if (!byColor.has(k)) byColor.set(k, { cid: 'c' + (++st.seq), name: cn, hex: v.color_hex || '', sizes: [], locked: true });
+        const card = byColor.get(k);
+        const sn = norm(v.size);
+        if (sn && !card.sizes.some(x => norm(x.name).toLowerCase() === sn.toLowerCase())) {
+          card.sizes.push({ sid: 's' + (++st.seq), name: sn, qty: 0 });
+        }
       });
-      const seenSize = [];
-      (existingVariants || []).forEach(v => {
-        const s = (v.size || '').trim();
-        if (s && seenSize.indexOf(s) < 0) seenSize.push(s);
-      });
-      st.sizes = seenSize.join(', ');
+      st.colors = [...byColor.values()];
     }
 
     const isEdit = !!pid;
@@ -221,7 +186,7 @@
                 <em>俱乐部每单分成上限；平台按俱乐部单独调整时不能超过此值</em></label>
               <label class="plat-pe__f"><span>${isEdit ? '当前可售库存' : '期初库存（自动汇总）'}</span>
                 <input id="peStock" type="number" min="0" step="1" value="${isEdit ? (prod.stock || 0) : 0}" readonly>
-                <em>${isEdit ? '库存按规格维护；下方新填的数量会计入「本次追加」' : '不能手填：由下方颜色×尺码的数量实时汇总'}</em></label>
+                <em>${isEdit ? '库存按规格维护；下方新填的数量计入「本次追加」' : '不能手填：由下方每个颜色的尺码数量实时汇总'}</em></label>
               <label class="plat-pe__f"><span>补货点</span>
                 <input id="peReorder" type="number" min="0" step="1" value="${prod ? (prod.reorder_point == null ? 5 : prod.reorder_point) : 5}"></label>
               <label class="plat-pe__f"><span>仓库</span>
@@ -271,21 +236,15 @@
           </section>
 
           <section class="plat-pe__sec">
-            <div class="plat-pe__sec-h"><h3>规格矩阵</h3>
-              <p>${isEdit ? '按 颜色 × 尺码 追加组合，已存在的组合会跳过，不会重置已调好的库存与条码。' : '按 颜色 × 尺码 一次生成所有 SKU 组合；不配则只建一个「默认」规格。'}</p></div>
+            <div class="plat-pe__sec-h"><h3>颜色 · 尺码 · 期初库存</h3>
+              <p>${isEdit
+                ? '每个颜色下面加它有的尺码，尺码后面填本次入库数量。已存在的「颜色 + 尺码」只显示现有库存（矩阵不会重复生成），要改库存请用下面的「管理已有规格」。'
+                : '先建颜色，再在每个颜色下加这个颜色有的尺码和期初数量 —— 一个「颜色 + 尺码」就是一个 SKU。每个颜色的尺码可以不一样（黑色 S/M/L，白色只有 M/L）。不配则只建一个「默认」规格。'}</p></div>
             <div class="plat-pe__mx">
-              <div>
-                <div class="plat-mx__label">颜色 <em>可留空；色值手填 #RRGGBB，用于 C 端色块</em></div>
-                <div class="plat-mx__chips" id="peColors"></div>
-                <div style="margin-top:8px"><button class="btn ghost" type="button" data-act="addcolor">＋ 添加颜色</button></div>
-              </div>
-              <div>
-                <div class="plat-mx__label">尺码 <em>逗号分隔，例如 S,M,L,XL 或 38,39,40,41</em></div>
-                <input class="plat-mx__sizes" id="peSizes" placeholder="S, M, L, XL" value="${esc(st.sizes)}">
-              </div>
-              <div>
-                <div class="plat-mx__label">每个规格的期初数量 <em>按颜色填每个尺码的件数（如 黑色 S:5 L:5 M:5）；期初库存自动汇总</em></div>
-                <div class="plat-pe__qtygrid" id="peQtyGrid"></div>
+              <div class="plat-pe__specs" id="peColors"></div>
+              <div class="plat-pe__specfoot">
+                <button class="btn ghost" type="button" data-act="addcolor">＋ 添加颜色</button>
+                <span class="plat-pe__specnote">颜色可留空；色值手填 #RRGGBB（C 端色块用），不用系统取色盘。</span>
               </div>
               <div class="plat-mx__preview" id="peMxPreview"></div>
               ${isEdit ? `<div class="plat-pe__varlist"><div class="plat-pe__label">已有规格（${(existingVariants || []).length}）· 本次追加 <b id="peAddTotal">0</b> 件</div>
@@ -332,6 +291,7 @@
       if (typeof cfg.onClose === 'function') cfg.onClose();
     };
     session = uxDialogSession(root, { onEscape: () => close() });
+
     /* ---------- 图片 ---------- */
     const coverBox = root.querySelector('#peCover');
     const galleryBox = root.querySelector('#peGallery');
@@ -442,11 +402,173 @@
       dirty = true; paintCover(); paintGallery();
     }
 
-    /* ---------- 颜色 ---------- */
-    function paintColors() {
-      root.querySelector('#peColors').innerHTML = st.colors.map(chipHtml).join('');
-      mxPreview(root);
-      paintQtyGrid(root, st, isEdit);
+    /* ---------- 规格：颜色卡 → 卡内尺码行 ----------
+       渲染只在「增删卡/行」时整块重建；打字只更新 state + 局部刷新统计，
+       否则每敲一个字都会把输入框换掉、焦点丢失（颜色名根本打不完整）。 */
+    function cardCount(c) {
+      const rows = rowsOf(c);
+      const skus = rows.length;
+      const fresh = rows.filter(r => !existingMap.has(existKey(norm(c.name), r.size)));
+      const qty = fresh.reduce((a, r) => a + r.qty, 0);
+      if (!norm(c.name)) return '填个颜色名';
+      if (isEdit) return `${skus} 个尺码${fresh.length ? ` · 本次新增 ${fresh.length} 个` : ' · 都已存在'}`;
+      return `${skus} 个尺码 · 共 ${qty} 件`;
+    }
+
+    function sizeRowHtml(c, s) {
+      const cn = norm(c.name);
+      const sn = norm(s.name);
+      const isExist = !!cn && existingMap.has(existKey(cn, sn));
+      return `<div class="plat-pe__sizerow${isExist ? ' plat-pe__sizerow--locked' : ''}" data-sid="${esc(s.sid)}">
+        ${isExist
+          ? `<span class="plat-pe__sizename plat-pe__sizename--static">${esc(sn || '均码')}</span>`
+          : `<input class="plat-pe__sizename" type="text" value="${esc(s.name)}" placeholder="尺码，如 M / 38" aria-label="尺码" title="留空＝均码（这个颜色只有一个规格）">`}
+        ${isExist
+          ? `<span class="plat-pe__have" title="该规格已存在，库存请用「管理已有规格」修改">已有 ${existingMap.get(existKey(cn, sn))} 件</span>`
+          : `<label class="plat-pe__qtycell">期初 <input class="plat-pe__qtyin" type="number" min="0" step="1" value="${intOf(s.qty)}" aria-label="期初数量"></label>`}
+        ${isExist ? '' : '<button class="plat-pe__sdel" type="button" data-act="delsize" aria-label="删除该尺码">×</button>'}
+      </div>`;
+    }
+
+    function cardHtml(c) {
+      const hex = platNormHex(c.hex);
+      const rows = c.sizes || [];
+      /* locked＝这个颜色来自已有规格：颜色名/色值改了也只会追加出一组同义新 SKU
+         （矩阵对已有组合是 skip），所以这里只读，改它们请走「管理已有规格」。
+         卡里仍然可以加新尺码 —— 「追加」才是编辑态唯一的正向动作。 */
+      const lock = !!c.locked;
+      const lockTip = '已有规格的颜色名 / 色值请用「管理已有规格」修改；这里只能加新尺码';
+      return `<div class="plat-pe__chip plat-pe__ccard${lock ? ' plat-pe__ccard--locked' : ''}" data-cid="${esc(c.cid)}">
+        <div class="plat-pe__chead">
+          <span class="plat-mx__swatch${hex ? '' : ' plat-mx__swatch--empty'}"${hex ? ` style="background:${hex}"` : ''} aria-hidden="true"></span>
+          <input class="plat-pe__chipname" type="text" value="${esc(c.name)}" placeholder="颜色名，例如 黑色" aria-label="颜色名"${lock ? ` readonly title="${lockTip}"` : ''}>
+          <input class="plat-pe__chiphex" type="text" value="${esc(hex)}" placeholder="#RRGGBB" maxlength="7"
+                 spellcheck="false" autocomplete="off" aria-label="色值（手填，例如 #2B2B2B）"${lock ? ' readonly' : ''}>
+          <span class="plat-pe__ccount">${esc(cardCount(c))}</span>
+          ${lock ? '<span class="plat-pe__locktag">已有</span>'
+                 : '<button class="plat-pe__cdel" type="button" data-act="delcolor" aria-label="删除该颜色">×</button>'}
+        </div>
+        <div class="plat-pe__sizerows">
+          ${rows.length ? rows.map(s => sizeRowHtml(c, s)).join('')
+            : `<div class="plat-pe__sizeempty">这个颜色还没有尺码 —— 不填尺码就只有「${esc(norm(c.name) || '该颜色')}」一个均码规格</div>`}
+        </div>
+        <div class="plat-pe__sizeadd">
+          <input class="plat-pe__bulkin" type="text" data-cid="${esc(c.cid)}" placeholder="S,M,L 或 38（回车 / 点添加）" aria-label="批量添加尺码">
+          <button class="btn ghost sm" type="button" data-act="addsize">＋ 添加尺码</button>
+        </div>
+      </div>`;
+    }
+
+    /* 一个颜色都没有时的兜底卡：不配矩阵也得能填期初库存（否则商品建出来就是 0 件） */
+    function defaultCardHtml() {
+      return `<div class="plat-pe__ccard plat-pe__ccard--default">
+        <div class="plat-pe__chead">
+          <span class="plat-mx__swatch plat-mx__swatch--empty" aria-hidden="true"></span>
+          <span class="plat-pe__cdname">默认规格</span>
+          <span class="plat-pe__ccount">不配颜色 / 尺码时只建这一个</span>
+        </div>
+        <div class="plat-pe__sizerows">
+          <div class="plat-pe__sizerow">
+            <span class="plat-pe__sizename plat-pe__sizename--static">均码</span>
+            <label class="plat-pe__qtycell">期初 <input class="plat-pe__qtyin" type="number" min="0" step="1" data-default="1" value="${intOf(st.defaultQty)}" aria-label="期初数量"></label>
+          </div>
+        </div>
+      </div>`;
+    }
+
+    function paintSpecs() {
+      const box = root.querySelector('#peColors');
+      if (!box) return;
+      const cards = st.colors.map(cardHtml);
+      if (!cards.length) cards.push(defaultCardHtml());
+      box.innerHTML = cards.join('');
+      syncSpecMeta();
+    }
+
+    /* 打字时只刷「卡右上角统计 / 预览条 / 库存汇总」，不动输入框本身 */
+    function syncSpecMeta() {
+      root.querySelectorAll('.plat-pe__ccard[data-cid]').forEach(card => {
+        const c = st.colors.find(x => x.cid === card.dataset.cid);
+        const el = card.querySelector('.plat-pe__ccount');
+        if (c && el) el.textContent = cardCount(c);
+      });
+      mxPreview();
+      updateStockTotal();
+    }
+
+    function existingFresh() {
+      const skus = skuList(st);
+      const fresh = skus.filter(s => !existingMap.has(existKey(s.color, s.size)));
+      return { skus, fresh, exist: skus.length - fresh.length };
+    }
+
+    function stockTotal() {
+      const { skus, fresh } = existingFresh();
+      if (!skus.length) return intOf(st.defaultQty);
+      return fresh.reduce((a, s) => a + s.qty, 0);
+    }
+
+    function updateStockTotal() {
+      const t = stockTotal();
+      if (isEdit) {
+        const add = root.querySelector('#peAddTotal');
+        if (add) add.textContent = t;
+      } else {
+        const el = root.querySelector('#peStock');
+        if (el) el.value = t;
+      }
+    }
+
+    function mxPreview() {
+      const box = root.querySelector('#peMxPreview');
+      if (!box) return;
+      const { skus, fresh, exist } = existingFresh();
+      if (!skus.length) {
+        const q = intOf(st.defaultQty);
+        box.textContent = '未配置颜色：只建一个「默认」规格' + (q > 0 ? `，期初 ${q} 件` : '，C 端照常可买');
+        return;
+      }
+      const groups = [];
+      st.colors.forEach(c => {
+        const nm = norm(c.name);
+        if (!nm) return;
+        groups.push(nm + ' ' + rowsOf(c).map(r => r.size || '均码').join('/'));
+      });
+      const brief = groups.slice(0, 3).join('；') + (groups.length > 3 ? ' 等' : '');
+      const nul = st.colors.filter(c => norm(c.name)).length;
+      const qty = stockTotal();
+      if (!isEdit) {
+        box.textContent = `将生成 ${nul} 个颜色 · ${skus.length} 个 SKU · 期初共 ${qty} 件 —— ${brief}`;
+      } else if (fresh.length) {
+        box.textContent = `本次将新增 ${fresh.length} 个 SKU · 共 ${qty} 件${exist ? `；另有 ${exist} 个已存在会跳过` : ''} —— ${brief}`;
+      } else {
+        box.textContent = `这 ${skus.length} 个 SKU 都已存在，不会重复生成；要改库存请用「管理已有规格」 —— ${brief}`;
+      }
+    }
+
+    /* 卡内的批量输入：逗号/空格分都行，重复尺码自动跳过；回车或点「添加尺码」触发 */
+    function addSizesFromInput(input) {
+      const cid = input && input.dataset ? input.dataset.cid : '';
+      const c = st.colors.find(x => x.cid === cid);
+      if (!c) return;
+      const parts = (input.value || '').split(/[,，、;；\s]+/).map(x => x.trim()).filter(Boolean);
+      if (!parts.length) return;
+      /* 批量加真实尺码时，先丢掉卡片里「未命名的均码占位行」：
+         新建颜色会自带一行空尺码（留着就是均码规格），如果这里再批量加
+         S/M/L，会变成「均码 + S + M + L」四行、并多出一个 0 库存的均码 SKU，
+         跟用户「先建颜色、再往这个颜色下加几个尺码」的心智模型冲突。 */
+      c.sizes = c.sizes.filter(s => norm(s.name));
+      parts.forEach(nm => {
+        const k = nm.toLowerCase();
+        if (!c.sizes.some(x => norm(x.name).toLowerCase() === k)) {
+          c.sizes.push({ sid: 's' + (++st.seq), name: nm, qty: 0 });
+        }
+      });
+      input.value = '';
+      dirty = true;
+      paintSpecs();
+      const again = root.querySelector(`.plat-pe__bulkin[data-cid="${cid}"]`);
+      if (again) again.focus();
     }
 
     /* ---------- 保存 ---------- */
@@ -470,7 +592,6 @@
       const price = Number(val('#pePrice') || 0);
       if (!name) { toast('请填写商品名称'); root.querySelector('#peName').focus(); return; }
       if (!(price > 0)) { toast('请填写有效零售价'); root.querySelector('#pePrice').focus(); return; }
-      const rawColors = readColors(root);
       const badHex = badHexChips(root);
       if (badHex.length) {
         toast('色值请填 #RRGGBB，例如 #2B2B2B');
@@ -478,9 +599,33 @@
         try { badHex[0].select(); } catch (_) { /* 有些环境不让选 */ }
         return;
       }
-      const colors = rawColors.filter(c => c.name);
-      if (rawColors.length && !colors.length) { toast('颜色还没有填名称'); return; }
-      const sizes = sizesOf(root);
+      const namedColors = st.colors.filter(c => norm(c.name));
+      if (st.colors.length && !namedColors.length) { toast('颜色还没有填名称'); return; }
+      /* 两张卡取同一个颜色名 → 库存键会撞在一起，后端也会建重复 SKU，保存前先拦 */
+      const seenName = Object.create(null);
+      for (const c of namedColors) {
+        const k = norm(c.name).toLowerCase();
+        if (seenName[k]) { toast(`颜色「${norm(c.name)}」重复了，请合并成一张卡`); return; }
+        seenName[k] = 1;
+      }
+
+      const colors = namedColors.map(c => ({ name: norm(c.name), hex: platNormHex(c.hex), sizes: sizesOfColor(c) }));
+      /* 期初库存按「颜色 → 尺码」逐格提交，与后端 _sku_stock_map 同构；
+         编辑态跳过已存在的组合（矩阵对它们是 skip，塞了也不生效）。 */
+      const skuStock = {};
+      namedColors.forEach(c => {
+        const nm = norm(c.name);
+        const m = {};
+        rowsOf(c).forEach(r => {
+          if (existingMap.has(existKey(nm, r.size))) return;
+          if (r.qty > 0) m[r.size] = r.qty;
+        });
+        if (Object.keys(m).length) skuStock[nm] = m;
+      });
+      if (!colors.length) {
+        const q = intOf(st.defaultQty);
+        if (q > 0) skuStock[''] = { '': q };
+      }
 
       const buttons = [...root.querySelectorAll('[data-act="save"]')];
       buttons.forEach(b => { b.disabled = true; b.textContent = '保存中…'; });
@@ -502,24 +647,7 @@
         commission_rate: Number(val('#peCommission') || 0) / 100
       };
 
-      /* 期初库存按格汇总成 {颜色:{尺码:数量}}：与后端 _sku_stock_map 同构，
-         键用「填写的名字」（后端会按同一套 normalize 归一），无颜色行落 '' 键。 */
-      const namedColors = st.colors.filter(c => (c.name || '').trim());
-      const skuStock = {};
-      const qtyAt = (cid, sz) => (st.qty[cid] && st.qty[cid][sz]) || 0;
-      if (namedColors.length) {
-        const szs = sizes.length ? sizes : [''];
-        namedColors.forEach(c => {
-          const m = {};
-          szs.forEach(sz => { const q = qtyAt(c.cid, sz); if (q > 0) m[sz] = q; });
-          if (Object.keys(m).length) skuStock[c.name.trim()] = m;
-        });
-      } else if (sizes.length) {
-        const m = {};
-        sizes.forEach(sz => { const q = qtyAt('', sz); if (q > 0) m[sz] = q; });
-        if (Object.keys(m).length) skuStock[''] = m;
-      }
-
+      const skuPlan = skuList(st).length;
       let id = pid;
       try {
         if (!id) {
@@ -527,8 +655,8 @@
             sku: (val('#peSku') || '').trim() || ('GEAR-' + Date.now()),
             stock: Number(val('#peStock') || 0)
           });
-          if (colors.length || sizes.length) {
-            body.colors = colors; body.sizes = sizes;
+          if (colors.length || Object.keys(skuStock).length) {
+            if (colors.length) { body.colors = colors; body.sizes = []; }
             if (Object.keys(skuStock).length) body.skuStock = skuStock;
           }
           if (msg) msg.textContent = '创建商品…';
@@ -538,12 +666,14 @@
         } else {
           if (msg) msg.textContent = '保存商品信息…';
           await api('/api/platform/products/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });
-          if (colors.length || sizes.length) {
+          if (colors.length) {
             try {
-              await api(`/api/platform/products/${id}/variants/matrix`, {
+              const r = await api(`/api/platform/products/${id}/variants/matrix`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(Object.assign({ colors, sizes }, Object.keys(skuStock).length ? { skuStock } : {}))
+                body: JSON.stringify(Object.assign({ colors, sizes: [] }, Object.keys(skuStock).length ? { skuStock } : {}))
               });
+              if (msg) msg.textContent = '';
+              if (r && r.created) toast(`已追加 ${r.created} 个规格` + (r.skipped ? `，跳过已存在 ${r.skipped} 个` : ''));
             } catch (e) { toast('规格追加失败：' + (e.message || '')); }
           }
         }
@@ -572,7 +702,7 @@
         }
 
         dirty = false;
-        toast(isEdit ? '商品已更新' : '商品已上架' + (colors.length && sizes.length ? ` · ${colors.length * sizes.length} 个规格` : ''));
+        toast(isEdit ? '商品已更新' : '商品已上架' + (skuPlan ? ` · ${skuPlan} 个规格` : ''));
         hardClose();
         if (typeof loadProducts === 'function') loadProducts();
       } catch (e) {
@@ -595,21 +725,37 @@
       if (act === 'pickcover') { pickCover(); return; }
       if (act === 'cropcover') { cropCover(); return; }
       if (act === 'addgallery') { pickGallery(); return; }
+
+      const card = btn.closest('.plat-pe__ccard[data-cid]');
+      const ci = card ? st.colors.findIndex(x => x.cid === card.dataset.cid) : -1;
+      const color = ci >= 0 ? st.colors[ci] : null;
+
       if (act === 'addcolor') {
-        st.colors.push({ cid: 'c' + (++st.seq), name: '', hex: '' });
-        dirty = true; paintColors();
+        st.colors.push({ cid: 'c' + (++st.seq), name: '', hex: '', sizes: [{ sid: 's' + (++st.seq), name: '', qty: 0 }] });
+        dirty = true; paintSpecs();
         const names = root.querySelectorAll('.plat-pe__chipname');
         if (names.length) names[names.length - 1].focus();
         return;
       }
       if (act === 'delcolor') {
-        const chip = btn.closest('.plat-pe__chip');
-        const i = chip ? Number(chip.dataset.i) : -1;
-        if (i >= 0) {
-          const cid = st.colors[i] && st.colors[i].cid;
-          if (cid) delete st.qty[cid];   // 删颜色连它名下已填的数量一起清，不留在汇总里
-          st.colors.splice(i, 1); dirty = true; paintColors();
-        }
+        if (color) { st.colors.splice(ci, 1); dirty = true; paintSpecs(); }
+        return;
+      }
+      if (act === 'addsize') {
+        if (!color) return;
+        const bulk = card.querySelector('.plat-pe__bulkin');
+        if (bulk && (bulk.value || '').trim()) { addSizesFromInput(bulk); return; }
+        color.sizes.push({ sid: 's' + (++st.seq), name: '', qty: 0 });
+        dirty = true; paintSpecs();
+        const rows = root.querySelectorAll(`.plat-pe__ccard[data-cid="${color.cid}"] .plat-pe__sizename`);
+        if (rows.length) rows[rows.length - 1].focus();
+        return;
+      }
+      if (act === 'delsize') {
+        const row = btn.closest('.plat-pe__sizerow');
+        if (!color || !row) return;
+        const si = color.sizes.findIndex(s => s.sid === row.dataset.sid);
+        if (si >= 0) { color.sizes.splice(si, 1); dirty = true; paintSpecs(); }
         return;
       }
       if (act === 'managevariants') {
@@ -623,42 +769,63 @@
       if (act === 'gallery-del') { delGallery(key); return; }
     });
 
+    /* 卡内批量加尺码：回车即落（不用先点按钮再点输入框） */
+    root.addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      const el = e.target;
+      if (!el || !el.classList || !el.classList.contains('plat-pe__bulkin')) return;
+      e.preventDefault();
+      addSizesFromInput(el);
+    });
+
     root.addEventListener('input', e => {
-      if (e.target.classList.contains('plat-pe__qtyin')) {
-        const cid = e.target.dataset.cid || '', sz = e.target.dataset.size || '';
-        const v = Math.max(0, parseInt(e.target.value, 10) || 0);
-        if (!st.qty[cid]) st.qty[cid] = {};
-        st.qty[cid][sz] = v;
-        dirty = true;
-        updateStockTotal(root, st, isEdit);
-        return;
-      }
-      if (e.target.closest('#peColors')) {
-        const chip = e.target.closest('.plat-pe__chip');
-        if (!chip) return;
-        const i = Number(chip.dataset.i);
+      const card = e.target.closest('.plat-pe__ccard[data-cid]');
+      if (card) {
+        const ci = st.colors.findIndex(x => x.cid === card.dataset.cid);
+        if (ci < 0) return;
+        const c = st.colors[ci];
         if (e.target.classList.contains('plat-pe__chipname')) {
-          st.colors[i].name = e.target.value;
-          /* 改颜色名只刷数量网格的行名（数量按 cid 记，不会丢） */
-          paintQtyGrid(root, st, isEdit);
+          c.name = e.target.value;
+          dirty = true; syncSpecMeta();
+          return;
         }
-        else if (e.target.classList.contains('plat-pe__chiphex')) {
+        if (e.target.classList.contains('plat-pe__chiphex')) {
           /* 边打字边预览：只有能解析成色值时才刷色块，输一半的 “#2B” 不闪黑 */
-          st.colors[i].hex = e.target.value.trim();
-          const sw = chip.querySelector('.plat-mx__swatch');
+          c.hex = e.target.value.trim();
           const hex = platNormHex(e.target.value);
+          const sw = card.querySelector('.plat-mx__swatch');
           if (sw) {
             sw.style.background = hex || '';
             sw.classList.toggle('plat-mx__swatch--empty', !hex);
+            sw.style.borderStyle = '';
           }
           if (hex) e.target.classList.remove('is-bad');
-          paintQtyGrid(root, st, isEdit);
+          dirty = true; syncSpecMeta();
+          return;
         }
-        dirty = true;
-        mxPreview(root);
+        const row = e.target.closest('.plat-pe__sizerow');
+        if (row) {
+          const si = (c.sizes || []).findIndex(s => s.sid === row.dataset.sid);
+          if (si < 0) return;
+          if (e.target.classList.contains('plat-pe__sizename')) {
+            c.sizes[si].name = e.target.value;
+            dirty = true; syncSpecMeta();
+            return;
+          }
+          if (e.target.classList.contains('plat-pe__qtyin')) {
+            c.sizes[si].qty = intOf(e.target.value);
+            dirty = true; syncSpecMeta();
+            return;
+          }
+        }
+        if (e.target.classList.contains('plat-pe__bulkin')) { dirty = true; return; }
         return;
       }
-      if (e.target.id === 'peSizes') { dirty = true; mxPreview(root); paintQtyGrid(root, st, isEdit); return; }
+      if (e.target.dataset && e.target.dataset.default) {
+        st.defaultQty = intOf(e.target.value);
+        dirty = true; syncSpecMeta();
+        return;
+      }
       dirty = true;
     });
 
@@ -673,10 +840,10 @@
       if (hex) { el.value = hex; el.classList.remove('is-bad'); }
       else if (raw) el.classList.add('is-bad');
       else el.classList.remove('is-bad');
-      const chip = el.closest('.plat-pe__chip');
-      const i = chip ? Number(chip.dataset.i) : -1;
-      if (i >= 0 && st.colors[i]) st.colors[i].hex = raw;
-      const sw = chip && chip.querySelector('.plat-mx__swatch');
+      const card = el.closest('.plat-pe__ccard');
+      const ci = card ? st.colors.findIndex(x => x.cid === card.dataset.cid) : -1;
+      if (ci >= 0) st.colors[ci].hex = raw;
+      const sw = card && card.querySelector('.plat-mx__swatch');
       if (sw) {
         sw.style.background = hex || '';
         sw.classList.toggle('plat-mx__swatch--empty', !hex);
@@ -686,7 +853,7 @@
     /* 初次绘制 */
     paintCover();
     paintGallery();
-    paintColors();
+    paintSpecs();
     const nameEl = root.querySelector('#peName');
     if (nameEl) setTimeout(() => { try { nameEl.focus({ preventScroll: true }); } catch (_) { nameEl.focus(); } }, 30);
   };

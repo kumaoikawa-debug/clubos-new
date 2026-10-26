@@ -5835,6 +5835,37 @@ def platform_import_products(payload:dict=Body(...)):
             'newBrands':new_dict['brands'],'newCategories':new_dict['categories']}
 
 
+def _parse_color_dims(colors, sizes):
+    """解析 颜色 / 尺码 两个维度，支持「每个颜色配自己的尺码」。
+
+    返回 ([(颜色名, 色值, 该颜色专属尺码|None)], 全局尺码列表)。
+
+    2026-10-26 用户反馈：现实里每个颜色的尺码并不一样（黑色 S/M/L、白色只有 M/L），
+    旧口径「颜色列表 × 一条全局尺码串」的笛卡尔积会凭空生成一堆 0 库存的假 SKU。
+    所以颜色项带 sizes 键时以它为准（空列表＝该颜色只有均码，不与全局尺码相乘）；
+    不带该键才回落到全局 sizes —— 旧客户端 / CSV / 批量弹层都还是那个形状。
+    """
+    global_sizes=[]
+    for x in (sizes or []):
+        nm=catalog_service.normalize_dimension(x)
+        if nm and nm not in global_sizes: global_sizes.append(nm)
+    out=[]
+    for x in (colors or []):
+        own=None
+        if isinstance(x,dict):
+            nm=catalog_service.normalize_dimension(x.get('name'))
+            hx=catalog_service.normalize_color_hex(x.get('hex'))
+            if 'sizes' in x:
+                own=[]
+                for s in (x.get('sizes') or []):
+                    ns=catalog_service.normalize_dimension(s)
+                    if ns and ns not in own: own.append(ns)
+        else:
+            nm=catalog_service.normalize_dimension(x); hx=None
+        if nm: out.append((nm,hx,own))
+    return out,global_sizes
+
+
 # ==========================================================================
 # SKU 矩阵：颜色 × 尺码 一次生成所有组合
 # ==========================================================================
@@ -5857,16 +5888,8 @@ def generate_variant_matrix(product_id:int, payload:dict=Body(...)):
     with conn() as c:
         p=c.execute('SELECT id,brand_id,category_id FROM products WHERE id=?',(product_id,)).fetchone()
         if not p: raise HTTPException(404,'商品不存在')
-        color_list=[]
-        for x in colors:
-            if isinstance(x,dict):
-                nm=catalog_service.normalize_dimension(x.get('name'))
-                hx=catalog_service.normalize_color_hex(x.get('hex'))
-            else:
-                nm=catalog_service.normalize_dimension(x); hx=None
-            if nm: color_list.append((nm,hx))
-        size_list=[sz for sz in (catalog_service.normalize_dimension(x) for x in sizes) if sz]
-        if not color_list: color_list=[(None,None)]
+        color_list,size_list=_parse_color_dims(colors,sizes)
+        if not color_list: color_list=[(None,None,None)]
         if not size_list: size_list=[None]
         mx=c.execute("SELECT COALESCE(MAX(sort),0) m FROM product_variants WHERE product_id=?",(product_id,)).fetchone()['m']
         # 商品原本只有迁移生成的那个「默认」规格，加真实矩阵后它就该退场，
@@ -5878,8 +5901,8 @@ def generate_variant_matrix(product_id:int, payload:dict=Body(...)):
             moved=int(dflt['stock'] or 0)
             c.execute("UPDATE product_variants SET status='inactive',stock=0 WHERE id=?",(dflt['id'],))
         created,skipped=0,0
-        for cn,ch in color_list:
-            for sz in size_list:
+        for cn,ch,own in color_list:
+            for sz in (size_list if own is None else own) or [None]:
                 exist=c.execute("""SELECT id FROM product_variants WHERE product_id=?
                                    AND IFNULL(color,'')=? AND IFNULL(size,'')=?""",
                                 (product_id,cn or '',sz or '')).fetchone()
@@ -6061,20 +6084,13 @@ def _build_variant_matrix(c, pid:int, *, brand_id, category_id, payload:dict, in
         c.execute("INSERT INTO product_variants(product_id,name,sku,stock,sort,status,is_default) VALUES(?,?,?,?,?,'active',1)",
                   (pid,'默认',sku,initial_stock,0))
         return 1
-    color_list=[]
-    for x in colors:
-        if isinstance(x,dict):
-            nm=catalog_service.normalize_dimension(x.get('name')); hx=catalog_service.normalize_color_hex(x.get('hex'))
-        else:
-            nm=catalog_service.normalize_dimension(x); hx=None
-        if nm: color_list.append((nm,hx))
-    size_list=[sz for sz in (catalog_service.normalize_dimension(x) for x in sizes) if sz]
-    if not color_list: color_list=[(None,None)]
+    color_list,size_list=_parse_color_dims(colors,sizes)
+    if not color_list: color_list=[(None,None,None)]
     if not size_list: size_list=[None]
     price=payload.get('price')
     n=0; sort=0
-    for cn,ch in color_list:
-        for sz in size_list:
+    for cn,ch,own in color_list:
+        for sz in (size_list if own is None else own) or [None]:
             name=' / '.join([x for x in (cn,sz) if x]) or '默认'
             sku=catalog_service.ensure_unique_sku(c,
                 catalog_service.build_sku(c,product_id=int(pid),brand_id=brand_id,category_id=category_id,

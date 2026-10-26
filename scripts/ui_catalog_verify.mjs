@@ -105,10 +105,12 @@ const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
   for (const f of ["品牌", "品类", "人群", "季节", "系列", "面料 / 材质"]) {
     rec(`上架表单有「${f}」字段`, formLabels.some((t) => t.includes(f)), formLabels.join("|").slice(0, 160));
   }
-  await page.fill("#peName", "矩阵验收商品");
+  const prodName = "矩阵验收-" + Date.now();
+  await page.fill("#peName", prodName);
   await page.fill("#pePrice", "899");
 
-  // 规格矩阵：加两个颜色（色值手填）+ 尺码
+  // 规格区（2026-10-26 起）：先建颜色 → 每个颜色下加「自己的」尺码与期初库存；
+  // 不再有全局尺码串，各色尺码独立，避免跨色凭空生成 0 库存假 SKU。
   await page.locator('.plat-pe [data-act="addcolor"]').click();
   await page.locator('.plat-pe [data-act="addcolor"]').click();
   await page.waitForTimeout(300);
@@ -116,27 +118,49 @@ const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
     (await page.locator('.plat-pe input[type="color"]').count()) === 0 &&
     (await page.locator(".plat-pe__chiphex").count()) === 2,
     `chip=${await page.locator(".plat-pe__chiphex").count()}`);
-  await page.locator(".plat-pe__chip").nth(0).locator(".plat-pe__chipname").fill("雪白");
-  await page.locator(".plat-pe__chip").nth(0).locator(".plat-pe__chiphex").fill("#F5F5F0");
-  await page.locator(".plat-pe__chip").nth(1).locator(".plat-pe__chipname").fill("松绿");
-  await page.locator(".plat-pe__chip").nth(1).locator(".plat-pe__chiphex").fill("3F6B4F");
-  await page.fill("#peSizes", "S, M, L");
-  await page.waitForTimeout(400);
+
+  // 颜色 1：黑色，尺码 S/M/L
+  const card0 = page.locator('.plat-pe__ccard').nth(0);
+  await card0.locator('.plat-pe__chipname').fill("黑色");
+  await card0.locator('.plat-pe__chiphex').fill("#2B2B2B");
+  await card0.locator('.plat-pe__bulkin').fill("S, M, L");
+  await card0.locator('.plat-pe__bulkin').press("Enter");
+  await page.waitForTimeout(200);
+
+  // 颜色 2：白色，尺码只有 M/L（验证各色尺码独立、不强制同串）
+  const card1 = page.locator('.plat-pe__ccard').nth(1);
+  await card1.locator('.plat-pe__chipname').fill("白色");
+  await card1.locator('.plat-pe__chiphex').fill("#F5F5F0");
+  await card1.locator('.plat-pe__bulkin').fill("M, L");
+  await card1.locator('.plat-pe__bulkin').press("Enter");
+  await page.waitForTimeout(200);
+
+  // 填期初库存：黑色 S/M/L 各 5，白色 M/L 分别 3/4 → 共 22 件
+  const q0 = card0.locator('.plat-pe__qtyin');
+  await q0.nth(0).fill("5"); await q0.nth(1).fill("5"); await q0.nth(2).fill("5");
+  const q1 = card1.locator('.plat-pe__qtyin');
+  await q1.nth(0).fill("3"); await q1.nth(1).fill("4");
+  await page.waitForTimeout(300);
+
   const preview = await page.locator("#peMxPreview").textContent();
-  rec("矩阵预览算出 2 色 × 3 码 = 6 个 SKU", /2 色 × 3 码 = 6/.test(preview || ""), preview);
+  rec("预览按各色独立尺码算：2 颜色 · 5 SKU · 22 件",
+    /2 个颜色 · 5 个 SKU · 期初共 22 件/.test(preview || ""), preview);
   await page.click('.plat-pe__foot [data-act="save"]');
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(2200);
   const toast = await page.locator(".toast, .ux-toast").allTextContents().catch(() => []);
-  rec("上架成功并提示规格数", toast.some((t) => /6 个规格/.test(t)), toast.join("|"));
+  rec("上架成功并提示 5 个规格", toast.some((t) => /5 个规格/.test(t)), toast.join("|"));
 
   // 规格管理：矩阵按钮 + 颜色/尺码字段
-  const newRow = page.locator("#productRows tr", { hasText: "矩阵验收商品" }).first();
+  const newRow = page.locator("#productRows tr", { hasText: prodName }).first();
   await newRow.locator('button:has-text("规格")').click();
   await page.waitForTimeout(900);
   const vRows = await page.locator(".pv-list .list-row").count();
-  rec("规格弹层列出 6 个规格", vRows === 6, `行数 ${vRows}`);
+  rec("规格弹层列出 5 个规格（黑色 S/M/L + 白色 M/L，无白色/S 假 SKU）", vRows === 5, `行数 ${vRows}`);
   const vNames = await page.locator(".pv-list .list-row__title").allTextContents();
-  rec("规格名是「颜色 / 尺码」", vNames.some((t) => t.includes("雪白 / S")), vNames.slice(0, 3).join("|"));
+  rec("规格名是「颜色 / 尺码」",
+    vNames.some((t) => t.includes("黑色 / S")) && vNames.some((t) => t.includes("白色 / M")),
+    vNames.slice(0, 5).join("|"));
+  rec("不生成跨色假 SKU（不存在「白色 / S」）", !vNames.some((t) => t.includes("白色 / S")), vNames.join("|"));
   rec("规格弹层有批量矩阵按钮", await page.locator('[data-act="matrix"]').count() === 1);
   await page.locator('[data-act="add"]').click();
   await page.waitForTimeout(500);
