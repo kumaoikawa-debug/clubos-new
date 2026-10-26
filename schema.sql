@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS clubs (
   logo_url TEXT,
   slogan TEXT,
   biz_section_json TEXT,
+  home_banners_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -21,6 +21,7 @@ from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config
                         update_platform_provider_config, test_provider_connection, effective_gateway_mode)
 from clubos_domain.club_analytics import ClubBusinessIntelligence
 from clubos_domain import club_biz
+from clubos_domain import club_home
 from clubos_domain import c_profile
 from clubos_domain.gear_points_policy import GearPointsPolicyService
 from clubos_domain.commission_rate import ClubCommissionRateService
@@ -2683,6 +2684,10 @@ def public_club(club_id:int):
     # 业务介绍区：未配置或关闭 → None，C 端整节隐藏（空壳板块比没有板块更伤信任）。
     # 图片在这里就换成公开代理地址（生产 /static/uploads/* 是 404）。
     out.pop('biz_section_json',None)
+    # 首页运营轮播：未配置或关闭 → None，C 端回落默认活动轮播（不破坏旧行为）。
+    # 图片同样在这里换成公开代理地址。
+    out.pop('home_banners_json',None)
+    out['home_banners']=club_home.public_json(club_id,x)
     # 演示环境走的是 dict(x) 全量下发，内部列要显式摘掉（生产走白名单，天然不含）
     out.pop('c_profile_json',None)
     out['biz_section']=club_biz.public_json(club_id,x)
@@ -2756,6 +2761,77 @@ def club_biz_media(club_id:int,asset_path:str):
     club_or_404(club_id)
     rel=unquote(asset_path)
     if not rel.startswith(f'uploads/{club_id}/biz/'):
+        raise HTTPException(404,'not found')
+    file_path=_safe_media_path('/static/'+rel)
+    if not file_path or not file_path.is_file():raise HTTPException(404,'not found')
+    return FileResponse(file_path)
+
+@app.get('/api/club/{club_id}/home-banners')
+def get_club_home_banners(club_id:int):
+    return club_home.from_club(club_or_404(club_id))
+
+@app.patch('/api/club/{club_id}/home-banners')
+def update_club_home_banners(club_id:int,payload:dict=Body(...)):
+    x=club_or_404(club_id)
+    try: cfg=club_home.normalize(payload,club_home.from_club(x))
+    except ValueError as e: raise HTTPException(400,str(e))
+    with conn() as c:
+        c.execute('UPDATE clubs SET home_banners_json=? WHERE id=?',(club_home.dumps(cfg),club_id))
+    return cfg
+
+@app.get('/api/public/clubs/{club_id}/home-media/{asset_path:path}')
+def public_club_home_media(club_id:int,asset_path:str):
+    # 只放行「首页轮播配置里真实引用过」的文件，不是对 /static/uploads 通配开放。
+    x=club_or_404(club_id)
+    if IS_PROD and x['status']!='active':raise HTTPException(404,'not found')
+    original='/static/'+unquote(asset_path)
+    if original not in club_home.media_paths(club_home.from_club(x)):raise HTTPException(404,'not found')
+    file_path=_safe_media_path(original)
+    if not file_path or not file_path.is_file():raise HTTPException(404,'not found')
+    response=FileResponse(file_path)
+    response.headers['Cache-Control']='public, max-age=300'
+    return response
+
+@app.get('/api/public/clubs/{club_id}/home-banners')
+def public_club_home_banners(club_id:int):
+    if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
+    return club_home.public_view(club_id,club_or_404(club_id)) or {}
+
+@app.post('/api/club/{club_id}/home-banners/image')
+async def upload_club_home_image(club_id:int,file:UploadFile=File(...)):
+    """上传首页轮播配图（C 端首页运营 banner）。
+
+    - 落 `uploads/{club}/home/{uuid}{ext}`，**原样存盘不重编码**。
+    - 返回两个地址：`url` 是落库形状（`/static/uploads/...`，club_home._image 只认它），
+      `preview` 是俱乐部域代理（生产环境 /static/uploads/* 被 security_v025 直接 404）。
+    """
+    club_or_404(club_id)
+    real=Path(file.filename or '').suffix.lower()
+    if real not in _PUBLIC_IMAGE_EXT: raise HTTPException(400,'仅支持图片文件：png/jpg/jpeg/webp/gif')
+    data=await file.read()
+    if len(data) > 10*1024*1024: raise HTTPException(413,'图片过大（上限 10MB）')
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.verify()
+    except Exception:
+        raise HTTPException(400,'图片文件损坏或格式不受支持')
+    dest=UPLOAD/str(club_id)/'home'
+    dest.mkdir(parents=True, exist_ok=True)
+    name=uuid.uuid4().hex+real
+    (dest/name).write_bytes(data)
+    url=f'/static/uploads/{club_id}/home/{name}'
+    preview=f'/api/club/{club_id}/home-media/uploads/{club_id}/home/{name}'
+    return {'url':url,'preview':preview,'bytes':len(data)}
+
+@app.get('/api/club/{club_id}/home-media/{asset_path:path}')
+def club_home_media(club_id:int,asset_path:str):
+    """俱乐部域首页轮播配图代理：编辑弹窗里即时预览刚上传的图（带登录态）。
+
+    作用域只有 `uploads/{club}/home/` 一个目录，加上 _safe_media_path 的 `..` 拦截，双重收口。
+    """
+    club_or_404(club_id)
+    rel=unquote(asset_path)
+    if not rel.startswith(f'uploads/{club_id}/home/'):
         raise HTTPException(404,'not found')
     file_path=_safe_media_path('/static/'+rel)
     if not file_path or not file_path.is_file():raise HTTPException(404,'not found')

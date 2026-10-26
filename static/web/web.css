@@ -115,6 +115,8 @@
   position:relative;flex:0 0 100%;scroll-snap-align:start;
   min-height:min(84vh,660px);display:flex;align-items:flex-end;overflow:hidden;
 }
+/* 整张可点的轮播（后台自定义 banner 设了跳转目标）：给可点暗示，但别盖过 CTA 指针 */
+.w-hero__slide.is-link{cursor:pointer}
 .w-hero__media{position:absolute;inset:0;background-size:cover;background-position:center;background-color:#1d2a24}
 .w-hero__scrim{
   position:absolute;inset:0;

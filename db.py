@@ -277,6 +277,9 @@ def _run_compat_migrations(c):
     _ensure_column(c,'gear_orders','shipping_consignee','shipping_consignee TEXT')
     _ensure_column(c,'gear_orders','shipping_phone','shipping_phone TEXT')
     _ensure_column(c,'gear_orders','shipping_address','shipping_address TEXT')
+    # v0.32 C 端首页运营轮播：俱乐部后台自定义首页顶部 banner（自定义图 / 轮播间隔 /
+    # 跳转活动或商品）。可空 → 存量库老俱乐部直接回落默认活动轮播，无需回填。
+    _ensure_column(c,'clubs','home_banners_json','home_banners_json TEXT')
     # v0.30 商品目录（多品牌 / 服饰标准模式）：品牌与品类是独立字典，商品只存外键。
     # 人群（gender）默认 unisex 而不是 NULL：登山杖、背包这类根本不分男女的装备
     # 不该为了必填被硬塞一个性别，而 NULL 会让「按人群筛选」多出一个说不清的第四态。

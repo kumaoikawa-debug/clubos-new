@@ -83,24 +83,91 @@ function bindCaro(box,bar,cnt){
   sync();
 }
 
-/* ── ① 首页：满屏 hero + 全部活动瀑布流（最新上架倒序；id 自增 = 上架顺序，最稳）── */
+/* ── ① 首页：后台自定义轮播优先，无配置则回落默认「最近活动」hero ──────────
+   后台自定义的轮播（clubs.home_banners_json）有图、有间隔、可点跳活动/商品；
+   没开启或没条目时整块回落默认活动 hero —— 不破坏旧行为、不留空白。
+   自走定时器与商城 mall hero 用各自的变量互不干扰：切走首页只清自己的定时器。 */
+let HOME_BANNERS=null,_homeBannerTimer=0,_homeBannerMs=5000,_homeBannerHoldTimer=0;
+function homeBannerIdx(t){const n=t.children.length;return n?Math.max(0,Math.min(n-1,Math.round(t.scrollLeft/Math.max(1,t.clientWidth)))):0;}
+function homeBannerGo(i){const t=$('#homeHeroTrack');if(!t)return;const n=t.children.length;if(!n)return;const k=((Number(i)||0)%n+n)%n;t.scrollTo({left:Math.round(k*t.clientWidth),behavior:'smooth'});}
+function homeBannerStop(){clearInterval(_homeBannerTimer);_homeBannerTimer=0;}
+function homeBannerPlay(ms){
+  if(ms)_homeBannerMs=Math.max(2000,ms||5000);
+  homeBannerStop();
+  const t=$('#homeHeroTrack');
+  if(!t||t.children.length<2||document.hidden)return;
+  _homeBannerTimer=setInterval(()=>{
+    const el=$('#homeHeroTrack');
+    /* 容器被藏起来（切到别的 tab）或页面在后台 → 自清，不空转烧电。 */
+    if(!el||!el.offsetParent||document.hidden){homeBannerStop();return;}
+    homeBannerGo(homeBannerIdx(el)+1);
+  },_homeBannerMs);
+}
+/* 用户自己动了就先停手，等他看完再接着播 —— 和手指抢着滑是最差的体验。 */
+function homeBannerHold(){homeBannerStop();clearTimeout(_homeBannerHoldTimer);_homeBannerHoldTimer=setTimeout(()=>homeBannerPlay(),4000);}
+/* 跳转到后台配好的目标：活动 → openAct，商品 → openProduct。
+   目标失效（活动下架 / 商品不存在）由 openAct/openProduct 自己兜底，这里只分发。
+   openProduct 内 showProductPane 只切换 wmall 内部子面板、不会把 #wmall 整体显示出来
+   （与 openAct 自己 wviewShow 不同）—— 从 banner 这种「外部入口」进来必须先切到 wmall，
+   否则商品详情渲染进一个 display:none 的视图，看起来就是「点了没反应」。 */
+window.goBannerTarget=function(i){
+  const it=HOME_BANNERS&&HOME_BANNERS[Number(i)];if(!it)return;
+  if(it.targetType==='activity')openAct(Number(it.targetId));
+  else if(it.targetType==='product'){ if(typeof wviewShow==='function')wviewShow('wmall'); openProduct(Number(it.targetId)); }
+};
+/* 后台自定义的首页轮播单张。整张可点（is-link），CTA 复用 .w-hero__cta；
+   纯展示（无目标）时只显示图与文案、不给可点暗示。 */
+function homeBannerSlide(it,i){
+  const img=it.image||'',link=it.targetType==='activity'||it.targetType==='product';
+  const cta=link?`<button class="w-hero__cta" type="button" onclick="goBannerTarget(${i})">${esc(it.buttonText||'查看详情')}</button>`:'';
+  return `<div class="w-hero__slide${img?'':' is-fallback'}${link?' is-link':''}"${link?` onclick="goBannerTarget(${i})"`:''}>
+    ${img?`<div class="w-hero__media" style="background-image:url('${esc(img)}')"></div>`:'<div class="w-hero__media"></div>'}
+    <div class="w-hero__scrim"></div>
+    <div class="w-hero__copy">
+      ${it.badge?`<div class="w-hero__eyebrow">${esc(it.badge)}</div>`:''}
+      ${it.title?`<h1>${esc(it.title)}</h1>`:''}
+      ${it.subtitle?`<p class="w-hero__sub">${esc(it.subtitle)}</p>`:''}
+      ${cta}
+    </div>
+  </div>`;
+}
+
 window.loadHome=async function(){
   const hero=$('#homeHero'),feed=$('#homeFeed');
   if(hero&&!hero.children.length)hero.innerHTML='<div class="w-sk" style="padding:0;height:100%"><div class="w-sk__bar" style="height:100%;border-radius:0"></div></div>';
   if(feed&&!feed.children.length)feed.innerHTML='<div class="w-sk-row"></div><div class="w-sk-row"></div>';
+  homeBannerStop();HOME_BANNERS=null;
   try{
-    const acts=await api(`/api/public/clubs/${CLUB}/activities`);
+    /* 轮播配置与活动列表并行拉：后台没配就直接回落，配了就优先用自定义 banner。 */
+    const [acts,banners]=await Promise.all([
+      api(`/api/public/clubs/${CLUB}/activities`),
+      api(`/api/public/clubs/${CLUB}/home-banners`).catch(()=>null)
+    ]);
     /* 必须**裸赋值**：web.js 里是 `let ACT_ALL`（全局词法绑定），`window.ACT_ALL=`
-       只会新建一个 window 属性、读 `ACT_ALL` 时仍然拿到旧的空数组 —— 于是活动页
-       「已有数据 → 直接渲染」的快路径永远不生效，每次切 tab 都整页重拉。 */
+       只会新建一个 window 属性、读 `ACT_ALL` 时仍然拿到旧的空数组。 */
     ACT_ALL=acts;
     const list=(acts||[]).slice().sort((a,b)=>Number(b.id||0)-Number(a.id||0));
-    if(hero)hero.innerHTML=list.length
-      ?'<div class="w-hero__track">'+list.slice(0,5).map(homeSlide).join('')+'</div>'
-        +(list.length>1?'<div class="w-hero__meter"><i></i></div><div class="w-hero__count"></div>':'')
-      :'<div class="w-hero__slide is-fallback"><div class="w-hero__media"></div><div class="w-hero__scrim"></div><div class="w-hero__copy"><div class="w-hero__eyebrow">'+(window.__clubName||'俱乐部')+'</div><h1>去户外，找到下一场。</h1><p class="w-hero__sub">俱乐部正在筹备新的线路，稍后再来看看。</p></div></div>';
-    const t=hero&&hero.querySelector('.w-hero__track');
-    if(t&&list.length>1)bindCaro(t,hero.querySelector('.w-hero__meter i'),hero.querySelector('.w-hero__count'));
+    const useBanner=!!(banners&&banners.enabled&&Array.isArray(banners.items)&&banners.items.length);
+    if(hero){
+      if(useBanner){
+        HOME_BANNERS=banners.items;
+        hero.innerHTML='<div class="w-hero__track" id="homeHeroTrack">'+banners.items.map(homeBannerSlide).join('')+'</div>'
+          +(banners.items.length>1?'<div class="w-hero__meter"><i></i></div><div class="w-hero__count"></div>':'');
+        const t=hero.querySelector('#homeHeroTrack');
+        if(t&&banners.items.length>1){
+          bindCaro(t,hero.querySelector('.w-hero__meter i'),hero.querySelector('.w-hero__count'));
+          ['pointerdown','touchstart','wheel'].forEach(ev=>t.addEventListener(ev,homeBannerHold,{passive:true}));
+          homeBannerPlay((Number(banners.interval)||5)*1000);
+        }
+      }else{
+        hero.innerHTML=list.length
+          ?'<div class="w-hero__track">'+list.slice(0,5).map(homeSlide).join('')+'</div>'
+            +(list.length>1?'<div class="w-hero__meter"><i></i></div><div class="w-hero__count"></div>':'')
+          :'<div class="w-hero__slide is-fallback"><div class="w-hero__media"></div><div class="w-hero__scrim"></div><div class="w-hero__copy"><div class="w-hero__eyebrow">'+(window.__clubName||'俱乐部')+'</div><h1>去户外，找到下一场。</h1><p class="w-hero__sub">俱乐部正在筹备新的线路，稍后再来看看。</p></div></div>';
+        const t=hero&&hero.querySelector('.w-hero__track');
+        if(t&&list.length>1)bindCaro(t,hero.querySelector('.w-hero__meter i'),hero.querySelector('.w-hero__count'));
+      }
+    }
     if(feed)feed.innerHTML=list.length?list.map(feedCard).join(''):'<div class="w-empty">俱乐部正在筹备新的活动，稍后再来看看。</div>';
   }catch(e){
     /* hero 不能停在骨架条：失败时降级成「去户外」兜底文案，整页仍是完整可用的视觉，

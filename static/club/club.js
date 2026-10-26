@@ -2364,6 +2364,7 @@ let SETTINGS_TAB='brand';
 const SET_TAB_LOAD={brand:()=>loadSettings(),
   leaders:async()=>{await loadLeaders()},
   biz:async()=>{await loadBizSection()},
+  home:async()=>{await loadHomeBanners()},
   cprofile:async()=>{await loadCProfile()},
   credits:async()=>{await loadCredits();await loadAIUsage()},
   pay:async()=>{await loadPayAccount()}};
@@ -2371,7 +2372,7 @@ window.setTab=async name=>{
   if(!SET_TAB_LOAD[name])name='brand';
   SETTINGS_TAB=name;
   document.querySelectorAll('#setTabs .set-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('onclick')===`setTab('${name}')`));
-  ['brand','leaders','biz','cprofile','credits','pay'].forEach(p=>{
+  ['brand','leaders','biz','home','cprofile','credits','pay'].forEach(p=>{
     const el=document.getElementById('pane-'+p);
     if(el)el.style.display=p===name?'':'none';
   });
@@ -2732,6 +2733,191 @@ async function deleteBizItem(i){
   if(!ok)return;
   bizCfg.items.splice(Number(i),1);
   await persistBiz();
+}
+
+/* ===== 首页运营轮播（C 端首页顶部 banner 自定义 · 2026-10-26）=================
+   替换写死的「最近 5 场活动」hero。老板可自定义图片、轮播间隔、跳转目标（活动/商品）。
+   未开启或没条目时 C 端整块回落默认活动轮播（不破坏旧行为）。写穿式保存，沿用 biz 范式。 */
+let homeCfg=null;
+async function loadHomeBanners(){
+  const form=$('#homeForm');if(!form)return;
+  if(!homeCfg)skel('#homeItems',2);
+  let cfg;
+  try{cfg=await api(`/api/club/${CLUB}/home-banners`)}
+  catch(e){form.innerHTML='<div class="sub">读取失败：'+esc(e.message||'请重试')+'</div>';return}
+  homeCfg=Object.assign({enabled:false,interval:5,items:[]},cfg||{});
+  if(!Array.isArray(homeCfg.items))homeCfg.items=[];
+  renderHomeBanners();
+}
+function targetLabel(it){
+  const t=String(it.targetType||'');
+  if(t==='activity')return '跳活动 #'+(it.targetId||'?');
+  if(t==='product')return '跳商品 #'+(it.targetId||'?');
+  return '不跳转';
+}
+function renderHomeBanners(){
+  const form=$('#homeForm'),list=$('#homeItems'),tag=$('#homeStateTag');
+  const c=homeCfg||{enabled:false,interval:5,items:[]};
+  if(tag){tag.className='tag'+(c.enabled?' info':'');tag.textContent=c.enabled?'已开启 · C 端首页生效':'已关闭 · C 端回落活动轮播'}
+  if(form)form.innerHTML=
+    '<label class="list-row" style="gap:10px;align-items:center;cursor:pointer">'
+      +'<input type="checkbox" id="homeEnabled"'+(c.enabled?' checked':'')+' onchange="homeToggle(this.checked)">'
+      +'<div class="list-row__main"><div class="list-row__title">在 C 端启用自定义首页轮播</div>'
+      +'<div class="list-row__sub">关闭时 C 端整块回落默认「最近活动」轮播，不会留白。</div></div></label>'
+    +'<div style="margin-top:12px"><div class="sub">自动轮播间隔（秒，2–30）</div>'
+      +'<input id="homeInterval" type="number" min="2" max="30" step="1" style="width:120px;margin-top:6px" value="'+esc(String(c.interval||5))+'" placeholder="5"></div>'
+    +'<div style="margin-top:12px"><button class="btn" type="button" onclick="saveHomeBanners()">保存开关与间隔</button></div>';
+  if(!list)return;
+  list.innerHTML=(c.items||[]).map((it,i)=>'<div class="list-row">'
+    +'<div class="list-row__main"><div class="list-row__title">'+esc(it.title||'（纯图片）')+'</div>'
+    +'<div class="list-row__sub">'
+      +(it.badge?'<b>'+esc(it.badge)+'</b> · ':'')
+      +targetLabel(it)
+      +(it.subtitle?' · '+esc(it.subtitle):'')
+      +(it.image?' · 有图':'')
+    +'</div></div>'
+    +'<div class="list-row__end">'
+    +(it.image?'<img src="'+esc(homePreviewUrl(it.image))+'" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:8px;flex:0 0 auto;background:#eef0ea" onerror="this.remove()">':'')
+    +'<button class="btn ghost" type="button" onclick="moveHomeItem('+i+',-1)"'+(i===0?' disabled':'')+'>↑</button> '
+    +'<button class="btn ghost" type="button" onclick="moveHomeItem('+i+',1)"'+(i===(c.items.length-1)?' disabled':'')+'>↓</button> '
+    +'<button class="btn ghost" type="button" onclick="editHomeItem('+i+')">编辑</button> '
+    +'<button class="btn ghost" type="button" onclick="deleteHomeItem('+i+')">删除</button></div></div>').join('')
+    ||'<div class="empty">还没有轮播图。加一张想推的活动或商品图。</div>';
+}
+function homeToggle(on){if(!homeCfg)return;homeCfg.enabled=!!on;renderHomeBanners();persistHomeBanners().catch(()=>{})}
+async function persistHomeBanners(){
+  if(!homeCfg)return;
+  const iv=$('#homeInterval');
+  if(iv){let v=parseInt(iv.value,10);if(isNaN(v))v=5;v=Math.max(2,Math.min(30,v));homeCfg.interval=v;}
+  try{
+    const cfg=await api(`/api/club/${CLUB}/home-banners`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:homeCfg.enabled,interval:homeCfg.interval,items:homeCfg.items})});
+    homeCfg=Object.assign({enabled:false,interval:5,items:[]},cfg||{});
+    if(!Array.isArray(homeCfg.items))homeCfg.items=[];
+    renderHomeBanners();
+    toast(homeCfg.enabled?'已保存 · C 端首页生效':'已保存 · C 端回落活动轮播');
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'});throw e}
+}
+async function saveHomeBanners(){try{await persistHomeBanners()}catch(e){}}
+function homePreviewUrl(u){
+  const s=String(u||'');
+  const m=/^\/static\/uploads\/(\d+)\/home\//.exec(s);
+  if(!m)return s;
+  return `/api/club/${m[1]}/home-media${s.slice('/static'.length)}`;
+}
+let HOME_DLG=null;
+function homeItemDialog(mode,i){
+  const it=(mode==='edit'&&homeCfg)?((homeCfg.items||[])[Number(i)]||{}):{};
+  const state={image:String(it.image||''),uploading:false};
+  const ov=uxDialog({
+    title:mode==='edit'?'编辑轮播图':'添加轮播图',
+    desc:'上传或粘贴一张图；可填标题/副标题/角标/按钮文案作为图片上的浮层。点图会按你选的「跳转目标」打开指定活动或商品。',
+    body:'<div class="ux-field"><label>配图 <em>*</em></label>'
+      +'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+      +'<button class="btn ghost" type="button" id="homeDlgPick">上传图片</button>'
+      +'<input type="file" id="homeDlgFile" accept="image/png,image/jpeg,image/webp,image/gif" hidden>'
+      +'<span class="sub" id="homeDlgState">'+(it.image?'已有一张配图，可更换':'还没有配图 · 支持 png / jpg / webp / gif')+'</span></div>'
+      +'<div id="homeDlgPrev" style="margin-top:8px">'
+      +(it.image?'<img src="'+esc(homePreviewUrl(it.image))+'" alt="" style="max-width:100%;max-height:160px;border-radius:8px;display:block;background:#eef0ea" onerror="this.remove()">':'')
+      +'</div>'
+      +'<input id="homeDlgUrl" type="text" style="margin-top:8px;width:100%" value="'+(/^https?:/.test(String(it.image||''))?esc(it.image):'')+'" placeholder="或粘贴图片链接（https://…）">'
+      +'</div>'
+      +'<div class="ux-field"><label for="homeDlgTitle">标题（可空）</label>'
+      +'<input id="homeDlgTitle" type="text" maxlength="40" value="'+esc(it.title||'')+'" placeholder="秋日徒步招募"></div>'
+      +'<div class="ux-field"><label for="homeDlgSub">副标题（可空）</label>'
+      +'<input id="homeDlgSub" type="text" maxlength="80" value="'+esc(it.subtitle||'')+'" placeholder="10月24日 · 蓥华山"></div>'
+      +'<div class="ux-field"><label for="homeDlgBadge">角标（可空）</label>'
+      +'<input id="homeDlgBadge" type="text" maxlength="20" value="'+esc(it.badge||'')+'" placeholder="HOT / 限时"></div>'
+      +'<div class="ux-field"><label for="homeDlgBtn">按钮文案（可空）</label>'
+      +'<input id="homeDlgBtn" type="text" maxlength="20" value="'+esc(it.buttonText||'')+'" placeholder="即刻探索"></div>'
+      +'<div class="ux-field"><label for="homeDlgTarget">跳转目标</label>'
+      +'<select id="homeDlgTarget">'
+      +'<option value=""'+(String(it.targetType||'')===''?' selected':'')+'>不跳转（纯展示）</option>'
+      +'<option value="activity"'+(String(it.targetType||'')==='activity'?' selected':'')+'>跳转到活动</option>'
+      +'<option value="product"'+(String(it.targetType||'')==='product'?' selected':'')+'>跳转到商品</option>'
+      +'</select></div>'
+      +'<div class="ux-field" id="homeDlgTargetIdWrap" style="'+(String(it.targetType||'')? '':'display:none')+'"><label for="homeDlgTargetId">目标 ID（活动或商品的数字 id）</label>'
+      +'<input id="homeDlgTargetId" type="number" min="1" style="width:160px" value="'+(it.targetId?esc(String(it.targetId)):'')+'" placeholder="例如 42"></div>',
+    foot:'<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>'+(mode==='edit'?'保存':'添加')+'</button>',
+    wide:true,
+    onClose:()=>{HOME_DLG=null}
+  });
+  HOME_DLG={ov,state,mode,i};
+  const q=s=>ov.querySelector(s);
+  const paint=url=>{const box=q('#homeDlgPrev');if(box)box.innerHTML=url?'<img src="'+esc(url)+'" alt="" style="max-width:100%;max-height:160px;border-radius:8px;display:block;background:#eef0ea" onerror="this.remove()">':''};
+  q('#homeDlgTarget').onchange=()=>{const wrap=q('#homeDlgTargetIdWrap');if(wrap)wrap.style.display=q('#homeDlgTarget').value?'':'none';};
+  q('#homeDlgPick').onclick=()=>q('#homeDlgFile').click();
+  q('#homeDlgFile').onchange=async e=>{
+    const f=e.target.files&&e.target.files[0];e.target.value='';
+    if(!f)return;
+    if(!/^image\//.test(f.type)){showAlert({title:'只能选图片',message:'请选择 png / jpg / webp / gif 格式的图片。'});return}
+    if(f.size>10*1024*1024){showAlert({title:'图片太大',message:'单张上限 10MB。'});return}
+    const st=q('#homeDlgState');
+    const local=URL.createObjectURL(f);
+    paint(local);
+    if(st)st.textContent='上传中…';
+    state.uploading=true;
+    try{
+      const fd=new FormData();fd.append('file',f);
+      const r=await api(`/api/club/${CLUB}/home-banners/image`,{method:'POST',body:fd})||{};
+      URL.revokeObjectURL(local);
+      state.image=String(r.url||'');
+      q('#homeDlgUrl').value='';
+      paint(homePreviewUrl(state.image));
+      if(st)st.textContent='上传成功';
+    }catch(err){
+      URL.revokeObjectURL(local);
+      paint(homePreviewUrl(state.image));
+      if(st)st.textContent='上传失败，可重试';
+      showAlert({title:'上传失败',message:err.message||'请重试'});
+    }finally{state.uploading=false}
+  };
+  q('[data-ok]').onclick=async()=>{
+    if(state.uploading){toast('图片还在上传，等它传完再保存');return}
+    const title=(q('#homeDlgTitle').value||'').trim();
+    const subtitle=(q('#homeDlgSub').value||'').trim();
+    const badge=(q('#homeDlgBadge').value||'').trim();
+    const buttonText=(q('#homeDlgBtn').value||'').trim();
+    const targetType=q('#homeDlgTarget').value||'';
+    let targetId=null;
+    if(targetType){
+      targetId=parseInt((q('#homeDlgTargetId').value||'').trim(),10);
+      if(isNaN(targetId)||targetId<=0){toast('请填写有效的目标 ID（正整数）');q('#homeDlgTargetId').focus();return}
+    }
+    const url=(q('#homeDlgUrl').value||'').trim();
+    const image=url||state.image;
+    if(!image){toast('请上传或粘贴一张轮播图');q('#homeDlgPick').focus();return}
+    const item={image:image,title:title,subtitle:subtitle,badge:badge,buttonText:buttonText,targetType:targetType,targetId:targetId};
+    homeCfg.items=homeCfg.items||[];
+    if(mode==='edit')homeCfg.items[Number(i)]=item;else homeCfg.items.push(item);
+    const btn=q('[data-ok]');btn.disabled=true;btn.textContent='保存中…';
+    try{await persistHomeBanners()}catch(e){btn.disabled=false;btn.textContent=mode==='edit'?'保存':'添加';return}
+    ov.uxClose();
+  };
+  q('[data-cancel]').onclick=()=>ov.uxClose();
+}
+async function addHomeItem(){
+  if(!homeCfg)return;
+  if((homeCfg.items||[]).length>=8)return showAlert({title:'最多 8 张',message:'轮播图太多会拖慢首屏，建议聚焦主推内容。'});
+  homeItemDialog('add');
+}
+async function editHomeItem(i){
+  if(!homeCfg)return;
+  homeItemDialog('edit',i);
+}
+async function deleteHomeItem(i){
+  const it=(homeCfg?.items||[])[Number(i)];if(!it)return;
+  const ok=await uxConfirm({title:'删除轮播图',message:'确定删除「'+(it.title||'这张轮播图')+'」？删除后 C 端不再显示。',confirmText:'删除',danger:true});
+  if(!ok)return;
+  homeCfg.items.splice(Number(i),1);
+  await persistHomeBanners();
+}
+async function moveHomeItem(i,dir){
+  if(!homeCfg)return;
+  const arr=homeCfg.items||[];
+  const j=Number(i)+Number(dir);
+  if(j<0||j>=arr.length)return;
+  const tmp=arr[i];arr[i]=arr[j];arr[j]=tmp;
+  await persistHomeBanners();
 }
 /* 后台 AI 发活动弹窗（createModal #createForm）补「活动城市」下拉：
    与手工新建 / 编辑共用同一份 CLUBOS_CITIES，AI 生成路径（ai-generate 已接收 city）也能落 city。 */
