@@ -125,3 +125,11 @@ python tests/product_catalog_smoke.py
 # 门槛校验、平台承担成本、跨俱乐部可用、定向券不外溢、注册城市设置。
 # 自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/coupon_smoke.py
+
+# 生成详情（promoHtml iframe）不得横向溢出 / 字图错排（2026-10-26 用户截图：
+# C 端详情能左右拖动、大数字被裁成一串）。模型直出的任意 CSS 里，4 个大数字的
+# .stat-row{display:flex} 在 ~316px 窄容器里子项缩不下去 → 撑出右侧。
+# 守住：html/body 一起锁宽、*{min-width:0}、媒体限宽、iframe scrolling="no"、
+# 溢出 flex 行自动换行 + 同档大字号统一缩小 + 纯数字不拆行；四端 shared.js 版本一致。
+# 纯静态断言（只读 static/*），不建库不碰真库。
+python tests/promo_responsive_smoke.py

@@ -401,18 +401,30 @@ function promoHtmlDoc(html){
   /* 模型声明了 --bg 却常忘给 body 上底色（2026-10-18 深色画册实测）→ 确定性补：
      从它的 <style> 里抽出第一个 --bg，直接注入基础样式，杜绝深色块之间漏白。 */
   var bg='';var m=String(body).match(/--bg\s*:\s*([^;}]+)/i);if(m)bg=m[1].trim();
+  /* ★ 2026-10-26 堵「生成详情左右能拖 / 字图错排」的底座（用户截图实证）：
+     模型直出的 promoHtml 是任意 CSS。只给 body 加 overflow-x:hidden 挡不住 —— iframe 真正的
+     滚动容器是 <html>，body 裁不下时整篇仍能横向拖动；再加上 flex 行（例如 4 个大数字的
+     .stat-row）子项默认 min-width:auto、缩不到内容以下，于是撑出右侧被裁断，视觉上就是
+     「32008015 挤成一串 + 左边字被切」。这里从源头加三件事：
+       ① html 与 body 一起锁死横向溢出（html 才是滚动容器）；
+       ② *{min-width:0} 允许 flex/grid 子项收缩，不再被内容顶宽；
+       ③ 媒体元素一律不超过容器宽，长英文/URL 允许断行（中文本来就能断）。 */
   return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">'
     +'<meta name="viewport" content="width=device-width,initial-scale=1">'
-    +'<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:transparent}'
+    +'<style>*{box-sizing:border-box;min-width:0}'
+    +'html,body{margin:0;padding:0;background:transparent;width:100%;max-width:100%;overflow-x:hidden}'
     +(bg?'html{background:'+bg.replace(/[<"\']/g,'')+'}':'')
     +'body{width:100%;overflow-x:hidden;font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}'
+    +'img,figure,video,iframe,svg,table,pre{max-width:100%!important}'
     +'img{max-width:100%;height:auto;display:block}section{display:block}a{color:inherit}</style></head><body>'
     +body+'</body></html>';
 }
 function escAttr(s){return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');}
 function mountPromoHtml(html,mm){
   var doc=promoHtmlDoc(resolveMediaRefsHtml(html,mm));
-  return '<div class="ed-promo-html"><iframe sandbox="allow-same-origin" referrerpolicy="no-referrer" '
+  /* scrolling="no"：内容高度由 sizePromoIframe 按真实内容量出来写死，iframe 自己不需要滚动。
+     关掉它是「详情不能左右移动」最硬的一道保险 —— 即便某块仍略宽，也只能被裁、不能拖动。 */
+  return '<div class="ed-promo-html"><iframe sandbox="allow-same-origin" scrolling="no" referrerpolicy="no-referrer" '
     +'style="width:100%;border:0;display:block;background:transparent" '
     +'srcdoc="'+escAttr(doc)+'"></iframe></div>';
 }
@@ -426,18 +438,78 @@ function sizePromoIframe(ifr){
   try{var d=ifr.contentDocument;if(d&&d.body){ifr.style.height=(d.body.scrollHeight+16)+'px';
     setTimeout(function(){try{ifr.style.height=(d.body.scrollHeight+24)+'px';}catch(_){}},800);}}catch(_){}
 }
+/* ★ 2026-10-26 「装不下」的弹性行自己换行 + 统一缩字号（只处理真正溢出的行）。
+   模型写 .stat-row{display:flex} + .num{font-size:72px}，4 个数字在 ~316px 的窄容器里必然溢出。
+   做法：把该行 flex-wrap 打开、每个子项给 42% 的 basis 让它两两换行；再把「同一行里的大字号
+   文字」按最紧的那一格**统一**缩小（避免 3200 缩了、8 还是 72px 的大小不一）。
+   幂等：已经 wrap 过的行直接跳过；重复调用只在仍溢出时动作。非 flex / 纵向排列 / 正常排版的
+   块一律不碰，避免把好版式改坏。 */
+function fitPromoDoc(ifr){
+  var d,w;try{d=ifr.contentDocument;w=ifr.contentWindow;}catch(_e){return}
+  if(!d||!d.body||!w||!(w.innerWidth>0))return;
+  var all=Array.prototype.slice.call(d.querySelectorAll('body *'));
+  all.forEach(function(el){
+    var cs;try{cs=w.getComputedStyle(el)}catch(_e){return}
+    if(cs.display!=='flex'&&cs.display!=='inline-flex')return;
+    if(String(cs.flexDirection||'').indexOf('column')===0)return;   /* 纵向列不按行处理 */
+    if(cs.flexWrap==='wrap'||cs.flexWrap==='wrap-reverse')return;  /* 已归一过 */
+    var ch=Array.prototype.slice.call(el.children);
+    if(!ch.length)return;
+    /* 溢出判定：容器自身超出，或任一子项的内容比子项宽（.stat 被 flex:1 压窄、.num 溢出它） */
+    var overflow=el.clientWidth>0&&el.scrollWidth>el.clientWidth+1;
+    if(!overflow)for(var k=0;k<ch.length;k++){if(ch[k].clientWidth>0&&ch[k].scrollWidth>ch[k].clientWidth+1){overflow=true;break;}}
+    if(!overflow)return;
+    el.style.flexWrap='wrap';
+    ch.forEach(function(k){k.style.flex='1 1 42%';k.style.minWidth='0';});
+    var minRatio=1,maxFs=0,leaves=[];
+    ch.forEach(function(k){
+      var kw=k.clientWidth;if(!kw)return;
+      Array.prototype.slice.call(k.querySelectorAll('*')).forEach(function(t){
+        if(t.children.length)return;
+        var tx=(t.textContent||'').trim();if(!tx)return;
+        var tcs;try{tcs=w.getComputedStyle(t)}catch(_e){return}
+        var fs=parseFloat(tcs.fontSize)||0;
+        var tw=Math.max(t.scrollWidth,Math.ceil(t.getBoundingClientRect().width||0));
+        if(tw>kw+1)minRatio=Math.min(minRatio,kw/tw);
+        if(fs>maxFs)maxFs=fs;
+        leaves.push({t:t,fs:fs});
+      });
+    });
+    if(minRatio<1){leaves.forEach(function(L){
+      /* 只缩这一行里字号最大的那一档（数字），标签小字保持原样；0.96 留 4% 余量防像素级误差 */
+      if(L.fs>=maxFs*0.9){try{L.t.style.fontSize=Math.max(13,Math.floor(L.fs*minRatio*0.96))+'px';}catch(_e){}}
+    });}
+  });
+  /* 兜底：任何仍比容器宽的元素，允许长词断行（break-word 不会把 3200 这种数字劈成两行） */
+  all.forEach(function(el){
+    try{
+      if(el.clientWidth>0&&el.scrollWidth>el.clientWidth+1){
+        var tx2=(el.textContent||'').trim();
+        if(/^[0-9.,%°℃+\-—\s]{1,12}$/.test(tx2))return;  /* 纯数字不拆，拆了就是错排 */
+        var cs2=w.getComputedStyle(el);
+        if(cs2.whiteSpace==='nowrap')el.style.whiteSpace='normal';
+        el.style.overflowWrap='break-word';
+      }
+    }catch(_e){}
+  });
+}
+/* 归一 + 量高一起做：先让它装得下，再按新高度写 iframe */
+function refreshPromoIframe(ifr){
+  try{fitPromoDoc(ifr);}catch(_e){}
+  sizePromoIframe(ifr);
+}
 function setupPromoIframe(ifr){
   if(!ifr||ifr.__promoSetup)return;ifr.__promoSetup=true;
-  sizePromoIframe(ifr);
+  refreshPromoIframe(ifr);
   try{var d=ifr.contentDocument;
     if(d)d.querySelectorAll('img').forEach(function(im){
-      if(!im.complete)im.addEventListener('load',function(){sizePromoIframe(ifr);},{once:true});});}catch(_){}
+      if(!im.complete)im.addEventListener('load',function(){refreshPromoIframe(ifr);},{once:true});});}catch(_e){}
   if(typeof ResizeObserver!=='undefined'){
     var lastW=-1;
     try{ifr.__promoRO=new ResizeObserver(function(){
       var w=ifr.getBoundingClientRect().width;
-      if(w>0&&Math.abs(w-lastW)>1){lastW=w;sizePromoIframe(ifr);}
-    });ifr.__promoRO.observe(ifr);}catch(_){}
+      if(w>0&&Math.abs(w-lastW)>1){lastW=w;refreshPromoIframe(ifr);}
+    });ifr.__promoRO.observe(ifr);}catch(_e){}
   }
 }
 if(typeof document!=='undefined'){
@@ -453,12 +525,11 @@ if(typeof document!=='undefined'){
     if(!btn)return;
     setTimeout(function(){
       document.querySelectorAll('.ed-promo-html iframe').forEach(function(ifr){
-        if(ifr.getBoundingClientRect().width>0&&parseInt(ifr.style.height||'0',10)<80)sizePromoIframe(ifr);
+        if(ifr.getBoundingClientRect().width>0&&parseInt(ifr.style.height||'0',10)<80)refreshPromoIframe(ifr);
       });
     },60);
   },true);
 }
-
 function renderPromo(detail,master={},opts={}){
   const mm=mediaMap(master);
   /* 阶段二（2026-10-14）：模型直出 HTML 优先；缺失 / 不达标时回退下方 blocks */
