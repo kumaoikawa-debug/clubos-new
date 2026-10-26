@@ -2358,6 +2358,311 @@ function ledMore(key){
    logo 上传走独立端点（POST …/settings/logo），表单文本走 PUT …/settings；
    保存成功后同步刷新后台侧栏的品牌名，前后台看到的永远同一个名字。 */
 let clubLogoUrl='';
+/* ── 小程序信息 / 管理助手 / 标准设置（2026-10-26）────────────────────────
+   俱乐部租用 ClubOS 会有自己的微信小程序：认证信息、授权状态、体验者、
+   管理助手（员工+角色权限）与标准设置（基础/转发/支付）在此集中管理。
+   与微信开放平台的真实对接是后续版本，当前是台账模型（字段与微信公众平台
+   一一对应）。后端：/api/club/{CLUB}/miniprogram* 与 /api/club/{CLUB}/mp/*。 */
+const MP_PERMS={activities:'活动管理',registrations:'报名管理',content:'内容生成',
+  members:'会员管理',mall:'商城查看',finance:'数据与结算',settings:'俱乐部设置',miniprogram:'小程序管理'};
+let MP_STAFF_TAB='staff';
+
+/* ── 小程序信息 ─────────────────────────────────────────────────────────── */
+async function loadMpInfo(){
+  const box=$('#mpInfoBody');if(!box)return;
+  box.innerHTML='<div class="empty">正在加载小程序信息…</div>';
+  let info;
+  try{info=await api(`/api/club/${CLUB}/miniprogram`,{cache:'no-store'})}
+  catch(e){loaderError('#mpInfoBody',e,'小程序信息读取失败');return}
+  const avatar=info.avatarUrl?`<img src="${esc(info.avatarUrl)}${info.avatarUrl.indexOf('?')<0?'?t='+Date.now():''}" alt="头像" style="width:88px;height:88px;border-radius:50%;object-fit:cover">`:`<span style="width:88px;height:88px;border-radius:50%;background:var(--bg-soft,#f2f0ea);display:inline-flex;align-items:center;justify-content:center;font-size:26px"> squirrel</span>`;
+  const qr=info.qrcodeUrl?`<img src="${esc(info.qrcodeUrl)}${info.qrcodeUrl.indexOf('?')<0?'?t='+Date.now():''}" alt="小程序码" style="width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`:'<span class="sub">未上传</span>';
+  const row=(k,v)=>`<div style="display:flex;gap:14px;padding:9px 0;border-bottom:1px dashed var(--line)"><span class="sub" style="flex:0 0 110px">${k}</span><div style="flex:1;min-width:0">${v||'<span class="sub">未填写</span>'}</div></div>`;
+  const tag=(v,ok)=>v?`<span class="tag${ok?'':' orange'}">${esc(v)}</span>`:'<span class="sub">未登记</span>';
+  const cats=(info.serviceCategories||[]).map(c=>`<span class="tag">${esc(c)}</span>`).join(' ');
+  const testers=(info.testers||[]);
+  box.innerHTML=`
+  <div class="card section">
+    <div class="panel-title"><h3>认证信息</h3><button class="btn secondary" type="button" onclick="mpInfoEdit()">编辑信息</button></div>
+    <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;padding:6px 0 14px">
+      <div style="text-align:center">${avatar}<div class="sub" style="margin-top:6px">小程序头像</div><label class="btn ghost sm" style="cursor:pointer;margin-top:4px;display:inline-block">上传<input type="file" accept="image/*" style="display:none" onchange="mpUploadImage('avatar',this)"></label></div>
+      <div style="text-align:center">${qr}<div class="sub" style="margin-top:6px">小程序码</div><label class="btn ghost sm" style="cursor:pointer;margin-top:4px;display:inline-block">上传<input type="file" accept="image/*" style="display:none" onchange="mpUploadImage('qrcode',this)"></label></div>
+      <div style="flex:1;min-width:280px">
+        ${row('小程序名称',esc(info.appName))}
+        ${row('AppID',`<code>${esc(info.appid)}</code>`)}
+        ${row('小程序简介',esc(info.appIntro))}
+        ${row('主体类型 / 名称',`${esc(info.subjectType)} ${info.subjectName&&info.subjectType?' / ':''}${esc(info.subjectName)}`)}
+        ${row('服务类目',cats)}
+        ${row('实名验证',tag(info.realnameStatus,info.realnameStatus==='实名验证成功'))}
+        ${row('资质认证',tag(info.qualificationStatus,!!info.qualificationStatus&&info.qualificationStatus.indexOf('未')<0))}
+        ${row('年审到期时间',esc(info.annualReviewAt))}
+        ${row('微信支付品牌',info.payBrandName?`${esc(info.payBrandName)}${info.payBrandId?`（ID:${esc(info.payBrandId)}）`:''}`:'')}
+      </div>
+    </div>
+  </div>
+  <div class="card section">
+    <div class="panel-title"><div><h3>授权状态</h3><div class="sub">小程序授权托管后的版本与合规状态；未授权时填 AppID 也可先登记。</div></div><span class="tag ${info.authorized?'':'orange'}">${info.authorized?'已授权':'未授权'}</span></div>
+    ${row('当前版本号',esc(info.currentVersion))}
+    ${row('隐私设置保护指引',tag(info.privacyStatus,info.privacyStatus==='已配置'))}
+    ${row('地理位置接口权限',tag(info.geoPermission,info.geoPermission==='已开通'))}
+    ${row('小程序备案',tag(info.recordStatus,info.recordStatus==='已备案'))}
+    ${row('发布状态',tag(info.releaseStatus,info.releaseStatus==='已发布'))}
+    <div style="padding:10px 0 2px"><div class="sub" style="margin-bottom:6px">绑定体验者（${testers.length}）—— 体验者可体验未发布版本</div>
+    ${testers.length?testers.map(t=>`<span class="tag" style="margin:0 6px 6px 0">${esc(t.nickname)}${t.wxid?` · ${esc(t.wxid)}`:''}</span>`).join(''):'<span class="sub">暂无体验者</span>'}</div>
+  </div>
+  <div id="mpInfoFormBox"></div>`;
+}
+function mpInfoEdit(){
+  const box=$('#mpInfoFormBox');if(!box)return;
+  api(`/api/club/${CLUB}/miniprogram`,{cache:'no-store'}).then(info=>{
+    const f=(id,label,ph,max)=>`<label style="display:block"><span class="sub">${label}</span><input id="${id}" maxlength="${max||60}" style="width:100%;margin-top:4px" value="${esc(info[id]||'')}" placeholder="${ph||''}"></label>`;
+    box.innerHTML=`<div class="card section">
+    <div class="panel-title"><h3>编辑小程序信息</h3><span class="sub">与微信公众平台「小程序信息」逐项对应</span></div>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
+      ${f('appid','AppID','wxc014caaaa15c0fb2',64)}
+      ${f('appName','小程序名称','远拓旅游Toptravel',40)}
+      ${f('subjectType','主体类型','企业 / 个人 / 政府媒体或其他',20)}
+      ${f('subjectName','主体名称','成都远拓户外旅游有限公司',80)}
+      ${f('realnameStatus','实名验证状态','已认证 / 实名验证成功',20)}
+      ${f('qualificationStatus','资质认证状态','已认证 / 未认证',20)}
+      ${f('annualReviewAt','年审到期时间','2027-09-02 10:58:40',32)}
+      ${f('payBrandName','微信支付品牌','远拓旅游',60)}
+      ${f('payBrandId','微信支付品牌 ID','18226',32)}
+      ${f('currentVersion','当前版本号','7.9.4',20)}
+      ${f('privacyStatus','隐私设置保护指引','已配置 / 未配置',20)}
+      ${f('geoPermission','地理位置接口权限','已开通 / 未开通',20)}
+      ${f('recordStatus','小程序备案','已备案 / 未备案',20)}
+      ${f('releaseStatus','发布状态','已发布 / 审核中 / 未发布',20)}
+    </div>
+    <label style="display:block;margin-top:12px"><span class="sub">小程序简介</span><textarea id="appIntro" maxlength="300" rows="3" style="width:100%;margin-top:4px">${esc(info.appIntro||'')}</textarea></label>
+    <label style="display:block;margin-top:12px"><span class="sub">服务类目（每行一个，最多 10 个）</span><textarea id="mpCats" rows="3" style="width:100%;margin-top:4px" placeholder="旅游服务>旅行社">${esc((info.serviceCategories||[]).join('\n'))}</textarea></label>
+    <label style="display:block;margin-top:12px"><span class="sub">绑定体验者（每行一个：昵称,微信号）</span><textarea id="mpTesters" rows="3" style="width:100%;margin-top:4px" placeholder="小野,xy_001">${esc((info.testers||[]).map(t=>[t.nickname,t.wxid].filter(Boolean).join(',')).join('\n'))}</textarea></label>
+    <label style="display:flex;align-items:center;gap:8px;margin-top:12px"><input type="checkbox" id="mpAuthed" ${info.authorized?'checked':''}><span>已授权该小程序给 ClubOS（授权托管后可代发布版本）</span></label>
+    <div style="margin-top:14px;display:flex;gap:10px"><button class="btn" type="button" onclick="saveMpInfo()">保存信息</button><button class="btn ghost" type="button" onclick="$('#mpInfoFormBox').innerHTML=''">取消</button></div>
+    </div>`;
+  }).catch(e=>showAlert({title:'读取失败',message:e.message||'请重试'}));
+}
+async function saveMpInfo(){
+  const cats=String($('#mpCats')?.value||'').split('\n').map(x=>x.trim()).filter(Boolean).slice(0,10);
+  const testers=String($('#mpTesters')?.value||'').split('\n').map(l=>l.trim()).filter(Boolean).slice(0,20).map(l=>{
+    const i=l.indexOf(',');const nick=(i<0?l:l.slice(0,i)).trim();const wx=(i<0?'':l.slice(i+1)).trim();
+    return {nickname:nick,wxid:wx,boundAt:''};}).filter(t=>t.nickname);
+  const payload={appid:$('#appid')?.value||'',appName:$('#appName')?.value||'',appIntro:$('#appIntro')?.value||'',
+    subjectType:$('#subjectType')?.value||'',subjectName:$('#subjectName')?.value||'',
+    realnameStatus:$('#realnameStatus')?.value||'',qualificationStatus:$('#qualificationStatus')?.value||'',
+    annualReviewAt:$('#annualReviewAt')?.value||'',payBrandName:$('#payBrandName')?.value||'',
+    payBrandId:$('#payBrandId')?.value||'',currentVersion:$('#currentVersion')?.value||'',
+    privacyStatus:$('#privacyStatus')?.value||'',geoPermission:$('#geoPermission')?.value||'',
+    recordStatus:$('#recordStatus')?.value||'',releaseStatus:$('#releaseStatus')?.value||'',
+    serviceCategories:cats,testers,authorized:!!$('#mpAuthed')?.checked};
+  try{
+    await api(`/api/club/${CLUB}/miniprogram`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    toast('小程序信息已保存');$('#mpInfoFormBox').innerHTML='';loadMpInfo();
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
+}
+async function mpUploadImage(kind,input){
+  const f=input.files&&input.files[0];if(!f)return;
+  const fd=new FormData();fd.append('file',f);
+  try{
+    await api(`/api/club/${CLUB}/miniprogram/image/${kind}`,{method:'POST',body:fd});
+    toast(kind==='avatar'?'小程序头像已更新':'小程序码已更新');loadMpInfo();
+  }catch(e){showAlert({title:'上传失败',message:e.message||'请重试'})}
+}
+
+/* ── 小程序助手：员工管理 + 角色管理 ───────────────────────────────────── */
+function mpStaffTab(t){
+  MP_STAFF_TAB=t;
+  document.querySelectorAll('#mpStaffTabs .set-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('data-mptab')===t));
+  const s=$('#mpStaffBody'),r=$('#mpRolesBody');
+  if(s)s.style.display=t==='staff'?'':'none';
+  if(r)r.style.display=t==='roles'?'':'none';
+  t==='staff'?loadMpStaff():loadMpRoles();
+}
+async function loadMpStaffTab(){mpStaffTab(MP_STAFF_TAB)}
+async function loadMpStaff(){
+  const box=$('#mpStaffBody');if(!box)return;
+  box.innerHTML='<div class="empty">正在加载员工…</div>';
+  let d;
+  try{d=await api(`/api/club/${CLUB}/mp/staff`,{cache:'no-store'})}
+  catch(e){loaderError('#mpStaffBody',e,'员工读取失败');return}
+  const rows=d.staff.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.name)}</strong><div class="sub">${[x.wxid,x.phone].filter(Boolean).map(esc).join(' · ')||'—'}</div></td><td>${esc(x.roleName||'—')}${x.roleName?'':`<div class="sub">未分配角色</div>`}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${x.status==='active'?'已启用':'已停用'}</span></td><td class="sub">${esc(String(x.boundAt||'').slice(0,16))}</td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" onclick="mpStaffForm(${x.id})">编辑权限</button><button class="btn ghost sm" onclick="mpStaffDel(${x.id})" style="color:var(--orange)">删除</button></div></td></tr>`).join('');
+  box.innerHTML=`
+  <div style="margin:4px 0 10px"><button class="btn" type="button" onclick="mpStaffForm()">绑定管理员</button><span class="sub" style="margin-left:10px">按角色分配权限；同一员工只绑一个角色</span></div>
+  <div class="card"><table class="table"><thead><tr><th>#</th><th>员工</th><th>用户角色</th><th>状态</th><th>绑定时间</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="6" class="empty">还没有绑定员工，点上方「绑定管理员」</td></tr>'}</tbody></table></div>
+  <div id="mpStaffFormBox"></div>`;
+}
+function mpStaffForm(id){
+  const box=$('#mpStaffFormBox');if(!box)return;
+  api(`/api/club/${CLUB}/mp/staff`,{cache:'no-store'}).then(d=>{
+    const st=(d.staff||[]).find(x=>x.id===id)||{};
+    const opts=(d.roles||[]).map(r=>`<option value="${r.id}" ${st.roleId===r.id?'selected':''}>${esc(r.name)}</option>`).join('');
+    box.innerHTML=`<div class="card section"><div class="panel-title"><h3>${id?'编辑员工权限':'绑定管理员'}</h3></div>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
+      <label style="display:block"><span class="sub">姓名 *</span><input id="mpStName" maxlength="20" style="width:100%;margin-top:4px" value="${esc(st.name||'')}" placeholder="员工姓名"></label>
+      <label style="display:block"><span class="sub">微信号</span><input id="mpStWx" maxlength="64" style="width:100%;margin-top:4px" value="${esc(st.wxid||'')}" placeholder="微信号（用于后续微信侧绑定）"></label>
+      <label style="display:block"><span class="sub">手机号</span><input id="mpStPhone" maxlength="11" inputmode="numeric" style="width:100%;margin-top:4px" value="${esc(st.phone||'')}" placeholder="11 位手机号"></label>
+      <label style="display:block"><span class="sub">用户角色</span><select id="mpStRole" style="width:100%;margin-top:4px"><option value="">（暂不分配）</option>${opts}</select></label>
+    </div>
+    <div style="margin-top:14px;display:flex;gap:10px"><button class="btn" type="button" onclick="saveMpStaff(${id||0})">${id?'保存':'绑定'}</button><button class="btn ghost" type="button" onclick="$('#mpStaffFormBox').innerHTML=''">取消</button></div></div>`;
+  }).catch(e=>showAlert({title:'读取失败',message:e.message||'请重试'}));
+}
+async function saveMpStaff(id){
+  const roleId=$('#mpStRole')?.value||null;
+  const payload={name:$('#mpStName')?.value||'',wxid:$('#mpStWx')?.value||'',phone:$('#mpStPhone')?.value||''};
+  if(roleId!==null)payload.roleId=roleId?Number(roleId):null;
+  try{
+    if(id){await api(`/api/club/${CLUB}/mp/staff/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('员工权限已更新')}
+    else{await api(`/api/club/${CLUB}/mp/staff`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('管理员已绑定')}
+    loadMpStaff();
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
+}
+async function mpStaffDel(id){
+  showAlert({title:'删除员工',message:'确定删除该员工的绑定？删除后其权限立即失效。',danger:true,
+    actions:[{label:'取消',ghost:true},{label:'删除',danger:true,fn:async close=>{close();
+      try{await api(`/api/club/${CLUB}/mp/staff/${id}`,{method:'DELETE'});toast('已删除');loadMpStaff()}
+      catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}}}]}).catch(()=>{});
+}
+async function loadMpRoles(){
+  const box=$('#mpRolesBody');if(!box)return;
+  box.innerHTML='<div class="empty">正在加载角色…</div>';
+  let d;
+  try{d=await api(`/api/club/${CLUB}/mp/roles`,{cache:'no-store'})}
+  catch(e){loaderError('#mpRolesBody',e,'角色读取失败');return}
+  const cards=d.roles.map(r=>`<div class="card" style="margin-bottom:10px"><div class="panel-title"><div><h3>${esc(r.name)}${r.system?' <span class="tag">系统预置</span>':''}</h3><div class="sub">${esc(r.remark||'')} · ${r.perms.length} 项权限</div></div><div style="display:flex;gap:6px;flex:0 0 auto"><button class="btn ghost sm" onclick="mpRoleForm(${r.id})">编辑权限</button>${r.system?'':`<button class="btn ghost sm" onclick="mpRoleDel(${r.id})" style="color:var(--orange)">删除</button>`}</div></div><div>${r.perms.length?r.perms.map(p=>`<span class="tag" style="margin:0 6px 6px 0">${esc(MP_PERMS[p]||p)}</span>`).join(''):'<span class="sub">未分配任何权限</span>'}</div></div>`).join('');
+  box.innerHTML=`<div style="margin:4px 0 10px"><button class="btn" type="button" onclick="mpRoleForm()">＋ 新建角色</button></div>${cards}<div id="mpRoleFormBox"></div>`;
+}
+function mpRoleForm(id){
+  const box=$('#mpRoleFormBox');if(!box)return;
+  api(`/api/club/${CLUB}/mp/roles`,{cache:'no-store'}).then(d=>{
+    const r=(d.roles||[]).find(x=>x.id===id)||{};
+    const checks=Object.entries(d.perms||MP_PERMS).map(([k,v])=>`<label style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:10px;padding:7px 12px;margin:0 8px 8px 0;cursor:pointer"><input type="checkbox" class="mp-perm" value="${k}" ${(r.perms||[]).includes(k)?'checked':''}><span>${esc(v)}</span></label>`).join('');
+    box.innerHTML=`<div class="card section"><div class="panel-title"><h3>${id?'编辑角色':'新建角色'}</h3></div>
+    <label style="display:block;max-width:320px"><span class="sub">角色名称 *</span><input id="mpRoleName" maxlength="20" style="width:100%;margin-top:4px" value="${esc(r.name||'')}" placeholder="例如：客服 / 财务"></label>
+    <div style="margin-top:12px"><span class="sub">权限点</span><div style="margin-top:6px">${checks}</div></div>
+    <label style="display:block;margin-top:10px;max-width:520px"><span class="sub">备注</span><input id="mpRoleRemark" maxlength="100" style="width:100%;margin-top:4px" value="${esc(r.remark||'')}" placeholder="这个角色负责什么"></label>
+    <div style="margin-top:14px;display:flex;gap:10px"><button class="btn" type="button" onclick="saveMpRole(${id||0})">${id?'保存':'创建'}</button><button class="btn ghost" type="button" onclick="$('#mpRoleFormBox').innerHTML=''">取消</button></div></div>`;
+  }).catch(e=>showAlert({title:'读取失败',message:e.message||'请重试'}));
+}
+async function saveMpRole(id){
+  const perms=[...document.querySelectorAll('#mpRoleFormBox .mp-perm:checked')].map(x=>x.value);
+  const payload={name:$('#mpRoleName')?.value||'',perms,remark:$('#mpRoleRemark')?.value||''};
+  try{
+    if(id){await api(`/api/club/${CLUB}/mp/roles/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('角色已更新')}
+    else{await api(`/api/club/${CLUB}/mp/roles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('角色已创建')}
+    loadMpRoles();
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
+}
+async function mpRoleDel(id){
+  showAlert({title:'删除角色',message:'确定删除该角色？仍有员工使用时会被拒绝。',danger:true,
+    actions:[{label:'取消',ghost:true},{label:'删除',danger:true,fn:async close=>{close();
+      try{await api(`/api/club/${CLUB}/mp/roles/${id}`,{method:'DELETE'});toast('已删除');loadMpRoles()}
+      catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}}}]}).catch(()=>{});
+}
+
+/* ── 小程序标准设置：基础 / 转发 / 支付 ─────────────────────────────────── */
+let MP_SET=null;
+const MP_PAY_BIZS={signup:'活动报名',mall:'装备商城',topup:'余额充值',stored:'会员储值'};
+const MP_PAY_WAYS={balance:'余额支付',wx:'微信支付'};
+async function loadMpSettings(){
+  const box=$('#mpSetBody');if(!box)return;
+  box.innerHTML='<div class="empty">正在加载设置…</div>';
+  let d;
+  try{d=await api(`/api/club/${CLUB}/miniprogram/settings`,{cache:'no-store'})}
+  catch(e){loaderError('#mpSetBody',e,'设置读取失败');return}
+  MP_SET=d.settings||{};
+  const b=MP_SET.base||{},sh=MP_SET.share||{},p=MP_SET.pay||{};
+  const matrix=p.matrix||{};
+  const grpOf=g=>g==='base'?b:g==='share'?sh:p;
+  const sw=(g,k,label,hint)=>{const on=!!grpOf(g)[k];return `<label style="display:flex;align-items:center;gap:10px;padding:7px 0;cursor:pointer"><input type="checkbox" data-mpset="${g}.${k}" ${on?'checked':''}><span>${label}${hint?` <span class="sub">（${hint}）</span>`:''}</span></label>`};
+  const txt=(g,k,label,ph)=>`<label style="display:block"><span class="sub">${label}</span><input data-mpset="${g}.${k}" style="width:100%;margin-top:4px" maxlength="60" value="${esc(grpOf(g)[k]||'')}" placeholder="${ph||''}"></label>`;
+  const matrixRow=biz=>`<tr><td><strong>${MP_PAY_BIZS[biz]}</strong></td>${Object.entries(MP_PAY_WAYS).map(([wk,wn])=>`<td><label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-mppay="${biz}.${wk}" ${((matrix[biz]||{})[wk])?'checked':''}> ${wn}</label></td>`).join('')}</tr>`;
+  const customs=(p.customWays||[]).map((w,i)=>`<span class="tag" style="margin:0 6px 6px 0">${esc(w)} <a href="javascript:void(0)" onclick="mpDelCustomWay(${i})" style="color:var(--orange);text-decoration:none">×</a></span>`).join('');
+  box.innerHTML=`
+  <div class="card section"><div class="panel-title"><div><h3>基础设置</h3><div class="sub">小程序的全局展示与授权行为</div></div></div>
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:4px 0 8px">
+      ${b.copyrightIcon?`<img src="${esc(b.copyrightIcon)}" alt="版权图标" style="width:100px;height:48px;object-fit:contain;border-radius:8px;border:1px solid var(--line)">`:`<span style="width:100px;height:48px;border-radius:8px;border:1px dashed var(--line);display:inline-flex;align-items:center;justify-content:center" class="sub">版权图标</span>`}
+      <div class="sub">建议尺寸 100×48px；留空则为默认</div>
+    </div>
+    ${txt('base','copyrightIcon','版权图标图片地址','https://…/icon.png（可粘贴任意可访问图片链接）')}
+    <div style="margin-top:10px"><span class="sub">隐私授权样式</span>
+      <label style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;cursor:pointer"><input type="radio" name="mpPrivacy" data-mpset="base.privacyStyle" value="wx" ${b.privacyStyle!=='component'?'checked':''}> 微信自带</label>
+      <label style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;cursor:pointer"><input type="radio" name="mpPrivacy" data-mpset="base.privacyStyle" value="component" ${b.privacyStyle==='component'?'checked':''}> 小程序组件</label>
+    </div>
+    <div style="margin-top:6px">
+      ${sw('base','firstAuthNickname','首次授权头像昵称','新用户在首次使用时弹出授权')}
+      ${sw('base','homeFavoriteTip','首页提示收藏小程序')}
+      ${sw('base','showClubFavorite','显示俱乐部收藏')}
+      ${sw('base','forceGPS','强制获取 GPS','不设置则按需请求')}
+      ${sw('base','showMonthlySales','显示月销量')}
+      ${sw('base','recentPurchase','开启最近购买')}
+      ${sw('base','phoneRequired','预留电话必填')}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px;margin-top:8px">
+      <label style="display:block"><span class="sub">门店排列模式</span><select data-mpset="base.listMode" style="width:100%;margin-top:4px"><option value="default" ${b.listMode!=='city'?'selected':''}>传统排列</option><option value="city" ${b.listMode==='city'?'selected':''}>按城市排列</option></select></label>
+      <label style="display:block"><span class="sub">手机号码前缀</span><select data-mpset="base.phonePrefix" style="width:100%;margin-top:4px">${['中国大陆','中国香港','中国澳门','中国台湾'].map(x=>`<option ${b.phonePrefix===x?'selected':''}>${x}</option>`).join('')}</select></label>
+    </div>
+    <div style="margin-top:12px"><button class="btn" type="button" onclick="saveMpSetGroup('base')">保存基础设置</button></div>
+  </div>
+  <div class="card section"><div class="panel-title"><div><h3>转发设置</h3><div class="sub">用户把小程序/活动转发给朋友与朋友圈时的标题与封面</div></div></div>
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
+      ${txt('share','friendTitle','发给朋友 · 转发标题','让山野·走进日常生活!')}
+      ${txt('share','friendCover','发给朋友 · 转发封面','封面图 URL，建议 500×400')}
+      ${txt('share','momentTitle','分享到朋友圈 · 标题','')}
+      ${txt('share','momentCover','分享到朋友圈 · 封面','封面图 URL')}
+    </div>
+    <div style="margin-top:8px">${sw('share','groupShare','开启分享拼单')}</div>
+    <div style="margin-top:12px"><button class="btn" type="button" onclick="saveMpSetGroup('share')">保存转发设置</button></div>
+  </div>
+  <div class="card section"><div class="panel-title"><div><h3>支付设置</h3><div class="sub">按业务线勾选可用的支付方式；实际收款仍由 ClubOS 支付层统一处理</div></div></div>
+    <div class="card"><table class="table"><thead><tr><th>业务</th>${Object.values(MP_PAY_WAYS).map(w=>`<th>${w}</th>`).join('')}</tr></thead><tbody>${Object.keys(MP_PAY_BIZS).map(matrixRow).join('')}</tbody></table></div>
+    <div style="margin-top:8px">${sw('pay','mixedPay','允许混合支付','余额+微信组合支付')}</div>
+    <div style="margin-top:10px"><span class="sub">自定义支付方式（仅代下单/统计用）</span>
+      <div style="margin-top:6px">${customs||'<span class="sub">暂无</span>'}
+      <span style="display:inline-flex;gap:6px;margin-left:6px"><input id="mpCustomWay" maxlength="20" placeholder="支付名称" style="width:140px"><button class="btn ghost sm" type="button" onclick="mpAddCustomWay()">添加方式</button></span></div>
+    </div>
+    ${txt('pay','wxMchId','微信支付商户 ID','1630023229')}
+    <div style="margin-top:12px"><button class="btn" type="button" onclick="saveMpSetGroup('pay')">保存支付设置</button></div>
+  </div>`;
+}
+function _mpCollect(group){
+  const out={};
+  document.querySelectorAll(`#mpSetBody [data-mpset]`).forEach(el=>{
+    const [g,k]=el.getAttribute('data-mpset').split('.');
+    if(g!==group)return;
+    if(el.type==='checkbox')out[k]=el.checked;
+    else if(el.type==='radio'){if(el.checked)out[k]=el.value}
+    else out[k]=el.value;
+  });
+  if(group==='pay'){
+    const matrix={};MP_SET.pay=MP_SET.pay||{};
+    Object.keys(MP_PAY_BIZS).forEach(biz=>{matrix[biz]={};
+      Object.keys(MP_PAY_WAYS).forEach(wk=>{
+        const el=document.querySelector(`#mpSetBody [data-mppay="${biz}.${wk}"]`);
+        const prev=(MP_SET.pay.matrix||{})[biz]||{};
+        matrix[biz][wk]=el?el.checked:!!prev[wk];});});
+    out.matrix=matrix;
+    out.customWays=MP_SET.pay.customWays||[];
+  }
+  return out;
+}
+async function saveMpSetGroup(group){
+  try{
+    const payload={settings:{}};
+    payload.settings[group]=_mpCollect(group);
+    const r=await api(`/api/club/${CLUB}/miniprogram/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    MP_SET=r.settings;toast('设置已保存');
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
+}
+function mpAddCustomWay(){
+  const v=String($('#mpCustomWay')?.value||'').trim();if(!v)return;
+  MP_SET.pay=MP_SET.pay||{};MP_SET.pay.customWays=MP_SET.pay.customWays||[];
+  if(MP_SET.pay.customWays.length>=10){showAlert({title:'最多 10 个自定义支付方式'});return}
+  MP_SET.pay.customWays.push(v.slice(0,20));saveMpSetGroup('pay');
+}
+function mpDelCustomWay(i){
+  MP_SET.pay=MP_SET.pay||{};MP_SET.pay.customWays=MP_SET.pay.customWays||[];
+  MP_SET.pay.customWays.splice(i,1);saveMpSetGroup('pay');
+}
+
 let SETTINGS_TAB='brand';
 /* 设置中心 tab：领队资源库/业务介绍/AI Credits/收款账户都收进了设置页，
    每个 tab 面板沿用原 load 函数（DOM id 不变），首次切入时才拉数据。 */
@@ -2367,12 +2672,15 @@ const SET_TAB_LOAD={brand:()=>loadSettings(),
   home:async()=>{await loadHomeBanners()},
   cprofile:async()=>{await loadCProfile()},
   credits:async()=>{await loadCredits();await loadAIUsage()},
-  pay:async()=>{await loadPayAccount()}};
+  pay:async()=>{await loadPayAccount()},
+  mpinfo:async()=>{await loadMpInfo()},
+  mpstaff:async()=>{await loadMpStaffTab()},
+  mpset:async()=>{await loadMpSettings()}};
 window.setTab=async name=>{
   if(!SET_TAB_LOAD[name])name='brand';
   SETTINGS_TAB=name;
   document.querySelectorAll('#setTabs .set-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('onclick')===`setTab('${name}')`));
-  ['brand','leaders','biz','home','cprofile','credits','pay'].forEach(p=>{
+  ['brand','leaders','biz','home','cprofile','credits','pay','mpinfo','mpstaff','mpset'].forEach(p=>{
     const el=document.getElementById('pane-'+p);
     if(el)el.style.display=p===name?'':'none';
   });

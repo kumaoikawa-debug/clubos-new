@@ -1,5 +1,5 @@
 from __future__ import annotations
-import uuid, os, io, csv, re, zipfile, shutil, asyncio, secrets
+import uuid, os, io, csv, re, json, zipfile, shutil, asyncio, secrets
 from sqlite3 import IntegrityError
 from datetime import datetime, timedelta, date
 from pathlib import Path
@@ -1814,6 +1814,349 @@ def _serve_club_logo(club_id:int,ext:str):
 def club_settings_logo(club_id:int,ext:str):
     """后台/登录态代理。"""
     return _serve_club_logo(club_id,ext)
+
+
+# ── 俱乐部小程序资产管理：小程序信息 / 管理助手 / 标准设置（2026-10-26）───────
+# 每个租用 ClubOS 的俱乐部都会有自己的微信小程序；认证信息（appid/主体/类目/
+# 年审/支付品牌）、授权状态、体验者、管理助手（员工+角色权限）与标准设置
+# （基础/转发/支付）在此集中管理。
+# 说明：与微信开放平台的真实对接（授权托管、代码上传、版本发布、员工微信侧
+# 绑定）是后续版本；当前是「线下登记 + 后台台账管理」模型，字段与微信公开
+# 平台一一对应，方便后续直接迁移。
+MP_PERMS={'activities':'活动管理','registrations':'报名管理','content':'内容生成',
+          'members':'会员管理','mall':'商城查看','finance':'数据与结算',
+          'settings':'俱乐部设置','miniprogram':'小程序管理'}
+_MP_SYSTEM_ROLES=(('管理员',sorted(MP_PERMS.keys()),'拥有全部管理权限（系统预置）'),
+                  ('活动运营',('activities','registrations','content','members'),'日常发团与报名、内容运营'),
+                  ('内容编辑',('content',),'只负责宣发内容'))
+_MP_INFO_TEXT=('appid','app_name','app_intro','subject_type','subject_name',
+               'realname_status','qualification_status','annual_review_at',
+               'pay_brand_name','pay_brand_id','current_version','privacy_status',
+               'geo_permission','record_status','release_status')
+_MP_INFO_LEN={'appid':64,'app_name':40,'app_intro':300,'subject_type':20,'subject_name':80,
+              'realname_status':20,'qualification_status':20,'annual_review_at':32,
+              'pay_brand_name':60,'pay_brand_id':32,'current_version':20,'privacy_status':20,
+              'geo_permission':20,'record_status':20,'release_status':20}
+# 前端/调用方统一发 camelCase；这里归一成 DB snake_case 列
+_MP_INFO_CAMEL={'appName':'app_name','appIntro':'app_intro','subjectType':'subject_type',
+                'subjectName':'subject_name','realnameStatus':'realname_status',
+                'qualificationStatus':'qualification_status','annualReviewAt':'annual_review_at',
+                'payBrandName':'pay_brand_name','payBrandId':'pay_brand_id',
+                'currentVersion':'current_version','privacyStatus':'privacy_status',
+                'geoPermission':'geo_permission','recordStatus':'record_status',
+                'releaseStatus':'release_status'}
+
+def _mp_get(c,club_id):
+    return row(c.execute('SELECT * FROM club_miniprogram WHERE club_id=?',(club_id,)))
+
+def _mp_public(x):
+    """DB 行 → 下发 dict（camelCase + JSON 列解析；无行给全空骨架）。"""
+    if not x: x={}
+    def _jl(v,fb):
+        try:
+            v=json.loads(v) if isinstance(v,str) else (v or fb)
+            return v if isinstance(v,list) else fb
+        except Exception: return fb
+    return {'appid':x.get('appid') or '','appName':x.get('app_name') or '',
+            'appIntro':x.get('app_intro') or '','avatarUrl':x.get('avatar_url') or '',
+            'qrcodeUrl':x.get('qrcode_url') or '','subjectType':x.get('subject_type') or '',
+            'subjectName':x.get('subject_name') or '',
+            'serviceCategories':_jl(x.get('service_categories_json'),[]),
+            'realnameStatus':x.get('realname_status') or '','qualificationStatus':x.get('qualification_status') or '',
+            'annualReviewAt':x.get('annual_review_at') or '','payBrandName':x.get('pay_brand_name') or '',
+            'payBrandId':x.get('pay_brand_id') or '','currentVersion':x.get('current_version') or '',
+            'privacyStatus':x.get('privacy_status') or '','geoPermission':x.get('geo_permission') or '',
+            'recordStatus':x.get('record_status') or '','releaseStatus':x.get('release_status') or '',
+            'authorized':bool(x.get('authorized')),
+            'testers':_jl(x.get('testers_json'),[]),'updatedAt':x.get('updated_at') or ''}
+
+def _mp_seed_roles(c,club_id):
+    """该俱乐部还没有角色时，预置 3 个系统角色（幂等：只看有没有任何角色）。"""
+    if c.execute('SELECT 1 FROM club_mp_roles WHERE club_id=? LIMIT 1',(club_id,)).fetchone(): return
+    for name,perms,remark in _MP_SYSTEM_ROLES:
+        c.execute('INSERT INTO club_mp_roles(club_id,name,perms_json,remark,system) VALUES(?,?,?,?,1)',
+                  (club_id,name,json.dumps(list(perms),ensure_ascii=False),remark))
+
+def _mp_role_public(r):
+    try: perms=json.loads(r['perms_json']) if isinstance(r['perms_json'],str) else (r['perms_json'] or [])
+    except Exception: perms=[]
+    return {'id':int(r['id']),'name':r['name'],'perms':[p for p in perms if p in MP_PERMS],
+            'remark':r['remark'] or '','system':bool(r['system']),'createdAt':r['created_at']}
+
+@app.get('/api/club/{club_id}/miniprogram')
+def club_miniprogram_get(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return _mp_public(_mp_get(c,club_id))
+
+@app.put('/api/club/{club_id}/miniprogram')
+def club_miniprogram_put(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    # camelCase → snake_case 归一（前端统一发 camelCase；snake_case 兼容保留）
+    for camel,snake in _MP_INFO_CAMEL.items():
+        if camel in payload and snake not in payload:
+            payload[snake]=payload[camel]
+    fields={}
+    for f in _MP_INFO_TEXT:
+        if f not in payload: continue
+        v=str(payload.get(f) or '').strip()
+        if len(v)>_MP_INFO_LEN[f]: raise HTTPException(400,f'{f} 超长（上限 {_MP_INFO_LEN[f]} 字）')
+        fields[f]=v or None
+    if 'authorized' in payload: fields['authorized']=1 if payload.get('authorized') else 0
+    if 'serviceCategories' in payload:
+        cats=[str(x).strip()[:60] for x in (payload.get('serviceCategories') or []) if str(x).strip()]
+        if len(cats)>10: raise HTTPException(400,'服务类目最多 10 个')
+        fields['service_categories_json']=json.dumps(cats,ensure_ascii=False)
+    if 'testers' in payload:
+        ts=[]
+        for t in (payload.get('testers') or [])[:20]:
+            if not isinstance(t,dict): continue
+            nick=str(t.get('nickname') or '').strip()[:30]
+            if not nick: continue
+            ts.append({'nickname':nick,'wxid':str(t.get('wxid') or '').strip()[:64],
+                       'boundAt':str(t.get('boundAt') or '').strip()[:32]})
+        fields['testers_json']=json.dumps(ts,ensure_ascii=False)
+    if not fields: raise HTTPException(400,'没有需要更新的字段')
+    with conn() as c:
+        if not _mp_get(c,club_id):
+            c.execute('INSERT INTO club_miniprogram(club_id) VALUES(?)',(club_id,))
+        sets=','.join(f'{k}=?' for k in fields)
+        c.execute(f"UPDATE club_miniprogram SET {sets},updated_at=CURRENT_TIMESTAMP WHERE club_id=?",
+                  (*fields.values(),club_id))
+        out=_mp_public(_mp_get(c,club_id))
+    return {'ok':True,'info':out}
+
+_MP_IMG_KIND={'avatar':'avatar','qrcode':'qrcode'}
+
+@app.post('/api/club/{club_id}/miniprogram/image/{kind}')
+async def club_mp_image_upload(club_id:int,kind:str,file:UploadFile=File(...)):
+    """上传小程序头像 / 小程序码。固定文件名覆盖写，URL 不变（前端加时间戳破缓存）。"""
+    club_or_404(club_id)
+    col=_MP_IMG_KIND.get(kind)
+    if not col: raise HTTPException(400,'kind 仅支持 avatar / qrcode')
+    real=Path(file.filename or '').suffix.lower()
+    if real not in _PUBLIC_IMAGE_EXT: raise HTTPException(400,'仅支持图片文件：png/jpg/jpeg/webp/gif')
+    data=await file.read()
+    if len(data)>5*1024*1024: raise HTTPException(413,'图片过大（上限 5MB）')
+    dest=UPLOAD/str(club_id)/'mp'
+    dest.mkdir(parents=True,exist_ok=True)
+    (dest/f'{kind}{real}').write_bytes(data)
+    for stale in dest.glob(f'{kind}.*'):
+        if stale.suffix.lower()!=real: stale.unlink(missing_ok=True)
+    url=f'/api/club/{club_id}/miniprogram/{kind}{real}'
+    with conn() as c:
+        if not _mp_get(c,club_id):
+            c.execute('INSERT INTO club_miniprogram(club_id) VALUES(?)',(club_id,))
+        c.execute(f'UPDATE club_miniprogram SET {col}_url=?,updated_at=CURRENT_TIMESTAMP WHERE club_id=?',(url,club_id))
+    return {'url':url}
+
+@app.get('/api/club/{club_id}/miniprogram/{kind}.{ext}')
+def club_mp_image(club_id:int,kind:str,ext:str):
+    """登录态代理读小程序头像 / 小程序码（同 _serve_club_logo 的形状校验思路）。"""
+    col=_MP_IMG_KIND.get(kind)
+    if not col: raise HTTPException(404,'不存在的图片类型')
+    with conn() as c:
+        x=_mp_get(c,club_id)
+    url=(x or {}).get(f'{col}_url') if x else None
+    if not url: raise HTTPException(404,'尚未设置该图片')
+    m=re.match(r'^/api/club/(\d+)/miniprogram/(avatar|qrcode)(\.[a-z0-9]{2,5})$',str(url),re.I)
+    if not m or int(m.group(1))!=int(club_id): raise HTTPException(404,'尚未设置该图片')
+    ext='.'+str(ext).lower().lstrip('.')
+    if ext not in _PUBLIC_IMAGE_EXT: raise HTTPException(404,'不支持的图片格式')
+    fp=UPLOAD/f'{int(club_id)}'/'mp'/f'{kind}{ext}'
+    if not fp.is_file(): raise HTTPException(404,'图片文件已丢失')
+    return FileResponse(fp,headers={'Cache-Control':'no-store'})
+
+# ── 小程序标准设置（基础 / 转发 / 支付三组，JSON 归一）────────────────────────
+_MP_SETTINGS_DEFAULTS={
+    'base':{'copyrightIcon':'','privacyStyle':'wx','firstAuthNickname':True,'homeFavoriteTip':True,
+            'showClubFavorite':False,'forceGPS':False,'listMode':'default','showMonthlySales':False,
+            'recentPurchase':True,'phonePrefix':'中国大陆','phoneRequired':True},
+    'share':{'friendTitle':'','friendCover':'','momentTitle':'','momentCover':'','groupShare':False},
+    'pay':{'matrix':{'signup':{'balance':False,'wx':True},'mall':{'balance':True,'wx':True},
+                     'topup':{'balance':False,'wx':True},'stored':{'balance':False,'wx':False}},
+           'mixedPay':True,'customWays':[],'wxMchId':''}}
+
+@app.get('/api/club/{club_id}/miniprogram/settings')
+def club_mp_settings_get(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r=row(c.execute('SELECT settings_json FROM club_mp_settings WHERE club_id=?',(club_id,)))
+    try: saved=json.loads(r['settings_json']) if r and isinstance(r['settings_json'],str) else {}
+    except Exception: saved={}
+    if not isinstance(saved,dict): saved={}
+    # 深合并默认值：新增的设置项对存量俱乐部自动可见，不用补数据
+    out={}
+    for grp,defaults in _MP_SETTINGS_DEFAULTS.items():
+        src=saved.get(grp) if isinstance(saved.get(grp),dict) else {}
+        out[grp]={**defaults,**src}
+    return {'settings':out,'updatedAt':(r or {}).get('updated_at') if r else ''}
+
+@app.put('/api/club/{club_id}/miniprogram/settings')
+def club_mp_settings_put(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    body=payload.get('settings') if isinstance(payload.get('settings'),dict) else payload
+    with conn() as c:
+        r=row(c.execute('SELECT settings_json FROM club_mp_settings WHERE club_id=?',(club_id,)))
+        try: saved=json.loads(r['settings_json']) if r and isinstance(r['settings_json'],str) else {}
+        except Exception: saved={}
+        if not isinstance(saved,dict): saved={}
+        for grp,defaults in _MP_SETTINGS_DEFAULTS.items():
+            if grp not in body: continue
+            incoming=body.get(grp)
+            if not isinstance(incoming,dict): raise HTTPException(400,f'{grp} 组设置必须是对象')
+            merged={**defaults,**saved.get(grp,{})} if isinstance(saved.get(grp),dict) else dict(defaults)
+            for k,v in incoming.items():
+                if k not in defaults: continue   # 白名单外键直接丢弃，不报错
+                merged[k]=v
+            saved[grp]=merged
+        blob=json.dumps(saved,ensure_ascii=False)
+        if len(blob)>64*1024: raise HTTPException(400,'设置内容过大')
+        c.execute('''INSERT INTO club_mp_settings(club_id,settings_json,updated_at) VALUES(?,?,CURRENT_TIMESTAMP)
+                     ON CONFLICT(club_id) DO UPDATE SET settings_json=excluded.settings_json,updated_at=CURRENT_TIMESTAMP''',
+                  (club_id,blob))
+        out,_=None,None
+        cur=row(c.execute('SELECT settings_json,updated_at FROM club_mp_settings WHERE club_id=?',(club_id,)))
+    try: saved=json.loads(cur['settings_json'])
+    except Exception: saved={}
+    result={}
+    for grp,defaults in _MP_SETTINGS_DEFAULTS.items():
+        src=saved.get(grp) if isinstance(saved.get(grp),dict) else {}
+        result[grp]={**defaults,**src}
+    return {'ok':True,'settings':result}
+
+# ── 小程序管理助手：角色管理 ─────────────────────────────────────────────────
+@app.get('/api/club/{club_id}/mp/roles')
+def club_mp_roles_get(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        _mp_seed_roles(c,club_id)
+        data=rows(c.execute('SELECT * FROM club_mp_roles WHERE club_id=? ORDER BY system DESC,id',(club_id,)))
+    return {'roles':[_mp_role_public(r) for r in data],'perms':MP_PERMS}
+
+@app.post('/api/club/{club_id}/mp/roles')
+def club_mp_roles_add(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    name=str(payload.get('name') or '').strip()
+    if not name: raise HTTPException(400,'角色名称必填')
+    if len(name)>20: raise HTTPException(400,'角色名称过长（上限 20 字）')
+    perms=[p for p in (payload.get('perms') or []) if p in MP_PERMS]
+    remark=str(payload.get('remark') or '').strip()[:100]
+    with conn() as c:
+        cur=c.execute('INSERT INTO club_mp_roles(club_id,name,perms_json,remark) VALUES(?,?,?,?)',
+                      (club_id,name,json.dumps(perms,ensure_ascii=False),remark))
+        rid=int(cur.lastrowid)
+        r=row(c.execute('SELECT * FROM club_mp_roles WHERE id=?',(rid,)))
+    return {'ok':True,'role':_mp_role_public(r)}
+
+@app.patch('/api/club/{club_id}/mp/roles/{role_id}')
+def club_mp_roles_update(club_id:int,role_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        r=row(c.execute('SELECT * FROM club_mp_roles WHERE id=? AND club_id=?',(role_id,club_id)))
+        if not r: raise HTTPException(404,'角色不存在')
+        name=str(payload.get('name') or '').strip() if 'name' in payload else r['name']
+        if not name: raise HTTPException(400,'角色名称必填')
+        if len(name)>20: raise HTTPException(400,'角色名称过长（上限 20 字）')
+        perms=None
+        if 'perms' in payload:
+            perms=[p for p in (payload.get('perms') or []) if p in MP_PERMS]
+            # 兜底：系统「管理员」角色不允许被摘成空权限（保底小程序管理权）
+            if r['system'] and r['name']=='管理员' and not perms: perms=list(MP_PERMS.keys())
+        remark=str(payload.get('remark') if 'remark' in payload else (r['remark'] or '')).strip()[:100]
+        c.execute('UPDATE club_mp_roles SET name=?,perms_json=?,remark=? WHERE id=?',
+                  (name,json.dumps(perms if perms is not None else json.loads(r['perms_json'] or '[]'),ensure_ascii=False),remark,role_id))
+        r2=row(c.execute('SELECT * FROM club_mp_roles WHERE id=?',(role_id,)))
+    return {'ok':True,'role':_mp_role_public(r2)}
+
+@app.delete('/api/club/{club_id}/mp/roles/{role_id}')
+def club_mp_roles_delete(club_id:int,role_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r=row(c.execute('SELECT * FROM club_mp_roles WHERE id=? AND club_id=?',(role_id,club_id)))
+        if not r: raise HTTPException(404,'角色不存在')
+        if r['system']: raise HTTPException(400,'系统预置角色不能删除')
+        used=c.execute('SELECT COUNT(*) FROM club_mp_staff WHERE club_id=? AND role_id=?',(club_id,role_id)).fetchone()[0]
+        if used: raise HTTPException(400,f'仍有 {used} 名员工使用该角色，请先调整他们的角色')
+        c.execute('DELETE FROM club_mp_roles WHERE id=?',(role_id,))
+    return {'ok':True}
+
+# ── 小程序管理助手：员工管理 ─────────────────────────────────────────────────
+@app.get('/api/club/{club_id}/mp/staff')
+def club_mp_staff_get(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        _mp_seed_roles(c,club_id)
+        data=rows(c.execute('''SELECT s.*,r.name role_name FROM club_mp_staff s
+                               LEFT JOIN club_mp_roles r ON r.id=s.role_id
+                               WHERE s.club_id=? ORDER BY s.id''',(club_id,)))
+        roles=rows(c.execute('SELECT * FROM club_mp_roles WHERE club_id=? ORDER BY system DESC,id',(club_id,)))
+    return {'staff':[{'id':int(x['id']),'name':x['name'],'wxid':x['wxid'] or '','phone':x['phone'] or '',
+                      'avatarUrl':x['avatar_url'] or '','roleId':x['role_id'],'roleName':x['role_name'] or '',
+                      'status':x['status'],'boundAt':x['bound_at']} for x in data],
+            'roles':[_mp_role_public(r) for r in roles],'perms':MP_PERMS}
+
+@app.post('/api/club/{club_id}/mp/staff')
+def club_mp_staff_add(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    name=str(payload.get('name') or '').strip()
+    if not name: raise HTTPException(400,'员工姓名必填')
+    if len(name)>20: raise HTTPException(400,'员工姓名过长（上限 20 字）')
+    phone=str(payload.get('phone') or '').strip()[:20]
+    if phone and not re.match(r'^1[3-9]\d{9}$',phone): raise HTTPException(400,'手机号格式不正确')
+    wxid=str(payload.get('wxid') or '').strip()[:64]
+    role_id=payload.get('roleId')
+    with conn() as c:
+        if role_id is not None:
+            if not c.execute('SELECT 1 FROM club_mp_roles WHERE id=? AND club_id=?',(int(role_id),club_id)).fetchone():
+                raise HTTPException(400,'角色不存在')
+        cur=c.execute('INSERT INTO club_mp_staff(club_id,name,wxid,phone,role_id) VALUES(?,?,?,?,?)',
+                      (club_id,name,wxid or None,phone or None,int(role_id) if role_id is not None else None))
+        sid=int(cur.lastrowid)
+        r=row(c.execute('''SELECT s.*,r.name role_name FROM club_mp_staff s
+                           LEFT JOIN club_mp_roles r ON r.id=s.role_id WHERE s.id=?''',(sid,)))
+    return {'ok':True,'staff':{'id':sid,'name':name,'wxid':wxid,'phone':phone,
+            'roleId':r['role_id'],'roleName':r['role_name'] or '','status':r['status'],'boundAt':r['bound_at']}}
+
+@app.patch('/api/club/{club_id}/mp/staff/{staff_id}')
+def club_mp_staff_update(club_id:int,staff_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        r=row(c.execute('SELECT * FROM club_mp_staff WHERE id=? AND club_id=?',(staff_id,club_id)))
+        if not r: raise HTTPException(404,'员工不存在')
+        name=r['name'];phone=r['phone'];wxid=r['wxid'];role_id=r['role_id'];status=r['status']
+        if 'name' in payload:
+            name=str(payload.get('name') or '').strip()
+            if not name: raise HTTPException(400,'员工姓名必填')
+            if len(name)>20: raise HTTPException(400,'员工姓名过长（上限 20 字）')
+        if 'phone' in payload:
+            phone=str(payload.get('phone') or '').strip()[:20] or None
+            if phone and not re.match(r'^1[3-9]\d{9}$',phone): raise HTTPException(400,'手机号格式不正确')
+        if 'wxid' in payload: wxid=str(payload.get('wxid') or '').strip()[:64] or None
+        if 'roleId' in payload:
+            role_id=payload.get('roleId')
+            if role_id is not None:
+                if not c.execute('SELECT 1 FROM club_mp_roles WHERE id=? AND club_id=?',(int(role_id),club_id)).fetchone():
+                    raise HTTPException(400,'角色不存在')
+                role_id=int(role_id)
+        if 'status' in payload:
+            status=str(payload.get('status') or '')
+            if status not in ('active','disabled'): raise HTTPException(400,'status 不合法')
+        c.execute('UPDATE club_mp_staff SET name=?,phone=?,wxid=?,role_id=?,status=? WHERE id=?',
+                  (name,phone,wxid,role_id,status,staff_id))
+        r2=row(c.execute('''SELECT s.*,r.name role_name FROM club_mp_staff s
+                            LEFT JOIN club_mp_roles r ON r.id=s.role_id WHERE s.id=?''',(staff_id,)))
+    return {'ok':True,'staff':{'id':staff_id,'name':name,'phone':phone or '','wxid':wxid or '',
+            'roleId':role_id,'roleName':r2['role_name'] or '','status':status,'boundAt':r2['bound_at']}}
+
+@app.delete('/api/club/{club_id}/mp/staff/{staff_id}')
+def club_mp_staff_delete(club_id:int,staff_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        if not c.execute('SELECT 1 FROM club_mp_staff WHERE id=? AND club_id=?',(staff_id,club_id)).fetchone():
+            raise HTTPException(404,'员工不存在')
+        c.execute('DELETE FROM club_mp_staff WHERE id=?',(staff_id,))
+    return {'ok':True}
 
 @app.get('/api/public/clubs/{club_id}/logo.{ext}')
 def public_club_logo(club_id:int,ext:str):

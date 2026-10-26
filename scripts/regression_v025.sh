@@ -140,3 +140,10 @@ python tests/promo_responsive_smoke.py
 # （面板 DOM、筛选按钮、明细样式、platform.js/css 版本 20261026b）。
 # production 模式真鉴权 + 临时库隔离，公开申请只发 1 次（线上 IP 限速 3/h）。
 python tests/club_source_applications_smoke.py
+
+# 俱乐部小程序资产管理（2026-10-26 用户需求三件套）：小程序信息（认证/授权/
+# 体验者）、管理助手（员工+角色权限）、标准设置（基础/转发/支付）。
+# 守住：camelCase 契约、上传与代理读、系统角色禁删/占用角色禁删、设置深合并
+# 默认值与白名单、跨俱乐部 403、前端三个新 tab 与 club.js 版本 20261026b。
+# production 真鉴权 + 临时库/临时 uploads。
+python tests/club_miniprogram_smoke.py

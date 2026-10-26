@@ -12,6 +12,66 @@ CREATE TABLE IF NOT EXISTS clubs (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- ── 俱乐部小程序资产管理（2026-10-26）───────────────────────────────────────
+-- 每个租用 ClubOS 的俱乐部都有（或将有）自己的微信小程序；认证信息、授权
+-- 状态、体验者等在此登记。与微信开放平台的真实对接（授权托管、代码上传、
+-- 版本发布）是后续版本；当前是「线下登记 + 后台管理」的台账模型。
+CREATE TABLE IF NOT EXISTS club_miniprogram (
+  club_id INTEGER PRIMARY KEY,
+  appid TEXT,
+  app_name TEXT,
+  app_intro TEXT,
+  avatar_url TEXT,
+  qrcode_url TEXT,
+  subject_type TEXT,
+  subject_name TEXT,
+  service_categories_json TEXT,
+  realname_status TEXT,
+  qualification_status TEXT,
+  annual_review_at TEXT,
+  pay_brand_name TEXT,
+  pay_brand_id TEXT,
+  current_version TEXT,
+  privacy_status TEXT,
+  geo_permission TEXT,
+  record_status TEXT,
+  release_status TEXT,
+  authorized INTEGER NOT NULL DEFAULT 0,
+  testers_json TEXT,
+  updated_at TEXT
+);
+
+-- 小程序管理助手 · 角色管理（权限点清单见 app.py MP_PERMS）
+CREATE TABLE IF NOT EXISTS club_mp_roles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  perms_json TEXT NOT NULL DEFAULT '[]',
+  remark TEXT,
+  system INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 小程序管理助手 · 员工管理（绑定台账；员工登录体系后续接入）
+CREATE TABLE IF NOT EXISTS club_mp_staff (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  wxid TEXT,
+  phone TEXT,
+  avatar_url TEXT,
+  role_id INTEGER,
+  status TEXT NOT NULL DEFAULT 'active',
+  bound_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 小程序标准设置（基础 / 转发 / 支付三组，JSON 归一存取）
+CREATE TABLE IF NOT EXISTS club_mp_settings (
+  club_id INTEGER PRIMARY KEY,
+  settings_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT
+);
+
 CREATE TABLE IF NOT EXISTS ai_credit_accounts (
   club_id INTEGER PRIMARY KEY,
   balance INTEGER NOT NULL DEFAULT 0,
