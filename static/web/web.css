@@ -2220,3 +2220,7 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
   padding:10px 2px;border-bottom:1px solid var(--w-line);font-size:12.5px;
 }
 .web-shell .me-invite__rec span{font-size:11px;color:var(--w-muted,#8b988f)}
+
+/* 商品介绍里的插图（2026-10-27） */
+.w-pd__descimg{margin:12px 0}
+.w-pd__descimg img{display:block;width:100%;height:auto;border-radius:8px}

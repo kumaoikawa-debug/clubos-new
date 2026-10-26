@@ -254,8 +254,14 @@
           </section>
 
           <section class="plat-pe__sec">
-            <div class="plat-pe__sec-h"><h3>商品介绍</h3><p>C 端详情页展示的图文介绍，留空则该区块不显示。</p></div>
-            <textarea id="peDesc" class="plat-pe__desc" rows="6" placeholder="例如：三层 GORE-TEX 面料，腋下拉链透气，适合高海拔多变天气…">${esc(prod ? prod.description : '')}</textarea>
+            <div class="plat-pe__sec-h"><h3>商品介绍</h3><p>C 端详情页展示的图文介绍，留空则该区块不显示。可插入图片，图片按插入顺序排在文字之间。</p></div>
+            <div class="plat-pe__descbar">
+              <button class="btn ghost sm" type="button" data-act="adddescimg">＋ 插入图片</button>
+              <span class="plat-pe__deschint">支持 jpg / png / webp，可多选；大图自动压到 1280px 宽。</span>
+            </div>
+            <textarea id="peDesc" class="plat-pe__desc" rows="8" placeholder="例如：三层 GORE-TEX 面料，腋下拉链透气，适合高海拔多变天气…（也可点上方「插入图片」把详情图插进来）">${esc(prod ? prod.description : '')}</textarea>
+            <div class="plat-pe__descpreview" id="peDescPreview"></div>
+            <input id="peDescFile" type="file" accept="image/*" multiple hidden>
           </section>
         </div>
 
@@ -400,6 +406,105 @@
       }
       if (st.cover.fromImageId && g.id && st.cover.fromImageId === g.id) st.cover = { url: '', blob: null, fromImageId: null };
       dirty = true; paintCover(); paintGallery();
+    }
+
+    /* ---------- 商品介绍：文字 + 插图 ----------
+       「插入图片」把图直接传到 /api/platform/uploads/image 拿 URL，再以 Markdown 图片行
+       `![](url)` 插到光标处。这样新商品（还没有 id）也能立刻插图，保存时不需要补传；
+       C 端按「整行是 ![](url) 就渲染成图片，否则当普通段落」解析（见 web.js pdDescHtml）。 */
+    function downscaleImage(file, maxW) {
+      maxW = maxW || 1280;
+      return new Promise(resolve => {
+        if (!file || !/^image\//.test(file.type)) { resolve(file); return; }
+        const url = URL.createObjectURL(file);
+        const im = new Image();
+        im.onload = () => {
+          try {
+            const w = im.naturalWidth || 0, h = im.naturalHeight || 0;
+            if (!w || w <= maxW) { URL.revokeObjectURL(url); resolve(file); return; }
+            const nw = maxW, nh = Math.max(1, Math.round(h * maxW / w));
+            const cv = document.createElement('canvas');
+            cv.width = nw; cv.height = nh;
+            cv.getContext('2d').drawImage(im, 0, 0, nw, nh);
+            cv.toBlob(b => { URL.revokeObjectURL(url); resolve(b || file); }, 'image/jpeg', 0.9);
+          } catch (e) { URL.revokeObjectURL(url); resolve(file); }
+        };
+        im.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+        im.src = url;
+      });
+    }
+
+    function descPreviewHtml(text) {
+      const lines = String(text || '').split('\n');
+      let out = '', buf = [];
+      const flush = () => { if (buf.length) { out += '<p>' + esc(buf.join('\n')) + '</p>'; buf = []; } };
+      lines.forEach(line => {
+        const m = line.trim().match(/^!\[\s*\]\(([^)]+)\)$/);
+        if (m && /^(https?:\/\/|\/)/.test(m[1])) { flush(); out += '<img src="' + esc(m[1]) + '" alt="">'; }
+        else if (!line.trim()) { flush(); }
+        else buf.push(line);
+      });
+      flush();
+      return out || '<span class="plat-pe__descempty">暂无介绍内容</span>';
+    }
+
+    function paintDescPreview() {
+      const box = root.querySelector('#peDescPreview');
+      const ta = root.querySelector('#peDesc');
+      if (!box || !ta) return;
+      box.innerHTML = descPreviewHtml(ta.value);
+    }
+
+    function insertAtCursor(ta, text) {
+      /* 没聚焦在文本框时（点了按钮、文件框抢了焦点）就追加到末尾，
+         否则 selectionStart 是 0，图会被插到整段文字最前面。 */
+      const focused = (document.activeElement === ta);
+      const start = (focused && ta.selectionStart != null) ? ta.selectionStart : ta.value.length;
+      const end = (focused && ta.selectionEnd != null) ? ta.selectionEnd : ta.value.length;
+      ta.value = ta.value.slice(0, start) + text + ta.value.slice(end);
+      const pos = start + text.length;
+      try { ta.selectionStart = ta.selectionEnd = pos; } catch (_) {}
+      ta.focus();
+      dirty = true;
+      paintDescPreview();
+    }
+
+    function addDescImages() {
+      const input = root.querySelector('#peDescFile');
+      if (!input) return;
+      input.value = '';                 /* 允许再次选同一个文件 */
+      input.click();
+    }
+
+    function bindDescFile() {
+      const input = root.querySelector('#peDescFile');
+      if (!input) return;
+      input.addEventListener('change', async () => {
+        const files = [...(input.files || [])];
+        if (!files.length) return;
+        const ta = root.querySelector('#peDesc');
+        const msg = root.querySelector('#peMsg');
+        let done = 0;
+        for (const f of files) {
+          if (msg) msg.textContent = '上传插图 ' + (done + 1) + '/' + files.length + '…';
+          let blob = f;
+          try { blob = await downscaleImage(f, 1280); } catch (_) { blob = f; }
+          const fd = new FormData();
+          /* 保留真实格式：downscaleImage 只有「大图」才会转成 jpeg，
+             小图原样返回；一律写 .jpg 会让 PNG 字节挂 .jpg 扩展名，
+             服务端按扩展名给 Content-Type，C 端就解不出来。 */
+          const btype = (blob && blob.type) || '';
+          const ext = btype === 'image/png' ? '.png' : btype === 'image/webp' ? '.webp' : btype === 'image/gif' ? '.gif' : '.jpg';
+          fd.append('file', blob, 'desc' + ext);
+          try {
+            const r = await api('/api/platform/uploads/image', { method: 'POST', body: fd });
+            if (r && r.url) { insertAtCursor(ta, '\n![](' + r.url + ')\n'); done++; }
+          } catch (e) { toast('插图上传失败：' + ((e && e.message) || '网络错误')); }
+        }
+        if (msg) msg.textContent = '';
+        input.value = '';
+        paintDescPreview();
+      });
     }
 
     /* ---------- 规格：颜色卡 → 卡内尺码行 ----------
@@ -725,6 +830,7 @@
       if (act === 'pickcover') { pickCover(); return; }
       if (act === 'cropcover') { cropCover(); return; }
       if (act === 'addgallery') { pickGallery(); return; }
+      if (act === 'adddescimg') { addDescImages(); return; }
 
       const card = btn.closest('.plat-pe__ccard[data-cid]');
       const ci = card ? st.colors.findIndex(x => x.cid === card.dataset.cid) : -1;
@@ -779,6 +885,7 @@
     });
 
     root.addEventListener('input', e => {
+      if (e.target && e.target.id === 'peDesc') { dirty = true; paintDescPreview(); return; }
       const card = e.target.closest('.plat-pe__ccard[data-cid]');
       if (card) {
         const ci = st.colors.findIndex(x => x.cid === card.dataset.cid);
@@ -854,6 +961,8 @@
     paintCover();
     paintGallery();
     paintSpecs();
+    paintDescPreview();
+    bindDescFile();
     const nameEl = root.querySelector('#peName');
     if (nameEl) setTimeout(() => { try { nameEl.focus({ preventScroll: true }); } catch (_) { nameEl.focus(); } }, 30);
   };

@@ -5499,6 +5499,15 @@ async def _save_platform_upload(file:UploadFile)->str|None:
     dest.write_bytes(data)
     return f'/static/uploads/platform/{batch.name}/img{ext}'
 
+@app.post('/api/platform/uploads/image')
+async def upload_platform_image(file:UploadFile=File(...)):
+    # 商品「介绍/详情」里的插图：只落盘并返回 URL，不挂进商品图集。
+    # 与 /images/batch 的区别：那个会追加进 product_images，C 端顶部轮播会再出现一次；
+    # 介绍里的插图不该占用主图轮播，所以单独走这个接口。
+    url=await _save_platform_upload(file)
+    if not url: raise HTTPException(400,'只支持图片文件（png/jpg/jpeg/webp/gif），单张上限 10MB')
+    return {'url':url}
+
 @app.get('/api/platform/products/{product_id}/images')
 def platform_product_images(product_id:int):
     with conn() as c:

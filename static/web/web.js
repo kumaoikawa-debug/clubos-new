@@ -805,8 +805,24 @@ function pdRecCards(cur){
 /* 商品介绍按句拆点：description 是整段话，参考稿「全部性能」是两条短句。
    拆不开（只有一句）就不画这个标题 —— 只有一个要点的列表等于没有列表。 */
 function pdBullets(p){
-  const s=String(p.description||'').split(/[。；;\n]/).map(x=>x.trim()).filter(x=>x.length>=4);
+  /* 插图行（![](url)）不是文字要点，别让它出现在「全部性能」列表里 */
+  const s=String(p.description||'').split(/[。；;\n]/).map(x=>x.trim()).filter(x=>x.length>=4&&!/^!\[/.test(x));
   return s.length>1?s.slice(0,6):[];
+}
+/* 商品介绍渲染：整行是 Markdown 图片 `![](url)` 就画成图，其余按段落（换行保留）。
+   只接受站内相对地址或 http(s)，避免把描述里的任意串塞进 img src。 */
+function pdDescHtml(desc){
+  const lines=String(desc||'').split('\n');
+  let out='',buf=[];
+  const flush=()=>{if(buf.length){out+='<p>'+esc(buf.join('\n'))+'</p>';buf=[];}};
+  lines.forEach(line=>{
+    const m=line.trim().match(/^!\[\s*\]\(([^)]+)\)$/);
+    if(m&&/^(https?:\/\/|\/)/.test(m[1])){flush();out+='<figure class="w-pd__descimg"><img src="'+esc(m[1])+'" alt="" loading="lazy"></figure>';}
+    else if(!line.trim()){flush();}
+    else buf.push(line);
+  });
+  flush();
+  return out;
 }
 function productDetailHtml(){
   const p=P_CUR;if(!p)return '';
@@ -872,7 +888,7 @@ function productDetailHtml(){
   </div>
   ${p.description?`<section class="w-pd__sec is-open" id="pdSecDetail">
     <button class="w-pd__sechd" type="button" onclick="pdToggleSec(this)" aria-expanded="true">商品详情<i>−</i></button>
-    <div class="w-pd__secbody"><p class="w-pd__desc">${esc(p.description)}</p></div>
+    <div class="w-pd__secbody"><div class="w-pd__desc">${pdDescHtml(p.description)}</div></div>
   </section>`:''}
   <section class="w-pd__sec" id="pdSecSpec">
     <button class="w-pd__sechd" type="button" onclick="pdToggleSec(this)" aria-expanded="false">产品信息<i>+</i></button>

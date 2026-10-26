@@ -149,8 +149,12 @@ check('匿名读明细被拒', anon.get('/api/platform/club-applications').statu
 html = (ROOT / 'static/platform/index.html').read_text(encoding='utf-8')
 check('index.html 有官网申请明细面板', all(k in html for k in ('plat-apply-panel', 'id="applyRows"', 'id="applyFilters"', 'id="applyStats"')))
 check('index.html 有筛选按钮组', all(f'data-af="{s}"' in html for s in ('all', 'pending', 'active', 'rejected', 'disabled')))
-check('platform.js 版本 20261027a', 'platform.js?v=20261027a' in html)
-check('platform.css 版本 20261027a', 'platform.css?v=20261027a' in html)
+import re as _re_v
+_mjs = _re_v.search(r'/static/platform/platform\.js\?v=([0-9A-Za-z]+)', html)
+_mcss = _re_v.search(r'/static/platform/platform\.css\?v=([0-9A-Za-z]+)', html)
+check('platform.js 带版本号', bool(_mjs and _mjs.group(1)))
+check('platform.css 与 platform.js 同批', bool(_mjs and _mcss and _mjs.group(1) == _mcss.group(1)),
+      '%s / %s' % (_mjs.group(1) if _mjs else None, _mcss.group(1) if _mcss else None))
 
 js = (ROOT / 'static/platform/platform.js').read_text(encoding='utf-8')
 check('platform.js 有明细加载/渲染/筛选', all(k in js for k in ('loadApplications', 'renderApplications', 'applyFilterSet')))

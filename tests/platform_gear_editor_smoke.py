@@ -140,16 +140,25 @@ def main():
     # ── ⑤ 前端护栏 ─────────────────────────────────────────────────────────
     html = (ROOT / 'static/platform/index.html').read_text(encoding='utf-8')
     import re
-    vers = set(re.findall(r'v=(20261027a)', html))
-    check('平台端脚本同批 20261027a', len(vers) == 1 and 'platform.js?v=20261027a' in html
-          and 'product-editor.js?v=20261027a' in html and 'workflows-platform-more.js?v=20261027a' in html)
+    def _ver(asset):
+        m = re.search(re.escape(asset) + r'\?v=([0-9A-Za-z]+)', html)
+        return m.group(1) if m else None
+    _v = _ver('/static/platform/platform.js')
+    check('平台端脚本同批（platform.js / product-editor / workflows-platform-more / css）',
+          bool(_v) and _v == _ver('/static/platform/product-editor.js')
+          and _v == _ver('/static/ux/workflows-platform-more.js')
+          and _v == _ver('/static/platform/platform.css'), str(_v))
     pe = (ROOT / 'static/platform/product-editor.js').read_text(encoding='utf-8')
     check('编辑器：最高佣金率语义', '最高佣金率' in pe and '不能超过此值' in pe)
     check('编辑器：仓库字段', 'peWarehouse' in pe and '存在哪个仓' in pe)
     check('编辑器：期初库存只读自动汇总', "id=\"peStock\" type=\"number\" min=\"0\" step=\"1\" value=\"${isEdit ? (prod.stock || 0) : 0}\" readonly" in pe
-          and 'paintQtyGrid' in pe and 'updateStockTotal' in pe)
+          and 'plat-pe__qtyin' in pe and 'updateStockTotal' in pe)
     check('编辑器：skuStock 随保存提交', 'skuStock' in pe and 'data-cid' in pe)
-    check('编辑器：库存数量网格输入框', 'plat-pe__qtyin' in pe and 'plat-pe__qtygrid' in pe)
+    check('编辑器：库存按颜色卡维护尺码', 'plat-pe__ccard' in pe and 'plat-pe__qtyin' in pe and 'plat-pe__sizerow' in pe)
+    check('编辑器：商品介绍可插入图片', 'data-act="adddescimg"' in pe and 'peDescPreview' in pe
+          and '/api/platform/uploads/image' in pe)
+    wjs = (ROOT / 'static/web/web.js').read_text(encoding='utf-8')
+    check('C 端：商品介绍渲染插图', 'function pdDescHtml' in wjs and 'w-pd__descimg' in wjs)
     pf = (ROOT / 'static/platform/platform.js').read_text(encoding='utf-8')
     check('品牌弹窗 Logo 走上传', 'brandFormDialog' in pf and '/api/platform/uploads/image' in pf
           and pf.count("'Logo 地址'") == 0)

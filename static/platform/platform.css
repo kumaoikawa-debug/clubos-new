@@ -619,3 +619,13 @@
 @media(max-width:520px){
   .plat-pe__sizerows{grid-template-columns:1fr}
 }
+
+/* ── 商品介绍：插图工具条 + 预览（2026-10-27）──────────────────────────── */
+.plat-pe__descbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px}
+.plat-pe__deschint{font-size:12px;color:#7b857b;line-height:1.5}
+.plat-pe__desc{width:100%;min-height:150px;resize:vertical}
+.plat-pe__descpreview{margin-top:10px;border:1px dashed #d7ded7;border-radius:8px;background:#fafbf9;padding:10px 12px;min-height:44px;font-size:13px;line-height:1.8;color:#33403a;white-space:pre-line}
+.plat-pe__descpreview p{margin:0 0 8px}
+.plat-pe__descpreview p:last-child{margin-bottom:0}
+.plat-pe__descpreview img{display:block;max-width:100%;height:auto;margin:8px 0;border-radius:6px}
+.plat-pe__descempty{color:#9aa39a}
