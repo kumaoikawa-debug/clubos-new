@@ -104,16 +104,21 @@ class ClubCommissionRateService:
 
         override = self.club_override(c, club_id)
         if override and override["enabled"] and override["rate"] > 0:
+            # 2026-10-26 用户反馈：商品上的佣金率 = 最高比例，俱乐部专属费率不能
+            # 突破它。谈判结果可以定得高，但成交一律按 min(专属费率, 商品上限) 结。
+            capped = override["rate"] > prod_rate
+            eff = min(override["rate"], prod_rate)
             return ClubCommissionRate(
                 club_id=club_id,
-                rate=override["rate"],
+                rate=eff,
                 source="club_override",
                 enabled=True,
                 has_club_override=True,
                 club_rate=override["rate"],
                 product_rate=prod_rate,
                 note=override["note"],
-                reason="总平台已为该俱乐部单独设定佣金率",
+                reason=("总平台已为该俱乐部单独设定佣金率"
+                        + (f"（超出商品最高佣金率，已按 {prod_rate*100:g}% 封顶）" if capped else "")),
             )
 
         if override and not override["enabled"]:

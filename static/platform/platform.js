@@ -36,7 +36,7 @@ async function loadClubs(){try{skel('#clubRows',4);loadApplications();let [a,cr]
   const defPct=Number((cr&&cr.productDefaultRatePercent)||8);$('#clubRows').innerHTML=a.map(x=>`<tr><td><div class="plat-club-cell"><span class="plat-club-logo">${clubLogoHtml(x)}</span><span><strong>${esc(x.name)}</strong>${x.source==='website'?' <span class="tag">官网申请</span>':''}<div class="sub">${esc(x.city||'')} ${esc(x.contact_name||'')} ${esc(x.contact_phone||'')}</div></span></div></td><td>${esc(x.subscription_plan||x.plan||'—')}<div class="sub">${esc(enumCn(x.subscription_status,'未开通'))}</div></td><td><span class="tag ${x.status==='pending'||x.status==='disabled'?'orange':''}">${esc(enumCn(x.status))}</span></td><td>${(()=>{const r=rateMap[x.id];if(!r)return '<span class="sub">—</span>';
    const pct=Number(r.ratePercent||0);const own=!!r.hasClubOverride;
    const dis=!r.enabled;
-   return `<div class="plat-rate-cell"><strong>${dis?'0':pct}%</strong>${own?'<span class="tag">已单独设定</span>':'<span class="sub">商品默认</span>'}${dis?'<span class="tag orange">已停发</span>':''}${own?`<div class="sub">默认 ${Number(r.productRatePercent||defPct)}%</div>`:''}</div>`})()}</td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" onclick="setClubCommissionRate(${x.id})">佣金率</button></div></td><td><div class="plat-credits-cell"><strong>${x.ai_credits}</strong>${Number(x.ai_credit_debt||0)>0?`<div class="sub">欠账 ${x.ai_credit_debt}</div>`:''}<div class="plat-credits-ops"><button class="btn ghost sm" title="扣减 100 Credits" onclick="quickCredits(${x.id},-100)">−100</button><button class="btn ghost sm" title="增加 100 Credits" onclick="quickCredits(${x.id},100)">+100</button><button class="btn ghost sm" onclick="adjust(${x.id})">调整</button></div></div></td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn secondary" onclick="clubStatus(${x.id},'${x.status==='active'?'disabled':'active'}')">${x.status==='active'?'停用':'启用'}</button><button class="btn ghost" onclick="assignPlan(${x.id})">套餐</button>${x.status==='pending'?`<button class="btn ghost" onclick="clubStatus(${x.id},'rejected')">拒绝</button>`:''}</div></td></tr>`).join('')}catch(e){loaderError('#clubRows',e,'loadClubs 加载失败')}}
+   return `<div class="plat-rate-cell"><strong>${dis?'0':pct}%</strong>${own?'<span class="tag">已单独设定</span>':'<span class="sub">商品上限</span>'}${dis?'<span class="tag orange">已停发</span>':''}${own?`<div class="sub">商品上限 ${Number(r.productRatePercent||defPct)}%</div>`:''}</div>`})()}</td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" onclick="setClubCommissionRate(${x.id})">佣金率</button></div></td><td><div class="plat-credits-cell"><strong>${x.ai_credits}</strong>${Number(x.ai_credit_debt||0)>0?`<div class="sub">欠账 ${x.ai_credit_debt}</div>`:''}<div class="plat-credits-ops"><button class="btn ghost sm" title="扣减 100 Credits" onclick="quickCredits(${x.id},-100)">−100</button><button class="btn ghost sm" title="增加 100 Credits" onclick="quickCredits(${x.id},100)">+100</button><button class="btn ghost sm" onclick="adjust(${x.id})">调整</button></div></div></td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn secondary" onclick="clubStatus(${x.id},'${x.status==='active'?'disabled':'active'}')">${x.status==='active'?'停用':'启用'}</button><button class="btn ghost" onclick="assignPlan(${x.id})">套餐</button>${x.status==='pending'?`<button class="btn ghost" onclick="clubStatus(${x.id},'rejected')">拒绝</button>`:''}</div></td></tr>`).join('')}catch(e){loaderError('#clubRows',e,'loadClubs 加载失败')}}
 
 /* ── 官网申请明细（2026-10-26）────────────────────────────────────
    官网「申请体验」表单经 server.js 代理写入 clubs 表（source='website'），
@@ -617,6 +617,41 @@ async function createReplenishmentPO(productId,qty){const v=await showForm({titl
    两个弹窗结构完全同构，只是端点不同，所以合成一个工厂函数。
    ★ 删除品牌会把商品的 brand_id 置空（不删商品）；删品类同理，但有子品类的
      父品类不让删（后端 400）—— 悬空外键比「删不掉」危险得多。 */
+/* ── 品牌 Logo 上传（2026-10-26 用户反馈：Logo 是上传的，不是贴图）──────────
+   uxForm 没有 file 字段，所以品牌新增/编辑换成 uxDialog 自定义 body：
+   Logo 点「上传」立即 POST /api/platform/uploads/image 拿 URL（新品牌还没有
+   id，必须先传图后落库），保存时随 {name,logoUrl} 一起提交。 */
+function brandFormDialog(cur){
+  return new Promise(resolve=>{
+    let logoUrl=(cur&&cur.logo_url)||'';
+    const body='<div style="display:grid;gap:12px">'
+      +'<label style="display:block"><span class="sub">品牌名 *</span>'
+      +'<input id="pbName" maxlength="60" style="width:100%;margin-top:4px" value="'+esc(cur?cur.name:'')+'" placeholder="例如 Arc\'teryx"></label>'
+      +'<div><span class="sub">品牌 Logo</span><div id="pbLogoRow" style="display:flex;gap:10px;align-items:center;margin-top:6px;flex-wrap:wrap"></div></div></div>';
+    const dlg=uxDialog({title:cur?'编辑品牌':'新增品牌',desc:'Logo 从本地选择文件上传（png/jpg/webp，≤10MB），不做贴图链接。',
+      body,foot:'<button class="btn ghost" type="button" data-act="cancel">取消</button><button class="btn" type="button" data-act="ok">保存</button>'});
+    const row=dlg.querySelector('#pbLogoRow');
+    const paint=()=>{row.innerHTML=logoUrl
+      ?'<img src="'+esc(logoUrl)+'" alt="Logo" style="width:56px;height:56px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#fff">'
+        +'<button class="btn ghost sm" type="button" data-act="relogo">重新上传</button>'
+        +'<button class="btn ghost sm" type="button" data-act="rmlogo" style="color:#a44435">移除</button>'
+      :'<button class="btn secondary sm" type="button" data-act="relogo">上传 Logo</button><span class="sub">选本地图片文件，上传后可预览</span>'};
+    paint();
+    const pick=()=>{const inp=document.createElement('input');inp.type='file';inp.accept='image/*';
+      inp.onchange=async()=>{const f=inp.files&&inp.files[0];if(!f)return;
+        const fd=new FormData();fd.append('file',f);
+        try{const r=await api('/api/platform/uploads/image',{method:'POST',body:fd});logoUrl=r.url;paint();toast('Logo 已上传')}
+        catch(e){showAlert({title:'上传失败',message:e.message||'请重试'})}};
+      inp.click()};
+    row.onclick=e=>{const b=e.target.closest('[data-act]');if(!b)return;
+      if(b.dataset.act==='relogo')pick();
+      if(b.dataset.act==='rmlogo'){logoUrl='';paint()}};
+    dlg.querySelector('[data-act="cancel"]').onclick=()=>{dlg.uxClose();resolve(null)};
+    dlg.querySelector('[data-act="ok"]').onclick=()=>{const name=dlg.querySelector('#pbName').value.trim();
+      if(!name){toast('请填写品牌名');return}
+      dlg.uxClose();resolve({name:name,logoUrl:logoUrl})};
+  });
+}
 function prodDictDialog(kind){
   const isBrand=kind==='brand';
   const base=isBrand?'/api/platform/brands':'/api/platform/product-categories';
@@ -635,12 +670,19 @@ function prodDictDialog(kind){
     foot:'<button class="btn" data-act="add">＋ 新增'+label+'</button>'});
   paint(dlg);
   dlg.querySelector('[data-act="add"]').onclick=async()=>{
-    const fields=isBrand?[{name:'name',label:'品牌名',required:true,placeholder:'例如 Arc\'teryx'},{name:'logoUrl',label:'Logo 地址',placeholder:'/static/uploads/… 或 https://…',help:'可留空'}]
-      :[{name:'name',label:'品类名',required:true,placeholder:'例如 冲锋衣 / 软壳'},{name:'parentId',label:'上级品类',type:'select',value:'',options:[{value:'',label:'无（一级品类）'},...(await api(base)).filter(x=>!x.parent_id).map(x=>({value:x.id,label:x.name}))]}];
+    if(isBrand){
+      const v=await brandFormDialog(null);if(!v)return;
+      try{
+        await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});
+        await loadProductDicts(true);await paint(dlg);toast('品牌已创建');
+      }catch(e){showAlert({title:'创建失败',message:e.message})}
+      return;
+    }
+    const fields=[{name:'name',label:'品类名',required:true,placeholder:'例如 冲锋衣 / 软壳'},{name:'parentId',label:'上级品类',type:'select',value:'',options:[{value:'',label:'无（一级品类）'},...(await api(base)).filter(x=>!x.parent_id).map(x=>({value:x.id,label:x.name}))]}];
     const v=await uxForm({title:'新增'+label,submitText:'创建',fields});
     if(!v||!v.name)return;
     try{
-      const body=isBrand?{name:v.name,logoUrl:v.logoUrl||''}:{name:v.name,parentId:v.parentId?Number(v.parentId):null};
+      const body={name:v.name,parentId:v.parentId?Number(v.parentId):null};
       await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       await loadProductDicts(true);await paint(dlg);toast(label+'已创建');
     }catch(e){showAlert({title:'创建失败',message:e.message})}
@@ -656,12 +698,19 @@ function prodDictDialog(kind){
     }
     if(act==='edit'){
       const list=await api(base),cur=list.find(x=>Number(x.id)===id);if(!cur)return;
-      const fields=isBrand?[{name:'name',label:'品牌名',value:cur.name,required:true},{name:'logoUrl',label:'Logo 地址',value:cur.logo_url||'',placeholder:'/static/uploads/… 或 https://…'}]
-        :[{name:'name',label:'品类名',value:cur.name,required:true},{name:'parentId',label:'上级品类',type:'select',value:cur.parent_id||'',options:[{value:'',label:'无（一级品类）'},...list.filter(x=>!x.parent_id&&Number(x.id)!==id).map(x=>({value:x.id,label:x.name}))]}];
+      if(isBrand){
+        const v=await brandFormDialog(cur);if(!v)return;
+        try{
+          await api(base+'/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});
+          await loadProductDicts(true);await paint(dlg);loadProducts();toast('已保存');
+        }catch(e){showAlert({title:'保存失败',message:e.message})}
+        return;
+      }
+      const fields=[{name:'name',label:'品类名',value:cur.name,required:true},{name:'parentId',label:'上级品类',type:'select',value:cur.parent_id||'',options:[{value:'',label:'无（一级品类）'},...list.filter(x=>!x.parent_id&&Number(x.id)!==id).map(x=>({value:x.id,label:x.name}))]}];
       const v=await uxForm({title:'编辑'+label,submitText:'保存',fields});
       if(!v||!v.name)return;
       try{
-        const body=isBrand?{name:v.name,logoUrl:v.logoUrl||''}:{name:v.name,parentId:v.parentId?Number(v.parentId):null};
+        const body={name:v.name,parentId:v.parentId?Number(v.parentId):null};
         await api(base+'/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         await loadProductDicts(true);await paint(dlg);loadProducts();toast('已保存');
       }catch(e){showAlert({title:'保存失败',message:e.message})}

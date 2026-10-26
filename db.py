@@ -296,6 +296,9 @@ def _run_compat_migrations(c):
     _ensure_column(c,'products','season','season TEXT')
     _ensure_column(c,'products','series','series TEXT')
     _ensure_column(c,'products','material','material TEXT')
+    # 仓库（2026-10-26 用户反馈）：这批货存在哪个仓。纯台账文本，不做仓库主数据 ——
+    # 平台现阶段就一个自建仓 + 代发，先让运营能把「放哪儿」记下来。
+    _ensure_column(c,'products','warehouse','warehouse TEXT')
     # 头图（cover_url）：商品的主视觉，C 端卡片 / 详情页首图都优先用它；
     # 与 product_images 图集解耦 —— 头图不一定是图集里的某一张，运营可单独设。
     # 可空 + 无回填，幂等（_ensure_column 已判列存在）。

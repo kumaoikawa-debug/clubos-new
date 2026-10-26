@@ -357,6 +357,7 @@ CREATE TABLE IF NOT EXISTS products (
   image_url TEXT,
   category TEXT,
   commission_rate REAL NOT NULL DEFAULT 0.08,
+  warehouse TEXT,
   average_cost REAL NOT NULL DEFAULT 0,
   last_purchase_cost REAL NOT NULL DEFAULT 0,
   last_inbound_at TEXT,

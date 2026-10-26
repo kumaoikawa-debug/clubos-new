@@ -96,10 +96,10 @@
    const def=Number(data.productDefaultRatePercent||8);
    const isOwn=!!cur.hasClubOverride;
    const body='<div class="plat-rate-edit">'
-     +'<div class="plat-rate-edit__hint">商品默认佣金率 <b>'+def+'%</b>；单独设定后本俱乐部按自己的比例计算佣金，未设定则沿用商品默认。</div>'
+     +'<div class="plat-rate-edit__hint">商品最高佣金率（众数） <b>'+def+'%</b>；商品上的「最高佣金率」是上限 —— 这里单独设定的比例超过某件商品的上限时，该商品成交一律按商品上限封顶。</div>'
      +'<label class="plat-rate-edit__label">本俱乐部佣金率（%）</label>'
      +'<input id="platRateInput" class="plat-rate-edit__input" type="number" min="0" max="100" step="0.1" value="'+(isOwn?Number(cur.clubRatePercent||0):def)+'">'
-     +'<div class="plat-rate-edit__hint">0 表示不发佣金；上限 100%。</div>'
+     +'<div class="plat-rate-edit__hint">0 表示不发佣金；上限 100%。实际生效比例以成交时 min(本设定, 商品最高佣金率) 为准。</div>'
      +'<label class="plat-rate-edit__check"><input type="checkbox" id="platRateEnabled"'+(cur.enabled===false?'':' checked')+'> 启用佣金发放</label>'
      +'<label class="plat-rate-edit__label">备注（可选）</label>'
      +'<input id="platRateNote" class="plat-rate-edit__input" value="'+esc(cur.note||'')+'" placeholder="如：年度合作协议 2026">'
@@ -119,7 +119,10 @@
      if(enabled&&v<=0){toast('启用佣金时佣金率必须大于 0');return}
      const note=dlg.querySelector('#platRateNote').value;
      try{const r=await patch('/api/platform/commission-rates/'+id,{ratePercent:v,enabled,note});
-       dlg.uxClose();toast('佣金率已设为 '+Number(r.ratePercent||v)+'%');loadClubs();if(typeof loadCommissions==='function')loadCommissions()}
+       dlg.uxClose();
+       const eff=Number(r.ratePercent||v);
+       toast(eff<v?('已保存；超出商品最高佣金率的部分按 '+eff+'% 封顶'):('佣金率已设为 '+eff+'%'));
+       loadClubs();if(typeof loadCommissions==='function')loadCommissions()}
      catch(e){toast((e&&e.message)||'保存失败')}};
  });
  window.rejectAS=async id=>uxTask(async()=>{const d=await uxForm({title:'拒绝售后 · #'+id,fields:[{name:'note',label:'拒绝原因',type:'textarea',full:true,required:true,value:'不符合售后条件'}],submitText:'确认拒绝'});if(!d)return;await post('/api/platform/after-sales/'+id+'/reject',d);toast('已拒绝');loadAfterSales()});

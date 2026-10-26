@@ -14,7 +14,7 @@
 ④ 前端护栏：平台端 index.html 有官网申请明细面板（plat-apply-panel /
    applyRows / applyFilters），platform.js 有 loadApplications /
    renderApplications / applyFilterSet / 官网徽标，platform.css 有
-   plat-apply-stat，版本号升到 20261026b。
+   plat-apply-stat，版本号升到 20261027a。
 
 自带临时库隔离（CLUBOS_DB_PATH + app.UPLOAD 指临时目录），绝不碰真库。
 production 模式真鉴权（含 CSRF），公开接口按线上语义匿名放行（IP 限速 3/h，
@@ -149,8 +149,8 @@ check('匿名读明细被拒', anon.get('/api/platform/club-applications').statu
 html = (ROOT / 'static/platform/index.html').read_text(encoding='utf-8')
 check('index.html 有官网申请明细面板', all(k in html for k in ('plat-apply-panel', 'id="applyRows"', 'id="applyFilters"', 'id="applyStats"')))
 check('index.html 有筛选按钮组', all(f'data-af="{s}"' in html for s in ('all', 'pending', 'active', 'rejected', 'disabled')))
-check('platform.js 版本 20261026b', 'platform.js?v=20261026b' in html)
-check('platform.css 版本 20261026b', 'platform.css?v=20261026b' in html)
+check('platform.js 版本 20261027a', 'platform.js?v=20261027a' in html)
+check('platform.css 版本 20261027a', 'platform.css?v=20261027a' in html)
 
 js = (ROOT / 'static/platform/platform.js').read_text(encoding='utf-8')
 check('platform.js 有明细加载/渲染/筛选', all(k in js for k in ('loadApplications', 'renderApplications', 'applyFilterSet')))

@@ -147,3 +147,9 @@ python tests/club_source_applications_smoke.py
 # 默认值与白名单、跨俱乐部 403、前端三个新 tab 与 club.js 版本 20261026b。
 # production 真鉴权 + 临时库/临时 uploads。
 python tests/club_miniprogram_smoke.py
+
+# 平台端商品编辑器三件改造（2026-10-26 用户反馈）：品牌 Logo 本地上传
+# （uploads/image 先拿 URL 再落库）、商品「最高佣金率」封顶俱乐部专属费率
+# （resolve=min(谈判价,商品上限)，原因写明封顶）、期初库存 skuStock 按颜色×尺码
+# 逐格落库自动汇总 + 仓库字段。自带临时库隔离。
+python tests/platform_gear_editor_smoke.py

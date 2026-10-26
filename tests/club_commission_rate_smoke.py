@@ -10,15 +10,18 @@
 议价能力都不同。
 
 改造后的模型：
-    实际生效佣金率 = 俱乐部专属费率（若总平台单独设定且启用）
-                    否则 商品默认费率
+    实际生效佣金率 = min(俱乐部专属费率, 商品最高佣金率)（若总平台单独设定且启用）
+                    否则 商品自己的最高佣金率
+    —— 2026-10-26 用户反馈：商品上的佣金率是「最高比例」，总平台针对不同
+       俱乐部调整的佣金比例不能超过它；谈判价可以定得高，成交按商品上限封顶。
     平台总开关（commission_enabled）关闭 → 一律不发佣金。
 
 本测试锁住这套模型的**每一条不变量**：
 
 ① 默认回落到商品费率：没有单独设定时，生效费率 == 商品 commission_rate。
-② 平台按俱乐部设不同费率：A 12%、B 18% 互不影响。
-③ 单独设定优先于商品费率：设了 15% 就用 15%，不再看商品默认。
+② 平台按俱乐部设不同费率（低于商品上限时互不影响）：A 5%、B 7%。
+③ 商品最高佣金率是上限：谈判价 12% > 商品 8% → 成交一律按 8% 封顶，
+   且单独设定值保留（12%）便于追溯，reason 写明封顶。
 ④ 清除单独设定 → 回到商品默认费率。
 ⑤ 平台可单独停发某俱乐部佣金（enabled=false → 费率 0）。
 ⑥ 平台总开关关闭 → 所有俱乐部一律 0 佣金。
@@ -102,20 +105,30 @@ check('未单独设定时生效费率 = 商品 8%',
       f'rate={r_a.rate} source={r_a.source}')
 check('未单独设定时 has_club_override=False', r_a.has_club_override is False)
 
-print('\n== 2. 平台按俱乐部设不同费率（互不影响） ==')
+print('\n== 2. 平台按俱乐部设不同费率（低于商品上限，互不影响） ==')
 with db.conn() as c:
-    service.set_club_rate(c, CLUB_A, rate=0.12, enabled=True, note='A 协议')
-    service.set_club_rate(c, CLUB_B, rate=0.18, enabled=True, note='B 协议')
+    service.set_club_rate(c, CLUB_A, rate=0.05, enabled=True, note='A 协议')
+    service.set_club_rate(c, CLUB_B, rate=0.07, enabled=True, note='B 协议')
 r_a = resolve(CLUB_A)
 r_b = resolve(CLUB_B)
-check('A 俱乐部生效 12%', abs(r_a.rate - 0.12) < 1e-9, f'rate={r_a.rate}')
-check('B 俱乐部生效 18%', abs(r_b.rate - 0.18) < 1e-9, f'rate={r_b.rate}')
+check('A 俱乐部生效 5%', abs(r_a.rate - 0.05) < 1e-9, f'rate={r_a.rate}')
+check('B 俱乐部生效 7%', abs(r_b.rate - 0.07) < 1e-9, f'rate={r_b.rate}')
 check('A 的单独设定标记为 True', r_a.has_club_override is True and r_a.source == 'club_override')
 
-print('\n== 3. 单独设定优先于商品费率 ==')
+print('\n== 3. 商品最高佣金率是上限：超出部分封顶 ==')
 r_a = resolve(CLUB_A, product_rate=0.05)
-check('即使商品费率是 5%，A 仍按单独设定的 12%',
-      abs(r_a.rate - 0.12) < 1e-9, f'rate={r_a.rate} productRate={r_a.product_rate}')
+check('商品上限 5% 时，A 谈判价 5% 不受影响', abs(r_a.rate - 0.05) < 1e-9,
+      f'rate={r_a.rate} productRate={r_a.product_rate}')
+with db.conn() as c:
+    service.set_club_rate(c, CLUB_A, rate=0.12, enabled=True, note='A 谈判价')
+r_a = resolve(CLUB_A, product_rate=0.08)
+check('谈判价 12% > 商品上限 8% → 生效按 8% 封顶',
+      abs(r_a.rate - 0.08) < 1e-9 and r_a.source == 'club_override',
+      f'rate={r_a.rate} productRate={r_a.product_rate}')
+check('封顶原因写明', '封顶' in r_a.reason, r_a.reason)
+check('单独设定值保留 12% 便于追溯', abs(r_a.club_rate - 0.12) < 1e-9, f'club_rate={r_a.club_rate}')
+with db.conn() as c:
+    service.set_club_rate(c, CLUB_A, rate=0.05, enabled=True, note='A 协议')
 
 print('\n== 4. 清除单独设定 → 回到商品默认 ==')
 with db.conn() as c:
@@ -124,7 +137,7 @@ r_a = resolve(CLUB_A)
 check('清除后 A 回到商品默认 8%',
       abs(r_a.rate - 0.08) < 1e-9 and r_a.source == 'product_default',
       f'rate={r_a.rate} source={r_a.source}')
-check('B 不受影响，仍是 18%', abs(resolve(CLUB_B).rate - 0.18) < 1e-9)
+check('B 不受影响，仍是 7%', abs(resolve(CLUB_B).rate - 0.07) < 1e-9)
 
 print('\n== 5. 平台可单独停发某俱乐部佣金 ==')
 with db.conn() as c:
@@ -133,7 +146,7 @@ r_a = resolve(CLUB_A)
 check('停发后 A 的生效费率为 0', r_a.rate == 0.0 and r_a.enabled is False,
       f'rate={r_a.rate} enabled={r_a.enabled}')
 check('停发原因说清了是平台关的', '关闭' in r_a.reason or '不发' in r_a.reason, r_a.reason)
-check('B 不受影响', abs(resolve(CLUB_B).rate - 0.18) < 1e-9)
+check('B 不受影响', abs(resolve(CLUB_B).rate - 0.07) < 1e-9)
 with db.conn() as c:
     service.clear_club_rate(c, CLUB_A)
 
@@ -144,7 +157,7 @@ r_b = resolve(CLUB_B)
 check('总开关关闭后 A 为 0', r_a.rate == 0.0 and r_a.enabled is False, f'rate={r_a.rate}')
 check('总开关关闭后 B 也为 0', r_b.rate == 0.0 and r_b.enabled is False, f'rate={r_b.rate}')
 set_platform_enabled(True)
-check('总开关恢复后 B 回到 18%', abs(resolve(CLUB_B).rate - 0.18) < 1e-9)
+check('总开关恢复后 B 回到 7%', abs(resolve(CLUB_B).rate - 0.07) < 1e-9)
 
 print('\n== 7. 边界校验 ==')
 with db.conn() as c:
@@ -174,7 +187,7 @@ with db.conn() as c:
 
 print('\n== 8. 成交时快照：改费率不影响历史订单 ==')
 with db.conn() as c:
-    service.set_club_rate(c, CLUB_A, rate=0.10, enabled=True, note='首期')
+    service.set_club_rate(c, CLUB_A, rate=0.06, enabled=True, note='首期')
 # 下单（走 checkout 主路径）
 # 装备是实物、平台统一发货 → 结算单必须挂一个真实存在的收货地址
 with db.conn() as c:
@@ -200,21 +213,21 @@ if order_id:
         items = c.execute('SELECT commission_rate_snapshot FROM gear_order_items WHERE order_id=?',
                           (order_id,)).fetchall()
     commission = float(row['club_commission'] or 0)
-    check('订单佣金 = 200 × 10% = ¥20',
-          abs(commission - 20.0) < 0.01, f'commission={commission}')
-    check('订单项写入成交时费率快照 0.10',
-          len(items) == 1 and abs(float(items[0]['commission_rate_snapshot'] or 0) - 0.10) < 1e-9,
+    check('订单佣金 = 200 × 6% = ¥12',
+          abs(commission - 12.0) < 0.01, f'commission={commission}')
+    check('订单项写入成交时费率快照 0.06',
+          len(items) == 1 and abs(float(items[0]['commission_rate_snapshot'] or 0) - 0.06) < 1e-9,
           str([dict(i) for i in items]))
     # 改费率后，历史订单佣金不变
     with db.conn() as c:
         service.set_club_rate(c, CLUB_A, rate=0.30, enabled=True, note='改价')
     with db.conn() as c:
         row2 = c.execute('SELECT club_commission FROM gear_orders WHERE id=?', (order_id,)).fetchone()
-    check('改费率后历史订单佣金仍是 ¥20（不追溯）',
-          abs(float(row2['club_commission'] or 0) - 20.0) < 0.01,
+    check('改费率后历史订单佣金仍是 ¥12（不追溯）',
+          abs(float(row2['club_commission'] or 0) - 12.0) < 0.01,
           f"after={row2['club_commission']}")
-    check('改费率后历史订单项快照仍是 0.10',
-          abs(float(items[0]['commission_rate_snapshot'] or 0) - 0.10) < 1e-9)
+    check('改费率后历史订单项快照仍是 0.06',
+          abs(float(items[0]['commission_rate_snapshot'] or 0) - 0.06) < 1e-9)
 
 print('\n== 9. 平台端 API ==')
 resp = client.get('/api/platform/commission-rates')
@@ -236,8 +249,9 @@ check('A 标记为已单独设定', row_a and row_a['hasClubOverride'] is True)
 
 resp2 = client.patch('/api/platform/commission-rates/%d' % CLUB_A, json={'ratePercent': 15})
 check('PATCH 设 15% 返回 200', resp2.status_code == 200, str(resp2.status_code))
-check('PATCH 后生效费率是 15%',
-      resp2.status_code == 200 and abs(float(resp2.json().get('ratePercent') or 0) - 15.0) < 1e-6,
+check('PATCH 后生效费率封顶到商品上限 8%（设定值保留 15%）',
+      resp2.status_code == 200 and abs(float(resp2.json().get('ratePercent') or 0) - 8.0) < 1e-6
+      and abs(float(resp2.json().get('clubRatePercent') or 0) - 15.0) < 1e-6,
       str(resp2.json())[:200] if resp2.status_code == 200 else '')
 resp3 = client.patch('/api/platform/commission-rates/%d' % CLUB_A, json={'clearOverride': True})
 check('PATCH clearOverride 回到商品默认',

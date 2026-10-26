@@ -542,3 +542,12 @@
 .plat-apply-stat.is-zero{opacity:.55}
 .plat-apply-note{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--muted)}
 @media (max-width:900px){.plat-apply-note{max-width:160px}}
+
+/* ── 商品编辑器 · 期初库存数量网格（2026-10-26）──────────────────────────
+   按颜色×尺码逐格填数量，期初库存自动汇总（只读），不能手填总数。 */
+.plat-pe__qtygrid{display:grid;gap:6px;margin-top:6px}
+.plat-pe__qtyrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 10px;border:1px dashed var(--line);border-radius:8px}
+.plat-pe__qtyname{flex:0 0 96px;font-weight:600;font-size:13px;display:inline-flex;align-items:center;gap:6px;word-break:break-all}
+.plat-pe__qtyname i{width:12px;height:12px;border-radius:3px;display:inline-block;border:1px solid rgba(0,0,0,.08);flex:0 0 12px}
+.plat-pe__qtycell{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--muted)}
+.plat-pe__qtycell input{width:64px}

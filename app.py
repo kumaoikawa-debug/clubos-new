@@ -5317,6 +5317,15 @@ def platform_delete_brand(brand_id:int):
         except LookupError as e: raise HTTPException(404,str(e))
     return {'ok':True,**out}
 
+@app.post('/api/platform/uploads/image')
+async def platform_upload_image(file:UploadFile=File(...)):
+    """平台端通用图片上传（2026-10-26）：品牌 Logo 等先传图拿到 URL，
+    再随表单一起落库 —— 新建品牌还没有 id，不能走「建完再传」的路线。"""
+    url=await _save_platform_upload(file)
+    if not url: raise HTTPException(400,'只支持图片文件（png/jpg/jpeg/webp/gif），单张上限 10MB')
+    return {'url':url}
+
+
 @app.get('/api/platform/product-categories')
 def platform_product_categories():
     with conn() as c: return catalog_service.list_categories(c, include_inactive=True)
@@ -5535,6 +5544,7 @@ def generate_variant_matrix(product_id:int, payload:dict=Body(...)):
     if not colors and not sizes: raise HTTPException(400,'至少给一个颜色或一个尺码')
     price=payload.get('price'); price=float(price) if price not in (None,'') else None
     stock=max(0,int(payload.get('stock') or 0))
+    sku_stock=_sku_stock_map(payload)
     with conn() as c:
         p=c.execute('SELECT id,brand_id,category_id FROM products WHERE id=?',(product_id,)).fetchone()
         if not p: raise HTTPException(404,'商品不存在')
@@ -5570,9 +5580,11 @@ def generate_variant_matrix(product_id:int, payload:dict=Body(...)):
                     catalog_service.build_sku(c,product_id=int(product_id),brand_id=p['brand_id'],
                                               category_id=p['category_id'],color=cn or '',size=sz or ''))
                 mx+=1
+                # 追加规格的库存落点：优先 skuStock 逐格取，没传才统一用 stock
+                vstock=int((sku_stock.get(cn or '') or {}).get(sz or '',0)) if sku_stock else stock
                 c.execute("""INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status,color,color_hex,size)
                              VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                          (product_id,name,sku,price,stock,mx,'active',cn,ch,sz))
+                          (product_id,name,sku,price,vstock,mx,'active',cn,ch,sz))
                 created+=1
         # 占位规格的库存转给第一个新建的规格，不让库存凭空消失
         if moved and created:
@@ -5645,7 +5657,19 @@ def platform_add_product(payload:dict=Body(...)):
         raise HTTPException(400, '请填写商品名称')
     if float(payload.get('price') or 0) <= 0:
         raise HTTPException(400, '请填写有效零售价')
-    initial_stock=max(0,int(payload.get('stock',0) or 0))
+    # 期初库存自动汇总（2026-10-26 用户反馈）：给了 skuStock 就按 颜色×尺码 逐格求和，
+    # 不再让手填总数与规格明细打架；没给映射才信任 payload.stock（旧客户端 / CSV 导入）。
+    sku_stock_raw=payload.get('skuStock') if isinstance(payload.get('skuStock'),dict) else {}
+    if sku_stock_raw:
+        initial_stock=0
+        for _mins in sku_stock_raw.values():
+            if isinstance(_mins,dict):
+                for _q in _mins.values():
+                    try: initial_stock+=max(0,int(_q or 0))
+                    except Exception: pass
+    else:
+        initial_stock=max(0,int(payload.get('stock',0) or 0))
+    warehouse=str(payload.get('warehouse') or '').strip() or None
     brand_id=payload.get('brandId') or payload.get('brand_id')
     category_id=payload.get('categoryId') or payload.get('category_id')
     gender=catalog_service.normalize_gender(payload.get('gender'))
@@ -5661,8 +5685,8 @@ def platform_add_product(payload:dict=Body(...)):
         # 单页编辑器鼓励手填款号，撞号是常态而不是异常，必须翻成一句人话（409）。
         try:
             c.execute("""INSERT INTO products(name,sku,price,stock,status,image_url,category,commission_rate,reorder_point,description,
-                     brand_id,category_id,gender,season,series,material,commerce_sync_status)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     brand_id,category_id,gender,season,series,material,warehouse,commerce_sync_status)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (name,payload.get('sku') or '',float(payload.get('price') or 0),0,payload.get('status','active'),payload.get('image_url'),
                        category,payload.get('commission_rate',0.08),
                        max(0,int(payload.get('reorder_point',payload.get('reorderPoint',5)) or 0)),
@@ -5673,6 +5697,7 @@ def platform_add_product(payload:dict=Body(...)):
                        catalog_service.normalize_season(payload.get('season')),
                        catalog_service.normalize_series(payload.get('series')),
                        catalog_service.normalize_material(payload.get('material')),
+                       warehouse,
                        'pending' if commerce_provider()=='medusa' else 'local'))
         except IntegrityError:
             raise HTTPException(409, f'款号「{payload.get("sku") or "(空)"}」已被占用，请换一个')
@@ -5686,14 +5711,41 @@ def platform_add_product(payload:dict=Body(...)):
     return out
 
 
+def _sku_stock_map(payload:dict) -> dict[str,dict[str,int]]:
+    """解析前端传来的 per-SKU 期初库存：{颜色:{尺码:数量}}。
+
+    键一律走 normalize_dimension，与 color_list/size_list 的归一口径一致 ——
+    前端传「黑色」，落库也是「黑色」，查表时两边都对得上；防一手大小写/空格漂移。
+    空键保留为 ''：对应「只填了尺码没填颜色」的默认色行，与 color_list 里
+    (None,None) 的回落分支用 `cn or ''` 查表对齐。
+    """
+    raw=payload.get('skuStock')
+    if not isinstance(raw,dict): return {}
+    out={}
+    for ck,mins in raw.items():
+        nk=catalog_service.normalize_dimension(ck) or ''
+        if not isinstance(mins,dict): continue
+        row={}
+        for sk,q in mins.items():
+            ns=catalog_service.normalize_dimension(sk) or ''
+            try: q=int(q or 0)
+            except Exception: q=0
+            if q>0: row[ns]=q
+        if row: out[nk]=row
+    return out
+
+
 def _build_variant_matrix(c, pid:int, *, brand_id, category_id, payload:dict, initial_stock:int=0) -> int:
     """按 colors × sizes 建规格；没给矩阵就退回建一个「默认」规格承接库存。
 
     库存真源在规格层，没有规格的商品在 C 端读不到库存、直接显示缺货 ——
     所以「不填矩阵」不等于「不建规格」。
+    2026-10-26 起支持 skuStock（{颜色:{尺码:数量}}）：期初库存按颜色×尺码
+    逐格落库；没传的键回落 0，完全没传 skuStock 才走旧口径（全部压第一个组合）。
     """
     colors=payload.get('colors') or []
     sizes=payload.get('sizes') or []
+    sku_stock=_sku_stock_map(payload)
     if not colors and not sizes:
         sku=catalog_service.ensure_unique_sku(c,
             catalog_service.build_sku(c,product_id=int(pid),brand_id=brand_id,category_id=category_id))
@@ -5719,12 +5771,16 @@ def _build_variant_matrix(c, pid:int, *, brand_id, category_id, payload:dict, in
                 catalog_service.build_sku(c,product_id=int(pid),brand_id=brand_id,category_id=category_id,
                                           color=cn or '',size=sz or ''))
             sort+=1
-            # 期初库存全部落在第一个组合上：均分会让每个 SKU 都只有几件，
-            # 运营还要再手工并回来。给一个明确落点更好发现、更好调。
+            # 期初库存落点：优先按 skuStock 的颜色×尺码逐格取；没传映射才用旧口径
+            #（全部压第一个组合，均分会让每个 SKU 只有几件，还得手工并回来）。
+            if sku_stock:
+                vstock=int((sku_stock.get(cn or '') or {}).get(sz or '',0))
+            else:
+                vstock=initial_stock if n==0 else 0
             c.execute("""INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status,color,color_hex,size)
                          VALUES(?,?,?,?,?,?,?,?,?,?)""",
                       (pid,name,sku,float(price) if price is not None else None,
-                       initial_stock if n==0 else 0,sort,'active',cn,ch,sz))
+                       vstock,sort,'active',cn,ch,sz))
             n+=1
     return n
 
@@ -5775,7 +5831,7 @@ def platform_decide_product_visibility(request_id:int,payload:dict=Body(...)):
 @app.patch('/api/platform/products/{product_id}')
 def platform_update_product(product_id:int,payload:dict=Body(...)):
     allowed=['name','price','status','image_url','category','commission_rate','reorder_point','description',
-             'brand_id','category_id','gender','season','series','material'];sets=[];vals=[]
+             'brand_id','category_id','gender','season','series','material','warehouse'];sets=[];vals=[]
     if 'reorderPoint' in payload and 'reorder_point' not in payload: payload={**payload,'reorder_point':payload.get('reorderPoint')}
     with conn() as c:
         p=row(c.execute('SELECT * FROM products WHERE id=?',(product_id,)))
