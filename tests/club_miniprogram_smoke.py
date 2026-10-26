@@ -120,6 +120,16 @@ check('未知图片类型被拒', r.status_code == 400)
 info = c_admin.get('/api/club/1/miniprogram').json()
 check('GET 后头像/码 URL 已入 info', info['avatarUrl'].endswith('/avatar.png') and info['qrcodeUrl'].endswith('/qrcode.png'))
 
+# 设置类图片（版权图标/转发封面/朋友圈封面）走上传端点，落 settings_json
+r = post('/api/club/1/miniprogram/image/friendCover', files={'file': ('f.png', io.BytesIO(PNG), 'image/png')})
+check('转发封面上传成功（kind 大小写不敏感）', r.status_code == 200, r.text[:150])
+s = c_admin.get('/api/club/1/miniprogram/settings').json()['settings']
+check('封面上传写入 settings.share.friendCover', s['share']['friendCover'].endswith('/friendcover.png'))
+r = c_admin.get('/api/club/1/miniprogram/friendcover.png')
+check('封面登录态代理可读', r.status_code == 200 and r.headers['content-type'].startswith('image/'))
+r = put('/api/club/1/miniprogram/settings', json={'settings': {'share': {'friendCover': ''}}})
+check('PUT 空值可清除封面', r.status_code == 200 and r.json()['settings']['share']['friendCover'] == '')
+
 # ── ② 管理助手：角色 ────────────────────────────────────────────────────────
 r = c_admin.get('/api/club/1/mp/roles')
 d = r.json()
@@ -188,7 +198,7 @@ html = (ROOT / 'static/club/index.html').read_text(encoding='utf-8')
 check('设置页有三个新 tab', all(f"setTab('{t}')" in html for t in ('mpinfo', 'mpstaff', 'mpset')))
 check('三个 pane 骨架存在', all(f'id="pane-{p}"' in html for p in ('mpinfo', 'mpstaff', 'mpset')))
 check('员工/角色双子tab与容器', 'mpStaffTabs' in html and 'id="mpStaffBody"' in html and 'id="mpRolesBody"' in html)
-check('club.js 版本 20261026c', 'club.js?v=20261026c' in html)
+check('club.js 版本 20261026d', 'club.js?v=20261026d' in html)
 js = (ROOT / 'static/club/club.js').read_text(encoding='utf-8')
 check('club.js 含三大板块函数', all(k in js for k in ('loadMpInfo', 'loadMpStaff', 'loadMpRoles', 'loadMpSettings', 'mpInfoEdit', 'saveMpInfo', 'mpStaffForm', 'mpRoleForm', 'saveMpSetGroup')))
 check('club.js setTab pane 数组含新板块', "'mpinfo','mpstaff','mpset'" in js)
@@ -201,5 +211,15 @@ check('小程序码系统自动生成（ClubOSQR 本地生成，无上传按钮�
       'ClubOSQR.draw' in js and js.count("mpUploadImage('qrcode'") == 0)
 check('头像自动回落俱乐部 Logo + 恢复自动', 'MP_LOGO' in js and 'avatarClear' in js and 'mpClearAvatar' in js)
 check('自动同步态展示（不显示「未填写」语气）', '微信授权后自动同步' in js)
+# 2026-10-26 用户反馈第二轮：图片全部本地上传（不是贴 URL）；修「编辑信息点不动」；合规流程梳理
+check('设置图片走上传控件（imgField 上传+移除）',
+      'const imgField=' in js and 'async function mpUploadSetImage' in js and 'async function mpClearSetImage' in js)
+check('版权图标/转发封面/朋友圈封面用 imgField 渲染（无贴 URL 输入）',
+      "imgField('copyrightIcon'" in js and "imgField('friendCover'" in js and "imgField('momentCover'" in js)
+check('合规流程卡 7 步骤（含旅行社许可证/ICP/隐私指引提示）',
+      '上线流程与合规' in js and '旅行社业务经营许可证' in js and '小程序备案（ICP）' in js
+      and "step('1'" in js and js.count("step('") == 7)
+check('编辑信息点击后滚动到表单（修「点不动」）',
+      'scrollIntoView' in js[js.index('function mpInfoEdit'):js.index('async function saveMpInfo')])
 
 print(f'\nALL PASS ({len(PASS)} checks)')

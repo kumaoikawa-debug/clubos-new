@@ -2382,7 +2382,10 @@ async function loadMpInfo(){
   try{const s=await api(`/api/club/${CLUB}/settings`,{cache:'no-store'});MP_LOGO=s.logoUrl||''}catch(e){MP_LOGO=MP_LOGO||''}
   const avatarSrc=info.avatarUrl?info.avatarUrl+(info.avatarUrl.indexOf('?')<0?'?t='+Date.now():''):MP_LOGO;
   const avatar=avatarSrc?`<img src="${esc(avatarSrc)}" alt="头像" style="width:88px;height:88px;border-radius:50%;object-fit:cover">`:`<span style="width:88px;height:88px;border-radius:50%;background:var(--bg-soft,#f2f0ea);display:inline-flex;align-items:center;justify-content:center;font-size:26px">⛰</span>`;
-  const autoRow=(k,v)=>`<div style="display:flex;gap:14px;padding:9px 0;border-bottom:1px dashed var(--line)"><span class="sub" style="flex:0 0 130px">${k} <span class="tag">自动同步</span></span><div style="flex:1;min-width:0">${v?esc(v):'<span class="sub">微信授权后自动同步，无需填写</span>'}</div></div>`;
+  /* 上线流程 7 步骤卡：编号圆点（有状态=品牌色）+ 说明 + 自动同步 tag */
+  const step=(n,title,desc,st,extra)=>`<div style="display:flex;gap:12px;padding:10px 0;border-bottom:1px dashed var(--line)">
+    <span style="flex:0 0 26px;height:26px;border-radius:50%;background:${st?'var(--brand)':'var(--bg-soft,#f2f0ea)'};color:${st?'#fff':'inherit'};display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:600">${n}</span>
+    <div style="flex:1;min-width:0"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${title}</b><span class="tag ${st?'':'orange'}">${st?esc(st):'待微信授权后自动同步'}</span></div><div class="sub" style="margin-top:2px">${desc}${extra?`<br>${esc(extra)}`:''}</div></div></div>`;
   const fillRow=(k,v)=>`<div style="display:flex;gap:14px;padding:9px 0;border-bottom:1px dashed var(--line)"><span class="sub" style="flex:0 0 110px">${k}</span><div style="flex:1;min-width:0">${v||'<span class="sub">未填写</span>'}</div></div>`;
   const cats=(info.serviceCategories||[]).map(c=>`<span class="tag">${esc(c)}</span>`).join(' ');
   const testers=(info.testers||[]);
@@ -2404,15 +2407,14 @@ async function loadMpInfo(){
     </div>
   </div>
   <div class="card section">
-    <div class="panel-title"><div><h3>认证与授权状态</h3><div class="sub">以下全部由微信侧自动同步（授权小程序给 ClubOS 后），不需要也不支持手动填写。</div></div><span class="tag ${info.authorized?'':'orange'}">${info.authorized?'已授权':'待微信授权'}</span></div>
-    ${autoRow('实名验证',info.realnameStatus)}
-    ${autoRow('资质认证',info.qualificationStatus)}
-    ${autoRow('年审到期时间',info.annualReviewAt)}
-    ${autoRow('当前版本号',info.currentVersion)}
-    ${autoRow('隐私设置保护指引',info.privacyStatus)}
-    ${autoRow('地理位置接口权限',info.geoPermission)}
-    ${autoRow('小程序备案',info.recordStatus)}
-    ${autoRow('发布状态',info.releaseStatus)}
+    <div class="panel-title"><div><h3>上线流程与合规</h3><div class="sub">按微信小程序上线的合规顺序梳理；每步状态由微信授权后自动同步，不需要也不支持手动填写。</div></div><span class="tag ${info.authorized?'':'orange'}">${info.authorized?'已授权':'待微信授权'}</span></div>
+    ${step('1','注册与主体认证','完成小程序注册，并通过微信认证（企业主体认证服务费 300 元/年）。',info.realnameStatus)}
+    ${step('2','服务类目与行业资质','开通与业务一致的服务类目：旅游服务>旅行社 需上传《旅行社业务经营许可证》。',info.qualificationStatus)}
+    ${step('3','小程序备案（ICP）','2023-09 起新注册小程序须完成 ICP 备案，未备案无法提交发布。',info.recordStatus)}
+    ${step('4','用户隐私保护指引','在公众平台声明收集的用户信息；须与「标准设置→隐私授权」的开关一致，否则审核驳回。',info.privacyStatus)}
+    ${step('5','微信支付绑定','绑定与小程序主体一致的微信支付商户号。',info.payBrandName?'已绑定（'+info.payBrandName+'）':'')}
+    ${step('6','版本管理与发布','开发版上传 → 提交审核 → 发布；当前版本号由微信侧自动同步。',info.releaseStatus,info.currentVersion?'当前版本：'+info.currentVersion:'')}
+    ${step('7','体验者与灰度','正式发布前可绑定最多 15 名体验者，扫码体验开发版/体验版。',testers.length?testers.length+' 人':'')}
     <div style="padding:10px 0 2px"><div class="sub" style="margin-bottom:6px">体验者（${testers.length}）—— 微信授权后在微信公众平台绑定，自动同步</div>
     ${testers.length?testers.map(t=>`<span class="tag" style="margin:0 6px 6px 0">${esc(t.nickname)}${t.wxid?` · ${esc(t.wxid)}`:''}</span>`).join(''):'<span class="sub">暂无</span>'}</div>
   </div>
@@ -2445,6 +2447,9 @@ function mpInfoEdit(){
     <label style="display:block;margin-top:12px"><span class="sub">服务类目（每行一个，最多 10 个）</span><textarea id="mpCats" rows="3" style="width:100%;margin-top:4px" placeholder="旅游服务>旅行社">${esc((info.serviceCategories||[]).join('\n'))}</textarea></label>
     <div style="margin-top:14px;display:flex;gap:10px"><button class="btn" type="button" onclick="saveMpInfo()">保存信息</button><button class="btn ghost" type="button" onclick="$('#mpInfoFormBox').innerHTML=''">取消</button></div>
     </div>`;
+    // 2026-10-26 用户反馈「编辑信息点不动」：表单渲染在授权状态卡之后、视口之外，
+    // 点击后必须滚动到表单，否则看起来毫无反应。
+    box.scrollIntoView({behavior:'smooth',block:'start'});
   }).catch(e=>showAlert({title:'读取失败',message:e.message||'请重试'}));
 }
 async function saveMpInfo(){
@@ -2575,25 +2580,27 @@ async function loadMpSettings(){
   const txt=(g,k,label,ph)=>`<label style="display:block"><span class="sub">${label}</span><input data-mpset="${g}.${k}" style="width:100%;margin-top:4px" maxlength="60" value="${esc(grpOf(g)[k]||'')}" placeholder="${ph||''}"></label>`;
   const matrixRow=biz=>`<tr><td><strong>${MP_PAY_BIZS[biz]}</strong></td>${Object.entries(MP_PAY_WAYS).map(([wk,wn])=>`<td><label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" data-mppay="${biz}.${wk}" ${((matrix[biz]||{})[wk])?'checked':''}> ${wn}</label></td>`).join('')}</tr>`;
   const customs=(p.customWays||[]).map((w,i)=>`<span class="tag" style="margin:0 6px 6px 0">${esc(w)} <a href="javascript:void(0)" onclick="mpDelCustomWay(${i})" style="color:var(--orange);text-decoration:none">×</a></span>`).join('');
+  const imgField=(kind,label,hint,w,h,cur)=>`<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:6px 0">
+      ${cur?`<img src="${esc(cur)}${cur.indexOf('?')<0?'?t='+Date.now():''}" alt="${label}" style="width:${w}px;height:${h}px;object-fit:cover;border-radius:8px;border:1px solid var(--line)">`:`<span style="width:${w}px;height:${h}px;border-radius:8px;border:1px dashed var(--line);display:inline-flex;align-items:center;justify-content:center" class="sub">未上传</span>`}
+      <div><div style="font-weight:600">${label}</div><div class="sub">${hint}</div>
+      <div style="display:flex;gap:8px;margin-top:6px"><label class="btn secondary sm" style="cursor:pointer;display:inline-block">${cur?'换图':'上传图片'}<input type="file" accept="image/*" style="display:none" onchange="mpUploadSetImage('${kind}',this)"></label>${cur?`<button class="btn ghost sm" type="button" onclick="mpClearSetImage('${kind}')">移除</button>`:''}</div></div>
+    </div>`;
   box.innerHTML=`
   <div class="card section"><div class="panel-title"><div><h3>基础设置</h3><div class="sub">小程序的全局展示与授权行为</div></div></div>
-    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:4px 0 8px">
-      ${b.copyrightIcon?`<img src="${esc(b.copyrightIcon)}" alt="版权图标" style="width:100px;height:48px;object-fit:contain;border-radius:8px;border:1px solid var(--line)">`:`<span style="width:100px;height:48px;border-radius:8px;border:1px dashed var(--line);display:inline-flex;align-items:center;justify-content:center" class="sub">版权图标</span>`}
-      <div class="sub">建议尺寸 100×48px；留空则为默认</div>
-    </div>
-    ${txt('base','copyrightIcon','版权图标图片地址','https://…/icon.png（可粘贴任意可访问图片链接）')}
+    ${imgField('copyrightIcon','版权图标','建议尺寸 100×48px；显示在小程序底部版权栏',100,48,b.copyrightIcon)}
     <div style="margin-top:10px"><span class="sub">隐私授权样式</span>
       <label style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;cursor:pointer"><input type="radio" name="mpPrivacy" data-mpset="base.privacyStyle" value="wx" ${b.privacyStyle!=='component'?'checked':''}> 微信自带</label>
       <label style="display:inline-flex;align-items:center;gap:6px;margin-left:12px;cursor:pointer"><input type="radio" name="mpPrivacy" data-mpset="base.privacyStyle" value="component" ${b.privacyStyle==='component'?'checked':''}> 小程序组件</label>
+      <span class="sub" style="margin-left:10px">⚠ 需与微信公众平台的「用户隐私保护指引」配置一致，否则审核不通过</span>
     </div>
     <div style="margin-top:6px">
       ${sw('base','firstAuthNickname','首次授权头像昵称','新用户在首次使用时弹出授权')}
       ${sw('base','homeFavoriteTip','首页提示收藏小程序')}
       ${sw('base','showClubFavorite','显示俱乐部收藏')}
-      ${sw('base','forceGPS','强制获取 GPS','不设置则按需请求')}
+      ${sw('base','forceGPS','强制获取 GPS','需在微信公众平台开通地理位置接口权限')}
       ${sw('base','showMonthlySales','显示月销量')}
       ${sw('base','recentPurchase','开启最近购买')}
-      ${sw('base','phoneRequired','预留电话必填')}
+      ${sw('base','phoneRequired','预留电话必填','收集手机号须在隐私保护指引中声明')}
     </div>
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px;margin-top:8px">
       <label style="display:block"><span class="sub">门店排列模式</span><select data-mpset="base.listMode" style="width:100%;margin-top:4px"><option value="default" ${b.listMode!=='city'?'selected':''}>传统排列</option><option value="city" ${b.listMode==='city'?'selected':''}>按城市排列</option></select></label>
@@ -2602,11 +2609,11 @@ async function loadMpSettings(){
     <div style="margin-top:12px"><button class="btn" type="button" onclick="saveMpSetGroup('base')">保存基础设置</button></div>
   </div>
   <div class="card section"><div class="panel-title"><div><h3>转发设置</h3><div class="sub">用户把小程序/活动转发给朋友与朋友圈时的标题与封面</div></div></div>
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
+    ${imgField('friendCover','发给朋友 · 转发封面','建议 500×400（5:4）',100,80,b.friendCover)}
+    ${imgField('momentCover','分享到朋友圈 · 封面','建议 500×400',100,80,b.momentCover)}
+    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px;margin-top:8px">
       ${txt('share','friendTitle','发给朋友 · 转发标题','让山野·走进日常生活!')}
-      ${txt('share','friendCover','发给朋友 · 转发封面','封面图 URL，建议 500×400')}
       ${txt('share','momentTitle','分享到朋友圈 · 标题','')}
-      ${txt('share','momentCover','分享到朋友圈 · 封面','封面图 URL')}
     </div>
     <div style="margin-top:8px">${sw('share','groupShare','开启分享拼单')}</div>
     <div style="margin-top:12px"><button class="btn" type="button" onclick="saveMpSetGroup('share')">保存转发设置</button></div>
@@ -2621,6 +2628,18 @@ async function loadMpSettings(){
     ${txt('pay','wxMchId','微信支付商户 ID','1630023229')}
     <div style="margin-top:12px"><button class="btn" type="button" onclick="saveMpSetGroup('pay')">保存支付设置</button></div>
   </div>`;
+}
+async function mpUploadSetImage(kind,input){
+  const f=input.files&&input.files[0];if(!f)return;
+  const fd=new FormData();fd.append('file',f);
+  try{await api(`/api/club/${CLUB}/miniprogram/image/${kind}`,{method:'POST',body:fd});toast('图片已上传');loadMpSettings()}
+  catch(e){showAlert({title:'上传失败',message:e.message||'请重试'})}
+}
+async function mpClearSetImage(kind){
+  const target={copyrightIcon:['base','copyrightIcon'],friendCover:['share','friendCover'],momentCover:['share','momentCover']}[kind];
+  if(!target)return;
+  try{await api(`/api/club/${CLUB}/miniprogram/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({settings:{[target[0]]:{[target[1]]:''}}})});toast('已移除，恢复默认');loadMpSettings()}
+  catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
 }
 function _mpCollect(group){
   const out={};

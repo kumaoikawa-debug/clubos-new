@@ -1930,44 +1930,82 @@ def club_miniprogram_put(club_id:int,payload:dict=Body(...)):
         out=_mp_public(_mp_get(c,club_id))
     return {'ok':True,'info':out}
 
-_MP_IMG_KIND={'avatar':'avatar','qrcode':'qrcode'}
+# kind → 存储：avatar/qrcode 落 club_miniprogram 列；版权图标/转发封面落
+# club_mp_settings.settings_json 对应字段（2026-10-26 用户反馈：设置里的图片
+# 必须是上传，不能贴 URL）。
+_MP_IMG_COLUMN={'avatar':'avatar_url','qrcode':'qrcode_url'}
+_MP_IMG_SETTING={'copyrighticon':('base','copyrightIcon'),
+                 'friendcover':('share','friendCover'),
+                 'momentcover':('share','momentCover')}
+
+def _mp_settings_load(c,club_id):
+    r=row(c.execute('SELECT settings_json FROM club_mp_settings WHERE club_id=?',(club_id,)))
+    try: saved=json.loads(r['settings_json']) if r and isinstance(r['settings_json'],str) else {}
+    except Exception: saved={}
+    return saved if isinstance(saved,dict) else {}
+
+def _mp_settings_merge(saved):
+    out={}
+    for grp,defaults in _MP_SETTINGS_DEFAULTS.items():
+        src=saved.get(grp) if isinstance(saved.get(grp),dict) else {}
+        out[grp]={**defaults,**src}
+    return out
 
 @app.post('/api/club/{club_id}/miniprogram/image/{kind}')
 async def club_mp_image_upload(club_id:int,kind:str,file:UploadFile=File(...)):
-    """上传小程序头像 / 小程序码。固定文件名覆盖写，URL 不变（前端加时间戳破缓存）。"""
+    """上传小程序图片（头像/码/版权图标/转发封面）。固定文件名覆盖写，URL 不变
+    （前端加时间戳破缓存）。kind 大小写不敏感。"""
     club_or_404(club_id)
-    col=_MP_IMG_KIND.get(kind)
-    if not col: raise HTTPException(400,'kind 仅支持 avatar / qrcode')
+    k=kind.lower()
+    col=_MP_IMG_COLUMN.get(k)
+    set_target=_MP_IMG_SETTING.get(k)
+    if not col and not set_target:
+        raise HTTPException(400,'kind 仅支持 avatar / qrcode / copyrightIcon / friendCover / momentCover')
     real=Path(file.filename or '').suffix.lower()
     if real not in _PUBLIC_IMAGE_EXT: raise HTTPException(400,'仅支持图片文件：png/jpg/jpeg/webp/gif')
     data=await file.read()
     if len(data)>5*1024*1024: raise HTTPException(413,'图片过大（上限 5MB）')
     dest=UPLOAD/str(club_id)/'mp'
     dest.mkdir(parents=True,exist_ok=True)
-    (dest/f'{kind}{real}').write_bytes(data)
-    for stale in dest.glob(f'{kind}.*'):
+    (dest/f'{k}{real}').write_bytes(data)
+    for stale in dest.glob(f'{k}.*'):
         if stale.suffix.lower()!=real: stale.unlink(missing_ok=True)
-    url=f'/api/club/{club_id}/miniprogram/{kind}{real}'
+    url=f'/api/club/{club_id}/miniprogram/{k}{real}'
     with conn() as c:
-        if not _mp_get(c,club_id):
-            c.execute('INSERT INTO club_miniprogram(club_id) VALUES(?)',(club_id,))
-        c.execute(f'UPDATE club_miniprogram SET {col}_url=?,updated_at=CURRENT_TIMESTAMP WHERE club_id=?',(url,club_id))
+        if col:
+            if not _mp_get(c,club_id):
+                c.execute('INSERT INTO club_miniprogram(club_id) VALUES(?)',(club_id,))
+            c.execute(f'UPDATE club_miniprogram SET {col}=?,updated_at=CURRENT_TIMESTAMP WHERE club_id=?',(url,club_id))
+        else:
+            grp,field=set_target
+            saved=_mp_settings_load(c,club_id)
+            saved.setdefault(grp,{})[field]=url
+            blob=json.dumps(saved,ensure_ascii=False)
+            if len(blob)>64*1024: raise HTTPException(400,'设置内容过大')
+            c.execute('''INSERT INTO club_mp_settings(club_id,settings_json,updated_at) VALUES(?,?,CURRENT_TIMESTAMP)
+                         ON CONFLICT(club_id) DO UPDATE SET settings_json=excluded.settings_json,updated_at=CURRENT_TIMESTAMP''',
+                      (club_id,blob))
     return {'url':url}
 
 @app.get('/api/club/{club_id}/miniprogram/{kind}.{ext}')
 def club_mp_image(club_id:int,kind:str,ext:str):
-    """登录态代理读小程序头像 / 小程序码（同 _serve_club_logo 的形状校验思路）。"""
-    col=_MP_IMG_KIND.get(kind)
-    if not col: raise HTTPException(404,'不存在的图片类型')
+    """登录态代理读小程序图片（形状校验后按路由参数拼路径，不掺任意片段）。"""
+    k=kind.lower()
+    if k not in _MP_IMG_COLUMN and k not in _MP_IMG_SETTING: raise HTTPException(404,'不存在的图片类型')
     with conn() as c:
-        x=_mp_get(c,club_id)
-    url=(x or {}).get(f'{col}_url') if x else None
+        if k in _MP_IMG_COLUMN:
+            x=_mp_get(c,club_id)
+            url=(x or {}).get(_MP_IMG_COLUMN[k]) if x else None
+        else:
+            saved=_mp_settings_load(c,club_id)
+            grp,field=_MP_IMG_SETTING[k]
+            url=(saved.get(grp) or {}).get(field) if isinstance(saved.get(grp),dict) else None
     if not url: raise HTTPException(404,'尚未设置该图片')
-    m=re.match(r'^/api/club/(\d+)/miniprogram/(avatar|qrcode)(\.[a-z0-9]{2,5})$',str(url),re.I)
-    if not m or int(m.group(1))!=int(club_id): raise HTTPException(404,'尚未设置该图片')
+    m=re.match(r'^/api/club/(\d+)/miniprogram/([a-z]+)(\.[a-z0-9]{2,5})$',str(url),re.I)
+    if not m or int(m.group(1))!=int(club_id) or m.group(2).lower()!=k: raise HTTPException(404,'尚未设置该图片')
     ext='.'+str(ext).lower().lstrip('.')
     if ext not in _PUBLIC_IMAGE_EXT: raise HTTPException(404,'不支持的图片格式')
-    fp=UPLOAD/f'{int(club_id)}'/'mp'/f'{kind}{ext}'
+    fp=UPLOAD/f'{int(club_id)}'/'mp'/f'{k}{ext}'
     if not fp.is_file(): raise HTTPException(404,'图片文件已丢失')
     return FileResponse(fp,headers={'Cache-Control':'no-store'})
 
