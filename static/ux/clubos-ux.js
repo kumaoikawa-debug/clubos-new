@@ -23,7 +23,10 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
      工具区、整条 topbar 撤掉，纵向空间还给工作区（2026-11-01）。
      按 #creditPill 判定 —— 只有俱乐部端有这个元素，平台端顶栏不受影响。 */
   const creditPill=bar.querySelector('#creditPill');
-  if(creditPill){workspace.querySelector('.workspace-tools').appendChild(creditPill);creditPill.classList.add('workspace-credit');bar.style.display='none';}
+  if(creditPill){workspace.querySelector('.workspace-tools').appendChild(creditPill);creditPill.classList.add('workspace-credit')}
+  /* 顶栏整体撤掉（俱乐部端 2026-11-01、平台端 2026-11-02 用户要求）：标题/副标题与
+     面包屑信息重复，撤掉后纵向空间全部还给工作区。仅 club/platform 有 .topbar。 */
+  bar.style.display='none';
   const scrim=document.createElement('div');scrim.className='ux-drawer-scrim';scrim.setAttribute('aria-hidden','true');document.body.appendChild(scrim);
   const toggle=workspace.querySelector('.ux-mobile-toggle');let drawerSession=null;
   const close=()=>{sidebar.classList.remove('ux-open');scrim.classList.remove('ux-open');toggle.setAttribute('aria-expanded','false');drawerSession?.release();drawerSession=null;sidebar.inert=innerWidth<=900};

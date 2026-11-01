@@ -19,14 +19,14 @@ class AICreditEngine:
         #                          >0 = 具备资格，这是平台未按俱乐部单独设定时的默认比例）
         # 2026-10-23 装备折扣迁到套餐；2026-10-24 装备积分抵用资格也迁到套餐
         # （基础套餐无此项权益，Pro/Enterprise 具备，比例由总平台按俱乐部单独设定）。
-        ("starter", "Starter", 299.0, 3000, "适合刚开始使用 ClubOS AI 的俱乐部", 10, 1.0, 0.0),
+        ("starter", "Starter", 299.0, 3000, "适合刚起步的俱乐部", 10, 1.0, 0.0),
         ("pro", "Pro", 699.0, 10000, "适合持续运营活动与内容的俱乐部", 20, 0.95, 20.0),
         ("enterprise", "Enterprise", 0.0, 30000, "组织级额度；价格由平台另行约定", 30, 0.90, 50.0),
     ]
     DEFAULT_TOPUPS = [
-        ("T1000", "1,000 Credits", 99.0, 1000, 10),
-        ("T5000", "5,000 Credits", 399.0, 5000, 20),
-        ("T12000", "12,000 Credits", 799.0, 12000, 30),
+        ("T1000", "1,000 积分", 99.0, 1000, 10),
+        ("T5000", "5,000 积分", 399.0, 5000, 20),
+        ("T12000", "12,000 积分", 799.0, 12000, 30),
     ]
 
     @staticmethod
@@ -58,6 +58,12 @@ class AICreditEngine:
                    VALUES(?,?,?,?,'active',?)""",
                 (code, name, amount, credits, sort_order),
             )
+        # 2026-11-02 合规去 AI 化：存量库里仍是旧文案（含 AI 字样）的种子数据同步改名；
+        # 只做原文精确匹配，运营已自定义的名称不受影响。
+        c.execute("UPDATE ai_credit_plans SET description='适合刚起步的俱乐部' WHERE description='适合刚开始使用 ClubOS AI 的俱乐部'")
+        c.execute("UPDATE ai_credit_topup_packages SET name='1,000 积分' WHERE name='1,000 Credits'")
+        c.execute("UPDATE ai_credit_topup_packages SET name='5,000 积分' WHERE name='5,000 Credits'")
+        c.execute("UPDATE ai_credit_topup_packages SET name='12,000 积分' WHERE name='12,000 Credits'")
 
     def ensure_account(self, c, club_id: int) -> dict[str, Any]:
         r = c.execute("SELECT * FROM ai_credit_accounts WHERE club_id=?", (club_id,)).fetchone()
@@ -101,7 +107,7 @@ class AICreditEngine:
             c.execute(
                 """INSERT INTO ai_credit_ledger(club_id,type,amount,source_type,source_id,note)
                    VALUES(?,?,?,?,?,?)""",
-                (club_id, "debt_recovery", -take, source_type, source_id, f"自动偿还 AI Credits 欠账 #{d['id']}"),
+                (club_id, "debt_recovery", -take, source_type, source_id, f"自动偿还积分欠账 #{d['id']}"),
             )
             remaining -= take
             recovered += take
@@ -347,7 +353,7 @@ class AICreditEngine:
     def assign_plan(self, c, *, club_id: int, plan_code: str, auto_renew: bool = True) -> dict[str, Any]:
         plan = c.execute("SELECT * FROM ai_credit_plans WHERE code=? AND status='active'", (plan_code,)).fetchone()
         if not plan:
-            raise ValueError("AI Credits 套餐不存在或已停用")
+            raise ValueError("积分套餐不存在或已停用")
         period = self._month_key()
         start, end = self._period_bounds(period)
         c.execute(
@@ -375,7 +381,7 @@ class AICreditEngine:
         period = period_key or self._month_key()
         sub = self.subscription(c, club_id)
         if not sub or sub.get("status") != "active":
-            raise ValueError("俱乐部尚未开通 AI Credits 套餐")
+            raise ValueError("俱乐部尚未开通积分套餐")
         # 唯一索引 idx_ai_credit_subscription_period 保证每月只有一张订阅账单——
         # 这是刻意的账务不变量，不在它之外硬塞第二张。自助订阅引入后「同月换套餐」
         # 成为俱乐部的随手动作，语义按账单状态分两支：
@@ -397,7 +403,7 @@ class AICreditEngine:
             c.execute(
                 """UPDATE ai_credit_orders SET plan_code=?,credits=?,amount=?,note=? WHERE id=?""",
                 (sub["plan_code"], int(sub["monthly_credits_snapshot"]),
-                 float(sub["monthly_fee_snapshot"]), f"{period} AI Credits 套餐 {sub['plan_code']}", existing["id"]),
+                 float(sub["monthly_fee_snapshot"]), f"{period} 积分套餐 {sub['plan_code']}", existing["id"]),
             )
             return dict(c.execute("SELECT * FROM ai_credit_orders WHERE id=?", (existing["id"],)).fetchone())
         oid = f"aio_{uuid.uuid4().hex}"
@@ -405,7 +411,7 @@ class AICreditEngine:
             """INSERT INTO ai_credit_orders(id,club_id,order_type,plan_code,credits,amount,period_key,status,note)
                VALUES(?,?,?,?,?,?,?,'pending',?)""",
             (oid, club_id, "subscription", sub["plan_code"], int(sub["monthly_credits_snapshot"]),
-             float(sub["monthly_fee_snapshot"]), period, f"{period} AI Credits 套餐 {sub['plan_code']}"),
+             float(sub["monthly_fee_snapshot"]), period, f"{period} 积分套餐 {sub['plan_code']}"),
         )
         return dict(c.execute("SELECT * FROM ai_credit_orders WHERE id=?", (oid,)).fetchone())
 
@@ -426,7 +432,7 @@ class AICreditEngine:
     def confirm_order_paid(self, c, *, order_id: str, payment_ref: str) -> dict[str, Any]:
         o0 = c.execute("SELECT * FROM ai_credit_orders WHERE id=?", (order_id,)).fetchone()
         if not o0:
-            raise LookupError("AI Credits 账单不存在")
+            raise LookupError("积分账单不存在")
         o = dict(o0)
         if o["status"] == "paid":
             return {"order": o, "idempotent": True}
@@ -436,7 +442,7 @@ class AICreditEngine:
             raise ValueError("paymentRef 必填")
         same = c.execute("SELECT id FROM ai_credit_orders WHERE payment_ref=?", (payment_ref.strip(),)).fetchone()
         if same and str(same[0]) != order_id:
-            raise ValueError("paymentRef 已被其他 AI Credits 账单使用")
+            raise ValueError("paymentRef 已被其他积分账单使用")
         ledger_type = "subscription" if o["order_type"] == "subscription" else "topup"
         grant = self.grant(
             c,
@@ -445,7 +451,7 @@ class AICreditEngine:
             ledger_type=ledger_type,
             source_type="ai_credit_order",
             source_id=order_id,
-            note=o.get("note") or f"AI Credits {o['order_type']}",
+            note=o.get("note") or f"积分 {o['order_type']}",
         )
         c.execute(
             "UPDATE ai_credit_orders SET status='paid',payment_ref=?,paid_at=CURRENT_TIMESTAMP WHERE id=?",

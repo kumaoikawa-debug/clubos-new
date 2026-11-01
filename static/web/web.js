@@ -1421,7 +1421,7 @@ async function submitGearOrder(){
 获得 ${paid.gearPointsEarned} 装备积分${paid.platformBenefitSubsidy?`
 平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}
 俱乐部获得 ${money(paid.clubCommission)} 佣金
-俱乐部获得 ${paid.clubAIReward} AI Credits奖励`});
+俱乐部获得 ${paid.clubAIReward} 积分奖励`});
       loadWallet();loadMemberCenter();
       if(typeof loadOrders==='function')loadOrders();
       /* 库存变了，回列表要重新拉一次，否则卡片上还是旧库存。 */
