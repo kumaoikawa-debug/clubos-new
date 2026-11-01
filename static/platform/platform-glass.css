@@ -1,0 +1,92 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   ClubOS 总平台端 · 全局毛玻璃 + 流体背景 + 户外元素皮肤（2026-11-01）
+   与俱乐部端同一套设计语言（深绿品牌色 / CSS 渐变 blob / 户外母题 / 毛玻璃），
+   作用范围：整个总平台后台（侧栏 + 所有视图的卡片），做到与俱乐部端一致。
+   不改 platform.js：仅注入背景层 + 玻璃样式覆盖。
+   说明：总平台概览页原本就没有「示意」图表（分析视图本就拉真实 BI），
+        故此处只做视觉皮肤，不重写图表。
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* 整页背景透出固定流体层（fallback 渐变，JS 失败也有底色） */
+body.admin-workspace{background:linear-gradient(125deg,#d4ebdd 0%,#c7e6da 26%,#dfe7d2 50%,#f0ddc4 78%,#f3d3b0 100%)}
+.app{position:relative;z-index:1}
+
+/* 固定流体背景层：常驻视口背后，承载 blob + 户外 SVG 母题 */
+.plat-bg{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden;
+  background:linear-gradient(125deg,#d4ebdd 0%,#c7e6da 26%,#dfe7d2 50%,#f0ddc4 78%,#f3d3b0 100%)}
+.plat-bg .blob{position:absolute;border-radius:50%;filter:blur(40px);will-change:transform}
+.plat-bg .b1{width:680px;height:680px;left:-220px;top:-210px;opacity:.85;background:radial-gradient(circle at 32% 32%,#2f8f63,transparent 62%)}
+.plat-bg .b2{width:640px;height:640px;right:-230px;top:-90px;opacity:.82;background:radial-gradient(circle at 60% 40%,#15b083,transparent 62%)}
+.plat-bg .b3{width:600px;height:600px;right:-120px;bottom:-40px;opacity:.70;background:radial-gradient(circle at 50% 50%,#ef9a3d,transparent 62%)}
+.plat-bg .b4{width:580px;height:580px;left:-140px;bottom:-120px;opacity:.66;background:radial-gradient(circle at 50% 50%,#2f9e8a,transparent 62%)}
+.plat-bg .b5{width:540px;height:540px;left:32%;top:30%;opacity:.5;background:radial-gradient(circle at 50% 50%,#f0b070,transparent 62%)}
+.plat-bg .b6{width:460px;height:460px;right:16%;bottom:6%;opacity:.42;background:radial-gradient(circle at 50% 50%,#7cc6a3,transparent 62%)}
+
+/* 户外母题：等高线（徒步地图感） */
+.plat-bg .topo{position:absolute;right:-40px;top:-30px;width:60vw;max-width:760px;height:auto;opacity:.5}
+.plat-bg .topo path{fill:none;stroke:#2e6b4e;stroke-width:1.1;stroke-linecap:round}
+.plat-bg .topo circle{fill:#2e6b4e}
+/* 户外母题：山脊剪影（底部） */
+.plat-bg .ridge{position:absolute;left:0;right:0;bottom:0;width:100%;height:auto;opacity:.5}
+.plat-bg .ridge path{fill:#2e6b4e}
+/* 户外母题：飘浮小径点（虚线轨迹） */
+.plat-bg .trail{position:absolute;left:6%;top:62%;width:120px;height:auto;opacity:.5}
+
+/* 侧栏毛玻璃 */
+.admin-workspace .sidebar{background:rgba(251,252,250,.55);
+  -webkit-backdrop-filter:blur(18px) saturate(1.5);
+  backdrop-filter:blur(18px) saturate(1.5);
+  border-right:1px solid rgba(255,255,255,.65)}
+
+/* 通用卡片 / 统计块 毛玻璃（全局覆盖，选择器特异性与加载顺序双重保证） */
+.admin-workspace .card,
+.admin-workspace .g4 > .stat-tile,
+.admin-workspace .stat-tile{
+  background:rgba(255,255,255,.74);
+  -webkit-backdrop-filter:blur(14px) saturate(1.4);
+  backdrop-filter:blur(14px) saturate(1.4);
+  border:1px solid rgba(255,255,255,.92);
+  box-shadow:0 14px 36px rgba(20,55,40,.15), inset 0 1px 0 rgba(255,255,255,.8);
+}
+.admin-workspace .card:hover{border-color:rgba(255,255,255,.92);box-shadow:0 16px 40px rgba(20,55,40,.11)}
+.admin-workspace .g4:has(> .stat-tile){background:transparent;border:0}
+
+/* 卡片内辅助文本加深，玻璃化后保持对比度 */
+.admin-workspace .sub,
+.admin-workspace .notice,
+.admin-workspace .empty,
+.admin-workspace .hint{color:#2f423a}
+.admin-workspace .panel-title h3{color:var(--brand-deep,#16302a)}
+.admin-workspace .panel-title h2{color:var(--brand-deep,#16302a)}
+
+/* 统计块文字（#pMetrics 等） */
+.admin-workspace .stat-tile{overflow:hidden}
+.admin-workspace .stat-tile::before{width:4px;background:linear-gradient(var(--brand2),var(--brand));opacity:.85}
+.admin-workspace .stat-tile .v{color:var(--brand-deep,#16302a)}
+.admin-workspace .stat-tile .k{color:#2f423a}
+.admin-workspace .stat-tile .hint{color:var(--brand2)}
+
+/* 表格在玻璃卡内保持可读 */
+.admin-workspace .table{background:transparent}
+.admin-workspace .table thead th{color:#3f5249}
+.admin-workspace .table tbody td{color:#243a32}
+
+/* 顶部条（title / eyebrow / sub / pill）在流体背景上保持可读 */
+.admin-workspace .topbar{background:rgba(255,255,255,.32);
+  -webkit-backdrop-filter:blur(10px) saturate(1.3);
+  backdrop-filter:blur(10px) saturate(1.3);
+  border-bottom:1px solid rgba(255,255,255,.55)}
+.admin-workspace .topbar .title{color:var(--brand-deep,#16302a)}
+.admin-workspace .topbar .sub{color:#3f5249}
+.admin-workspace .topbar .eyebrow{color:var(--brand2)}
+.admin-workspace .topbar .pill{background:rgba(36,87,67,.92);color:#fff;border:0}
+
+/* 侧栏文字 / 品牌 / 通知在玻璃上保持可读 */
+.admin-workspace .sidebar .brand{color:var(--brand-deep,#16302a)}
+.admin-workspace .sidebar .notice{color:#3f5249}
+.admin-workspace .sidebar .nav button{color:#2a3d35}
+.admin-workspace .sidebar .nav button.active{background:rgba(36,87,67,.92);color:#fff}
+
+@media (max-width:920px){
+  .admin-workspace .grid.g2.section{grid-template-columns:1fr}
+}
