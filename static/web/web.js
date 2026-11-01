@@ -2317,11 +2317,20 @@ function syncPointConfirm(mx){
   const cash=Number(cm.cash||0)+Number(gm.cash||0),pts=cMax+gMax;
   c.dataset.max=String(cMax);g.dataset.max=String(gMax);
   cb.disabled=cash<=0;
-  /* 只说结论、不解释成因：上限是被活动规则卡住还是被余额卡住，属于规则侧的事。
-     顾客看到「本单可抵 ¥66.66」已经够做决定；算不出来时给一句能行动的实话。 */
-  capEl.innerHTML=cash<=0
-    ?'当前没有可抵扣的积分。'
-    :`本单可抵 <b>${money(cash)}</b><i>用 ${pts} 积分</i>`;
+  /* 抵不了要说清是谁的原因（2026-11-02 用户反馈）：后台关掉「允许活动积分抵现金」时
+     说「本次活动不支持积分抵扣」并收起开关——别让顾客以为是自己的积分出了问题；
+     只有活动支持抵扣、而两类余额都不够时才说「当前积分不足」。后端 maxRedeemable
+     每类都带 limiter：'off'=规则关闭 / 'empty'=余额为 0 / 'balance'|'policy'=被余额或政策卡住。 */
+  const tg=cb.closest('.point-toggle');
+  if(cash>0){
+    if(tg)tg.style.display='';
+    capEl.innerHTML=`本单可抵 <b>${money(cash)}</b><i>用 ${pts} 积分</i>`;
+  }else{
+    const clubOff=String(cm.limiter||'')==='off';
+    const anyEmpty=String(cm.limiter||'')==='empty'||String(gm.limiter||'')==='empty';
+    if(tg)tg.style.display=clubOff?'none':'';
+    capEl.innerHTML=clubOff?'本次活动不支持积分抵扣':(anyEmpty?'当前积分不足':'当前没有可抵扣的积分。');
+  }
   const wc=cb.checked?String(cMax):'0',wg=cb.checked?String(gMax):'0';
   let drifted=false;
   if(String(c.value||'0')!==wc){c.value=wc;drifted=true}
