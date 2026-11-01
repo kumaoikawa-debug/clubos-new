@@ -674,3 +674,8 @@
  .inventory-workflow .table td[data-label]::before {content:attr(data-label);display:block;font-size:13px;margin-bottom:4px;}
  .inventory-workflow .table input {width:100%!important;}
 }
+
+/* 库位库存：货号聚合主行 + 规格/库位明细行（2026-11-02） */
+.w-inv__sub>td{background:var(--panel-2,#f7f9f8);font-size:13px;color:var(--muted,#5a6b64)}
+.w-inv__sub .w-inv__loc{margin-left:8px;font-size:12px;opacity:.75}
+.w-inv__chev{width:20px;text-align:center;color:var(--muted,#8a9a92);user-select:none}

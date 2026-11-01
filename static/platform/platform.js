@@ -701,7 +701,22 @@ async function loadWarehouse(){
       <div class="wh-card__locs">${locRows}</div>
     </div>`;
   }).join('')+`</div>` : '<div class="empty">暂无仓库</div>';
- $('#warehouseInventory').innerHTML=`<table class="table"><thead><tr><th>商品</th><th>仓库</th><th>库位</th><th>区域</th><th>实物</th><th>锁定</th><th>可用</th></tr></thead><tbody>${inv.map(x=>`<tr><td>${esc(x.product_name)}<div class="sub">${esc(x.variant_name||'')} · ${esc(x.product_sku||'')}</div></td><td>${esc(x.warehouse_name)}</td><td>${esc(x.location_code)}</td><td>${esc(x.zone_type)}</td><td>${x.on_hand}</td><td>${x.reserved}</td><td><strong>${x.available}</strong></td></tr>`).join('')}</tbody></table>`;
+ // 按「货号 × 仓库」聚合：一个货号一行显示总量，颜色/尺码是货号下的可展开明细。
+  // 库存明细在账上仍按变体记账（移库/锁定/拣货都按变体），这里只是展示层不再把规格拆成多个商品行。
+  const groups={};
+  inv.forEach(x=>{const k=(x.product_id||0)+'@'+(x.warehouse_id||0);
+    if(!groups[k])groups[k]={name:x.product_name,code:x.product_code||x.product_sku||'',warehouse:x.warehouse_name,rows:[],on:0,rs:0,av:0};
+    const g=groups[k];g.rows.push(x);g.on+=Number(x.on_hand||0);g.rs+=Number(x.reserved||0);g.av+=Number(x.available||0);});
+  let wbody='',wi=0;
+  Object.values(groups).forEach(g=>{const id='wInvG'+(wi++);
+    const colors=[...new Set(g.rows.map(r=>String(r.color||'').trim()).filter(Boolean))];
+    const sizes=[...new Set(g.rows.map(r=>String(r.size||'').trim()).filter(Boolean))];
+    const spec=`${g.rows.length} 个规格 / ${colors.length} 色 / ${sizes.length} 码`;
+    wbody+=`<tr class="w-inv__main" onclick="toggleWInvDetail('${id}')" style="cursor:pointer"><td>${esc(g.name)}<div class="sub">${esc(g.code)} · ${esc(spec)}</div></td><td>${esc(g.warehouse)}</td><td>${g.on}</td><td>${g.rs}</td><td><strong>${g.av}</strong></td><td class="w-inv__chev" id="${id}chev">▸</td></tr>`;
+    g.rows.forEach(r=>{wbody+=`<tr class="w-inv__sub" data-sub="${id}" style="display:none"><td style="padding-left:30px">${esc(r.variant_name||'')} <span class="w-inv__loc">${esc(r.location_code||'')} · ${esc(r.zone_type||'')}</span></td><td>${esc(r.warehouse_name)}</td><td>${r.on_hand}</td><td>${r.reserved}</td><td>${r.available}</td><td></td></tr>`;});
+  });
+  $('#warehouseInventory').innerHTML=`<table class="table"><thead><tr><th>商品（货号合计，点行展开规格）</th><th>仓库</th><th>实物</th><th>锁定</th><th>可用</th><th></th></tr></thead><tbody>${wbody}</tbody></table>`;
+  if(!Object.keys(groups).length)$('#warehouseInventory').innerHTML='<div class="empty">暂无库存记录</div>';
  $('#warehouseTasks').innerHTML=tasks.map(t=>`<div class="notice" style="margin-bottom:8px"><strong>#${t.order_id} · ${t.task_type==='pick'?'拣货':'打包'}</strong><span class="tag" style="margin-left:8px">${esc(enumCn(t.status))}</span>${t.task_type==='pick'&&t.status==='pending'?` <button class="btn secondary" onclick="markPicked('${t.id}')">完成拣货</button>`:''}</div>`).join('')||'<div class="empty">暂无仓库任务</div>';
 }catch(e){loaderError('#warehouseSummary',e,'loadWarehouse 加载失败')}}
 
@@ -731,6 +746,7 @@ async function openWarehouseDetail(code){
   }).join('') : '<div class="wh-detail__empty">该仓库暂无库位</div>';
   box.innerHTML = meta + '<div class="wh-detail__table"><div class="wh-detail__th"><span>库位编码</span><span>名称</span><span>实物</span><span>锁定</span></div>' + rows + '</div>';
 }
+window.toggleWInvDetail=function(id){const subs=[...document.querySelectorAll('[data-sub="'+id+'"]')];if(!subs.length)return;const open=subs[0].style.display!=='none';subs.forEach(t=>t.style.display=open?'none':'');const chev=document.getElementById(id+'chev');if(chev)chev.textContent=open?'▸':'▾';};
 async function markPicked(id){await api(`/api/platform/warehouse/tasks/${id}/picked`,{method:'POST'});toast('拣货完成');loadWarehouse()}
 
 async function loadFinance(){try{skel('#supplierFinanceList',4);let [ss,sum,orders,products]=await Promise.all([api('/api/platform/finance/supplier-summary'),api('/api/platform/profit/summary'),api('/api/platform/profit/orders?limit=50'),api('/api/platform/profit/products')]);let payable=ss.reduce((a,x)=>a+Number(x.outstanding||0),0),overdue=ss.reduce((a,x)=>a+Number(x.overdue||0),0);$('#financeMetrics').innerHTML=[['供应商应付',money(payable)],['逾期应付',money(overdue)],['贡献利润',money(sum.contributionProfit)],['贡献毛利率',`${Number(sum.contributionMarginPct||0).toFixed(1)}%`]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');$('#supplierFinanceList').innerHTML=ss.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.supplierName)}</div> · 应付 ${money(x.outstanding)}${x.overdue>0?` <span class="tag orange">逾期 ${money(x.overdue)}</span>`:''}<div class="list-row__sub">已付 ${money(x.paidAmount)} · 已冲贷项 ${money(x.creditsApplied)} · 未用贷项 ${money(x.availableCredit)} · 采购价差 ${money(x.purchasePriceVariance)}</div><button class="btn ghost" style="margin-top:7px" onclick="paySupplier(${x.supplierId},${x.outstanding})">登记付款</button></div></div>`).join('')||'<div class="empty">暂无供应商应付</div>';$('#orderProfitList').innerHTML=orders.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">订单 #${x.orderId}</div> · 净销售 ${money(x.netSales)} · <b>${money(x.contributionProfit)}</b> <div class="list-row__sub">COGS ${money(x.cogs)} · 佣金 ${money(x.clubCommission)} · 积分/福利 ${money(Number(x.platformPointSubsidy)+Number(x.platformBenefitSubsidy))} · 物流包装 ${money(Number(x.shippingCost)+Number(x.packagingCost))}</div><button class="btn ghost" style="margin-top:6px" onclick="setOrderCosts(${x.orderId},${x.shippingCost||0},${x.packagingCost||0})">录入物流成本</button><div class="list-row__end"><span class="tag ${x.contributionProfit<0?'orange':''}">${Number(x.contributionMarginPct||0).toFixed(1)}%</span></div></div></div>`).join('')||'<div class="empty">暂无商城订单</div>';$('#productProfitList').innerHTML=`<table class="table"><thead><tr><th>商品</th><th>净销量</th><th>净销售</th><th>COGS</th><th>毛利</th><th>毛利率</th></tr></thead><tbody>${products.map(x=>`<tr><td>${esc(x.name)}<div class="sub">${esc(x.sku)}</div></td><td>${x.netUnits}</td><td>${money(x.netSales)}</td><td>${money(x.cogs)}</td><td><strong>${money(x.grossProfit)}</strong></td><td>${Number(x.grossMarginPct||0).toFixed(1)}%</td></tr>`).join('')}</tbody></table>`}catch(e){loaderError('#supplierFinanceList',e,'loadFinance 加载失败')}}

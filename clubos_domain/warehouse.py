@@ -204,7 +204,7 @@ class WarehouseEngine:
         return out
 
     def inventory(self,c,*,warehouse_id:int|None=None,product_id:int|None=None):
-        sql="""SELECT b.*,p.name product_name,v.sku product_sku,v.name variant_name,v.color,v.size,
+        sql="""SELECT b.*,p.name product_name,p.sku product_code,v.sku product_sku,v.name variant_name,v.color,v.size,
           l.code location_code,l.name location_name,l.zone_type,w.id warehouse_id,w.name warehouse_name,
           CASE WHEN l.zone_type='sellable' AND l.status='active' AND w.status='active' THEN b.on_hand-b.reserved-b.unsellable ELSE 0 END available
           FROM warehouse_sku_balances b JOIN products p ON p.id=b.product_id JOIN product_variants v ON v.id=b.variant_id
