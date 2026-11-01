@@ -2,9 +2,10 @@
 <!-- 内联 SVG 图标：省掉 /favicon.ico 的 404（浏览器默认会去请求它）。
      用山形描边，和底部导航的图标同一套笔画。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121714'/%3E%3Cpath d='M3.5 23.5 12 11l4.6 7.6 3-4.8 8.9 9.7z' fill='none' stroke='%237fd0a4' stroke-width='2.1' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/shared.css?v=20261024g"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261014a"><link rel="stylesheet" href="/static/ux/coupon-faces.css?v=20261024c"><link rel="stylesheet" href="/static/web/web.css?v=20261027e"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
+<link rel="stylesheet" href="/static/shared.css?v=20261029a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261101a"><link rel="stylesheet" href="/static/ux/coupon-faces.css?v=20261024c"><link rel="stylesheet" href="/static/web/web.css?v=20261031d"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
 
-<!-- C 端骨架：5 视图（首页 / 活动 / 装备 / 户外能力 / 我的）。
+<!-- C 端骨架：5 个导航视图（首页 / 活动 / 装备 / 户外能力 / 我的）
+     + 1 个不导航的隐藏视图 #wleaders（领队团队专区，2026-10-28 按要求从首页导航移除）。
      结构类 .web-shell / .web-top / .web-content / .wview / .web-nav 全部保留 ——
      experience-core.js 与 experience-consumer.js 靠 .web-nav、.web-content、#publicActivities、
      #publicProducts 定位，换掉它们等于让这两个装饰层静默失效。
@@ -17,7 +18,9 @@
     <!-- 购物车：只在装备页（.is-mall）或车里真有东西时出现（见 web.css .web-top__cart）。
          #cartBadge 是角标数字，renderCartBadge() 把它和父按钮的 .has 一起切显隐。 -->
     <button class="web-top__cart" type="button" onclick="openCart()" aria-label="购物车"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 4h2l2.3 11.4a1.5 1.5 0 0 0 1.5 1.2h8.4a1.5 1.5 0 0 0 1.5-1.2L21 7H6"/><circle cx="9.5" cy="20" r="1.1"/><circle cx="17" cy="20" r="1.1"/></svg><i class="web-top__badge" id="cartBadge" hidden>0</i></button>
-    <button class="web-top__btn" type="button" onclick="wv('wme')" aria-label="我的"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20.2a7.2 7.2 0 0 1 14.4 0"/></svg></button>
+    <!-- 顶栏右上角改成「信息」：通知提示必须走到页面之外，否则顾客停在首页时
+         完全不知道俱乐部发了通知。角标 #msgDot 只在真有通知时显示（见 paintNoticeHint）。 -->
+    <button class="web-top__msg" type="button" onclick="openNoticeSheet()" aria-label="信息"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 16V10a8 8 0 0 1 16 0v6l2 2H2z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg><i class="web-top__dot" id="msgDot" hidden>0</i></button>
   </header>
 
   <div class="web-content">
@@ -110,6 +113,22 @@
       <div class="w-biz" id="bizIntro"></div>
     </section>
 
+    <!-- ── 领队团队专区：列出资源库全部激活领队（录入即显示，无需逐个排班）──
+         数据来自 /api/public/clubs/{club_id}/leaders；卡片复用活动详情页的 leaderCard，
+         点卡进领队主页抽屉（简介 / 近期活动 / 评价 / 咨询 / 打分）。
+         #wLeadersGrid 由 web.js 的 renderLeaderGrid() 填充，空时走 w-sh__empty 兜底。
+         ★ 2026-10-28：按要求「首页不要显示领队」，已从底部导航摘掉入口；视图、接口、
+           抽屉全部保留原样，要恢复只需把一格的 data-wv 指回 wleaders（按钮结构见 git 历史）。 -->
+    <section id="wleaders" class="wview" style="display:none">
+      <div class="w-pad w-leaders">
+        <div class="w-leaders__head">
+          <h2>领队团队</h2>
+          <p>本俱乐部带队向导，点开可看简介与 TA 带的近期活动，也能直接咨询或打分。</p>
+        </div>
+        <div id="wLeadersGrid"></div>
+      </div>
+    </section>
+
     <!-- ── 我的：参考 PEAKTRACE 小程序「我的」版式（深色会员卡 + 积分 + 四宫格 + 商城订单五态 + 服务列表）
          所有 2 级子页面由 static/web/me.js 的 pushMe() 栈渲染到 #meStack（JS 注入到 .web-shell）。
          写入点：mePaintHome 直接写下列 id（meClubPts/meGearPts/meName/meTier/meCardNo/meGrow/meUp/meQuad/meOrders）。
@@ -121,13 +140,13 @@
         <button class="wme-card" type="button" onclick="pushMe('membercard')" aria-label="查看会员信息">
           <div class="wme-card__top">
             <div class="wme-card__id">
-              <div class="wme-ava" id="meAva">远</div>
+              <div class="wme-ava" id="meAva" role="button" tabindex="0" title="点击设置头像" onclick="openAvatarSheet()">远</div>
               <div class="wme-card__who">
                 <div class="wme-card__name"><span id="meName">远拓会员</span><i class="wme-tier" id="meTier">普通会员</i></div>
                 <div class="wme-card__no" id="meCardNo">NO. —</div>
               </div>
             </div>
-            <span class="wme-card__qrtile"><canvas class="wme-card__qr" id="meQr" width="88" height="88"></canvas></span>
+            <span class="wme-card__member" role="button" tabindex="0" onclick="openMemberCodeSheet()">会员码<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 6 6 6-6 6"/></svg></span>
           </div>
           <div class="wme-card__bot">
             <div class="wme-card__grow"><b id="meGrow">0</b><em class="wme-card__unit">元</em><span>成长值</span></div>
@@ -180,6 +199,7 @@
   </div>
 
   <!-- 底部导航 5 格：首页 / 活动 / 装备 / 户外能力 / 我的。
+       （领队专区 2026-10-28 从导航移除，恢复时加回一格 data-wv 指向 wleaders 的按钮即可。）
        图标做成内联 SVG —— 旧版是 clubos-ux.css 里 :nth-child(n):before 的字符图标，
        只有 4 个，加到第 5 格会没有图标可用；字符字形在不同系统上也不可控。 -->
   <nav class="web-nav" aria-label="主要导航">
@@ -187,19 +207,20 @@
     <button data-wv="wactivities" onclick="wv('wactivities',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 19.5 9.5 7l4 6.6 2.4-3.9 5.6 9.8z"/></svg><span>活动</span><i class="w-navdot" aria-hidden="true"></i></button>
     <button data-wv="wmall" onclick="wv('wmall',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/></svg><span>装备</span><i class="w-navdot" aria-hidden="true"></i></button>
     <button data-wv="wability" onclick="wv('wability',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15.6 8.4 10.8 10.8 8.4 15.6l4.8-2.4z"/></svg><span>户外能力</span><i class="w-navdot" aria-hidden="true"></i></button>
-    <button data-wv="wme" onclick="wv('wme',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20.2a7.2 7.2 0 0 1 14.4 0"/></svg><span>我的</span><i class="w-navdot" aria-hidden="true"></i></button>
+    <button data-wv="wme" onclick="wv('wme',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20.2a7.2 7.2 0 0 1 14.4 0"/></svg><span>我的</span><i class="w-navbadge" id="meNavDot" hidden></i><i class="w-navdot" aria-hidden="true"></i></button>
   </nav>
 </div>
 
-<script src="/static/shared.js?v=20261026a"></script>
+<script src="/static/shared.js?v=20261031d"></script>
 <script src="/static/ux/clubos-cities.js?v=20261023a"></script>
-<script src="/static/ux/coupon-faces.js?v=20261027c"></script><script src="/static/web/web.js?v=20261027d"></script>
-<script src="/static/web/web-biz.js?v=20261027d"></script>
-<script src="/static/web/me.js?v=20261027c"></script>
-<script src="/static/ux/clubos-ux.js?v=20261014a"></script>
+<script src="/static/ux/coupon-faces.js?v=20261027c"></script><script src="/static/web/web.js?v=20261031d"></script>
+<script src="/static/web/web-biz.js?v=20261031d"></script>
+<script src="/static/web/me.js?v=20261031d&rev=20261031d"></script>
+<script src="/static/ux/clubos-ux.js?v=20261101a"></script>
 <script src="/static/ux/workflows-web.js?v=20261027c"></script>
 <script src="/static/ux/qr-local.js?v=20261014a"></script>
 <script src="/static/ux/experience-core.js?v=20261014a"></script>
-<script src="/static/ux/payment-experience.js?v=20261017a"></script>
+<script src="/static/ux/payment-experience.js?v=20261017a&rev=20261027f"></script>
 <script src="/static/ux/experience-consumer.js?v=20261016a"></script>
+<script src="/static/web/nav-history.js?v=20261031d"></script>
 </body></html>

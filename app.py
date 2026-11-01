@@ -1,21 +1,26 @@
 from __future__ import annotations
-import uuid, os, io, csv, re, json, zipfile, shutil, asyncio, secrets
+import uuid, os, io, csv, re, json, zipfile, shutil, asyncio, secrets, hmac, hashlib, base64
 from sqlite3 import IntegrityError
 from datetime import datetime, timedelta, date
 from pathlib import Path
 from urllib.parse import unquote, quote, urlsplit
+import urllib.request, urllib.error
 from PIL import Image
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, Query, Header, Request, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body, Query, Header, Request, BackgroundTasks, Response
 from fastapi.responses import FileResponse, StreamingResponse, PlainTextResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
 
 from db import init_db, conn, row, rows, jdump, jload, setting
 from document_parser import save_uploads, parse_sources, _image_kind, IMAGE_EXTS as _IMAGE_UPLOAD_EXTS
 from cost_guard import sanitize_for_frontend, master_has_cost_evidence
+from cost_guard import redact_cost_text
+from link_source import fetch_link, LinkError
 from ai_engine import (generate_activity, generate_channel, regenerate_detail, detail_outline,
                        _fact_digest, pick_cover_media, generate_recap)
 from longpic import generate_longpic, build_fact_pack
 from image_caption import caption_media, caption_lines, persist_captions
+from ocr import ocr_image_text
 from ai_billing import ensure_credits, charge_credits, credit_cost
 from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config,
                         update_platform_provider_config, test_provider_connection, effective_gateway_mode)
@@ -30,6 +35,7 @@ from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, Act
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
 import logistics_engine
+from clubos_domain import stock_control as stock_control
 
 ROOT=Path(__file__).resolve().parent
 STATIC=ROOT/'static'
@@ -53,6 +59,7 @@ async def security_boundary(request:Request,call_next):
     identity=None
     try:
         identity=await authorize_request(request)
+        request.state.identity=identity
         response=await call_next(request)
     except HTTPException as e:
         if request.url.path in ('/','/platform','/club','/web','/leader') and e.status_code==401:
@@ -141,6 +148,21 @@ def club_or_404(club_id:int):
     with conn() as c: x=row(c.execute('SELECT * FROM clubs WHERE id=?',(club_id,)))
     if not x: raise HTTPException(404,'俱乐部不存在')
     return x
+
+def public_user_id(request:Request,supplied=None):
+    identity=getattr(request.state,'identity',None)
+    if identity and identity.get('role')=='member':
+        uid=identity.get('user_id')
+        if uid is None or (supplied is not None and str(supplied)!=str(uid)):
+            raise HTTPException(403,'permission denied')
+        return int(uid)
+    if IS_PROD: raise HTTPException(401,'authentication required')
+    try: return int(supplied if supplied is not None else 1)
+    except (TypeError,ValueError): raise HTTPException(400,'用户编号须为整数')
+
+class MembershipPurchase(BaseModel):
+    userId:int|None=None
+    tierId:int=Field(gt=0,strict=True)
 
 
 def user_or_create(c,name:str,phone:str):
@@ -315,7 +337,19 @@ def _source_for_storage(source:dict)->dict:
     images=[{k:x.get(k) for k in ('ref','name','url','width','height','orientation','source','page','kind')}
             for x in source.get('images') or []]
     return {'text':source.get('text',''),'files':source.get('files') or [],'images':images,
-            'media_manifest':source.get('media_manifest') or []}
+            'media_manifest':source.get('media_manifest') or [],
+            # 链接只存 URL + 标题作溯源（正文与配图已进 text / images，不依赖它再抓一次）。
+            'link':source.get('link') or {}}
+
+
+def _source_link_info(srcv:dict)->dict|None:
+    """落盘 source 里的「链接来源」。兼容早期只存 URL 字符串的写法。"""
+    l=srcv.get('link') if isinstance(srcv,dict) else None
+    if isinstance(l,str): l={'url':l}
+    if not isinstance(l,dict): return None
+    url=str(l.get('url') or '').strip()
+    if not url: return None
+    return {'url':url,'title':str(l.get('title') or '').strip()[:120]}
 
 
 def _source_from_storage(stored:dict|None)->dict|None:
@@ -433,6 +467,14 @@ from clubos_domain.leader_recommend import ACTIVITY_TYPES as _LEADER_ACTIVITY_TY
 _LEADER_SPECIALTIES = tuple(_LEADER_ACTIVITY_TYPES.keys())
 
 
+def _leader_years(payload:dict)->int:
+    """带队年限：只接受 0-60 的整数。填错（空串 / 乱写）落 0，前端就不印「N 年经验」，
+    绝不让一个手滑的数字变成对外宣称的资历。"""
+    try: y=int(float(payload.get('yearsExp') or 0))
+    except (TypeError,ValueError): y=0
+    return max(0,min(60,y))
+
+
 def _leader_roster(c,club_id:int)->list[dict]:
     """领队资源库名册，附带累计带队次数——判断"谁在真正带队"要看这个数。"""
     out=[]
@@ -443,6 +485,16 @@ def _leader_roster(c,club_id:int)->list[dict]:
         d['assignedCount']=int(c.execute('SELECT COUNT(*) FROM occurrence_leaders WHERE club_id=? AND leader_id=?',
                                          (club_id,r['id'])).fetchone()[0])
         out.append(d)
+    # 2026-10-27 口碑与咨询待办：俱乐部端名册要能一眼看出「谁口碑好」「谁的咨询还没回」。
+    stats=_leader_stats(c,club_id,[x['id'] for x in out])
+    pending={}
+    for r in rows(c.execute('SELECT leader_id,COUNT(*) cnt FROM leader_inquiries WHERE club_id=? AND status="new" GROUP BY leader_id',(club_id,))):
+        pending[int(r['leader_id'] or 0)]=int(r['cnt'] or 0)
+    for d in out:
+        s=stats.get(int(d['id'])) or {}
+        d['ratingAvg']=s.get('ratingAvg')
+        d['ratingCount']=int(s.get('ratingCount') or 0)
+        d['newInquiries']=pending.get(int(d['id']),0)
     return out
 
 
@@ -565,12 +617,24 @@ def _release_detail_version(c,version_id:int)->None:
     c.execute('DELETE FROM activity_detail_versions WHERE id=? AND status=\'pending\'',(version_id,))
 
 
-async def _run_generate_job(club_id:int,job_id:int,source:dict,refresh_facts:bool=False,direction:str='',city:str=''):
+async def _run_generate_job(club_id:int,job_id:int,source:dict,refresh_facts:bool=False,direction:str='',city:str='',link_info:dict|None=None):
     """后台执行真模型生成（live 模式）。任何异常都落进 job.error，绝不能静默丢任务。"""
     city_val=str(city or '').strip()[:40] or None
     try:
         with conn() as c:
             c.execute('UPDATE ai_generate_jobs SET status="running",stage="generating",started_at=CURRENT_TIMESTAMP WHERE id=?',(job_id,))
+        # 图内文字 OCR 增强（2026-10-29）：链接正文偏薄但配图很多（如微信长图推文）时，
+        # 文字烤在图里、静态/渲染都抓不到，这里调视觉模型把图内文字读出来并入正文，
+        # 活动要素（日期/价格/地点）才完整。任何失败都静默跳过 —— 读不出只是内容少一点，
+        # 不能让整条生成挂掉。
+        if link_info and len((link_info.get('text') or '').strip()) < 200 and link_info.get('images'):
+            try:
+                _ocr = await ocr_image_text(club_id, list(link_info['images']))
+                if _ocr:
+                    _base = source.get('text') or ''
+                    source['text'] = (_base + '\n\n【以下文字提取自推文配图（OCR）】\n' + _ocr).strip()
+            except Exception:
+                pass
         result,usage=await generate_activity(club_id,source,direction=direction)
         master=result['activity_master']; detail=result['detail']
         if city_val: master['city']=city_val
@@ -579,8 +643,9 @@ async def _run_generate_job(club_id:int,job_id:int,source:dict,refresh_facts:boo
         charge_credits(club_id,'detail',usage.usage_id)
         title=master.get('title') or 'AI生成活动'
         with conn() as c:
-            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,source_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(
-                club_id,title,'draft',master.get('date',''),master.get('location',''),city_val,float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source))))
+            _pd=_club_points_defaults(c,club_id)
+            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,source_json,points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(
+                club_id,title,'draft',master.get('date',''),master.get('location',''),city_val,float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source)),_pd[0],_pd[1],_pd[2],_pd[3]))
             aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
             vid,_n=_reserve_detail_version(c,club_id=club_id,activity_id=aid,origin='ai-generate')
             _finalize_detail_version(c,version_id=vid,activity_id=aid,detail=detail,master=master,
@@ -605,9 +670,14 @@ def ai_generate_job(club_id:int,job_id:int):
             'createdAt':j['created_at'],'finishedAt':j['finished_at']}
 
 @app.post('/api/club/{club_id}/activities/ai-generate')
-async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Form(''),city:str=Form(''),files:list[UploadFile]=File(default=[])):
+async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Form(''),city:str=Form(''),link:str=Form(''),files:list[UploadFile]=File(default=[])):
     club_or_404(club_id); ensure_credits(club_id,'detail')
     city_val=str(city or '').strip()[:40] or None
+    # 链接入口（2026-10-28）：老板手上常常只有一条别家写好的推文 / 自家活动页 URL。
+    # 链接和上传资料是并列关系，也可以一起给（文章正文 + 补几张实拍）。
+    link_raw=str(link or '').strip()
+    if not link_raw and not str(prompt or '').strip() and not files:
+        raise HTTPException(400,'先给点材料：填一句话、传一份资料，或者贴一条活动链接。')
     # live 模式下真模型要跑几分钟，同步响应会被网关空闲超时掐断（2026-09-28 实测：
     # 上传 14MB 请求体 11s 就能完整过网关，吞吐根本不是瓶颈；死的是几分钟的同步等待）。
     # 所以 live 一律改异步任务；mock 秒回，保持同步不破坏回归脚本。
@@ -634,7 +704,23 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
                     import fitz
                     with fitz.open(str(item)) as pdf:
                         if len(pdf)>120:raise ValueError('PDF exceeds 120-page processing limit')
-        source=parse_sources(saved,prompt,STATIC)
+        # 链接 → 正文 + 配图（2026-10-28）。配图落进同一批目录，交给 parse_sources
+        # 统一做图片元数据 / 打标 / media_manifest，两条入口最终长成同一个 source。
+        link_info=None
+        prompt_for_ai=prompt
+        if link_raw:
+            link_info=fetch_link(link_raw,batch/'link')
+            saved=saved+list(link_info['images'])
+            _link_text,_link_cost=redact_cost_text(link_info['text'])
+            # 成本闸门对链接正文同样生效：方案的网页版一样可能有「费用明细」页。
+            _head=f"[链接: {link_info['title'] or link_info['finalUrl']}]\n{link_info['url']}\n{_link_text}"
+            _p=str(prompt or '').strip()
+            prompt_for_ai=(_p+'\n\n'+_head).strip() if _p else _head
+        source=parse_sources(saved,prompt_for_ai,STATIC)
+        source['link']={'url':link_info['finalUrl'],'title':link_info['title']} if link_info else {}
+    except LinkError as e:
+        shutil.rmtree(batch,ignore_errors=True)
+        raise HTTPException(422,str(e))
     except (ValueError,zipfile.BadZipFile) as e:
         shutil.rmtree(batch,ignore_errors=True)
         raise HTTPException(413,str(e))
@@ -662,7 +748,11 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
     _doc_files=[f for f in (source.get('files') or []) if str(f.get('ext') or '') in _doc_exts]
     summary={'files':source['files'],'imageCount':len(source['images']),'media':source['media_manifest'],
              'textLength':_text_len,'docFiles':_doc_files,'noText':_text_len==0,'skippedFiles':_skipped,
-             'readErrors':source.get('readErrors') or []}
+             'readErrors':source.get('readErrors') or [],
+             # 前端据此告诉老板「这条链接读到了什么」，别让人以为贴了链接却被忽略。
+             'link':({'url':link_info['finalUrl'],'title':link_info['title'],
+                      'textLength':len(link_info['text']),'imageCount':len(link_info['images']),
+                      'truncated':link_info['truncated']} if link_info else None)}
     if not live_mode:
         # mock：秒回，保持旧的同步契约，回归脚本直接拿 activityId。
         try: result,usage=await generate_activity(club_id,source)
@@ -672,8 +762,9 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
         charge_credits(club_id,'detail',usage.usage_id)
         title=master.get('title') or 'AI生成活动'
         with conn() as c:
-            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,source_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)',(
-                club_id,title,'draft',master.get('date',''),master.get('location',''),city_val,float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source))))
+            _pd=_club_points_defaults(c,club_id)
+            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,source_json,points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(
+                club_id,title,'draft',master.get('date',''),master.get('location',''),city_val,float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source)),_pd[0],_pd[1],_pd[2],_pd[3]))
             aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
             vid,_n=_reserve_detail_version(c,club_id=club_id,activity_id=aid,origin='ai-generate')
             _finalize_detail_version(c,version_id=vid,activity_id=aid,detail=detail,master=master,
@@ -686,7 +777,7 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
     with conn() as c:
         cur=c.execute('INSERT INTO ai_generate_jobs(club_id,status,stage,summary_json) VALUES(?,"queued","queued",?)',(club_id,jdump(summary)))
         jid=int(cur.lastrowid)
-    background_tasks.add_task(_run_generate_job,club_id,jid,source,city=city_val)
+    background_tasks.add_task(_run_generate_job,club_id,jid,source,city=city_val,link_info=link_info)
     return {'jobId':jid,'stage':'queued','source':summary}
 
 @app.post('/api/club/{club_id}/activities')
@@ -726,8 +817,9 @@ def create_activity_manual(club_id:int,payload:dict=Body(...)):
         {'label':'名额','value':(f'{capacity} 人' if capacity else '待定')},
     ]})
     with conn() as c:
-        cur=c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json) VALUES(?,?,?,?,?,?,?,?,?,?)',
-            (club_id,title,'draft',event_date,location,city,price,capacity,jdump(master),jdump(detail)))
+        _pd=_club_points_defaults(c,club_id)
+        cur=c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (club_id,title,'draft',event_date,location,city,price,capacity,jdump(master),jdump(detail),_pd[0],_pd[1],_pd[2],_pd[3]))
         aid=int(cur.lastrowid)
         if occ_start:
             c.execute('INSERT INTO activity_occurrences(activity_id,club_id,start_at,price,capacity,status,label) VALUES(?,?,?,?,?,?,?)',
@@ -770,6 +862,8 @@ def get_activity(club_id:int,activity_id:int):
             'imageCount':len(_srcv.get('images') or []),
             'photoCount':len([x for x in (_srcv.get('media_manifest') or [])
                               if isinstance(x,dict) and str(x.get('kind') or 'photo')!='logo']),
+            # 链接来源（2026-10-28）：只回标题 + 字数，让俱乐部端能说「本场按链接生成」。
+            'link':_source_link_info(_srcv),
         }
         versions=rows(c.execute('''SELECT id,version_no,origin,direction,facts_refreshed,created_at,credits_charged,gateway_mode,gateway_model,outline
                                    FROM activity_detail_versions WHERE activity_id=? AND club_id=? AND status='ready' ORDER BY version_no DESC''',(activity_id,club_id)))
@@ -1019,6 +1113,105 @@ def update_activity_points_policy(club_id:int,activity_id:int,payload:dict=Body(
         policy=activity_points_policy.normalize_update(payload,current)
         activity_points_policy.persist(c,activity_id,club_id,policy)
     return policy.as_dict()
+
+def _club_points_defaults(c, club_id):
+    """读俱乐部的「新活动默认积分规则」，返回 (enabled, earn, accept, percent)。
+
+    2026-10-31：activities 那四个积分列的表级默认值写死 1/1/1/100，俱乐部改不动，
+    于是每场新活动都默认「参与积分 + 可抵 100%」（截图里全场 100% 就是这么来的）。
+    新建活动时显式读俱乐部配置写进去，运营在「积分策略」页设一次即可全场生效。
+    读不到（老库还没跑迁移 / 俱乐部不存在 / 值非法）一律退回原表级默认值 ——
+    加功能绝不能把建活动搞失败。
+    """
+    try:
+        r = c.execute('''SELECT default_points_enabled, default_earn_club_points,
+                         default_accept_club_points, default_club_points_max_discount_percent
+                         FROM clubs WHERE id=?''', (int(club_id),)).fetchone()
+    except Exception:
+        return (1, 1, 1, 100.0)
+    if not r:
+        return (1, 1, 1, 100.0)
+
+    def _b(v):
+        try:
+            return 1 if int(v) else 0
+        except Exception:
+            return 1
+
+    try:
+        pct = float(r['default_club_points_max_discount_percent'])
+    except Exception:
+        pct = 100.0
+    return (_b(r['default_points_enabled']), _b(r['default_earn_club_points']),
+            _b(r['default_accept_club_points']), max(0.0, min(100.0, pct)))
+
+@app.get('/api/club/{club_id}/points-default')
+def get_club_points_default(club_id:int):
+    """俱乐部级「新活动默认积分规则」：新建活动时继承这四个值。"""
+    with conn() as c:
+        en, earn, acc, pct = _club_points_defaults(c, club_id)
+    return {'enabled': bool(en), 'earnClubPoints': bool(earn),
+            'acceptClubPoints': bool(acc), 'clubPointsMaxDiscountPercent': pct}
+
+@app.patch('/api/club/{club_id}/points-default')
+def update_club_points_default(club_id:int, payload:dict=Body(...)):
+    """保存默认规则。**只影响之后新建的活动**，存量活动一律不动 ——
+    否则运营改一次默认值，就把历史活动那些「单独调过」的设置全冲掉了。"""
+    try:
+        pct = float(payload.get('clubPointsMaxDiscountPercent', 100) or 0)
+    except Exception:
+        pct = 100.0
+    pct = max(0.0, min(100.0, pct))
+    vals = (1 if payload.get('enabled') else 0,
+            1 if payload.get('earnClubPoints') else 0,
+            1 if payload.get('acceptClubPoints') else 0,
+            pct)
+    with conn() as c:
+        cur = c.execute('''UPDATE clubs SET default_points_enabled=?, default_earn_club_points=?,
+                           default_accept_club_points=?, default_club_points_max_discount_percent=?
+                           WHERE id=?''', vals + (int(club_id),))
+        if cur.rowcount == 0:
+            raise HTTPException(404, '俱乐部不存在')
+    return {'ok': True, 'enabled': bool(vals[0]), 'earnClubPoints': bool(vals[1]),
+            'acceptClubPoints': bool(vals[2]), 'clubPointsMaxDiscountPercent': pct}
+
+@app.post('/api/club/{club_id}/activities/points-policy/bulk')
+def bulk_update_activity_points_policy(club_id:int, payload:dict=Body(...)):
+    """批量改多场活动的积分规则（「积分策略」页勾选后一次刷）。
+
+    走一个事务、发一个请求：几十场活动逐条 PATCH 会让运营盯着进度条，
+    中途失败还会留下「改了一半」的烂摊子。
+    装备积分字段一律不碰（准入归总平台），只写俱乐部活动积分那四个。
+    """
+    ids = payload.get('activityIds') or []
+    if not isinstance(ids, list) or not ids:
+        raise HTTPException(400, '请至少勾选一场活动')
+    try:
+        pct = float(payload.get('clubPointsMaxDiscountPercent', 100) or 0)
+    except Exception:
+        pct = 100.0
+    pct = max(0.0, min(100.0, pct))
+    enabled = 1 if payload.get('enabled') else 0
+    earn = 1 if payload.get('earnClubPoints') else 0
+    accept = 1 if payload.get('acceptClubPoints') else 0
+    clean = []
+    for x in ids[:500]:
+        try:
+            clean.append(int(x))
+        except Exception:
+            continue
+    if not clean:
+        raise HTTPException(400, '活动 ID 无效')
+    updated = 0
+    with conn() as c:
+        for aid in clean:
+            cur = c.execute('''UPDATE activities SET points_enabled=?, earn_club_points=?,
+                               accept_club_points=?, club_points_max_discount_percent=?,
+                               updated_at=CURRENT_TIMESTAMP
+                               WHERE id=? AND club_id=?''',
+                            (enabled, earn, accept, pct, aid, int(club_id)))
+            updated += cur.rowcount
+    return {'ok': True, 'updated': updated, 'requested': len(clean)}
 
 @app.get('/api/club/{club_id}/activities/{activity_id}/member-discount')
 def get_activity_member_discount(club_id:int,activity_id:int):
@@ -1479,15 +1672,18 @@ def longpic_status(club_id:int,activity_id:int):
 _RECAP_JOBS: dict[tuple[int, int], dict] = {}
 
 async def _recap_job(club_id:int,activity_id:int,master:dict,note:str,entries:list[dict]):
-    job=_RECAP_JOBS.setdefault((club_id,activity_id),{'status':'running'})
+    # 独立回顾 activity_id 为 None（解耦、不绑定系统活动）；作业 key 用 (club_id, activity_id or 0) 保持一致
+    job=_RECAP_JOBS.setdefault((club_id,activity_id or 0),{'status':'running'})
     try:
         try: content,usage=await generate_recap(club_id,master,note,entries)
         except AIGatewayError as e:
             job.update(status='error',error=str(e)); return
         charge_credits(club_id,'recap',usage.usage_id)
         with conn() as c:
+            # content_assets.activity_id 允许 NULL（独立回顾）；按活动生成的仍填真实活动 id
+            act_val=activity_id if (activity_id and activity_id>0) else None
             cur=c.execute('INSERT INTO content_assets(club_id,activity_id,channel,title,body_json) VALUES(?,?,?,?,?)',(
-                club_id,activity_id,'recap',content.get('title') or '',jdump(content)))
+                club_id,act_val,'recap',content.get('title') or '',jdump(content)))
             asset_id=cur.lastrowid
         job.update(status='done',assetId=asset_id,title=content.get('title'),
                    skipped=job.get('skipped') or [])
@@ -1628,6 +1824,96 @@ async def recap_generate(club_id:int,activity_id:int,note:str=Form(''),
 @app.get('/api/club/{club_id}/activities/{activity_id}/recap/status')
 def recap_status(club_id:int,activity_id:int):
     return _RECAP_JOBS.get((club_id,activity_id)) or {'status':'idle'}
+
+
+# ══ 活动回顾（解耦版，2026-10-30 起）：不绑定系统里的活动 ══
+# 老板的新逻辑：俱乐部管理人员直接输入关键活动信息（名称/日期/地点/规模）+ 现场照片 + 基础文案，
+# 系统就自动生成活动回顾，无需先建一场「已结束的活动」。素材门槛不变（至少 1 张照片或 1 段记录）。
+# 落库到 content_assets(activity_id=0)，与按活动生成的回顾区分；状态走 /api/club/{club_id}/recap/status。
+@app.post('/api/club/{club_id}/recap')
+async def recap_generate_standalone(club_id:int,title:str=Form(''),event_date:str=Form(''),
+                                    location:str=Form(''),scale:str=Form(''),note:str=Form(''),
+                                    files:list[UploadFile]=File(default=[])):
+    """活动回顾（解耦版）：不挑活动，直接填关键信息 + 现场照片，AI 自动生成回顾。"""
+    club_or_404(club_id); ensure_credits(club_id,'recap')
+    title=(title or '').strip()
+    if not title:
+        raise HTTPException(422,'请填写活动名称（生成回顾需要的标题）。')
+    note=(note or '').strip()
+    img_files=[f for f in (files or [])
+               if Path(f.filename or '').suffix.lower() in _IMAGE_UPLOAD_EXTS]
+    if not img_files and not note:
+        raise HTTPException(422,'回顾必须有真实素材：请至少上传 1 张现场照片，'
+                                '或填写几句现场记录（人数、天气、路线、高光时刻……）。')
+    # 用自由输入拼一个最小 master：generate_recap 只读 title/date/location/capacity/duration
+    master={'title':title,'date':(event_date or '').strip(),'location':(location or '').strip(),
+            'capacity':(scale or '').strip() or None,'duration':None,'media':[]}
+    recap_entries=[];_skipped=[]
+    if img_files:
+        batch=UPLOAD/str(club_id)/uuid.uuid4().hex
+        try:
+            saved=save_uploads(img_files,batch,
+                               max_total_bytes=20*1024*1024 if IS_PROD else None,
+                               skipped_out=_skipped)
+        except ValueError as e:
+            shutil.rmtree(batch,ignore_errors=True)
+            raise HTTPException(413,str(e))
+        for i,p in enumerate(saved,1):
+            w=h=None
+            try:
+                with Image.open(p) as im:w,h=im.size
+            except Exception:pass
+            recap_entries.append({'ref':f'rcap_{i:02d}','url':f'/static/uploads/{club_id}/{batch.name}/{p.name}',
+                                  'kind':'photo','source':'recap','name':p.name,
+                                  'desc':p.stem,'width':w,'height':h})
+        if not recap_entries and not note:
+            _names='、'.join(str(x or '文件') for x in _skipped[:3]) or '上传的文件'
+            raise HTTPException(422,f'{_names}都没能作为照片读入。请换用 jpg/png 等常见图片格式，'
+                                    '或直接填写几句现场记录。')
+    if recap_entries:
+        master['media']=recap_entries
+    # activity_id=0 表示独立回顾；与按活动生成的 job 互不干扰（活动 id 从 1 起）
+    key=(club_id,0)
+    prev=_RECAP_JOBS.get(key)
+    if prev and prev.get('status')=='running':
+        return {'pending':True,'channel':'recap','activityId':0,
+                'status':'running','note':'这场回顾正在生成中，请等待完成。'}
+    _RECAP_JOBS[key]={'status':'running','started':datetime.utcnow().isoformat(),
+                      'skipped':[str(x) for x in _skipped]}
+    # 独立回顾没有活动：把自由输入的最小 master 直接传进去（不回查活动库），activity_id=None
+    asyncio.create_task(_recap_job(club_id,None,master,note,recap_entries))
+    return {'pending':True,'channel':'recap','activityId':0,'status':'running'}
+
+
+@app.get('/api/club/{club_id}/recap/status')
+def recap_status_standalone(club_id:int):
+    return _RECAP_JOBS.get((club_id,0)) or {'status':'idle'}
+
+
+# ══ 活动回顾（含独立回顾）现场照片的俱乐部鉴权媒体路由 ══
+# 回顾照片物理上在 UPLOAD/{club}/...，生产环境 /static/uploads/* 整体 404（防外链 + 防越权）。
+# 活动绑定的回顾走 /api/club/{club}/activities/{id}/media；独立回顾没有活动（activity_id=0），
+# 这里专门给回顾照片一个俱乐部会话鉴权的取回口，白名单=本俱乐部所有回顾内容的现场照片 url。
+@app.get('/api/club/{club_id}/recap-media/{asset_path:path}')
+def recap_media(club_id:int,asset_path:str):
+    club_or_404(club_id)
+    original='/static/'+unquote(asset_path)
+    file_path=_safe_media_path(original)
+    if not file_path:raise HTTPException(404,'not found')
+    # 白名单=本俱乐部所有回顾（含独立回顾与按活动生成）内容 JSON 里登记的现场照片 url
+    allowed=set()
+    with conn() as c:
+        rws=rows(c.execute("SELECT body_json FROM content_assets WHERE club_id=? AND channel='recap'",(club_id,)))
+    for r in rws:
+        try:
+            b=jload(r['body_json'],{}) or {}
+            for m in (b.get('media') or []):
+                if isinstance(m,dict) and m.get('url'): allowed.add(str(m['url']))
+        except Exception: pass
+    if original not in allowed or not file_path.is_file():raise HTTPException(404,'not found')
+    response=FileResponse(file_path)
+    response.headers['Cache-Control']='private, max-age=60'
+    return response
 
 @app.get('/api/club/{club_id}/content')
 def content_list(club_id:int):
@@ -2248,14 +2534,17 @@ def club_leader_add(club_id:int,payload:dict=Body(...)):
     with conn() as c:
         dup=c.execute('SELECT id FROM club_leaders WHERE club_id=? AND name=?',(club_id,name)).fetchone()
         if dup: raise HTTPException(409,f'资源库里已经有「{name}」了')
-        lid=c.execute('''INSERT INTO club_leaders(club_id,name,phone,role,specialties,base_city,avatar_url,status,note)
-                        VALUES(?,?,?,?,?,?,?,?,?)''',(
+        lid=c.execute('''INSERT INTO club_leaders(club_id,name,phone,role,specialties,base_city,avatar_url,status,note,
+                                                  bio,years_exp,cert_verified)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(
             club_id,name,str(payload.get('phone') or '').strip() or None,
             str(payload.get('role') or '').strip() or '领队',
             jdump(_leader_specs(payload.get('specialties'))),
             str(payload.get('baseCity') or '').strip() or None,
             _normalize_avatar_url(payload.get('avatarUrl')),
-            str(payload.get('status') or 'active'),str(payload.get('note') or '').strip() or None)).lastrowid
+            str(payload.get('status') or 'active'),str(payload.get('note') or '').strip() or None,
+            str(payload.get('bio') or '').strip() or None,_leader_years(payload),
+            1 if payload.get('certVerified') else 0)).lastrowid
     return {'id':int(lid)}
 
 
@@ -2278,6 +2567,9 @@ def club_leader_update(club_id:int,leader_id:int,payload:dict=Body(...)):
         if 'status' in payload: fields['status']=str(payload.get('status') or 'active')
         if 'note' in payload: fields['note']=str(payload.get('note') or '').strip() or None
         if 'specialties' in payload: fields['specialties']=jdump(_leader_specs(payload.get('specialties')))
+        if 'bio' in payload: fields['bio']=str(payload.get('bio') or '').strip() or None
+        if 'yearsExp' in payload: fields['years_exp']=_leader_years(payload)
+        if 'certVerified' in payload: fields['cert_verified']=1 if payload.get('certVerified') else 0
         if 'avatarUrl' in payload: fields['avatar_url']=_normalize_avatar_url(payload.get('avatarUrl'))
         if not fields: raise HTTPException(400,'没有需要更新的字段')
         sets=','.join(f'{k}=?' for k in fields)
@@ -2299,6 +2591,283 @@ def club_leader_delete(club_id:int,leader_id:int):
             return {'ok':True,'mode':'deactivated','assignments':used}
         c.execute('DELETE FROM club_leaders WHERE id=? AND club_id=?',(leader_id,club_id))
     return {'ok':True,'mode':'deleted'}
+
+
+@app.get('/api/club/{club_id}/leader-inbox')
+def club_leader_inbox(club_id:int,limit:int=60):
+    """俱乐部端「领队咨询箱 + 领队评价」。
+
+    C 端点「咨询领队」留的问题落在这里（带手机号，俱乐部要能回电）；评价是顾客打的分。
+    咨询默认只看未处理，避免几十条历史把待办冲下去 —— 传 status='all' 才看全部。
+    """
+    club_or_404(club_id)
+    lim=max(1,min(200,int(limit or 60)))
+    with conn() as c:
+        inquiries=[{'id':int(x['id']),'leaderId':int(x['leader_id'] or 0),
+                    'leaderName':str(x.get('leader_name') or ''),
+                    'activityId':int(x['activity_id'] or 0) if x.get('activity_id') else 0,
+                    'activityTitle':str(x.get('activity_title') or ''),
+                    'name':str(x.get('name') or ''),'phone':str(x.get('phone') or ''),
+                    'message':str(x.get('message') or ''),'status':str(x.get('status') or 'new'),
+                    'createdAt':x.get('created_at'),'handledAt':x.get('handled_at')}
+                   for x in rows(c.execute('''SELECT iq.*,l.name AS leader_name,a.title AS activity_title
+                                              FROM leader_inquiries iq
+                                              LEFT JOIN club_leaders l ON l.id=iq.leader_id
+                                              LEFT JOIN activities a ON a.id=iq.activity_id
+                                              WHERE iq.club_id=? ORDER BY (iq.status!='new'),iq.id DESC LIMIT ?''',(club_id,lim)))]
+        reviews=[{'id':int(x['id']),'leaderId':int(x['leader_id']),'leaderName':str(x.get('leader_name') or ''),
+                  'author':str(x.get('author') or '匿名山友'),'rating':int(x['rating'] or 0),
+                  'comment':str(x.get('comment') or ''),'createdAt':x.get('created_at')}
+                 for x in rows(c.execute('''SELECT rv.*,l.name AS leader_name FROM leader_reviews rv
+                                            LEFT JOIN club_leaders l ON l.id=rv.leader_id
+                                            WHERE rv.club_id=? AND rv.status='visible'
+                                            ORDER BY rv.id DESC LIMIT ?''',(club_id,lim)))]
+    return {'inquiries':inquiries,'reviews':reviews,
+            'newCount':sum(1 for x in inquiries if x['status']=='new')}
+
+
+@app.post('/api/club/{club_id}/leader-inquiries/{inquiry_id}/handled')
+def club_leader_inquiry_handled(club_id:int,inquiry_id:int,payload:dict=Body(default={})):
+    """标记咨询已回复 / 改回未处理。只做状态留痕，不发短信 —— 回复靠俱乐部真人打电话。"""
+    club_or_404(club_id)
+    handled=payload.get('handled')
+    handled=True if handled is None else bool(handled)
+    with conn() as c:
+        r=row(c.execute('SELECT id FROM leader_inquiries WHERE id=? AND club_id=?',(inquiry_id,club_id)))
+        if not r: raise HTTPException(404,'咨询不存在')
+        # handled_at 用 datetime('now') 现算，而不是把 'CURRENT_TIMESTAMP' 当字符串塞进去
+        # （后者会存成一段字面文本，页面上一看就是脏数据）。
+        c.execute("UPDATE leader_inquiries SET status=?,handled_at=? WHERE id=? AND club_id=?",
+                  ('handled' if handled else 'new',
+                   datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') if handled else None,
+                   inquiry_id,club_id))
+    return {'ok':True,'status':'handled' if handled else 'new'}
+
+
+@app.get('/api/club/{club_id}/notice-summary')
+def club_notice_summary(club_id:int):
+    """俱乐部端「有新东西没人看」的轻量计数（只 COUNT，不拉列表）。
+
+    存在的理由：领队咨询落在「俱乐部设置 → 领队资源库」的折叠块里，俱乐部不进那一页就
+    等于没人看见 —— C 端顾客留了问题却永远等不到电话。侧边栏角标 / 标签页标题要每
+    60 秒刷一次，所以这里只做两次 COUNT：每次拉 60 条咨询 + 评价列表太重。
+    """
+    club_or_404(club_id)
+    with conn() as c:
+        iq=row(c.execute('SELECT COUNT(*) AS n, COALESCE(MAX(id),0) AS latest FROM leader_inquiries '
+                         'WHERE club_id=? AND status="new"',(club_id,))) or {}
+        rv=row(c.execute('SELECT COUNT(*) AS n FROM leader_reviews WHERE club_id=? AND status="visible"',(club_id,))) or {}
+    return {'leaderInquiries':int(iq.get('n') or 0),
+            'latestInquiryId':int(iq.get('latest') or 0),
+            'leaderReviews':int(rv.get('n') or 0)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-10-29 统一收件箱（俱乐部端「信息」栏目）：合并线路咨询 + 领队咨询 + 企微轻量通知
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _club_wecom_webhook(c, club_id:int):
+    """该俱乐部是否配置了可用的企微群机器人 Webhook。没有就返回 None（不推送）。"""
+    r=row(c.execute('SELECT wecom_webhook,wecom_enabled FROM club_integrations WHERE club_id=?',(club_id,)))
+    if r and r.get('wecom_enabled') and r.get('wecom_webhook'):
+        return str(r['wecom_webhook']).strip()
+    return None
+
+def _push_inquiry_to_wecom(webhook:str, kind_label:str, data:dict):
+    """企微群机器人 Webhook 推送（urllib 实现，静默失败 —— 通知是锦上添花，绝不阻断业务）。"""
+    try:
+        lines=[f"**新的{kind_label}咨询**"]
+        if data.get('name'): lines.append(f"顾客：{data.get('name')}")
+        lines.append(f"电话：{data.get('phone','')}")
+        if data.get('activityTitle'): lines.append(f"线路：{data.get('activityTitle')}")
+        if data.get('leaderName'): lines.append(f"领队：{data.get('leaderName')}")
+        lines.append(f"问题：{data.get('message','')}")
+        if data.get('backendLink'): lines.append(f"[在后台「信息」查看]({data.get('backendLink')})")
+        body=json.dumps({'msgtype':'markdown','markdown':{'content':'\n'.join(lines)}},
+                        ensure_ascii=False).encode('utf-8')
+        req=urllib.request.Request(webhook, data=body, headers={'Content-Type':'application/json'})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            resp.read()
+    except Exception:
+        # 任何网络/格式失败都静默吞掉，不影响主流程
+        pass
+
+
+@app.get('/api/club/{club_id}/inquiries')
+def club_inquiries(club_id:int, kind:str='all', status:str='all', q:str='', limit:int=200):
+    """俱乐部端「信息」统一收件箱：合并线路咨询 + 领队咨询。
+
+    kind: all|route|leader；status: all|new|handled；q: 模糊搜姓名/电话/内容。
+    排序：未处理置顶，再按 id 倒序（最新的在最上）。newCount 给侧栏红点用。
+    """
+    club_or_404(club_id)
+    lim=max(1,min(500,int(limit or 200)))
+    qk=(q or '').strip().lower()
+    with conn() as c:
+        routes=[dict(x) for x in rows(c.execute('''SELECT iq.*, a.title AS activity_title, NULL AS leader_name
+                                                   FROM route_inquiries iq
+                                                   LEFT JOIN activities a ON a.id=iq.activity_id
+                                                   WHERE iq.club_id=?''',(club_id,)))]
+        leaders=[dict(x) for x in rows(c.execute('''SELECT iq.*, l.name AS leader_name, a.title AS activity_title
+                                                    FROM leader_inquiries iq
+                                                    LEFT JOIN club_leaders l ON l.id=iq.leader_id
+                                                    LEFT JOIN activities a ON a.id=iq.activity_id
+                                                    WHERE iq.club_id=?''',(club_id,)))]
+    items=[]
+    for x in routes:
+        items.append({'id':int(x['id']),'kind':'route','leaderId':0,'leaderName':'',
+                      'activityId':int(x['activity_id'] or 0) if x.get('activity_id') else 0,
+                      'activityTitle':str(x.get('activity_title') or ''),
+                      'name':str(x.get('name') or ''),'phone':str(x.get('phone') or ''),
+                      'message':str(x.get('message') or ''),'status':str(x.get('status') or 'new'),
+                      'createdAt':x.get('created_at'),'handledAt':x.get('handled_at')})
+    for x in leaders:
+        items.append({'id':int(x['id']),'kind':'leader',
+                      'leaderId':int(x['leader_id'] or 0),'leaderName':str(x.get('leader_name') or ''),
+                      'activityId':int(x['activity_id'] or 0) if x.get('activity_id') else 0,
+                      'activityTitle':str(x.get('activity_title') or ''),
+                      'name':str(x.get('name') or ''),'phone':str(x.get('phone') or ''),
+                      'message':str(x.get('message') or ''),'status':str(x.get('status') or 'new'),
+                      'createdAt':x.get('created_at'),'handledAt':x.get('handled_at')})
+    if kind and kind!='all':
+        items=[i for i in items if i['kind']==kind]
+    if status and status!='all':
+        items=[i for i in items if i['status']==status]
+    if qk:
+        items=[i for i in items if qk in (i['name']+i['phone']+i['message']).lower()]
+    new_count=sum(1 for i in items if i['status']=='new')
+    total=len(items)
+    items.sort(key=lambda i:(i['status']!='new', -i['id']))
+    items=items[:lim]
+    return {'items':items,'newCount':new_count,'total':total}
+
+
+@app.post('/api/club/{club_id}/inquiries/{kind}/{inquiry_id}/handled')
+def club_inquiry_handled(club_id:int, kind:str, inquiry_id:int, payload:dict=Body(default={})):
+    """统一标记咨询已回复 / 改回未处理（route / leader 通用）。只做状态留痕，回复靠真人打电话。"""
+    club_or_404(club_id)
+    if kind not in ('route','leader'): raise HTTPException(400,'未知咨询类型')
+    table='route_inquiries' if kind=='route' else 'leader_inquiries'
+    handled=payload.get('handled')
+    handled=True if handled is None else bool(handled)
+    with conn() as c:
+        r=row(c.execute(f'SELECT id FROM {table} WHERE id=? AND club_id=?',(inquiry_id,club_id)))
+        if not r: raise HTTPException(404,'咨询不存在')
+        c.execute(f"UPDATE {table} SET status=?, handled_at=? WHERE id=? AND club_id=?",
+                  ('handled' if handled else 'new',
+                   datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') if handled else None,
+                   inquiry_id,club_id))
+    return {'ok':True,'status':'handled' if handled else 'new'}
+
+
+@app.get('/api/club/{club_id}/integrations')
+def club_integrations_get(club_id:int):
+    """读取俱乐部企微集成配置（群机器人 Webhook）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        r=row(c.execute('SELECT wecom_webhook,wecom_enabled FROM club_integrations WHERE club_id=?',(club_id,)))
+    return {'wecomWebhook':str(r['wecom_webhook'] or '') if r else '',
+            'wecomEnabled':bool(r['wecom_enabled']) if r else False}
+
+@app.post('/api/club/{club_id}/integrations')
+def club_integrations_save(club_id:int, payload:dict=Body(default={})):
+    """保存俱乐部企微集成配置。webhook 必须 http(s)；enabled 开关。"""
+    club_or_404(club_id)
+    webhook=str(payload.get('wecomWebhook') or '').strip()
+    enabled=bool(payload.get('wecomEnabled'))
+    if webhook and not re.match(r'^https?://', webhook):
+        raise HTTPException(400,'企微 Webhook 必须是 http(s) 链接')
+    now=datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    with conn() as c:
+        r=row(c.execute('SELECT id FROM club_integrations WHERE club_id=?',(club_id,)))
+        if r:
+            c.execute('UPDATE club_integrations SET wecom_webhook=?,wecom_enabled=?,updated_at=? WHERE club_id=?',
+                      (webhook or None, 1 if enabled else 0, now, club_id))
+        else:
+            c.execute('INSERT INTO club_integrations(club_id,wecom_webhook,wecom_enabled,updated_at) VALUES(?,?,?,?)',
+                      (club_id, webhook or None, 1 if enabled else 0, now))
+    return {'ok':True}
+
+
+@app.post('/api/club/{club_id}/integrations/test')
+def club_integrations_test(club_id:int):
+    """向已配置的企微群机器人发一条测试消息，验证 Webhook 连通。"""
+    club_or_404(club_id)
+    with conn() as c:
+        webhook=_club_wecom_webhook(c,club_id)
+    if not webhook: raise HTTPException(400,'请先填写并保存可用的企微 Webhook')
+    _push_inquiry_to_wecom(webhook, '【测试】',
+        {'name':'测试', 'phone':'—',
+         'message':'企业微信通知已连通 ✅（这是一条来自 ClubOS 的测试消息）',
+         'backendLink':'/?view=info'})
+    return {'ok':True}
+
+
+def _leader_self(c,club_id:int,request:Request,leader_id:int=0):
+    """把当前登录身份解析成 club_leaders 里的一条领队记录。
+
+    口径与 /api/leader/occurrences 一致：账号绑定的 users.phone ↔ 领队名册的 phone
+    （同一份域数据，不再造第二套绑定关系）。内测（TEST_OPEN）允许用 leader_id 指定，
+    因为演示库里通常没有真正的领队账号；生产环境一律只认身份，不接受 URL 传 id。
+    """
+    from security_v025 import TEST_OPEN
+    identity=getattr(request.state,'identity',None) or None
+    if identity and identity.get('role')=='leader':
+        uid=identity.get('userId')
+        ph=row(c.execute('SELECT phone FROM users WHERE id=?',(uid,))) if uid else None
+        phone=str((ph or {}).get('phone') or '').strip()
+        if not phone: return None
+        return row(c.execute('SELECT * FROM club_leaders WHERE club_id=? AND REPLACE(COALESCE(phone,"")," ","")=? '
+                             'ORDER BY (status!="active"),id LIMIT 1',(club_id,phone.replace(' ',''))))
+    if TEST_OPEN and leader_id:
+        return row(c.execute('SELECT * FROM club_leaders WHERE id=? AND club_id=?',(int(leader_id),club_id)))
+    return None
+
+
+@app.get('/api/leader/inquiries')
+def leader_my_inquiries(request:Request,club_id:int=1,leader_id:int=0,limit:int=30):
+    """领队本人看到的顾客咨询（C 端点「咨询领队」留的问题）。
+
+    只返回「问我的」那几条，且带顾客留下的称呼与手机号 —— 领队要回电，没有号码等于没接到。
+    这里不做已读/未读两套状态：领队和俱乐部共用 status=new/handled，谁先处理都不会重复提醒。
+    """
+    lim=max(1,min(100,int(limit or 30)))
+    with conn() as c:
+        me=_leader_self(c,club_id,request,leader_id)
+        if not me: raise HTTPException(403,'请用领队账号登录后查看自己的咨询')
+        lid=int(me['id'])
+        rs=rows(c.execute('''SELECT iq.*,a.title AS activity_title
+                             FROM leader_inquiries iq
+                             LEFT JOIN activities a ON a.id=iq.activity_id
+                             WHERE iq.club_id=? AND iq.leader_id=?
+                             ORDER BY (iq.status!='new'),iq.id DESC LIMIT ?''',(club_id,lid,lim)))
+        out=[{'id':int(x['id']),
+              'name':str(x.get('name') or '山友'),
+              'phone':str(x.get('phone') or ''),
+              'message':str(x.get('message') or ''),
+              'status':str(x.get('status') or 'new'),
+              'activityTitle':str(x.get('activity_title') or ''),
+              'createdAt':x.get('created_at'),'handledAt':x.get('handled_at')} for x in rs]
+    return {'leader':{'leaderId':lid,'name':str(me.get('name') or '领队'),'role':str(me.get('role') or '领队')},
+            'inquiries':out,'newCount':sum(1 for x in out if x['status']=='new')}
+
+
+@app.post('/api/leader/inquiries/{inquiry_id}/handled')
+def leader_inquiry_handled(request:Request,inquiry_id:int,payload:dict=Body(default={}),club_id:int=1,leader_id:int=0):
+    """领队自己把咨询标成已回复 —— 领队回完电话就地收口，不用等俱乐部管理员再点一次。"""
+    handled=payload.get('handled')
+    handled=True if handled is None else bool(handled)
+    with conn() as c:
+        me=_leader_self(c,club_id,request,leader_id)
+        if not me: raise HTTPException(403,'请用领队账号登录')
+        r=row(c.execute('SELECT id FROM leader_inquiries WHERE id=? AND club_id=? AND leader_id=?',
+                        (inquiry_id,club_id,int(me['id']))))
+        if not r: raise HTTPException(404,'这条咨询不属于你')
+        c.execute('UPDATE leader_inquiries SET status=?,handled_at=? WHERE id=? AND club_id=? AND leader_id=?',
+                  ('handled' if handled else 'new',
+                   datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') if handled else None,
+                   inquiry_id,club_id,int(me['id'])))
+    return {'ok':True,'status':'handled' if handled else 'new'}
 
 
 @app.post('/api/club/{club_id}/leaders/{leader_id}/avatar')
@@ -2438,14 +3007,18 @@ _LEADER_OCC_FIELDS=('id','activity_id','activity_title','activity_location','sta
                     'label','execution_status','named_participants','insurance_pending','checked_in')
 
 @app.get('/api/leader/occurrences')
-def leader_occurrences(club_id:int=1,leader_id:int=0):
+def leader_occurrences(request:Request,club_id:int=1,leader_id:int=0):
     with conn() as c:
         out=[]
+        identity=getattr(request.state,'identity',None)
+        assigned=None
+        if identity and identity.get('role')=='leader':
+            assigned={r[0] for r in c.execute('SELECT occurrence_id FROM occurrence_leaders WHERE club_id=? AND phone=(SELECT phone FROM users WHERE id=?)',(club_id,identity.get('user_id')))}
         for it in execution_service.list_occurrences(c,club_id=club_id):
+            if assigned is not None and it['id'] not in assigned: continue
             row={k:it.get(k) for k in _LEADER_OCC_FIELDS}
             ls=execution_service.list_leaders(c,int(it['id']))
-            # 带 leader_id 时只回「我的场」——生产环境应按登录领队过滤。
-            if leader_id: ls=[l for l in ls if int(l.get('leader_id') or 0)==leader_id]
+            if leader_id and not any(int(l.get('leader_id') or 0)==leader_id for l in ls): continue
             row['leaders']=[{'name':l.get('name'),'role':l.get('role'),'phone':l.get('phone'),
                              'avatar_url':l.get('avatar_url')} for l in ls]
             out.append(row)
@@ -2463,6 +3036,44 @@ def leader_participant_checkin(occurrence_id:int,participant_id:int,payload:dict
         try:return execution_service.checkin(c,club_id=club_id,occurrence_id=occurrence_id,participant_id=participant_id,status=str(payload.get('status') or 'checked_in'),actor='leader',note=str(payload.get('note') or ''))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
+
+@app.post('/api/leader/occurrences/{occurrence_id}/checkin-by-token')
+def leader_checkin_by_token(occurrence_id:int,payload:dict=Body(...),club_id:int=1):
+    """扫码核销：领队端 jsQR 解出 token 后调此接口标记已签到。
+
+    双重校验：① token 签名有效；② token 的活动/俱乐部归属与当前接口一致。
+    actor='leader_scan' 与领队手动签到（actor='leader'）区分开，便于事后追溯。
+    """
+    token=str(payload.get('token') or '').strip()
+    club_id_t,occ_id_t,pid_t,ok=_checkin_verify(token)
+    if not ok: raise HTTPException(400,'签到码无效或已失效')
+    if int(club_id_t)!=int(club_id) or int(occ_id_t)!=int(occurrence_id):
+        raise HTTPException(403,'签到码与当前活动不匹配')
+    with conn() as c:
+        try:
+            return execution_service.checkin(c,club_id=club_id,occurrence_id=occurrence_id,
+                                             participant_id=pid_t,status='checked_in',
+                                             actor='leader_scan',note='扫码签到')
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(409,str(e))
+
+@app.get('/api/public/participants/{participant_id}/checkin-qr')
+def public_participant_checkin_qr(participant_id:int,user_id:int=0,club_id:int=1):
+    """C 端「我的报名」里每个参加人领到的签到二维码（SVG）。
+
+    仅本人（且参加人处于 active、报名已支付）可见，避免误领/冒领。
+    二维码内容 = HMAC 签名 token，领队扫码后调 checkin-by-token 核销。
+    """
+    with conn() as c:
+        p=c.execute('SELECT p.*,r.user_id,r.status reg_status FROM registration_participants p '
+                    'JOIN registrations r ON r.id=p.registration_id '
+                    'WHERE p.id=? AND p.club_id=?',(participant_id,club_id)).fetchone()
+        if not p: raise HTTPException(404,'参加人不存在')
+        if int(p['user_id'])!=int(user_id): raise HTTPException(403,'无权查看该签到码')
+        if p['status']!='active' or p['reg_status']!='paid': raise HTTPException(409,'该参加人当前不可签到')
+        token=_checkin_sign(club_id,p['occurrence_id'],participant_id)
+        svg=_qr_svg(token)
+    return Response(content=svg,media_type='image/svg+xml')
 
 @app.post('/api/leader/occurrences/{occurrence_id}/status')
 def leader_update_status(occurrence_id:int,payload:dict=Body(...),club_id:int=1):
@@ -2532,23 +3143,25 @@ def club_member_orders(club_id:int):
                                  WHERE o.club_id=? ORDER BY o.id DESC LIMIT 200''',(club_id,)))
 
 @app.get('/api/public/clubs/{club_id}/membership/purchasable')
-def public_purchasable_tiers(club_id:int,user_id:int=1):
+def public_purchasable_tiers(request:Request,club_id:int,user_id:int|None=None):
     """C 端可购买的会员卡 + 当前用户的有效购买记录（俱乐部未开通时返回空列表）。"""
     club_or_404(club_id)
+    user_id=public_user_id(request,user_id)
     with conn() as c:
         x=club_or_404(club_id)
         if not x.get('membership_purchase_enabled'):
-            return {'enabled':False,'tiers':[],'activePurchase':None}
+            return {'enabled':False,'tiers':[],'activePurchase':None,'paymentAvailable':not IS_PROD}
         tiers=membership_engine.purchasable_tiers(c,club_id)
         purchase=membership_engine.active_purchase(c,club_id=club_id,user_id=user_id)
-    return {'enabled':True,'tiers':tiers,'activePurchase':purchase}
+    return {'enabled':True,'tiers':tiers,'activePurchase':purchase,'paymentAvailable':not IS_PROD}
 
 @app.post('/api/public/clubs/{club_id}/membership/purchase')
-def public_purchase_membership(club_id:int,payload:dict=Body(...)):
+def public_purchase_membership(request:Request,club_id:int,payload:MembershipPurchase):
     """购买会员卡：写购买订单并立即生效（演示支付通道；接微信支付后在此换真实收单）。"""
     club_or_404(club_id)
-    user_id=int(payload.get('userId',1))
-    tier_id=int(payload.get('tierId') or 0)
+    user_id=public_user_id(request,payload.userId)
+    tier_id=payload.tierId
+    if IS_PROD: raise HTTPException(503,'会员购买暂未开放，支付接入完成后恢复；当前会员权益不受影响')
     with conn() as c:
         x=club_or_404(club_id)
         if not x.get('membership_purchase_enabled'):
@@ -2672,9 +3285,10 @@ def club_points_mall_verify(club_id:int,payload:dict=Body(...)):
     return {'ok':True,'redemption':r}
 
 @app.get('/api/public/clubs/{club_id}/points-mall')
-def public_points_mall(club_id:int,user_id:int=1):
+def public_points_mall(request:Request,club_id:int,user_id:int|None=None):
     """C 端积分商城：可兑换商品 + 我的兑换记录 + 当前积分。"""
     club_or_404(club_id)
+    user_id=public_user_id(request,user_id)
     with conn() as c:
         items=points_mall_engine.list_items(c,club_id=club_id,include_inactive=False)
         redemptions=points_mall_engine.my_redemptions(c,club_id=club_id,user_id=user_id)
@@ -2682,8 +3296,8 @@ def public_points_mall(club_id:int,user_id:int=1):
     return {'items':items,'redemptions':redemptions,'wallet':wallet}
 
 @app.post('/api/public/clubs/{club_id}/points-mall/{item_id}/redeem')
-def public_points_mall_redeem(club_id:int,item_id:int,payload:dict=Body(...)):
-    user_id=int(payload.get('userId',1))
+def public_points_mall_redeem(request:Request,club_id:int,item_id:int,payload:dict=Body(...)):
+    user_id=public_user_id(request,payload.get('userId'))
     with conn() as c:
         try:
             result=points_mall_engine.redeem(c,club_id=club_id,item_id=item_id,user_id=user_id)
@@ -2794,9 +3408,10 @@ def club_set_referral_coupon(club_id:int,payload:dict=Body(...)):
     return {'ok':True,'benefitId':bid}
 
 @app.get('/api/public/clubs/{club_id}/membership/invite-info')
-def public_invite_info(club_id:int,user_id:int=1):
+def public_invite_info(request:Request,club_id:int,user_id:int|None=None):
     """C 端邀请卡：我的邀请码 + 已邀请人数 + 奖励说明。"""
     club_or_404(club_id)
+    user_id=public_user_id(request,user_id)
     with conn() as c:
         code=membership_engine.ensure_invite_code(c,club_id=club_id,user_id=user_id)
         invited=rows(c.execute('''SELECT m.user_id,u.name,m.level,m.created_at
@@ -2809,10 +3424,10 @@ def public_invite_info(club_id:int,user_id:int=1):
                       'discountPercent':float(b.get('discount_percent') or 0)} if b else None}
 
 @app.post('/api/public/clubs/{club_id}/membership/join')
-def public_join_with_invite(club_id:int,payload:dict=Body(...)):
+def public_join_with_invite(request:Request,club_id:int,payload:dict=Body(...)):
     """新会员填邀请码入会：记录邀请关系，双方自动获赠「邀请优惠券」（若俱乐部已设定）。"""
     club_or_404(club_id)
-    user_id=int(payload.get('userId',1))
+    user_id=public_user_id(request,payload.get('userId'))
     with conn() as c:
         try:
             info=membership_engine.join_with_invite(c,club_id=club_id,user_id=user_id,invite_code=str(payload.get('inviteCode') or ''))
@@ -2833,10 +3448,10 @@ def public_join_with_invite(club_id:int,payload:dict=Body(...)):
     return {'ok':True,**info,'gifts':gifts,'wallet':wallet}
 
 @app.post('/api/public/clubs/{club_id}/coupons/transfer')
-def public_transfer_coupon(club_id:int,payload:dict=Body(...)):
+def public_transfer_coupon(request:Request,club_id:int,payload:dict=Body(...)):
     """券转赠：好友输入券码领取（接收方须已是本俱乐部会员，券未使用未过期且允许分享）。"""
     club_or_404(club_id)
-    to_user_id=int(payload.get('toUserId',1))
+    to_user_id=public_user_id(request,payload.get('toUserId'))
     with conn() as c:
         try:
             result=benefit_engine.transfer_coupon(c,club_id=club_id,code=str(payload.get('code') or ''),to_user_id=to_user_id)
@@ -3576,6 +4191,48 @@ def public_activities(club_id:int):
             a['cover']='/api/public/activities/%d/media/%s'%(a['id'],quote(str(cov)[len('/static/'):],safe='/'))
     return acts
 
+
+@app.get('/api/public/clubs/{club_id}/leaders')
+def public_club_leaders(club_id:int):
+    """C 端「领队团队专区」：列出资源库里全部 status='active' 的领队。
+
+    与活动详情的「带队领队」（`_public_leaders`，只含**已经排到团期上**的人）不同，这里是
+    俱乐部录入的**整本领队名册** —— 录入即显示，不需要逐个排班。这样顾客在 C 端能直接看到
+    俱乐部的带队团队（大头像 · 头衔 · 擅长 · 常驻城市 · 年限 · ★评分），最贴近用户参考的
+    同行版式，也解决了「明明录了领队、活动页却一片空白」的困惑。
+
+    字段走白名单，与 `public_leader` / `_public_leaders` 同一条脱敏纪律：
+    绝不下发手机号（`phone`）、内部备注（`note`）、带队执行备注。评分 / 评价数 / 带队场次
+    全部来自真实记录（`_leader_stats`），一条都没有时前端印「暂无评分」，不给假分。
+    """
+    if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
+    with conn() as c:
+        rs=rows(c.execute('SELECT id,name,role,specialties,base_city,avatar_url,bio,years_exp,cert_verified '
+                          'FROM club_leaders WHERE club_id=? AND status="active" ORDER BY id',(club_id,)))
+        out=[]
+        for r in rs:
+            specs=jload(r.get('specialties'),[])
+            lid=int(r['id'])
+            out.append({
+                'leaderId':lid,
+                'name':str(r.get('name') or '领队').strip() or '领队',
+                'role':str(r.get('role') or '').strip() or '领队',
+                'credential':str(r.get('role') or '').strip() or None,
+                'specialties':[str(x).strip() for x in specs if str(x).strip()] if isinstance(specs,list) else [],
+                'baseCity':str(r.get('base_city') or '').strip() or None,
+                'avatarUrl':_public_leader_avatar_url(club_id,lid,r.get('avatar_url')),
+                'bio':str(r.get('bio') or '').strip() or None,
+                'yearsExp':int(r.get('years_exp') or 0),
+                'certVerified':bool(r.get('cert_verified'))})
+        stats=_leader_stats(c,club_id,[x['leaderId'] for x in out])
+    for x in out:
+        s=stats.get(int(x['leaderId'])) or {}
+        x['ratingAvg']=s.get('ratingAvg')
+        x['ratingCount']=int(s.get('ratingCount') or 0)
+        x['leadCount']=int(s.get('leadCount') or 0)
+    return out
+
+
 def _public_leader_avatar_url(club_id:int,leader_id,avatar_url):
     """把俱乐部域头像地址改写成 C 端可访问的公开代理地址。
 
@@ -3605,24 +4262,73 @@ def _public_leaders(c,activity_id:int,club_id:int)->list:
     """
     seen=set();out=[]
     for r in rows(c.execute('''SELECT ol.leader_id,ol.name,ol.role,
-                                      l.role AS credential,l.specialties,l.base_city,l.avatar_url
+                                      l.role AS credential,l.specialties,l.base_city,l.avatar_url,
+                                      l.bio,l.years_exp,l.cert_verified
                                FROM occurrence_leaders ol
                                JOIN activity_occurrences o ON o.id=ol.occurrence_id
                                LEFT JOIN club_leaders l ON l.id=ol.leader_id
                                WHERE o.activity_id=? AND ol.club_id=? AND o.status="open"
                                ORDER BY o.start_at,ol.id''',(activity_id,club_id))):
         name=str(r.get('name') or '').strip() or '领队'
-        key=(int(r['leader_id']) if r.get('leader_id') else 0,name)
+        lid=int(r['leader_id']) if r.get('leader_id') else 0
+        key=(lid,name)
         if key in seen:continue
         seen.add(key)
         specs=jload(r.get('specialties'),[])
         out.append({
+            # leaderId 是「点开领队主页」的唯一钥匙（0 = 执行端手打的临时增援，没有档案，
+            # 前端就不给点击，也不给评分入口 —— 评一个查不到的人没有意义）。
+            'leaderId':lid,
             'name':name,
             'role':str(r.get('role') or '').strip() or '领队',
             'credential':str(r.get('credential') or '').strip() or None,
             'specialties':[str(x).strip() for x in specs if str(x).strip()] if isinstance(specs,list) else [],
             'baseCity':str(r.get('base_city') or '').strip() or None,
-            'avatarUrl':_public_leader_avatar_url(club_id,r.get('leader_id'),r.get('avatar_url'))})
+            'avatarUrl':_public_leader_avatar_url(club_id,r.get('leader_id'),r.get('avatar_url')),
+            'bio':str(r.get('bio') or '').strip() or None,
+            'yearsExp':int(r.get('years_exp') or 0),
+            'certVerified':bool(r.get('cert_verified'))})
+    # 评分 / 评价数 / 带队场次：全部来自真实数据（顾客评的 + 排班记录），一条都没有时
+    # 前端印「暂无评分」而不是给个漂亮的假分。
+    stats=_leader_stats(c,club_id,[x['leaderId'] for x in out])
+    for x in out:
+        s=stats.get(int(x['leaderId'] or 0)) or {}
+        x['ratingAvg']=s.get('ratingAvg')
+        x['ratingCount']=int(s.get('ratingCount') or 0)
+        x['leadCount']=int(s.get('leadCount') or 0)
+    return out
+
+
+def _leader_stats(c,club_id:int,leader_ids=None)->dict:
+    """领队口碑与带队量：{leader_id: {ratingAvg, ratingCount, leadCount}}。
+
+    三个数都必须来自真实记录：ratingAvg 是顾客评分的算术平均（没有评价就是 None，
+    前端印「暂无评分」），leadCount 是排班表里去重后的团期数。
+    绝不按「加入名册多久」推算年限、也不给新领队垫一个 5.0 的初始分。
+    """
+    ids=[int(i) for i in (leader_ids or []) if int(i or 0)]
+    if leader_ids is not None and not ids: return {}
+    where=''
+    params=[club_id]
+    if ids:
+        where=' AND leader_id IN (%s)'%','.join('?'*len(ids))
+        params+=ids
+    out={}
+    for i in ids: out[i]={'ratingAvg':None,'ratingCount':0,'leadCount':0}
+    # 无 GROUP BY 的聚合在零行时仍返回一行 leader_id=NULL 的幻影行，必须跳过。
+    for r in rows(c.execute('SELECT leader_id,AVG(rating) AS avg_rating,COUNT(*) AS cnt '
+                            'FROM leader_reviews WHERE club_id=? AND status="visible"'+where,tuple(params))):
+        if r['leader_id'] is None: continue
+        lid=int(r['leader_id'])
+        out.setdefault(lid,{'ratingAvg':None,'ratingCount':0,'leadCount':0})
+        out[lid]['ratingAvg']=round(float(r['avg_rating'] or 0),2)
+        out[lid]['ratingCount']=int(r['cnt'] or 0)
+    for r in rows(c.execute('SELECT leader_id,COUNT(DISTINCT occurrence_id) AS cnt FROM occurrence_leaders '
+                            'WHERE club_id=? AND leader_id IS NOT NULL'+where,tuple(params))):
+        if r['leader_id'] is None: continue
+        lid=int(r['leader_id'])
+        out.setdefault(lid,{'ratingAvg':None,'ratingCount':0,'leadCount':0})
+        out[lid]['leadCount']=int(r['cnt'] or 0)
     return out
 
 
@@ -3642,10 +4348,22 @@ def _public_trip_info(c,order:dict)->dict|None:
     occ_id=order.get('occurrence_id')
     if not occ_id: return None
     st=row(c.execute('SELECT * FROM occurrence_execution_settings WHERE occurrence_id=?',(occ_id,))) or {}
-    notices=[{'title':str(n['title'] or ''),'content':str(n['content'] or ''),'sentAt':n.get('sent_at')}
-             for n in rows(c.execute("SELECT title,content,sent_at FROM activity_notices WHERE occurrence_id=? AND status='sent' ORDER BY id",(occ_id,)))]
-    leaders=[{'name':str(l['name'] or '').strip() or '领队','role':str(l.get('role') or '').strip() or '领队'}
-             for l in rows(c.execute('SELECT name,role FROM occurrence_leaders WHERE occurrence_id=? ORDER BY id',(occ_id,)))]
+    notices=[{'id':int(n['id']),'title':str(n['title'] or ''),'content':str(n['content'] or ''),'sentAt':n.get('sent_at')}
+             for n in rows(c.execute("SELECT id,title,content,sent_at FROM activity_notices WHERE occurrence_id=? AND status='sent' ORDER BY id",(occ_id,)))]
+    # 带队人带 leader_id 与公开头像地址：C 端「我的报名」的出行指引要点开头像进领队主页
+    # 再咨询（2026-10-29 用户反馈「领队功能还是没实现，要显示头像、还能咨询领队」）。
+    # 手机号依旧不下发 —— 那是俱乐部内部联络方式，给顾客的是应急电话。
+    leaders=[]
+    for _tl in rows(c.execute('''SELECT ol.leader_id,ol.name,ol.role,ol.club_id,l.avatar_url
+                                 FROM occurrence_leaders ol
+                                 LEFT JOIN club_leaders l ON l.id=ol.leader_id
+                                 WHERE ol.occurrence_id=? ORDER BY ol.id''',(occ_id,))):
+        leaders.append({
+            'name':str(_tl['name'] or '').strip() or '领队',
+            'role':str(_tl.get('role') or '').strip() or '领队',
+            'leaderId':int(_tl['leader_id']) if _tl.get('leader_id') else 0,
+            'avatarUrl':_public_leader_avatar_url(int(_tl.get('club_id') or 0),_tl.get('leader_id'),_tl.get('avatar_url')),
+        })
     vehicles={int(r['participant_id']):str(r['name'] or '') for r in rows(c.execute('''SELECT pa.participant_id,g.name FROM participant_group_assignments pa
         JOIN execution_groups g ON g.id=pa.group_id WHERE pa.occurrence_id=? AND pa.group_type='vehicle' ''',(occ_id,))) if r.get('name')}
     trip={}
@@ -3660,6 +4378,38 @@ def _public_trip_info(c,order:dict)->dict|None:
     return trip or None
 
 
+def _public_execution(c,occurrence_id:int,club_id:int)->dict:
+    """C 端活动详情页「出行指引」：集合/应急 + 已发送通知 + 分组（按团期维度）。
+
+    与订单出行指引(_public_trip_info)同源，但面向**还没报名、正在看活动**的顾客：
+    - 通知只下发 status='sent'（草稿是俱乐部在改的半成品，顾客不该看到）；
+    - 领队手机号/内部备注不下发（与 _public_leaders 同纪律）；
+    - 列出本团期所有车/组（让顾客知道「这次会怎么编队」），本人具体分到哪台车
+      在订单出行指引里看（那是带 participant 维度的事）。
+    俱乐部没填的项就不出现 —— 不拿默认值凑一个看着很满的卡片。
+    """
+    st=row(c.execute('SELECT * FROM occurrence_execution_settings WHERE occurrence_id=?',(occurrence_id,))) or {}
+    notices=[{'id':int(n['id']),'title':str(n['title'] or ''),'content':str(n['content'] or ''),'sentAt':n.get('sent_at')}
+             for n in rows(c.execute("SELECT id,title,content,sent_at FROM activity_notices WHERE occurrence_id=? AND status='sent' ORDER BY id",(occurrence_id,)))]
+    # assigned_count 不是真列，是 list_groups 里的相关子查询算出来的；这里照抄同一套算法，
+    # 直接 SELECT assigned_count 会在运行期报「no such column」把整个详情接口打挂。
+    groups=[{'name':str(g['name'] or ''),'groupType':str(g.get('group_type') or ''),
+             'capacity':g.get('capacity'),'assignedCount':int(g.get('assigned_count') or 0),
+             'leaderName':str(g.get('leader_name') or '')}
+            for g in rows(c.execute('''SELECT g.name,g.group_type,g.capacity,g.leader_name,
+                        (SELECT COUNT(*) FROM participant_group_assignments a WHERE a.group_id=g.id) assigned_count
+                        FROM execution_groups g WHERE g.occurrence_id=? ORDER BY g.group_type,g.id''',(occurrence_id,)))]
+    trip={}
+    if str(st.get('meeting_time') or '').strip() or str(st.get('meeting_location') or '').strip():
+        trip['meeting']={'time':str(st.get('meeting_time') or '').strip() or None,
+                         'location':str(st.get('meeting_location') or '').strip() or None}
+    if str(st.get('emergency_phone') or '').strip():
+        trip['emergencyPhone']=str(st['emergency_phone']).strip()
+    if notices: trip['notices']=notices
+    if groups: trip['groups']=groups
+    return trip
+
+
 @app.get('/api/public/leaders/{leader_id}/avatar.{ext}')
 def public_leader_avatar(leader_id:int,ext:str):
     """C 端领队头像。顾客没有 club 角色，走不了俱乐部域那条代理，所以单开一条公开的。
@@ -3671,6 +4421,179 @@ def public_leader_avatar(leader_id:int,ext:str):
         r=row(c.execute('SELECT club_id FROM club_leaders WHERE id=?',(leader_id,)))
     if not r: raise HTTPException(404,'领队不存在')
     return _serve_leader_avatar(int(r['club_id']),leader_id,ext)
+
+
+_RATER_KEY_RE=re.compile(r'^[A-Za-z0-9:_\-]{6,64}$')
+
+
+def _public_cover_url(activity_id:int,cover)->str|None:
+    """活动封面在 C 端必须走活动域代理（生产环境 /static/uploads 被封死）。"""
+    cov=str(cover or '')
+    if not cov: return None
+    if cov.startswith('/static/'):
+        return '/api/public/activities/%d/media/%s'%(int(activity_id),quote(cov[len('/static/'):],safe='/'))
+    return cov
+
+
+def _leader_or_404(c,leader_id:int)->dict:
+    r=row(c.execute('SELECT * FROM club_leaders WHERE id=?',(leader_id,)))
+    if not r: raise HTTPException(404,'领队不存在')
+    club_id=int(r['club_id'])
+    if IS_PROD and club_or_404(club_id)['status']!='active': raise HTTPException(404,'not found')
+    # 停用的领队不对外开主页，除非他还挂在某个已发布活动的团期上（那就得能点开，
+    # 否则活动详情里那张卡会变成死链）。这样既不开「遍历 id 看全站领队」的口子，
+    # 也不会让正在带队的卡点不动。
+    if str(r.get('status') or 'active')!='active':
+        alive=c.execute('''SELECT 1 FROM occurrence_leaders ol
+                           JOIN activity_occurrences o ON o.id=ol.occurrence_id
+                           JOIN activities a ON a.id=o.activity_id
+                           WHERE ol.leader_id=? AND ol.club_id=? AND a.status="published" LIMIT 1''',
+                        (leader_id,club_id)).fetchone()
+        if not alive: raise HTTPException(404,'领队不存在')
+    return r
+
+
+@app.get('/api/public/leaders/{leader_id}')
+def public_leader(leader_id:int):
+    """C 端领队主页：卡面点进去看到的那一屏。
+
+    只下发顾客需要判断「这个人靠不靠谱」的信息：头衔/擅长/常驻/年限/简介/评分，
+    TA 近期带的已发布活动（可跳回活动详情报名），以及最近 20 条评价。
+    手机号、内部备注（note）、带队执行备注一律不下发 —— 与 _public_leaders 同一条纪律。
+    """
+    with conn() as c:
+        r=_leader_or_404(c,leader_id)
+        club_id=int(r['club_id'])
+        stats=_leader_stats(c,club_id,[leader_id]).get(int(leader_id)) or {}
+        reviews=[{'author':str(x.get('author') or '').strip() or '匿名山友',
+                  'rating':int(x['rating'] or 0),
+                  'comment':str(x.get('comment') or '').strip() or None,
+                  'createdAt':x.get('created_at')}
+                 for x in rows(c.execute('SELECT author,rating,comment,created_at FROM leader_reviews '
+                                         'WHERE club_id=? AND leader_id=? AND status="visible" '
+                                         'ORDER BY id DESC LIMIT 20',(club_id,leader_id)))]
+        acts=[]
+        for a in rows(c.execute('''SELECT a.id,a.title,a.location,a.event_date,a.cover,MIN(o.start_at) AS next_start
+                                   FROM occurrence_leaders ol
+                                   JOIN activity_occurrences o ON o.id=ol.occurrence_id AND o.status="open"
+                                   JOIN activities a ON a.id=o.activity_id AND a.status="published"
+                                   WHERE ol.club_id=? AND ol.leader_id=? AND o.start_at>=date("now")
+                                   GROUP BY a.id ORDER BY next_start LIMIT 4''',(club_id,leader_id))):
+            acts.append({'id':int(a['id']),'title':str(a['title'] or ''),'location':str(a.get('location') or ''),
+                         'nextStart':a.get('next_start'),'cover':_public_cover_url(int(a['id']),a.get('cover'))})
+        specs=jload(r.get('specialties'),[])
+    return {'leaderId':int(leader_id),'name':str(r.get('name') or '领队'),
+            'role':str(r.get('role') or '').strip() or '领队',
+            'credential':str(r.get('role') or '').strip() or None,
+            'specialties':[str(x).strip() for x in specs if str(x).strip()] if isinstance(specs,list) else [],
+            'baseCity':str(r.get('base_city') or '').strip() or None,
+            'avatarUrl':_public_leader_avatar_url(club_id,leader_id,r.get('avatar_url')),
+            'bio':str(r.get('bio') or '').strip() or None,
+            'yearsExp':int(r.get('years_exp') or 0),
+            'certVerified':bool(r.get('cert_verified')),
+            'ratingAvg':stats.get('ratingAvg'),'ratingCount':int(stats.get('ratingCount') or 0),
+            'leadCount':int(stats.get('leadCount') or 0),
+            'activities':acts,'reviews':reviews}
+
+
+@app.post('/api/public/leaders/{leader_id}/reviews')
+def public_leader_review(leader_id:int,payload:dict=Body(...)):
+    """顾客给领队评分（1-5 星 + 一句话）。
+
+    一人一评：同一个 rater_key 再提交 = 改自己的那条，不叠数（否则一个人能把分数刷上去）。
+    评分不要求登录 —— C 端会员登录在有网关的线上环境本来就不稳定，逼人登录等于关掉这个功能；
+    去重靠浏览器本地生成并带过来的 rater_key（会员登录时前端会换成 u:<userId>）。
+    """
+    try: rating=int(payload.get('rating') or 0)
+    except (TypeError,ValueError): rating=0
+    if not 1<=rating<=5: raise HTTPException(400,'请选择 1-5 星')
+    comment=str(payload.get('comment') or '').strip()[:200] or None
+    author=str(payload.get('author') or '').strip()[:20] or None
+    key=str(payload.get('raterKey') or '').strip()
+    if not _RATER_KEY_RE.match(key): raise HTTPException(400,'评价标识缺失，请刷新页面后重试')
+    try: activity_id=int(payload.get('activityId') or 0) or None
+    except (TypeError,ValueError): activity_id=None
+    with conn() as c:
+        r=_leader_or_404(c,leader_id)
+        club_id=int(r['club_id'])
+        # 关联活动只做归属校验，不做「必须参加过才能评」的硬门槛（到场与否系统未必知道，
+        # 拦死会把真实评价挡在门外）；脏数据靠这条 club_id 校验挡住。
+        if activity_id and not c.execute('SELECT 1 FROM activities WHERE id=? AND club_id=?',
+                                         (activity_id,club_id)).fetchone():
+            activity_id=None
+        ex=c.execute('SELECT id FROM leader_reviews WHERE club_id=? AND leader_id=? AND rater_key=?',
+                     (club_id,leader_id,key)).fetchone()
+        if ex:
+            c.execute('UPDATE leader_reviews SET rating=?,comment=?,author=?,activity_id=COALESCE(?,activity_id),'
+                      'updated_at=CURRENT_TIMESTAMP WHERE id=?',(rating,comment,author,activity_id,int(ex['id'])))
+            updated=True
+        else:
+            c.execute('INSERT INTO leader_reviews(club_id,leader_id,activity_id,rater_key,author,rating,comment) '
+                      'VALUES(?,?,?,?,?,?,?)',(club_id,leader_id,activity_id,key,author,rating,comment))
+            updated=False
+        stats=_leader_stats(c,club_id,[leader_id]).get(int(leader_id)) or {}
+    return {'ok':True,'updated':updated,'ratingAvg':stats.get('ratingAvg'),
+            'ratingCount':int(stats.get('ratingCount') or 0)}
+
+
+@app.post('/api/public/leaders/{leader_id}/inquiries')
+def public_leader_inquiry(leader_id:int,payload:dict=Body(...),background_tasks:BackgroundTasks=None):
+    """「咨询领队」：顾客问的都是「这条线累不累 / 我能不能去 / 档期还有没有」这类具体问题。
+
+    落到 leader_inquiries 里，俱乐部端「信息」统一收件箱能看到并标记已回复。
+    这里不做自动客服 —— 没有真人回答的「已收到」比不回更让人失望。
+    """
+    phone=re.sub(r'[^0-9+]','',str(payload.get('phone') or ''))
+    if len(phone)<6 or len(phone)>20: raise HTTPException(400,'请填写可联系上的手机号')
+    message=str(payload.get('message') or '').strip()
+    if len(message)<4: raise HTTPException(400,'把想咨询的问题写具体一点（至少 4 个字）')
+    if len(message)>500: raise HTTPException(400,'咨询内容最多 500 字')
+    name=str(payload.get('name') or '').strip()[:20] or None
+    try: activity_id=int(payload.get('activityId') or 0) or None
+    except (TypeError,ValueError): activity_id=None
+    with conn() as c:
+        r=_leader_or_404(c,leader_id)
+        club_id=int(r['club_id'])
+        if activity_id and not c.execute('SELECT 1 FROM activities WHERE id=? AND club_id=?',
+                                         (activity_id,club_id)).fetchone():
+            activity_id=None
+        iq=c.execute('INSERT INTO leader_inquiries(club_id,leader_id,activity_id,name,phone,message) '
+                     'VALUES(?,?,?,?,?,?)',(club_id,leader_id,activity_id,name,phone,message)).lastrowid
+        webhook=_club_wecom_webhook(c,club_id)
+        a=row(c.execute('SELECT title FROM activities WHERE id=?',(activity_id,))) if activity_id else None
+    if webhook and background_tasks is not None:
+        background_tasks.add_task(_push_inquiry_to_wecom, webhook, '领队',
+            {'name':name,'phone':phone,'message':message,
+             'leaderName':str(r.get('name') or ''),
+             'activityTitle':str(a.get('title') or '') if a else '',
+             'backendLink':'/?view=info'})
+    return {'ok':True,'inquiryId':int(iq),'leader':str(r.get('name') or '')}
+
+
+@app.post('/api/public/activities/{activity_id}/inquiries')
+def public_route_inquiry(activity_id:int,payload:dict=Body(...),background_tasks:BackgroundTasks=None):
+    """「咨询线路」：顾客在 C 端活动详情点「咨询这条线路」留下的问题。
+
+    落到 route_inquiries，进俱乐部端「信息」统一收件箱。同样不做自动客服。
+    """
+    phone=re.sub(r'[^0-9+]','',str(payload.get('phone') or ''))
+    if len(phone)<6 or len(phone)>20: raise HTTPException(400,'请填写可联系上的手机号')
+    message=str(payload.get('message') or '').strip()
+    if len(message)<4: raise HTTPException(400,'把想咨询的问题写具体一点（至少 4 个字）')
+    if len(message)>500: raise HTTPException(400,'咨询内容最多 500 字')
+    name=str(payload.get('name') or '').strip()[:20] or None
+    with conn() as c:
+        a=row(c.execute('SELECT id,club_id,title FROM activities WHERE id=? AND status="published"',(activity_id,)))
+        if not a: raise HTTPException(404,'活动不存在或未发布')
+        club_id=int(a['club_id'])
+        iq=c.execute('INSERT INTO route_inquiries(club_id,activity_id,name,phone,message) '
+                     'VALUES(?,?,?,?,?)',(club_id,activity_id,name,phone,message)).lastrowid
+        webhook=_club_wecom_webhook(c,club_id)
+    if webhook and background_tasks is not None:
+        background_tasks.add_task(_push_inquiry_to_wecom, webhook, '线路',
+            {'name':name,'phone':phone,'message':message,
+             'activityTitle':str(a.get('title') or ''),'backendLink':'/?view=info'})
+    return {'ok':True,'inquiryId':int(iq)}
 
 
 @app.get('/api/public/activities/{activity_id}')
@@ -3711,6 +4634,12 @@ def public_activity(activity_id:int):
     with conn() as _gc:a['gearRecommendations']=_gear_plan_for(_gc,a['activityMaster'],int(a['club_id']))
     # 带队领队：顾客挑团期时最想知道「谁带」，俱乐部端排好班之后这里必须看得见
     with conn() as _lc:a['leaders']=_public_leaders(_lc,activity_id,int(a['club_id']))
+    # 出行指引（按团期）：集合/应急 + 已发送通知 + 分组 —— 后台执行页填的内容同步到 C 端活动页。
+    # 与订单出行指引(_public_trip_info)同源，但面向「还没报名、正在看活动」的顾客（不含本人分车）。
+    with conn() as _ec:
+        for _o in (a.get('occurrences') or []):
+            _oid=int(_o.get('id') or 0)
+            if _oid: _o['execution']=_public_execution(_ec,_oid,int(a['club_id']))
     cov=a.get('cover')
     if cov and str(cov).startswith('/static/'):
         a['cover']='/api/public/activities/%d/media/%s'%(activity_id,quote(str(cov)[len('/static/'):],safe='/'))
@@ -3733,10 +4662,12 @@ def public_activity(activity_id:int):
     if IS_PROD:
         # Public activity is not a dump of private activity_master_json (internalData).
         a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy','gearRecommendations','leaders','detailVersionId','updatedAt')}
-        # 领队只放行展示必需的六样：手机号一类内部联络信息即便将来被写进这张表，也出不去。
-        # leaders 已经是活动级的扁平数组（见 _public_leaders），逐项过白名单即可。
-        a['leaders']=[{k:v for k,v in x.items()
-                       if k in ('name','role','credential','specialties','baseCity','avatarUrl')}
+        # 领队白名单：与 _public_leaders 同一条脱敏纪律（手机号/内部备注绝不下发），
+        # 但展示所需的字段要全部放行，否则前端卡片会变成「静态不可点」—— leaderId 没了就打不开
+        # 领队主页、years_exp/cert_verified/rating 没了就少印年限/资质/评分（用户反馈「领队信息没显示完」）。
+        _LEADER_PUBLIC_KEYS={'name','role','credential','specialties','baseCity','avatarUrl',
+                             'leaderId','yearsExp','certVerified','ratingAvg','ratingCount','bio','leadCount'}
+        a['leaders']=[{k:v for k,v in x.items() if k in _LEADER_PUBLIC_KEYS}
                       for x in (a.get('leaders') or [])]
         master=a.get('activityMaster') or {}
         if isinstance(master,dict):
@@ -3756,7 +4687,7 @@ def public_activity(activity_id:int):
         detail=a.get('detail') or {}
         if isinstance(detail,dict):
             a['detail']=sanitize_public_document({k:v for k,v in detail.items() if k in ('blocks','title','summary','subtitle','promoHtml')})
-        safe_occ_keys={'id','activity_id','club_id','start_at','end_at','price','capacity','sold','remaining','status','label'}
+        safe_occ_keys={'id','activity_id','club_id','start_at','end_at','price','capacity','sold','remaining','status','label','execution'}
         a['occurrences']=[{k:v for k,v in occurrence.items() if k in safe_occ_keys} for occurrence in a['occurrences']]
     return a
 
@@ -3929,10 +4860,12 @@ def create_gear_checkout(club_id:int,payload:dict=Body(...)):
     if not items: raise HTTPException(400,'items required')
     with conn() as c:
         c.execute('INSERT OR IGNORE INTO gear_point_accounts(user_id,balance) VALUES(?,0)',(user_id,))
+        checkout_engine.expire_gear(c)
         resolved=[]
         for it in items:
             p=row(c.execute('SELECT * FROM products WHERE id=? AND status="active"',(int(it['productId']),)))
             if not p: raise HTTPException(400,'商品不可售')
+            _owned_product(c,p['id'])
             q=max(1,int(it.get('quantity',1))); p=dict(p)
             # 规格：传了 variantId 就必须属于这个商品；没传就取默认规格。
             # 库存已经下沉到规格层，所以库存校验一律读规格的 stock —— 继续读
@@ -3943,6 +4876,7 @@ def create_gear_checkout(club_id:int,payload:dict=Body(...)):
             if vid and not v: raise HTTPException(400,'规格不存在或已下架')
             if v:
                 p['_variantId']=int(v['id']); p['_variantName']=v['name']
+                p['commerce_variant_id']=v.get('commerce_variant_id')
                 if v['price'] is not None: p['price']=float(v['price'])
                 stock=int(v['stock'] or 0)
             else:
@@ -3999,6 +4933,8 @@ def start_checkout_payment(checkout_id:str,payload:dict=Body(default={})):
         if not intent: raise HTTPException(404,'结算单不存在')
         if intent['status']=='paid':
             return {'ok':True,'checkoutId':checkout_id,'status':'paid','idempotent':True}
+        if intent['status']!='pending_payment':raise HTTPException(409,'结算单已取消或过期，请重新下单')
+        if intent['kind']=='gear' and commerce_provider()=='medusa' and not intent.get('commerce_cart_id'):raise HTTPException(409,'商品规格与 Medusa 尚未完成同步，暂不能付款')
         # Zero-cash orders never leave ClubOS and still use the same idempotent confirm path.
         if float(intent.get('cash_amount') or 0)<=0:
             attempt=payment_lifecycle.start(c,checkout_id=checkout_id,provider='clubos-zero',channel='zero',merchant_order_no=merchant_order_no(),metadata=metadata)
@@ -4318,6 +5254,51 @@ def _attach_checkin_status(c,participants):
         p['checkinType']=(rec or {}).get('checkin_type')
     return participants
 
+# ── 自助签到：C 端出码 + 执行端扫码核销（2026-10-30）──────────────────────
+# 设计：服务端用 HMAC-SHA256 对 "club.occurrence.participant" 签名生成 token，
+# 二维码由服务端用 qrcode 生成 SVG —— 前端零 QR 库依赖、单一真相源。
+# 领队端用 vendored jsQR 解码 token，调 checkin-by-token 核销；签名 + 活动归属双重校验。
+_CHECKIN_HASH = hashlib.sha256
+
+def _checkin_secret():
+    # 稳定签名密钥：环境变量优先；否则首启随机生成并持久化到 platform_settings。
+    env = os.environ.get('CLUBOS_CHECKIN_SECRET')
+    if env: return env
+    key = 'checkin_secret'
+    with conn() as c:
+        r = c.execute('SELECT value FROM platform_settings WHERE key=?',(key,)).fetchone()
+        if r and r[0]: return r[0]
+        s = secrets.token_hex(32)
+        c.execute('INSERT OR REPLACE INTO platform_settings(key,value) VALUES(?,?)',(key,s))
+        return s
+
+def _checkin_sign(club_id, occurrence_id, participant_id):
+    msg = f"{int(club_id)}.{int(occurrence_id)}.{int(participant_id)}"
+    sig = hmac.new(_checkin_secret().encode(), msg.encode(), _CHECKIN_HASH).hexdigest()[:16]
+    return f"{msg}.{sig}"
+
+def _checkin_verify(token):
+    # 返回 (club_id, occurrence_id, participant_id, valid)
+    try:
+        parts = str(token or '').split('.')
+        if len(parts) != 4: return (None, None, None, False)
+        club_id, occurrence_id, participant_id, sig = parts
+        msg = f"{club_id}.{occurrence_id}.{participant_id}"
+        exp = hmac.new(_checkin_secret().encode(), msg.encode(), _CHECKIN_HASH).hexdigest()[:16]
+        ok = hmac.compare_digest(exp, sig)
+        return (int(club_id), int(occurrence_id), int(participant_id), ok)
+    except Exception:
+        return (None, None, None, False)
+
+def _qr_svg(data):
+    # 延迟导入：qrcode 是新增依赖，缺省时不拖垮整个应用启动。
+    import qrcode
+    from qrcode.image.svg import SvgImage
+    img = qrcode.make(data, image_factory=SvgImage, box_size=8, border=2,
+                      error_correction=qrcode.constants.ERROR_CORRECT_M)
+    out = img.to_string()
+    return out.decode('utf-8') if isinstance(out, bytes) else out
+
 # 该装饰器曾误贴在下面的 _attach_checkin_status(c, participants) 上，导致这个接口
 # 实际注册成了「需要 query 参数 c + participants」的辅助函数，C 端「我的参加人」
 # 恒返回 422。装饰器归位到真正的路由函数。
@@ -4599,6 +5580,7 @@ def create_gear_order(club_id:int,payload:dict=Body(...)):
         for it in items:
             p=row(c.execute('SELECT * FROM products WHERE id=? AND status="active"',(int(it['productId']),)))
             if not p:raise HTTPException(400,'商品不可售')
+            _owned_product(c,p['id'])
             q=max(1,int(it.get('quantity',1)))
             if p['stock']<q:raise HTTPException(400,f"{p['name']} 库存不足")
             # 佣金率按俱乐部设定（2026-10-24）：与 checkout._finalize_gear 同一口径。
@@ -4656,7 +5638,7 @@ def public_member_center(club_id:int,user_id:int=1):
         active_purchase=membership_engine.active_purchase(c,club_id=club_id,user_id=user_id) if purchase_enabled else None
     return {'member':member,'wallet':wallet,'benefits':benefits,'redemptions':redemptions,'tiers':tiers,
             'activityHistory':history,'gearOwned':owned,'gearDiscount':gear_discount,
-            'membershipPurchase':{'enabled':purchase_enabled,'tiers':purchasable,'activePurchase':active_purchase}}
+            'membershipPurchase':{'enabled':purchase_enabled,'tiers':purchasable,'activePurchase':active_purchase,'paymentAvailable':not IS_PROD}}
 
 @app.post('/api/public/clubs/{club_id}/benefits/{benefit_id}/redeem')
 def public_redeem_benefit(club_id:int,benefit_id:int,payload:dict=Body(...)):
@@ -4792,6 +5774,8 @@ def user_order_center(user_id:int,club_id:int=1):
                 x['refundQuote']=activity_refund_policy.evaluate(activity=a,occurrence=occ,cash_paid=float(x.get('amount') or 0)) if a else None
             else: x['refundQuote']=None
             for p in x.get('participants',[]):
+                # 自助签到码：每个参加人一个 HMAC 签名 token（C 端据此向 checkin-qr 换二维码）。
+                p['checkinToken']=_checkin_sign(x.get('club_id',club_id), p.get('occurrence_id') or x.get('occurrence_id'), p.get('id'))
                 if x['status']=='paid' and p.get('status')=='active' and str(p.get('refund_status') or 'none') not in ('requested','processing') and a:
                     alloc_cash=float(p.get('allocated_cash_paid') or 0)
                     pq=activity_refund_policy.evaluate(activity=a,occurrence=occ,cash_paid=alloc_cash)
@@ -5332,8 +6316,9 @@ def platform_grant_coupon(coupon_id: int, payload: dict = Body(default={})):
 # ── C 端：领券中心 / 我的券包 / 分享 / 注册城市 ──────────────────────────────
 
 @app.get('/api/public/coupons/claimable')
-def public_claimable_coupons(user_id: int = 1, club_id: int = 0, city: str = ''):
+def public_claimable_coupons(request:Request,user_id:int|None=None,club_id:int=0,city:str=''):
     """领券中心：当前用户可以领的券（城市定向按注册城市圈人）。"""
+    user_id=public_user_id(request,user_id)
     with conn() as c:
         u = row(c.execute('SELECT * FROM users WHERE id=?', (user_id,)))
         user_city = str((u or {}).get('city') or '').strip() or str(city or '').strip()
@@ -5341,8 +6326,8 @@ def public_claimable_coupons(user_id: int = 1, club_id: int = 0, city: str = '')
 
 
 @app.post('/api/public/coupons/{coupon_id}/claim')
-def public_claim_coupon(coupon_id: int, payload: dict = Body(default={})):
-    user_id = int(payload.get('userId') or 1)
+def public_claim_coupon(request:Request,coupon_id:int,payload:dict=Body(default={})):
+    user_id=public_user_id(request,payload.get('userId'))
     with conn() as c:
         u = row(c.execute('SELECT * FROM users WHERE id=?', (user_id,)))
         user_city = str((u or {}).get('city') or '').strip() or str(payload.get('city') or '').strip()
@@ -5355,8 +6340,9 @@ def public_claim_coupon(coupon_id: int, payload: dict = Body(default={})):
 
 
 @app.get('/api/public/coupons/mine')
-def public_my_coupons(user_id: int = 1):
+def public_my_coupons(request:Request,user_id:int|None=None):
     """我的券包：跨俱乐部的全部券（平台券 + 俱乐部券）。"""
+    user_id=public_user_id(request,user_id)
     with conn() as c:
         out = benefit_engine.user_redemptions(c, user_id=user_id, club_id=0)
         now = benefit_engine._now()
@@ -5380,10 +6366,11 @@ def public_coupon_share(code: str):
 def public_user_profile(user_id: int):
     """用户基本信息（名字 + 注册城市）。手机号不返回：这是公开接口。"""
     with conn() as c:
-        u = row(c.execute('SELECT id,name,city FROM users WHERE id=?', (user_id,)))
+        u = row(c.execute('SELECT id,name,city,avatar_url,wechat_avatar_url FROM users WHERE id=?', (user_id,)))
         if not u:
             raise HTTPException(404, '用户不存在')
-        return u
+        return {'id':u['id'],'name':u['name'],'city':u.get('city') or '',
+                'avatarUrl':u.get('avatar_url') or '','wechatAvatarUrl':u.get('wechat_avatar_url') or ''}
 
 
 @app.post('/api/public/users/{user_id}/city')
@@ -5398,6 +6385,83 @@ def public_set_user_city(user_id: int, payload: dict = Body(...)):
     return {'ok': True, 'city': city}
 
 
+_USER_AVATAR_URL_RE=re.compile(r'^/api/public/users/(\d+)/avatar(\.[a-z0-9]{2,5})$', re.I)
+
+@app.post('/api/public/users/{user_id}/avatar')
+def public_set_user_avatar(user_id:int, payload:dict=Body(...)):
+    """C 端顾客设置自己的头像（自定义上传 / 用微信头像 / 恢复默认）。
+
+    - avatarData: data:image/...;base64,... —— 解码 + PIL 校验 + 裁成 1:1 后落盘
+      uploads/users/{id}/avatar{ext}，库里只存活动域代理地址（同领队头像口径，
+      生产环境 /static/uploads/* 被封死，裸链是死链）。
+    - useWechat:true —— 把已授权的 wechat_avatar_url 复制到 avatar_url（微信头像自动同步入口）。
+    - clear:true —— 头像置空，前端回退到首字母。
+    """
+    with conn() as c:
+        u=row(c.execute('SELECT id,avatar_url,wechat_avatar_url FROM users WHERE id=?',(user_id,)))
+        if not u: raise HTTPException(404,'用户不存在')
+        if payload.get('clear'):
+            c.execute('UPDATE users SET avatar_url=NULL WHERE id=?',(user_id,))
+            return {'avatarUrl':''}
+        if payload.get('useWechat'):
+            wx=str(u.get('wechat_avatar_url') or '')
+            if not wx: raise HTTPException(409,'还没有微信头像可用，请先在微信中授权')
+            c.execute('UPDATE users SET avatar_url=? WHERE id=?',(wx,user_id))
+            return {'avatarUrl':wx}
+        data=str(payload.get('avatarData') or '')
+        m=re.match(r'^data:(image/[a-z0-9.+-]+);base64,', data)
+        if not m: raise HTTPException(400,'头像数据格式不正确')
+        mime=m.group(1).lower()
+        ext_map={'image/png':'.png','image/jpeg':'.jpg','image/jpg':'.jpg','image/webp':'.webp','image/gif':'.gif'}
+        ext=ext_map.get(mime)
+        if not ext: raise HTTPException(400,'不支持的图片格式')
+        try:
+            raw=base64.b64decode(data.split(',',1)[1], validate=False)
+        except Exception:
+            raise HTTPException(400,'头像解码失败')
+        if len(raw)>3*1024*1024: raise HTTPException(413,'头像不能超过 3MB')
+        try:
+            Image.open(io.BytesIO(raw)).verify()
+            im=Image.open(io.BytesIO(raw)).convert('RGB')
+        except Exception:
+            raise HTTPException(400,'头像不是有效的图片文件')
+        side=min(im.size)
+        box=((im.width-side)//2,(im.height-side)//2,(im.width-side)//2+side,(im.height-side)//2+side)
+        im=im.crop(box).resize((256,256))
+        dest=UPLOAD/'users'/f'{int(user_id)}'; dest.mkdir(parents=True, exist_ok=True)
+        for stale in dest.glob('avatar.*'):
+            try: stale.unlink()
+            except OSError: pass
+        fp=dest/f'avatar{ext}'
+        save_ext='PNG' if ext=='.png' else ('JPEG' if ext in ('.jpg','.jpeg') else ('WEBP' if ext=='.webp' else 'GIF'))
+        im.save(fp, save_ext)
+        url=f'/api/public/users/{int(user_id)}/avatar{ext}'
+        c.execute('UPDATE users SET avatar_url=? WHERE id=?',(url,user_id))
+        return {'avatarUrl':url}
+
+@app.get('/api/public/users/{user_id}/avatar.{ext}')
+def public_user_avatar(user_id:int, ext:str):
+    """C 端顾客头像（公开）。磁盘定位与扩展名校验复用 _serve_user_avatar：
+    先按形状校验库里存的 URL，再用路由参数拼路径 —— 即便库里被写入畸形值也跳出不了 uploads。"""
+    with conn() as c:
+        r=row(c.execute('SELECT avatar_url FROM users WHERE id=?',(user_id,)))
+    if not r: raise HTTPException(404,'用户不存在')
+    return _serve_user_avatar(int(user_id), ext)
+
+def _serve_user_avatar(user_id:int, ext:str):
+    with conn() as c:
+        r=row(c.execute('SELECT avatar_url FROM users WHERE id=?',(user_id,)))
+    if not r: raise HTTPException(404,'用户不存在')
+    m=_USER_AVATAR_URL_RE.match(str(r['avatar_url'] or ''))
+    if not m or int(m.group(1))!=int(user_id):
+        raise HTTPException(404,'还没有设置头像')
+    ext='.'+str(ext).lower().lstrip('.')
+    if ext not in _PUBLIC_IMAGE_EXT: raise HTTPException(404,'不支持的图片格式')
+    fp=UPLOAD/'users'/f'{int(user_id)}'/f'avatar{ext}'
+    if not fp.is_file(): raise HTTPException(404,'头像文件已丢失')
+    return FileResponse(fp)
+
+
 @app.get('/api/platform/commerce/status')
 def platform_commerce_status():
     st=commerce_status()
@@ -5405,7 +6469,7 @@ def platform_commerce_status():
 
 @app.get('/api/platform/products')
 def platform_products(brand_id:int|None=None, category_id:int|None=None,
-                      gender:str|None=None, q:str|None=None):
+                      gender:str|None=None, q:str|None=None, status:str|None=None):
     # 规格数与图数一起带出来：后台列表要能一眼看出哪些商品还没维护多图/规格，
     # 逐个商品回查会退化成 N+1。
     where=['1=1']; args=[]
@@ -5414,6 +6478,7 @@ def platform_products(brand_id:int|None=None, category_id:int|None=None,
     if brand_id: where.append('p.brand_id=?'); args.append(int(brand_id))
     if category_id: where.append('p.category_id=?'); args.append(int(category_id))
     if gender: where.append('p.gender=?'); args.append(catalog_service.normalize_gender(gender))
+    if status: where.append('p.status=?'); args.append(str(status))
     if q:
         kw=str(q).strip()
         if kw:
@@ -5424,9 +6489,24 @@ def platform_products(brand_id:int|None=None, category_id:int|None=None,
         (SELECT name FROM product_categories ct WHERE ct.id=p.category_id) category_name,
         (SELECT name FROM product_categories pc WHERE pc.id=(SELECT parent_id FROM product_categories ct WHERE ct.id=p.category_id)) parent_category_name,
         (SELECT COUNT(*) FROM product_variants v WHERE v.product_id=p.id AND v.status='active') variants_count,
-        (SELECT COUNT(*) FROM product_images i WHERE i.product_id=p.id) images_count
+        (SELECT COUNT(*) FROM product_images i WHERE i.product_id=p.id) images_count,
+        (SELECT COALESCE(SUM(on_order),0) FROM warehouse_inventory wi WHERE wi.product_id=p.id) on_order
       FROM products p WHERE %s ORDER BY p.id DESC''' % ' AND '.join(where)
-    with conn() as c: return rows(c.execute(sql,args))
+    with conn() as c:
+        out=rows(c.execute(sql,args))
+        # 进销存 V1：派生库存状态（与库存状态机分离，商品上架仍可显示售罄）
+        for r in out:
+            r['inventory_status']=_inventory_status(r)
+        return out
+
+
+def _inventory_status(p:dict) -> str:
+    """根据汇总库存 / 补货点 / 在途，派生库存状态（与商品上架状态分离）。"""
+    stock=int(p.get('stock') or 0); rp=int(p.get('reorder_point') or 0); oo=int(p.get('on_order') or 0)
+    if stock<=0: return 'out_of_stock'
+    if oo>0 and stock<=rp: return 'restocking'
+    if stock<=rp: return 'low_stock'
+    return 'in_stock'
 
 
 def _resync_product_stock(c, product_id:int):
@@ -5439,10 +6519,55 @@ def _resync_product_stock(c, product_id:int):
     c.execute('UPDATE products SET stock=? WHERE id=?',(int(total),int(product_id)))
     return int(total)
 
+
+def _mirror_pool_delta(c,product_id:int,delta:int,*,ref:str,note:str=''):
+    _owned_product(c,product_id)
+    for v in rows(c.execute('SELECT id,stock FROM product_variants WHERE product_id=?',(product_id,))):
+        actual=int(c.execute('SELECT COALESCE(SUM(on_hand-reserved-unsellable),0) FROM warehouse_sku_balances WHERE variant_id=?',(v['id'],)).fetchone()[0])
+        diff=int(v['stock'])-actual
+        if diff:
+            c.execute('UPDATE product_variants SET stock=? WHERE id=?',(actual,v['id']))
+            inventory_engine.adjust_stock(c,product_id=product_id,variant_id=v['id'],quantity_delta=diff,reason=note or '规格期初调整',reference_type='variant_pool_edit',reference_id=ref)
+
+def _resync_product_stock_warehouse_aware(c, product_id:int):
+    """V1.2：有 WMS 时按真源反转口径收口（可售=派生），否则退回汇总重算。"""
+    if inventory_engine.warehouse:
+        from clubos_domain.product_stock import resync_sellable_from_wms as _rsync
+        _rsync(c,product_id=product_id)
+    else:
+        _resync_product_stock(c,product_id)
+
+@app.get('/api/platform/stock/consistency')
+def platform_stock_consistency():
+    """库存一致性自检（V1.2 真源反转口径）。
+
+    V1.2 起：warehouse_inventory.on_hand 是实物真源，product_variants.stock 是
+    可售派生（= Σon_hand − Σreserved − Σunsellable）。本端点比对：
+      ① products.stock 是否等于在售规格库存之和（列表汇总冗余校验）；
+      ② 各规格可售之和是否等于 WMS 可售总额（实物 − 锁定 − 不可售）。
+    返回所有不一致的商品与差值；修复由各触发点的 resync_sellable_from_wms 负责。
+    """
+    with conn() as c:
+        rows_out=[]
+        for p in c.execute('SELECT id,name,sku,stock,status FROM products ORDER BY id').fetchall():
+            p=dict(p)
+            variant_sum=int(c.execute("SELECT COALESCE(SUM(stock),0) FROM product_variants WHERE product_id=? AND status='active'",(p['id'],)).fetchone()[0])
+            wms_sellable=int(c.execute('SELECT COALESCE(SUM(on_hand-reserved-unsellable),0) FROM warehouse_inventory WHERE product_id=?',(p['id'],)).fetchone()[0])
+            wms_sum=int(c.execute('SELECT COALESCE(SUM(on_hand),0) FROM warehouse_inventory WHERE product_id=?',(p['id'],)).fetchone()[0])
+            diff_v=variant_sum-int(p['stock'] or 0)
+            diff_w=variant_sum-max(0,wms_sellable)
+            if diff_v!=0 or diff_w!=0:
+                rows_out.append({'id':p['id'],'name':p['name'],'sku':p['sku'],'status':p['status'],
+                                 'productsStock':int(p['stock'] or 0),'variantSum':variant_sum,
+                                 'wmsSum':wms_sum,'wmsSellable':max(0,wms_sellable),
+                                 'diffVsProducts':diff_v,'diffVsWms':diff_w})
+        return {'ok':True,'mismatches':rows_out,'count':len(rows_out)}
+
+
 @app.get('/api/platform/products/{product_id}/variants')
 def platform_variants(product_id:int):
     with conn() as c:
-        return rows(c.execute("SELECT id,product_id,name,sku,price,stock,status,sort,is_default,color,color_hex,size,barcode FROM product_variants WHERE product_id=? ORDER BY sort,id",(product_id,)))
+        return rows(c.execute("SELECT id,product_id,name,sku,price,stock,status,sort,is_default,color,color_hex,size,barcode,settlement_price FROM product_variants WHERE product_id=? ORDER BY sort,id",(product_id,)))
 
 @app.post('/api/platform/products/{product_id}/variants')
 def add_product_variant(product_id:int, payload:dict=Body(...)):
@@ -5474,12 +6599,24 @@ def add_product_variant(product_id:int, payload:dict=Body(...)):
         if dflt and others==0:
             moved=int(dflt['stock'] or 0)
             c.execute("UPDATE product_variants SET status='inactive',stock=0 WHERE id=?",(dflt['id'],))
-            stock=stock or moved
+        effective=int(stock or 0) or moved
         mx=c.execute("SELECT COALESCE(MAX(sort),0) m FROM product_variants WHERE product_id=?",(product_id,)).fetchone()['m']
-        c.execute('INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status,color,color_hex,size,barcode) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-                  (product_id,name,sku,price,stock,int(mx)+1,'active',color,color_hex,size,barcode))
+        # V1.2 固定结算价（品牌 fixed_price 模式逐 SKU 结算用）
+        settlement_price=max(0.0,float(payload.get('settlementPrice') or 0))
+        # stock 落 0，期初库存随后统一走 adjust_stock（实物台账 → 可售派生）链路，
+        # 不再直写规格 —— 直写会让 Σvariant 与 WMS 脱钩（真源反转口径）。
+        c.execute('INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status,color,color_hex,size,barcode,settlement_price) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+                  (product_id,name,sku,price,0,int(mx)+1,'active',color,color_hex,size,barcode,settlement_price))
         vid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
-        _resync_product_stock(c,product_id)
+        # V1.2：规格池净变化镜像到 WMS 实物台账 —— 占位规格退场是池内转移，WMS 净 −moved；
+        # 期初 effective 由 adjust_stock 落实物。两条合计 = 池净变化，账实永远对齐。
+        _mirror_pool_delta(c,product_id,-moved,ref=f'variant:{vid}:retire',note='占位规格退场，库存转移')
+        if effective:
+            try:
+                inventory_engine.adjust_stock(c,product_id=product_id,quantity_delta=effective,reason='新增规格期初库存',
+                                              actor_type='platform',reference_type='variant_opening',reference_id=str(vid),variant_id=vid)
+            except ValueError as e: raise HTTPException(409,str(e))
+        _resync_product_stock_warehouse_aware(c,product_id)
         return {'ok':True,'id':vid,'movedStock':moved}
 
 @app.patch('/api/platform/products/{product_id}/variants/{variant_id}')
@@ -5496,9 +6633,19 @@ def patch_product_variant(product_id:int, variant_id:int, payload:dict=Body(...)
             sets.append('color_hex=?');vals.append(catalog_service.normalize_color_hex(payload['colorHex']))
         if payload.get('price') is not None:
             raw=payload['price']; sets.append('price=?');vals.append(float(raw) if raw!='' else None)
+        if payload.get('settlementPrice') is not None:
+            sets.append('settlement_price=?');vals.append(max(0.0,float(payload.get('settlementPrice') or 0)))  # V1.2 固定结算价
+        # V1.2 真源反转：规格库存不再直写 —— 按差量走 adjust_stock（实物台账+流水+派生收口）。
+        stock_delta=0
         if payload.get('stock') is not None:
-            sets.append('stock=?');vals.append(max(0,int(payload['stock'])))
-        if not sets: raise HTTPException(400,'没有要修改的字段')
+            stock_delta=max(0,int(payload['stock']))-int(v['stock'] or 0)
+            if stock_delta:
+                try:
+                    inventory_engine.adjust_stock(c,product_id=product_id,quantity_delta=stock_delta,reason='规格库存调整',
+                                                  actor_type='platform',reference_type='variant_stock_edit',
+                                                  reference_id=str(variant_id),variant_id=variant_id)
+                except ValueError as e: raise HTTPException(409,str(e))
+        if not sets and stock_delta==0: raise HTTPException(400,'没有要修改的字段')
         vals+= [variant_id]
         c.execute('UPDATE product_variants SET '+(', '.join(sets))+' WHERE id=?',vals)
         _resync_product_stock(c,product_id)
@@ -5507,17 +6654,21 @@ def patch_product_variant(product_id:int, variant_id:int, payload:dict=Body(...)
 @app.delete('/api/platform/products/{product_id}/variants/{variant_id}')
 def delete_product_variant(product_id:int, variant_id:int):
     with conn() as c:
+        if c.execute('SELECT 1 FROM warehouse_sku_balances WHERE variant_id=?',(variant_id,)).fetchone() or c.execute('SELECT 1 FROM gear_order_items WHERE variant_id=?',(variant_id,)).fetchone():
+            raise HTTPException(409,'该 SKU 有库存或交易历史，请停用保留记录，不能删除')
         v=c.execute('SELECT * FROM product_variants WHERE id=? AND product_id=?',(variant_id,product_id)).fetchone()
         if not v: raise HTTPException(404,'规格不存在')
         c.execute('DELETE FROM product_variants WHERE id=?',(variant_id,))
-        # 删到只剩 0 个规格时补回一个「默认」：库存真源在规格层，
+        # 删到只剩 0 个规格时补回一个「默认」：可售库存派生自 WMS 实物（真源反转），
         # 一个规格都没有的商品在 C 端会读不到库存、直接变成缺货。
         left=c.execute("SELECT COUNT(*) n FROM product_variants WHERE product_id=? AND status='active'",(product_id,)).fetchone()['n']
         if left==0:
-            p=c.execute('SELECT sku,stock FROM products WHERE id=?',(product_id,)).fetchone()
-            c.execute("INSERT INTO product_variants(product_id,name,sku,stock,sort,status,is_default) VALUES(?,?,?,?,?,'active',1)",
-                      (product_id,'默认',p['sku'],int(p['stock'] or 0),0))
-        _resync_product_stock(c,product_id)
+            p=c.execute('SELECT sku FROM products WHERE id=?',(product_id,)).fetchone()
+            # V1.2：stock 先落 0，规格池空缺由紧随的派生收口从 WMS 可售总额回填
+            #（实物没消失，删规格只是池内转移 —— 旧口径里靠 products.stock 旧值承接）。
+            c.execute("INSERT INTO product_variants(product_id,name,sku,stock,sort,status,is_default) VALUES(?,?,?,0,0,'active',1)",
+                      (product_id,'默认',p['sku']))
+        _resync_product_stock_warehouse_aware(c,product_id)
         return {'ok':True,'restoredDefault':left==0}
 
 # ── 商品图片：头图 + 详情图集（本地批量上传 + 服务端落盘）──────────────────
@@ -5646,7 +6797,19 @@ def platform_add_brand(payload:dict=Body(...)):
         try:
             bid=catalog_service.create_brand(c,name=str(payload.get('name') or ''),
                                              logo_url=payload.get('logoUrl'),
-                                             sort=payload.get('sort') or 0)
+                                             sort=payload.get('sort') or 0,
+                                             name_en=payload.get('nameEn'),
+                                             intro=payload.get('intro'),
+                                             industry=payload.get('industry'),
+                                             official_website=payload.get('officialWebsite'),
+                                             country=payload.get('country'),
+                                             contact_name=payload.get('contactName'),
+                                             contact_phone=payload.get('contactPhone'),
+                                             cooperation_status=payload.get('cooperationStatus') or 'pending',
+                                             source_type=payload.get('sourceType') or 'platform_self',
+                                             mall_display_status=payload.get('mallDisplayStatus') or 'show',
+                                             settlement_mode=payload.get('settlementMode'),
+                                             settlement_ratio=payload.get('settlementRatio'))
         except ValueError as e: raise HTTPException(400,str(e))
     return {'ok':True,'id':bid}
 
@@ -5656,7 +6819,19 @@ def platform_patch_brand(brand_id:int, payload:dict=Body(...)):
         try:
             catalog_service.update_brand(c,brand_id,name=payload.get('name'),
                                          logo_url=payload.get('logoUrl'),
-                                         sort=payload.get('sort'),status=payload.get('status'))
+                                         sort=payload.get('sort'),status=payload.get('status'),
+                                         name_en=payload.get('nameEn'),
+                                         intro=payload.get('intro'),
+                                         industry=payload.get('industry'),
+                                         official_website=payload.get('officialWebsite'),
+                                         country=payload.get('country'),
+                                         contact_name=payload.get('contactName'),
+                                         contact_phone=payload.get('contactPhone'),
+                                         cooperation_status=payload.get('cooperationStatus'),
+                                         source_type=payload.get('sourceType'),
+                                         mall_display_status=payload.get('mallDisplayStatus'),
+                                         settlement_mode=payload.get('settlementMode'),
+                                         settlement_ratio=payload.get('settlementRatio'))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(400,str(e))
     return {'ok':True}
@@ -5672,6 +6847,129 @@ def platform_delete_brand(brand_id:int):
         try: out=catalog_service.delete_brand(c,brand_id)
         except LookupError as e: raise HTTPException(404,str(e))
     return {'ok':True,**out}
+
+# ───────────────────────── 供应商↔品牌关联（进销存 V1） ─────────────────────────
+@app.get('/api/platform/brands/{brand_id}/suppliers')
+def platform_brand_suppliers(brand_id:int):
+    with conn() as c:
+        if not c.execute('SELECT id FROM product_brands WHERE id=?',(brand_id,)).fetchone():
+            raise HTTPException(404,'品牌不存在')
+        return rows(c.execute("""SELECT bs.id,bs.brand_id,bs.supplier_id,bs.is_primary,bs.note,bs.created_at,
+                                 s.code,s.name,s.contact_name,s.phone,s.status supplier_status
+                                FROM brand_suppliers bs JOIN suppliers s ON s.id=bs.supplier_id
+                                WHERE bs.brand_id=? ORDER BY bs.is_primary DESC,bs.id""",(brand_id,)))
+
+@app.post('/api/platform/brands/{brand_id}/suppliers')
+def platform_brand_add_supplier(brand_id:int, payload:dict=Body(...)):
+    sid=int(payload.get('supplierId') or 0)
+    if sid<=0: raise HTTPException(400,'supplierId 必填')
+    is_primary=1 if payload.get('isPrimary') else 0
+    note=str(payload.get('note') or '')[:200]
+    with conn() as c:
+        if not c.execute('SELECT id FROM product_brands WHERE id=?',(brand_id,)).fetchone():
+            raise HTTPException(404,'品牌不存在')
+        if not c.execute('SELECT id FROM suppliers WHERE id=?',(sid,)).fetchone():
+            raise HTTPException(404,'供应商不存在')
+        if c.execute('SELECT id FROM brand_suppliers WHERE brand_id=? AND supplier_id=?',(brand_id,sid)).fetchone():
+            raise HTTPException(409,'该供应商已关联到本品牌')
+        # 设为主供应商时，先把同品牌其它关联降级
+        if is_primary:
+            c.execute('UPDATE brand_suppliers SET is_primary=0 WHERE brand_id=?',(brand_id,))
+        c.execute('INSERT INTO brand_suppliers(brand_id,supplier_id,is_primary,note) VALUES(?,?,?,?)',
+                  (brand_id,sid,is_primary,note))
+        new_id=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+    # 注意：last_insert_rowid 必须在 with 块内取 —— conn() 退出即关闭连接，
+    # 出块后再用 c 会抛 ProgrammingError 打成 500。
+    return {'ok':True,'id':new_id}
+
+@app.delete('/api/platform/brands/{brand_id}/suppliers/{supplier_id}')
+def platform_brand_remove_supplier(brand_id:int, supplier_id:int):
+    with conn() as c:
+        c.execute('DELETE FROM brand_suppliers WHERE brand_id=? AND supplier_id=?',(brand_id,supplier_id))
+    return {'ok':True}
+
+@app.get('/api/platform/suppliers/{supplier_id}/brands')
+def platform_supplier_brands(supplier_id:int):
+    """入库弹窗「品牌按供应商选」的数据源（2026-11-01 用户反馈）：
+    采购单已选定供应商，品牌下拉只应出现该供应商在品牌管理里关联的品牌，
+    而不是全量品牌池 —— 货是谁供的，品牌就该是谁家的。反查 brand_suppliers。"""
+    with conn() as c:
+        if not c.execute('SELECT id FROM suppliers WHERE id=?',(supplier_id,)).fetchone():
+            raise HTTPException(404,'供应商不存在')
+        return rows(c.execute("""SELECT bs.id,bs.is_primary,bs.note,
+                                 b.id AS brand_id,b.name,b.slug,b.status
+                                FROM brand_suppliers bs JOIN product_brands b ON b.id=bs.brand_id
+                                WHERE bs.supplier_id=?
+                                ORDER BY bs.is_primary DESC,b.name""",(supplier_id,)))
+
+# ───────────────────────── 品牌结算（进销存 V1，结构 + 查看 + 生成草稿） ─────────────────────────
+@app.get('/api/platform/brands/{brand_id}/settlements')
+def platform_brand_settlements(brand_id:int, status:str|None=None):
+    with conn() as c:
+        if not c.execute('SELECT id FROM product_brands WHERE id=?',(brand_id,)).fetchone():
+            raise HTTPException(404,'品牌不存在')
+        q='SELECT * FROM brand_settlements WHERE brand_id=?'; args=[brand_id]
+        if status: q+=' AND status=?'; args.append(status)
+        items=rows(c.execute(q+' ORDER BY id DESC',args))
+        summary=dict(c.execute('SELECT COALESCE(SUM(sales_amount),0) sales,COALESCE(SUM(settlement_amount),0) settle,COUNT(*) n FROM brand_settlements WHERE brand_id=?',(brand_id,)).fetchone())
+        return {'items':items,'summary':summary}
+
+@app.post('/api/platform/brands/{brand_id}/settlements/generate')
+def platform_brand_settlement_generate(brand_id:int, payload:dict=Body(...)):
+    """按时间段聚合该品牌下所有商品的销售额，生成一张草稿结算单（V1 不自动打款）。
+
+    V1.2 结算模式（品牌档案里配置）：
+      - sales_ratio（按销售额比例）：品牌应结 = 销售额 × settlement_ratio%；
+        ratio 未配置（0）时回落到请求里的 platformFeeRate 老口径（settle = sales × (1−fee)）。
+      - fixed_price（固定结算价）：品牌应结 = Σ(件数 × 规格结算价 settlement_price)，
+        规格没设结算价的行按成交单价快照兜底。
+    """
+    pf=float(payload.get('platformFeeRate') or 0.08)
+    period_from=str(payload.get('periodFrom') or '').strip() or None
+    period_to=str(payload.get('periodTo') or '').strip() or None
+    with conn() as c:
+        b=c.execute('SELECT * FROM product_brands WHERE id=?',(brand_id,)).fetchone()
+        if not b: raise HTTPException(404,'品牌不存在')
+        wc=['oi.product_id IN (SELECT id FROM products WHERE brand_id=?)']; wa=[brand_id]
+        if period_from: wc.append("o.created_at>=?"); wa.append(period_from)
+        if period_to: wc.append("o.created_at<=?"); wa.append(period_to)
+        sales=float(c.execute(f"""SELECT COALESCE(SUM(oi.unit_price*oi.quantity),0)
+                                  FROM gear_order_items oi JOIN gear_orders o ON o.id=oi.order_id
+                                  WHERE {' AND '.join(wc)}""",wa).fetchone()[0])
+        mode=str(b['settlement_mode'] or 'sales_ratio')
+        if mode=='fixed_price':
+            settled=float(c.execute(f"""SELECT COALESCE(SUM(oi.quantity * COALESCE(NULLIF(v.settlement_price,0), oi.unit_price, 0)),0)
+                                  FROM gear_order_items oi
+                                  JOIN gear_orders o ON o.id=oi.order_id
+                                  LEFT JOIN product_variants v ON v.id=oi.variant_id
+                                  WHERE {' AND '.join(wc)}""",wa).fetchone()[0])
+            settle=round(settled,2)
+        else:
+            ratio=float(b['settlement_ratio'] or 0)
+            if ratio>0: settle=round(sales*ratio/100,2)
+            else: settle=round(sales*(1.0-pf),2)
+        fee=round(sales-settle,2)
+        ts=datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        no='BS-%d-%s' % (brand_id, ts)
+        c.execute("""INSERT INTO brand_settlements(brand_id,settlement_no,period_from,period_to,sales_amount,platform_fee,settlement_amount,status)
+                     VALUES(?,?,?,?,?,?,?,?)""",(brand_id,no,period_from,period_to,sales,fee,settle,'draft'))
+        return {'ok':True,'id':int(c.execute('SELECT last_insert_rowid()').fetchone()[0]),'sales_amount':sales,'platform_fee':fee,'settlement_amount':settle,'mode':mode}
+
+@app.patch('/api/platform/brand-settlements/{settlement_id}')
+def platform_brand_settlement_patch(settlement_id:int, payload:dict=Body(...)):
+    allowed={'status','settlement_amount','platform_fee','sales_amount','note','settled_at'}
+    sets=[]; vals=[]
+    with conn() as c:
+        s=c.execute('SELECT * FROM brand_settlements WHERE id=?',(settlement_id,)).fetchone()
+        if not s: raise HTTPException(404,'结算单不存在')
+        for k in allowed:
+            if k in payload and payload[k] is not None:
+                if k=='status' and payload[k] not in ('draft','confirmed','paid'):
+                    raise HTTPException(400,'status 只能是 draft / confirmed / paid')
+                sets.append(f'{k}=?'); vals.append(payload[k])
+        if not sets: return {'ok':True}
+        c.execute('UPDATE brand_settlements SET %s WHERE id=?' % ','.join(sets), vals+[settlement_id])
+    return {'ok':True}
 
 @app.post('/api/platform/uploads/image')
 async def platform_upload_image(file:UploadFile=File(...)):
@@ -5776,6 +7074,13 @@ def platform_import_products(payload:dict=Body(...)):
     if not raw: raise HTTPException(400,'没有解析出有效数据行')
     if '商品名' not in (rd.fieldnames or []): raise HTTPException(400,'缺少「商品名」列')
 
+    with conn() as c:
+        for r in raw:
+            if str(r.get('库存') or '').strip():
+                p0=c.execute('SELECT id FROM products WHERE sku=?',(str(r.get('货号') or '').strip(),)).fetchone()
+                v=c.execute("SELECT stock FROM product_variants WHERE product_id=? AND IFNULL(color,'')=? AND IFNULL(size,'')=?",(p0['id'],r.get('颜色') or '',r.get('尺码') or '')).fetchone() if p0 else None
+                if int(float(r.get('库存') or 0)) != (int(v['stock']) if v else 0):
+                    raise HTTPException(409,'CSV 只导入商品资料；库存变更请在仓库按 SKU 验收或调整')
     created_products=0; updated_products=0; created_variants=0; errors=[]; new_dict={'brands':[], 'categories':[]}
     with conn() as c:
         # 先按货号归组：货号为空的按商品名归组（同名的合并成一个商品）
@@ -5935,6 +7240,8 @@ def generate_variant_matrix(product_id:int, payload:dict=Body(...)):
     with conn() as c:
         p=c.execute('SELECT id,brand_id,category_id FROM products WHERE id=?',(product_id,)).fetchone()
         if not p: raise HTTPException(404,'商品不存在')
+        # V1.2：池内变化前先记期初（占位退场/新规格期初都算池内变化，最后按差镜像 WMS）
+        pool_before=sum(int(x['stock'] or 0) for x in c.execute("SELECT stock FROM product_variants WHERE product_id=? AND status='active'",(product_id,)).fetchall())
         color_list,size_list=_parse_color_dims(colors,sizes)
         if not color_list: color_list=[(None,None,None)]
         if not size_list: size_list=[None]
@@ -5971,7 +7278,10 @@ def generate_variant_matrix(product_id:int, payload:dict=Body(...)):
                                ORDER BY sort,id LIMIT 1""",(product_id,)).fetchone()
             if first:
                 c.execute('UPDATE product_variants SET stock=? WHERE id=?',(moved,int(first['id'])))
-        _resync_product_stock(c,product_id)
+        # V1.2 真源反转：矩阵批量建规格带来的池净变化（Σ新规格期初）镜像到 WMS 实物台账
+        pool_after=sum(int(x['stock'] or 0) for x in c.execute("SELECT stock FROM product_variants WHERE product_id=? AND status='active'",(product_id,)).fetchall())
+        _mirror_pool_delta(c,product_id,pool_after-pool_before,ref=f'matrix:{product_id}:{created}',note='矩阵建规格期初库存镜像')
+        _resync_product_stock_warehouse_aware(c,product_id)
     return {'ok':True,'created':created,'skipped':skipped,'movedStock':moved}
 
 
@@ -5980,6 +7290,7 @@ def _sync_product_to_medusa(product_id:int, *, create_if_missing:bool=True):
         return {'ok':False,'skipped':True,'reason':'COMMERCE_PROVIDER is not medusa'}
     with conn() as c:
         p=row(c.execute('SELECT * FROM products WHERE id=?',(product_id,)))
+        vs=rows(c.execute("SELECT * FROM product_variants WHERE product_id=? AND status='active' ORDER BY sort,id",(product_id,)))
     if not p: raise HTTPException(404,'商品不存在')
     client=MedusaClient()
     try:
@@ -5990,13 +7301,28 @@ def _sync_product_to_medusa(product_id:int, *, create_if_missing:bool=True):
             if not inv:
                 full=client.get_admin_product(str(p['commerce_product_id']))
                 inv=client._inventory_item_id(full,str(p['commerce_variant_id']))
-            if inv:
-                client.set_inventory(inventory_item_id=str(inv),stock=int(p['stock']))
+            # Per-SKU stock is projected below after all mappings are checked.
+
             result={'product_id':p['commerce_product_id'],'variant_id':p['commerce_variant_id'],'inventory_item_id':inv}
         else:
             if not create_if_missing: raise RuntimeError('商品尚未绑定 Medusa')
             result=client.create_platform_product(name=p['name'],sku=p['sku'],price=float(p['price']),stock=int(p['stock']),
-                                                  status=p['status'],image_url=p.get('image_url'),category=p.get('category'))
+                                                  status=p['status'],image_url=p.get('image_url'),category=p.get('category'),variants=vs)
+        full=client.get_admin_product(str(result['product_id'])) or {}
+        mapped=[]
+        for v in vs:
+            remote=next((x for x in full.get('variants',[]) if x.get('sku')==v['sku'] or x.get('id')==v.get('commerce_variant_id')),None)
+            if not remote and len(vs)==1 and len(full.get('variants',[]))==1:remote=full['variants'][0]
+            if not remote:raise RuntimeError('Medusa 缺少 SKU '+str(v['sku'])+'，请先核对远端规格；禁止将多规格合并到默认规格')
+            iid=client._inventory_item_id(full,remote['id'])
+            if not iid:raise RuntimeError('Medusa SKU 未关联库存项')
+            with conn() as c:
+                physical=int(c.execute('SELECT COALESCE(SUM(on_hand-unsellable),0) FROM warehouse_sku_balances WHERE variant_id=? AND location_id IN (SELECT id FROM warehouse_locations WHERE zone_type="sellable" AND status="active")',(v['id'],)).fetchone()[0])
+            client.update_platform_product(product_id=str(result['product_id']),variant_id=str(remote['id']),name=p['name'],price=float(v['price'] if v['price'] is not None else p['price']),status=p['status'],image_url=p.get('image_url'))
+            client.set_inventory(inventory_item_id=str(iid),stock=physical)
+            mapped.append((remote['id'],v['id']))
+        with conn() as c:
+            c.executemany('UPDATE product_variants SET commerce_variant_id=? WHERE id=?',mapped)
         with conn() as c:
             c.execute("UPDATE products SET commerce_product_id=?,commerce_variant_id=?,commerce_inventory_item_id=?,commerce_sync_status='synced',commerce_sync_error=NULL,last_commerce_sync_at=CURRENT_TIMESTAMP WHERE id=?",
                       (result.get('product_id'),result.get('variant_id'),result.get('inventory_item_id'),product_id))
@@ -6034,8 +7360,12 @@ def platform_add_product(payload:dict=Body(...)):
     name = str(payload.get('name') or '').strip()
     if not name:
         raise HTTPException(400, '请填写商品名称')
-    if float(payload.get('price') or 0) <= 0:
+    if float(payload.get('price') or 0) < 0:
         raise HTTPException(400, '请填写有效零售价')
+    # 款号不填就自动生成：sku 列有唯一约束，两个空款号商品第二个必撞 409
+    #（采购页快捷建商品不填款号，之前第二条路直接被堵死）。
+    sku = str(payload.get('sku') or '').strip() or \
+        ('GEAR-' + datetime.utcnow().strftime('%Y%m%d%H%M%S') + '-' + uuid.uuid4().hex[:4])
     # 期初库存自动汇总（2026-10-26 用户反馈）：给了 skuStock 就按 颜色×尺码 逐格求和，
     # 不再让手填总数与规格明细打架；没给映射才信任 payload.stock（旧客户端 / CSV 导入）。
     sku_stock_raw=payload.get('skuStock') if isinstance(payload.get('skuStock'),dict) else {}
@@ -6055,6 +7385,9 @@ def platform_add_product(payload:dict=Body(...)):
     # 品类已结构化，但 category 文本列不能丢：C 端副标题、Medusa 同步、老统计都还在读它。
     # 建商品时按所选品类把它填上，两边永远一致，不需要人工维护第二份。
     with conn() as c:
+        if brand_id:
+            brand=c.execute('SELECT source_type FROM product_brands WHERE id=?',(brand_id,)).fetchone()
+            if brand and brand[0]=='external_api':payload={**payload,'source':'external_api','inventoryMode':'external_api','fulfillmentMode':'supplier_fulfillment'}
         cat_name=None
         if category_id:
             r=c.execute('SELECT name FROM product_categories WHERE id=?',(int(category_id),)).fetchone()
@@ -6064,9 +7397,10 @@ def platform_add_product(payload:dict=Body(...)):
         # 单页编辑器鼓励手填款号，撞号是常态而不是异常，必须翻成一句人话（409）。
         try:
             c.execute("""INSERT INTO products(name,sku,price,stock,status,image_url,category,commission_rate,reorder_point,description,
-                     brand_id,category_id,gender,season,series,material,warehouse,commerce_sync_status)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                      (name,payload.get('sku') or '',float(payload.get('price') or 0),0,payload.get('status','active'),payload.get('image_url'),
+                     brand_id,category_id,gender,season,series,material,warehouse,commerce_sync_status,
+                     source,inventory_mode,fulfillment_mode,owner_id)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      (name,sku,float(payload.get('price') or 0),0,'draft',payload.get('image_url'),
                        category,payload.get('commission_rate',0.08),
                        max(0,int(payload.get('reorder_point',payload.get('reorderPoint',5)) or 0)),
                        str(payload.get('description') or ''),
@@ -6077,13 +7411,25 @@ def platform_add_product(payload:dict=Body(...)):
                        catalog_service.normalize_series(payload.get('series')),
                        catalog_service.normalize_material(payload.get('material')),
                        warehouse,
-                       'pending' if commerce_provider()=='medusa' else 'local'))
+                       'pending' if commerce_provider()=='medusa' else 'local',
+                       str(payload.get('source') or 'platform_self'),
+                       str(payload.get('inventoryMode') or payload.get('inventory_mode') or 'platform_owned'),
+                       str(payload.get('fulfillmentMode') or payload.get('fulfillment_mode') or 'platform_warehouse'),
+                       int(payload.get('ownerId')) if payload.get('ownerId') else None))
         except IntegrityError:
             raise HTTPException(409, f'款号「{payload.get("sku") or "(空)"}」已被占用，请换一个')
         pid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
-        if initial_stock:
-            inventory_engine.adjust_stock(c,product_id=pid,quantity_delta=initial_stock,reason='新商品期初库存',actor_type='platform',reference_type='product_opening',reference_id=str(pid))
         created=_build_variant_matrix(c,pid,brand_id=brand_id,category_id=category_id,payload=payload,initial_stock=initial_stock)
+        external=(payload.get('source')=='external_api' or (payload.get('inventoryMode') or payload.get('inventory_mode') or 'platform_owned')!='platform_owned')
+        if external and initial_stock:raise HTTPException(400,'外部库存不能手填期初或进入平台仓，请等待品牌 API 接通')
+        if not external:
+            for v in rows(c.execute('SELECT id,stock FROM product_variants WHERE product_id=?',(pid,))):
+                if v['stock']:
+                    c.execute('UPDATE product_variants SET stock=0 WHERE id=?',(v['id'],))
+                    inventory_engine.adjust_stock(c,product_id=pid,variant_id=v['id'],quantity_delta=v['stock'],reason='自营商品期初入库',reference_type='product_opening',reference_id=f'{pid}:{v["id"]}')
+        if _norm_product_status(payload.get('status'))=='active':
+            _validate_product_publish(c,pid)
+            c.execute("UPDATE products SET status='active' WHERE id=?",(pid,))
     out={'id':pid,'variantsCreated':created}
     if commerce_provider()=='medusa':
         out['commerce']=_sync_product_to_medusa(pid)
@@ -6151,7 +7497,7 @@ def _build_variant_matrix(c, pid:int, *, brand_id, category_id, payload:dict, in
                 vstock=initial_stock if n==0 else 0
             c.execute("""INSERT INTO product_variants(product_id,name,sku,price,stock,sort,status,color,color_hex,size)
                          VALUES(?,?,?,?,?,?,?,?,?,?)""",
-                      (pid,name,sku,float(price) if price is not None else None,
+                      (pid,name,sku,float(price) if price is not None and float(price)>0 else None,
                        vstock,sort,'active',cn,ch,sz))
             n+=1
     return n
@@ -6165,6 +7511,11 @@ def platform_link_product(product_id:int,payload:dict=Body(...)):
         if not p: raise HTTPException(404,'商品不存在')
         c.execute("UPDATE products SET commerce_product_id=?,commerce_variant_id=?,commerce_inventory_item_id=?,commerce_sync_status='linked',commerce_sync_error=NULL,last_commerce_sync_at=CURRENT_TIMESTAMP WHERE id=?",
                   (product_id_ext,variant_id,inventory_id,product_id))
+        vs=rows(c.execute("SELECT id FROM product_variants WHERE product_id=? AND status='active'",(product_id,)))
+        local_vid=payload.get('variantId') or (vs[0]['id'] if len(vs)==1 else None)
+        if not local_vid:raise HTTPException(409,'多规格绑定请指定本地 variantId')
+        if not c.execute('SELECT 1 FROM product_variants WHERE id=? AND product_id=?',(local_vid,product_id)).fetchone():raise HTTPException(409,'SKU 不属于该商品')
+        c.execute('UPDATE product_variants SET commerce_variant_id=? WHERE id=?',(variant_id,local_vid))
     return {'ok':True,'productId':product_id,'commerceProductId':product_id_ext,'commerceVariantId':variant_id,'commerceInventoryItemId':inventory_id}
 
 @app.post('/api/platform/products/{product_id}/sync')
@@ -6183,6 +7534,24 @@ def platform_product_visibility_requests(status:str|None=None):
         if status: q+=' WHERE r.status=?'; args.append(status)
         return rows(c.execute(q+' ORDER BY r.id DESC',args))
 
+def _owned_product(c,pid):
+    try:return stock_control.owned(c,pid)
+    except ValueError as e:raise HTTPException(409,str(e))
+
+def _validate_product_publish(c,pid,changes=None):
+    p=row(c.execute('SELECT * FROM products WHERE id=?',(pid,)))
+    if not p:raise HTTPException(404,'商品不存在')
+    p.update(changes or {})
+    try:stock_control.owned(c,pid)
+    except ValueError as e:raise HTTPException(409,str(e))
+    missing=[]
+    if not (p.get('image_url') or p.get('cover_url') or c.execute('SELECT 1 FROM product_images WHERE product_id=?',(pid,)).fetchone()):missing.append('商品图片')
+    if not str(p.get('description') or '').strip():missing.append('商品详情')
+    if float(p.get('price') or 0)<=0:missing.append('有效零售价')
+    if not c.execute('SELECT 1 FROM warehouse_sku_balances WHERE product_id=? AND on_hand>0',(pid,)).fetchone():missing.append('已验收入库的 SKU')
+    if c.execute("SELECT 1 FROM stock_reconciliation WHERE product_id=? AND status='pending'",(pid,)).fetchone():missing.append('历史库存实盘核对')
+    if missing:raise HTTPException(400,'上架前请补齐：'+'、'.join(missing))
+
 @app.post('/api/platform/product-visibility-requests/{request_id}/decide')
 def platform_decide_product_visibility(request_id:int,payload:dict=Body(...)):
     decision=str(payload.get('decision') or '').strip()
@@ -6196,21 +7565,53 @@ def platform_decide_product_visibility(request_id:int,payload:dict=Body(...)):
                   (decision,str(payload.get('note') or '')[:200],request_id))
         new_status=None
         if decision=='approved':
+            if r['action']=='on':_validate_product_publish(c,r['product_id'])
             new_status='active' if r['action']=='on' else 'inactive'
             c.execute('UPDATE products SET status=? WHERE id=?',(new_status,r['product_id']))
     return {'ok':True,'requestId':request_id,'status':decision,'productStatus':new_status}
 
+# ── 商品状态兼容（进销存 V1.2）───────────────────────────────────────────────
+# 新 7 态：draft / pending_inbound / partially_received / pending_listing / active /
+# inactive / archived。历史上出现过（或外部同步可能写入）的别名统一归一：
+# 已知别名映射，未知值保留原样透传（前端按原文显示，绝不静默猜状态）。
+_PRODUCT_STATUS_ALIASES={
+    'on_sale':'active','online':'active','published':'active','in_stock':'active','selling':'active',
+    'off':'inactive','offline':'inactive','unlisted':'inactive','delisted':'inactive',
+    'removed':'inactive','off_shelf':'inactive','discontinued':'inactive',
+    'incoming':'pending_inbound','inbound_pending':'pending_inbound','to_inbound':'pending_inbound',
+    'partial':'partially_received','partial_inbound':'partially_received',
+    'wait_list':'pending_listing','to_list':'pending_listing','pre_list':'pending_listing',
+}
+
+def _norm_product_status(v)->str:
+    s=str(v or '').strip().lower()
+    if not s: return 'draft'
+    return _PRODUCT_STATUS_ALIASES.get(s,s)
+
 @app.patch('/api/platform/products/{product_id}')
 def platform_update_product(product_id:int,payload:dict=Body(...)):
     allowed=['name','price','status','image_url','category','commission_rate','reorder_point','description',
-             'brand_id','category_id','gender','season','series','material','warehouse'];sets=[];vals=[]
+             'brand_id','category_id','gender','season','series','material','warehouse',
+             'source','inventory_mode','fulfillment_mode','owner_id'];sets=[];vals=[]
     if 'reorderPoint' in payload and 'reorder_point' not in payload: payload={**payload,'reorder_point':payload.get('reorderPoint')}
+    if 'inventoryMode' in payload and 'inventory_mode' not in payload: payload={**payload,'inventory_mode':payload.get('inventoryMode')}
+    if 'fulfillmentMode' in payload and 'fulfillment_mode' not in payload: payload={**payload,'fulfillment_mode':payload.get('fulfillmentMode')}
+    if 'ownerId' in payload and 'owner_id' not in payload: payload={**payload,'owner_id':payload.get('ownerId')}
     with conn() as c:
         p=row(c.execute('SELECT * FROM products WHERE id=?',(product_id,)))
         if not p: raise HTTPException(404,'商品不存在')
+        # 进销存 V1.1（任务书 6.1/9）：上架前校验 —— 图 / 详情 / 售价三道闸。
+        # 待上架工作流把商品推进到 pending_listing 之后，上架不再是无脑翻转：
+        # 没图没介绍没价格的商品流到 C 端就是一张空白卡片。
+        # V1.2 状态兼容：比较前先归一，老状态别名（on_sale/offline/...）同样被拦住。
+        if _norm_product_status(payload.get('status') or '')=='active' and p['status']!='active':
+            _validate_product_publish(c,product_id,payload)
         if 'stock' in payload:
             try: inventory_engine.set_absolute_stock(c,product_id=product_id,new_stock=max(0,int(payload.get('stock') or 0)),reason=str(payload.get('stockReason') or '平台手工修改库存'))
             except ValueError as e: raise HTTPException(409,str(e))
+        for k in ('source','inventory_mode','fulfillment_mode'):
+            if k in payload and payload[k]!=p.get(k) and c.execute('SELECT 1 FROM warehouse_inventory WHERE product_id=? AND (on_hand>0 OR reserved>0)',(product_id,)).fetchone():
+                raise HTTPException(409,'已有仓储事实的商品不能直接切换库存归属，请先对账处理')
         # 前端传的是 brandId / categoryId（驼峰），这里统一成列名再进 allowed 循环
         if 'brandId' in payload and 'brand_id' not in payload: payload={**payload,'brand_id':payload.get('brandId')}
         if 'categoryId' in payload and 'category_id' not in payload: payload={**payload,'category_id':payload.get('categoryId')}
@@ -6219,8 +7620,9 @@ def platform_update_product(product_id:int,payload:dict=Body(...)):
                 v=payload[k]
                 # 空字符串代表「清空这个维度」，必须落成 NULL ——
                 # 外键列写空字符串在 SQLite 里不会报错，但永远 JOIN 不到任何品牌。
-                if k in ('brand_id','category_id'): v=int(v) if v not in (None,'',0) else None
+                if k in ('brand_id','category_id','owner_id'): v=int(v) if v not in (None,'',0) else None
                 if k=='gender': v=catalog_service.normalize_gender(v)
+                if k=='status': v=_norm_product_status(v)  # V1.2 状态兼容：别名归一后才落库
                 if k=='season': v=catalog_service.normalize_season(v)
                 if k=='series': v=catalog_service.normalize_series(v)
                 if k=='material': v=catalog_service.normalize_material(v)
@@ -6292,6 +7694,12 @@ def platform_order_filters():
 
 @app.patch('/api/platform/orders/{order_id}')
 def platform_update_order(order_id:int,payload:dict=Body(...)):
+    if payload.get('status')=='shipped':return platform_create_shipment(order_id,{'trackingNo':payload.get('tracking_no'),'carrier':payload.get('carrier')})
+    if payload.get('status')=='delivered':
+        with conn() as c:
+            o=row(c.execute('SELECT * FROM gear_orders WHERE id=?',(order_id,)))
+            if not o or o['status'] not in ('shipped','delivered'):raise HTTPException(409,'只能确认已发货订单签收')
+    elif payload.get('status') is not None:raise HTTPException(409,'订单状态必须通过对应业务动作推进')
     allowed=['status','tracking_no','carrier','after_sales_status'];sets=[];vals=[]
     for k in allowed:
         if k in payload:sets.append(f'{k}=?');vals.append(payload[k])
@@ -6428,8 +7836,17 @@ def platform_create_shipment(order_id: int, payload: dict = Body(...)):
         o = row(c.execute('SELECT id,status FROM gear_orders WHERE id=?', (order_id,)))
     if not o:
         raise HTTPException(404, '装备订单不存在')
-    if o['status'] == 'refunded':
+    if o['status'] in ('shipped','delivered'):
+        with conn() as c:
+            old=logistics_engine.get_shipment(c,order_id)
+            if old and old['tracking_no']==tracking:return {'ok':True,'idempotent':True,'shipmentId':old['id'],'commerceSync':_sync_order_shipment_to_medusa(order_id)}
+        raise HTTPException(409,'订单已发货，物流更正需单独登记，不能再次出库')
+    if o['status'] not in ('paid','processing','confirmed'):
         raise HTTPException(409, '已退款订单不能发货')
+    with conn() as c:
+        try:warehouse_engine.validate_dispatch(c,order_id)
+        except ValueError as e:raise HTTPException(409,str(e))
+        if not c.execute("SELECT 1 FROM warehouse_tasks WHERE order_id=? AND task_type='pack' AND status='packed'",(order_id,)).fetchone():raise HTTPException(409,'请先完成拣货和打包')
     cfg = _logistics_config()
     provider = logistics_engine.get_provider(cfg)
     try:
@@ -6438,6 +7855,8 @@ def platform_create_shipment(order_id: int, payload: dict = Body(...)):
     except logistics_engine.LogisticsError as exc:
         raise HTTPException(502, f'物流服务商返回失败：{exc}')
     with conn() as c:
+        try:warehouse_engine.dispatch_order(c,order_id=order_id,actor_type='platform')
+        except ValueError as e:raise HTTPException(409,str(e))
         sid = logistics_engine.upsert_shipment(
             c, order_id=order_id, provider=provider.code, carrier=carrier, carrier_code=code,
             tracking_no=tracking, status=result.get('status') or 'in_transit',
@@ -6447,7 +7866,7 @@ def platform_create_shipment(order_id: int, payload: dict = Body(...)):
                   " WHERE id=? AND status NOT IN ('delivered','refunded')", (carrier, tracking, order_id))
         s = logistics_engine.get_shipment(c, order_id)
         _apply_order_progress(c, order_id, s or {})
-    return {'ok': True, 'shipmentId': sid, 'carrier': carrier, 'carrierCode': code,
+    return {'ok': True, 'shipmentId': sid, 'carrier': carrier, 'carrierCode': code,'commerceSync':_sync_order_shipment_to_medusa(order_id),
             'trackingNo': tracking, 'status': (s or {}).get('status') or 'in_transit'}
 
 
@@ -6535,18 +7954,27 @@ async def logistics_webhook(provider_code: str, request: Request):
     return {'ok': True, 'added': out['added'], 'status': out['status']}
 
 
-def _medusa_fulfillment_items(local_order:dict, medusa_order:dict):
+def _medusa_fulfillment_items(local_order:dict,medusa_order:dict):
     with conn() as c:
-        local_items=rows(c.execute('SELECT * FROM gear_order_items WHERE order_id=? ORDER BY id',(local_order['id'],)))
-    by_product={str(x['product_id']):int(x['quantity']) for x in local_items}
-    out=[]
-    for item in (medusa_order or {}).get('items') or []:
-        md=item.get('metadata') or {}; pid=str(md.get('clubos_product_id') or '')
-        if pid and pid in by_product:
-            out.append({'id':item['id'],'quantity':by_product[pid]})
-    if not out and len(local_items)==len((medusa_order or {}).get('items') or []):
-        out=[{'id':mi['id'],'quantity':int(li['quantity'])} for li,mi in zip(local_items,medusa_order.get('items') or [])]
-    if not out: raise HTTPException(409,'无法把 ClubOS 装备明细映射到 Medusa Order items')
+        items=rows(c.execute('SELECT i.*,v.commerce_variant_id FROM gear_order_items i LEFT JOIN product_variants v ON v.id=i.variant_id WHERE i.order_id=?',(local_order['id'],)))
+    remaining={};by_product={}
+    for it in items:
+        key=str(it.get('commerce_variant_id') or '')
+        if key:remaining[key]=remaining.get(key,0)+int(it['quantity'])
+        by_product.setdefault(str(it['product_id']),[]).append(it)
+    out=[];matched=0
+    for remote in medusa_order.get('items') or []:
+        vid=str(remote.get('variant_id') or (remote.get('variant') or {}).get('id') or '')
+        if vid and vid in remaining:
+            q=min(remaining[vid],int(remote.get('quantity') or remaining[vid]));remaining[vid]-=q
+        else:
+            pid=str((remote.get('metadata') or {}).get('clubos_product_id') or '')
+            candidates=by_product.get(pid,[])
+            if len(candidates)==1:q=int(candidates[0]['quantity']);by_product[pid]=[]
+            elif len(items)==1 and len(medusa_order.get('items') or [])==1:q=int(items[0]['quantity'])
+            else:raise HTTPException(409,'Medusa 订单缺少准确 SKU 对应关系，请核对后同步')
+        if q:out.append({'id':remote['id'],'quantity':q});matched+=q
+    if matched!=sum(int(it['quantity']) for it in items):raise HTTPException(409,'Medusa SKU 履约数量与本地订单不一致')
     return out
 
 @app.get('/api/platform/warehouse/summary')
@@ -6577,13 +8005,13 @@ def platform_warehouse_inventory(warehouse_id:int|None=None,product_id:int|None=
 @app.post('/api/platform/warehouse/move')
 def platform_warehouse_move(payload:dict=Body(...)):
     with conn() as c:
-        try:return warehouse_engine.move_stock(c,product_id=int(payload.get('productId') or 0),from_location_id=int(payload.get('fromLocationId') or 0),to_location_id=int(payload.get('toLocationId') or 0),quantity=int(payload.get('quantity') or 0),note=str(payload.get('note') or '仓内移库'))
+        try:return warehouse_engine.move_stock(c,product_id=int(payload.get('productId') or 0),from_location_id=int(payload.get('fromLocationId') or 0),to_location_id=int(payload.get('toLocationId') or 0),quantity=int(payload.get('quantity') or 0),note=str(payload.get('note') or '仓内移库'),variant_id=payload.get('variantId'))
         except ValueError as e:raise HTTPException(409,str(e))
 
 @app.post('/api/platform/warehouse/count')
 def platform_warehouse_count(payload:dict=Body(...)):
     with conn() as c:
-        try:out=warehouse_engine.count_location(c,product_id=int(payload.get('productId') or 0),location_id=int(payload.get('locationId') or 0),counted_on_hand=int(payload.get('countedOnHand') or 0),note=str(payload.get('note') or '库位盘点'))
+        try:out=warehouse_engine.count_location(c,product_id=int(payload.get('productId') or 0),location_id=int(payload.get('locationId') or 0),counted_on_hand=int(payload.get('countedOnHand') or 0),note=str(payload.get('note') or '库位盘点'),variant_id=payload.get('variantId'))
         except ValueError as e:raise HTTPException(409,str(e))
     out['commerceSync']=_safe_sync_inventory_products([int(payload.get('productId') or 0)])
     return out
@@ -6611,11 +8039,11 @@ def platform_order_pack(order_id:int,payload:dict=Body(default={})):
         except ValueError as e:raise HTTPException(409,str(e))
 
 def _ensure_wms_order_reservation(c,order_id:int):
-    items=rows(c.execute('SELECT product_id,quantity FROM gear_order_items WHERE order_id=?',(order_id,)))
+    items=rows(c.execute('SELECT product_id,variant_id,SUM(quantity) quantity FROM gear_order_items WHERE order_id=? GROUP BY product_id,variant_id',(order_id,)))
     for it in items:
-        r=c.execute("SELECT 1 FROM warehouse_reservations WHERE order_id=? AND product_id=? AND status IN ('reserved','dispatched')",(order_id,it['product_id'])).fetchone()
-        if not r:
-            inventory_engine.sale_outbound(c,product_id=int(it['product_id']),quantity=int(it['quantity']),order_id=order_id,actor_type='wms_compat')
+        v=stock_control.sku(c,it['product_id'],it.get('variant_id'))
+        r=c.execute("SELECT 1 FROM warehouse_sku_reservations WHERE order_id=? AND variant_id=? AND status IN ('reserved','dispatched')",(order_id,v['id'])).fetchone()
+        if not r:inventory_engine.sale_outbound(c,product_id=it['product_id'],variant_id=v['id'],quantity=it['quantity'],order_id=order_id,actor_type='wms_compat')
 
 @app.post('/api/platform/orders/{order_id}/fulfill')
 def platform_fulfill_order(order_id:int):
@@ -6639,26 +8067,35 @@ def platform_fulfill_order(order_id:int):
         except Exception: pick=None
     return {'ok':True,'orderId':order_id,'commerceOrderId':o['commerce_order_id'],'fulfillmentId':fid,'pickTask':pick}
 
+def _sync_order_shipment_to_medusa(order_id:int):
+    if commerce_provider()!='medusa':return {'status':'local'}
+    try:
+        with conn() as c:o=row(c.execute('SELECT * FROM gear_orders WHERE id=?',(order_id,)))
+        if not o or o['status'] not in ('shipped','delivered'):raise ValueError('本地订单尚未实际发货')
+        if not o.get('commerce_order_id'):raise ValueError('订单未关联 Medusa')
+        client=MedusaClient();remote=client.get_admin_order(str(o['commerce_order_id']));items=_medusa_fulfillment_items(o,remote)
+        fulfillments=remote.get('fulfillments') or []
+        f=next((f for f in fulfillments if f.get('id')==o.get('commerce_fulfillment_id')),None)
+        if not f and fulfillments:f=fulfillments[0]
+        if not f:f=(client.create_fulfillment(str(o['commerce_order_id']),items).get('fulfillment') or {})
+        fid=f.get('id')
+        if not fid:raise ValueError('Medusa 未返回履约凭证，请核对后重试')
+        with conn() as c:c.execute('UPDATE gear_orders SET commerce_fulfillment_id=? WHERE id=?',(fid,order_id))
+        if not f.get('shipped_at') and not f.get('shipments'):
+            client.create_shipment(str(o['commerce_order_id']),str(fid),items,tracking_number=o['tracking_no'])
+        with conn() as c:c.execute("UPDATE gear_orders SET commerce_sync_status='shipped',commerce_sync_error=NULL WHERE id=?",(order_id,))
+        return {'status':'synced'}
+    except Exception as e:
+        with conn() as c:c.execute("UPDATE gear_orders SET commerce_sync_status='shipment_error',commerce_sync_error=? WHERE id=?",(str(e),order_id))
+        return {'status':'error','message':str(e)}
+
 @app.post('/api/platform/orders/{order_id}/ship')
 def platform_ship_order(order_id:int,payload:dict=Body(...)):
-    if commerce_provider()!='medusa': raise HTTPException(409,'当前未启用 Medusa')
-    tracking=str(payload.get('trackingNo') or '').strip(); carrier=str(payload.get('carrier') or '').strip()
-    if not tracking: raise HTTPException(400,'trackingNo required')
-    with conn() as c:o=row(c.execute('SELECT * FROM gear_orders WHERE id=?',(order_id,)))
-    if not o: raise HTTPException(404,'装备订单不存在')
-    if not o.get('commerce_order_id') or not o.get('commerce_fulfillment_id'): raise HTTPException(409,'请先创建 Medusa Fulfillment')
-    with conn() as c:
-        try:
-            warehouse_engine.validate_dispatch(c,order_id)
-            warehouse_engine.pack_order(c,order_id=order_id,note='发货前自动完成拣货/打包')
-        except ValueError as e: raise HTTPException(409,str(e))
-    client=MedusaClient(); mo=client.get_admin_order(str(o['commerce_order_id'])); items=_medusa_fulfillment_items(o,mo)
-    try: client.create_shipment(str(o['commerce_order_id']),str(o['commerce_fulfillment_id']),items,tracking_number=tracking,tracking_url=payload.get('trackingUrl'),label_url=payload.get('labelUrl'))
-    except Exception as e: raise HTTPException(502,f'Medusa发货失败: {e}')
-    with conn() as c:
-        warehouse_engine.dispatch_order(c,order_id=order_id,actor_type='platform')
-        c.execute("UPDATE gear_orders SET tracking_no=?,carrier=?,status='shipped',commerce_sync_status='shipped',shipped_at=CURRENT_TIMESTAMP WHERE id=?",(tracking,carrier,order_id))
-    return {'ok':True,'orderId':order_id,'status':'shipped','trackingNo':tracking,'carrier':carrier}
+    return {**platform_create_shipment(order_id,payload),'status':'shipped'}
+
+@app.post('/api/platform/orders/{order_id}/shipment/sync-commerce')
+def platform_retry_shipment_commerce(order_id:int):
+    return _sync_order_shipment_to_medusa(order_id)
 
 @app.post('/api/platform/orders/{order_id}/delivered')
 def platform_mark_delivered(order_id:int):
@@ -7189,6 +8626,13 @@ def platform_update_supplier(supplier_id:int,payload:dict=Body(...)):
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
 
+@app.delete('/api/platform/suppliers/{supplier_id}')
+def platform_delete_supplier(supplier_id:int):
+    with conn() as c:
+        try:return inventory_engine.delete_supplier(c,supplier_id)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(409,str(e))
+
 @app.get('/api/platform/products/{product_id}/suppliers')
 def platform_product_suppliers(product_id:int):
     with conn() as c:
@@ -7245,7 +8689,7 @@ def platform_cancel_purchase_order(po_id:str,payload:dict=Body(default={})):
 @app.post('/api/platform/procurement/purchase-orders/{po_id}/receive')
 def platform_receive_purchase_order(po_id:str,payload:dict=Body(...)):
     with conn() as c:
-        try:out=inventory_engine.receive_purchase_order(c,po_id=po_id,items=payload.get('items') or [],received_by='platform',note=str(payload.get('note') or ''))
+        try:out=inventory_engine.receive_purchase_order(c,po_id=po_id,items=payload.get('items') or [],received_by='platform',note=str(payload.get('note') or ''),location_id=payload.get('locationId'),request_key=payload.get('requestKey'))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
     product_ids=out.pop('productIds',[])
@@ -7255,6 +8699,23 @@ def platform_receive_purchase_order(po_id:str,payload:dict=Body(...)):
 @app.get('/api/platform/procurement/receipts')
 def platform_purchase_receipts(po_id:str|None=None,supplier_id:int|None=None):
     with conn() as c:return inventory_engine.list_receipts(c,po_id=po_id,supplier_id=supplier_id)
+
+@app.get('/api/platform/procurement/purchase-orders/{po_id}/exceptions')
+def platform_po_exceptions(po_id:str):
+    with conn() as c:
+        try:return inventory_engine.list_po_exceptions(c,po_id=po_id)
+        except LookupError as e: raise HTTPException(404,str(e))
+
+@app.post('/api/platform/procurement/purchase-orders/{po_id}/exceptions')
+def platform_register_po_exception(po_id:str,payload:dict=Body(...)):
+    with conn() as c:
+        try:return inventory_engine.register_po_exception(c,po_id=po_id,
+            item_id=int(payload.get('purchaseOrderItemId') or 0),
+            exception_type=str(payload.get('exceptionType') or ''),
+            quantity=int(payload.get('quantity') or 0),
+            note=str(payload.get('note') or ''),variant_id=payload.get('variantId'),resolution=str(payload.get('resolution') or 'closed'))
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(409,str(e))
 
 @app.get('/api/platform/inventory/summary')
 def platform_inventory_summary():
@@ -7268,9 +8729,59 @@ def platform_inventory_movements(product_id:int|None=None,movement_type:str|None
 def platform_inventory_adjustment(payload:dict=Body(...)):
     pid=int(payload.get('productId') or 0);delta=int(payload.get('quantityDelta') or 0)
     with conn() as c:
-        try:out=inventory_engine.adjust_stock(c,product_id=pid,quantity_delta=delta,reason=str(payload.get('reason') or '平台库存调整'),actor_type='platform')
+        try:out=inventory_engine.adjust_stock(c,product_id=pid,quantity_delta=delta,reason=str(payload.get('reason') or '平台库存调整'),actor_type='platform',variant_id=payload.get('variantId'))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
     product_ids=out.pop('productIds',[])
     out['commerceSync']=_safe_sync_inventory_products(product_ids)
     return out
+
+
+@app.get('/api/platform/stock/reconciliation')
+def platform_stock_reconciliation():
+    with conn() as c:
+        return rows(c.execute("SELECT r.*,p.name,p.sku FROM stock_reconciliation r JOIN products p ON p.id=r.product_id WHERE r.status='pending'"))
+
+@app.post('/api/platform/warehouse/reconcile/{product_id}')
+def platform_reconcile_stock(product_id:int,payload:dict=Body(...)):
+    with conn() as c:
+        _owned_product(c,product_id)
+        old=rows(c.execute('SELECT * FROM warehouse_inventory WHERE product_id=?',(product_id,)))
+        if any(r['reserved'] for r in old):raise HTTPException(409,'历史已锁库存必须先逐单核对；本入口仅拆分未锁定历史余额，不更改订单事实')
+        supplied=payload.get('balances') or [];totals={};seen=set()
+        for r in supplied:
+            vid=int(r.get('variantId') or 0);lid=int(r.get('locationId') or 0);q=int(r.get('onHand') or 0);u=int(r.get('unsellable') or 0)
+            if (vid,lid) in seen or min(q,u)<0 or u>q:raise HTTPException(400,'SKU 库位重复或数量无效')
+            if not c.execute('SELECT 1 FROM product_variants WHERE id=? AND product_id=?',(vid,product_id)).fetchone():raise HTTPException(400,'SKU 不属于该商品')
+            if not any(x['location_id']==lid for x in old):raise HTTPException(400,'只能拆分原有库位余额')
+            seen.add((vid,lid));a=totals.setdefault(lid,[0,0]);a[0]+=q;a[1]+=u
+        if any(totals.get(r['location_id'],[0,0])!=[r['on_hand'],r['unsellable']] for r in old):raise HTTPException(409,'逐 SKU 合计必须与原实物/不可售余额相等；差异请先实盘核实')
+        if not str(payload.get('note') or '').strip():raise HTTPException(400,'请填写实盘核对凭证')
+        if c.execute('SELECT 1 FROM warehouse_sku_balances WHERE product_id=?',(product_id,)).fetchone():raise HTTPException(409,'该商品已经有 SKU 实物账，不能重复拆分')
+        for r in supplied:c.execute('INSERT INTO warehouse_sku_balances(product_id,variant_id,location_id,on_hand,unsellable) VALUES(?,?,?,?,?)',(product_id,r['variantId'],r['locationId'],r['onHand'],r.get('unsellable',0)))
+        c.execute("UPDATE stock_reconciliation SET status='resolved',note=?,resolved_at=CURRENT_TIMESTAMP WHERE product_id=?",(payload['note'],product_id))
+        stock_control.sync(c,product_id)
+    return {'ok':True}
+
+@app.post('/api/platform/procurement/purchase-orders/{po_id}/supplier-shipment')
+def platform_supplier_shipment(po_id:str,payload:dict=Body(...)):
+    with conn() as c:
+        po=inventory_engine.get_purchase_order(c,po_id)
+        if po['status'] not in ('ordered','partially_received'):raise HTTPException(409,'只有已下单采购可登记供应商发货')
+        key=str(payload.get('requestKey') or '').strip();tracking=str(payload.get('trackingNo') or '').strip()
+        if not key or not tracking:raise HTTPException(400,'请提供本次发货凭证和请求键')
+        old=c.execute('SELECT * FROM purchase_shipments WHERE request_key=?',(key,)).fetchone()
+        if old:
+            if old['purchase_order_id']!=po_id:raise HTTPException(409,'请求键属于另一采购单')
+            return {'ok':True,'idempotent':True,'id':old['id']}
+        plans={z['variantId']:z['quantity'] for it in po['items'] for z in it['skuItems']};sent={}
+        for x in c.execute('SELECT items_json FROM purchase_shipments WHERE purchase_order_id=?',(po_id,)):
+            for z in jload(x[0],[]):sent[z['variantId']]=sent.get(z['variantId'],0)+z['quantity']
+        lineitems=payload.get('items') or [];seen=set()
+        if not lineitems:raise HTTPException(400,'请选择本次发出的 SKU 和数量')
+        for z in lineitems:
+            vid=int(z.get('variantId') or 0);q=int(z.get('quantity') or 0)
+            if vid in seen or vid not in plans or q<=0 or sent.get(vid,0)+q>plans[vid]:raise HTTPException(409,'供应商 SKU 发货数量超出采购计划或重复')
+            seen.add(vid)
+        c.execute('INSERT INTO purchase_shipments(purchase_order_id,request_key,carrier,tracking_no,items_json,shipped_at) VALUES(?,?,?,?,?,?)',(po_id,key,str(payload.get('carrier') or ''),tracking,jdump(lineitems),str(payload.get('shippedAt') or datetime.utcnow().isoformat())))
+    return {'ok':True}

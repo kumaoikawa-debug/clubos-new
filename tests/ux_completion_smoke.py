@@ -29,7 +29,7 @@ pieces={
         '/api/club/','/activities/','/execution/status',
     ],
     'payment-experience.js':[
-        '/api/public/checkouts/','/api/public/activities/','/gear-checkout',
+        '/api/public/checkouts/','/api/public/activities/',
     ],
     'leader-experience.js':['/api/leader/occurrences/'],
 }
@@ -53,6 +53,7 @@ assert '@app.post(\'/api/club/{club_id}/occurrences/{occurrence_id}/execution/st
 assert 'QR_VENDOR_LICENSE.txt' in (root/'static/ux/qr-local.js').read_text()
 assert (root/'static/ux/QR_VENDOR_LICENSE.txt').is_file()
 assert 'getBrandWCPayRequest' in (root/'static/ux/payment-experience.js').read_text()
+assert '/gear-checkout' in (root/'static/web/web.js').read_text()
 assert 'simulation' not in (root/'static/ux/payment-experience.js').read_text().lower()
 assert (root/'ClubOS_NEW_UIUX_Full_Interactive_Preview.html').is_file()
 js=list((root/'static').rglob('*.js'))

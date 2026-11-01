@@ -11,6 +11,7 @@ parser=argparse.ArgumentParser()
 parser.add_argument('command',choices=['create','disable'])
 parser.add_argument('--username',required=True)
 parser.add_argument('--role',choices=['platform','club','leader','member'])
+parser.add_argument('--department',choices=['all','procurement','warehouse','operations','finance'],default='all')
 parser.add_argument('--club-id',type=int)
 parser.add_argument('--user-id',type=int)
 args=parser.parse_args()
@@ -26,7 +27,7 @@ if args.command=='create':
     with conn() as c:
         if args.club_id and not c.execute('SELECT 1 FROM clubs WHERE id=?',(args.club_id,)).fetchone(): parser.error('unknown club')
         if args.user_id and not c.execute('SELECT 1 FROM users WHERE id=?',(args.user_id,)).fetchone(): parser.error('unknown user')
-        c.execute('INSERT INTO auth_accounts(username,password_hash,role,club_id,user_id) VALUES(?,?,?,?,?)',(username,hash_password(passwd),args.role,args.club_id,args.user_id))
+        c.execute('INSERT INTO auth_accounts(username,password_hash,role,club_id,user_id,platform_department) VALUES(?,?,?,?,?,?)',(username,hash_password(passwd),args.role,args.club_id,args.user_id,args.department))
     print('Account created:',username,args.role)
 else:
     with conn() as c:

@@ -1,6 +1,6 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
-window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='settings')await setTab(SETTINGS_TAB)}
+window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='info')await loadInfoCenter();if(v==='settings')await setTab(SETTINGS_TAB)}
 async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`AI Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>';loadClubAttention()}
 /* 工作台「待处理事项」：C 端产生新报名 / 新订单后，俱乐部没有主动提醒，只能自己进
    报名管理 / 商城去翻。这里把各视图里「需要人跟进」的数字汇总到工作台一张卡上，
@@ -11,10 +11,11 @@ async function loadClubAttention(){
   const box=$('#clubAttention'); if(!box)return;
   box.innerHTML='<div class="sub">正在汇总待处理事项…</div>';
   try{
-    const [regs,orders,reqs]=await Promise.all([
+    const [regs,orders,reqs,notice]=await Promise.all([
       api(`/api/club/${CLUB}/registrations`),
       api(`/api/club/${CLUB}/mall/orders`),
-      api(`/api/club/${CLUB}/mall/visibility-requests`)
+      api(`/api/club/${CLUB}/mall/visibility-requests`),
+      api(`/api/club/${CLUB}/inquiries?status=new`,{cache:'no-store'}).catch(()=>({}))
     ]);
     const r=(regs||[]);
     const incomplete=r.reduce((s,x)=>s+Math.max(0,(Number(x.active_participants||x.participant_count||1))-Number(x.complete_participants||0)),0);
@@ -25,7 +26,10 @@ async function loadClubAttention(){
     const ship=o.filter(x=>x.status==='paid'&&!x.tracking_no).length;
     const as=o.filter(x=>x.after_sales_status&&x.after_sales_status!=='无'&&x.after_sales_status!=='none').length;
     const vp=(reqs||[]).filter(x=>String(x.status||'')==='pending').length;
+    const inq=Number((notice||{}).newCount||0);
     const items=[];
+    // 顾客咨询（线路 + 领队）排最前：C 端顾客把手机号留在那里等回电，比任何「待发货」都拖不起。
+    if(inq)items.push({n:inq,t:'顾客咨询待回复',go:'info',h:'C 端顾客在问线路 / 领队，等你回电'});
     if(paidRegs)items.push({n:paidRegs,t:'进行中报名',go:'regs',h:'已支付报名待跟进'});
     if(incomplete)items.push({n:incomplete,t:'资料待补',go:'regs',h:'参加人资料待补全'});
     if(ins)items.push({n:ins,t:'保险待处理',go:'regs',h:'保险待出 / 待确认'});
@@ -34,10 +38,161 @@ async function loadClubAttention(){
     if(as)items.push({n:as,t:'商城售后',go:'mall',h:'售后进度跟进'});
     if(vp)items.push({n:vp,t:'待处理上架',go:'mall',h:'上下架申请待总平台'});
     box.innerHTML=items.length
-      ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">`+items.map(i=>`<div style="border:1px solid #d8e3dd;border-radius:14px;padding:14px;cursor:pointer;background:#fff" role="button" tabindex="0" onclick="go('${i.go}')"><div style="font-size:26px;font-weight:800;color:#1f7a4d">${i.n}</div><div style="font-weight:600;margin-top:2px">${esc(i.t)}</div><div style="font-size:12px;color:#6b7f76;margin-top:3px">${esc(i.h)}</div><div style="font-size:12px;color:#1f7a4d;margin-top:8px">去处理 ›</div></div>`).join('')+`</div>`
+      ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px">`+items.map(i=>`<div style="border:1px solid #d8e3dd;border-radius:14px;padding:14px;cursor:pointer;background:#fff" role="button" tabindex="0" onclick="attentionGo('${i.go}')"><div style="font-size:26px;font-weight:800;color:#1f7a4d">${i.n}</div><div style="font-weight:600;margin-top:2px">${esc(i.t)}</div><div style="font-size:12px;color:#6b7f76;margin-top:3px">${esc(i.h)}</div><div style="font-size:12px;color:#1f7a4d;margin-top:8px">去处理 ›</div></div>`).join('')+`</div>`
       : `<div class="notice">暂时没有需要处理的待办。C 端有新报名或新订单时，这里会第一时间提醒你。</div>`;
   }catch(e){box.innerHTML=`<div class="notice warn">待处理事项加载失败：${esc(e.message)}</div>`}
 }
+/* 领队咨询的「一键到达」：工作台点待办，直接落到 设置 → 领队资源库 的咨询箱，
+   顺手把折叠块展开、滚到视线中央 —— 以前要找它得先猜它藏在哪个标签页，翻三层。 */
+async function gotoLeaderInbox(){
+  window.go('settings');
+  for(let i=0;i<40&&!document.querySelector('#setTabs .set-tab');i++)await new Promise(r=>setTimeout(r,100));
+  try{await window.setTab('leaders')}catch(e){}
+  const d=document.querySelector('#lpInbox details');if(d)d.open=true;
+  const box=document.getElementById('lpInbox');
+  if(box)box.scrollIntoView({behavior:'smooth',block:'center'});
+}
+window.gotoLeaderInbox=gotoLeaderInbox;
+window.attentionGo=target=>{
+  if(target==='__leaders_inbox'){gotoLeaderInbox();return}
+  window.go(target);
+};
+
+/* 顾客咨询「有新的」提示（2026-10-28 起，2026-10-29 升级为统一收件箱）：60 秒轮询一次只做
+   COUNT 的轻量接口，数字涨了就 toast + 侧栏角标 + 标签页标题前缀。统一收件箱合并线路咨询 +
+   领队咨询，所以角标挂在「信息」栏目上 —— 「有活等着你」不再靠人自觉去翻。 */
+let _inqSeen=null;
+/* 角标由 JS 挂载：侧栏有个脚本会把按钮重绘成「图标 + 文字」，写死在 HTML 里的子节点会被吃掉。 */
+function _inqBadge(){
+  const btn=document.querySelector('.nav button[data-view="info"]');
+  if(!btn)return null;
+  let b=btn.querySelector('.nav-badge');
+  if(!b){b=document.createElement('i');b.className='nav-badge';b.style.display='none';btn.appendChild(b)}
+  return b;
+}
+async function pollLeaderInquiries(){
+  let d;try{d=await api(`/api/club/${CLUB}/inquiries?status=new`,{cache:'no-store'})}catch(_e){return}
+  const n=Number(d.newCount||0);
+  const badge=_inqBadge();
+  if(badge){badge.textContent=n>99?'99+':String(n);badge.style.display=n?'':'none'}
+  const base=document.title.replace(/^\(\d+\)\s*/,'');
+  document.title=n?`(${n}) ${base}`:base;
+  if(_inqSeen!==null&&n>_inqSeen&&typeof toast==='function')toast(`有 ${n-_inqSeen} 条新的顾客咨询待回复`);
+  _inqSeen=n;
+}
+window.pollLeaderInquiries=pollLeaderInquiries;
+
+/* ===== 信息 · 顾客咨询统一收件箱（2026-10-29）=====
+   合并线路咨询 + 领队咨询；可选企微群机器人通知（轻量，非硬依赖）。 */
+let infoKind='all', infoStatus='new', infoQ='', infoItems=[], infoSearchT=null;
+
+async function loadInfoCenter(){
+  try{
+    const q=encodeURIComponent(infoQ);
+    const d=await api(`/api/club/${CLUB}/inquiries?kind=${infoKind}&status=${infoStatus}&q=${q}&limit=200`,{cache:'no-store'});
+    infoItems=d.items||[];
+    const cnt=$('#infoCount'); if(cnt)cnt.textContent=`${infoItems.length} 条${d.total!==undefined?`（共 ${d.total}）`:''}`;
+    renderInfoList();
+  }catch(e){loaderError('#infoList',e,'咨询加载失败')}
+  loadInfoWecom();
+}
+
+function renderInfoList(){
+  const box=$('#infoList'); if(!box)return;
+  if(!infoItems.length){box.innerHTML='<div class="empty">暂无咨询。C 端顾客在活动详情点「咨询这条线路」或「咨询领队」后，会在这里出现。</div>';return;}
+  box.innerHTML=infoItems.map(it=>{
+    const isNew=it.status==='new';
+    const kindLabel=it.kind==='route'?'线路咨询':'领队咨询';
+    const who=it.name?esc(it.name):'匿名山友';
+    const sub=(it.activityTitle?('线路：'+esc(it.activityTitle)):'(未关联活动)')+(it.kind==='leader'&&it.leaderName?(' · 领队：'+esc(it.leaderName)):'');
+    return `<div class="info-row${isNew?' info-row--new':''}" role="button" tabindex="0" onclick="infoOpen('${it.kind}',${it.id})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();infoOpen('${it.kind}',${it.id})}">`
+      +`<div class="info-row__dot"></div>`
+      +`<div class="list-row__main">`
+      +`<div class="list-row__title">${who} <span class="tag ${it.kind==='route'?'tag--route':'tag--leader'}">${kindLabel}</span>${isNew?'<span class="tag orange">待处理</span>':'<span class="tag">已处理</span>'}</div>`
+      +`<div class="list-row__sub">${sub}</div>`
+      +`<div class="info-row__msg">${esc(it.message)}</div>`
+      +`<div class="info-row__meta">📞 ${esc(it.phone||'未留')} · ${esc(String(it.createdAt||'').replace('T',' '))}</div>`
+      +`</div></div>`;
+  }).join('');
+}
+
+function infoSetKind(k){
+  infoKind=k;
+  $$('#infoKindSeg .seg-btn').forEach(b=>b.classList.toggle('active',b.dataset.kind===k));
+  loadInfoCenter();
+}
+function infoSetStatus(s){
+  infoStatus=s;
+  $$('#infoStatusSeg .seg-btn').forEach(b=>b.classList.toggle('active',b.dataset.status===s));
+  loadInfoCenter();
+}
+function infoSearchInput(){
+  clearTimeout(infoSearchT);
+  infoSearchT=setTimeout(()=>{infoQ=($('#infoSearch')?.value||'').trim();loadInfoCenter()},300);
+}
+
+/* 关闭最上层的 uxDialog（uxClose 只是 overlay 实例方法，不是全局函数，故封装一层）。 */
+function infoClose(){const ov=document.querySelector('.ux-overlay');if(ov&&typeof ov.uxClose==='function')ov.uxClose();}
+
+function infoOpen(kind,id){
+  const it=infoItems.find(x=>x.kind===kind&&x.id===Number(id)); if(!it)return;
+  const isNew=it.status==='new';
+  const kindLabel=it.kind==='route'?'线路咨询':'领队咨询';
+  const html=`<div class="info-detail">`
+    +`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><span class="tag ${it.kind==='route'?'tag--route':'tag--leader'}">${kindLabel}</span>${isNew?'<span class="tag orange">待处理</span>':'<span class="tag">已处理</span>'}</div>`
+    +`<div class="info-detail__kv"><b>顾客</b><span>${esc(it.name||'匿名山友')}</span></div>`
+    +`<div class="info-detail__kv"><b>手机号</b><span>${it.phone?`<a href="tel:${esc(it.phone)}">${esc(it.phone)}</a>`:'未留'}</span></div>`
+    +`<div class="info-detail__kv"><b>线路</b><span>${esc(it.activityTitle||'(未关联活动)')}</span></div>`
+    +(it.kind==='leader'?`<div class="info-detail__kv"><b>领队</b><span>${esc(it.leaderName||'')}</span></div>`:'')
+    +`<div class="info-detail__kv"><b>提交时间</b><span>${esc(String(it.createdAt||'').replace('T',' '))}</span></div>`
+    +`<div class="info-detail__msg">${esc(it.message)}</div>`
+    +`<div class="sub" style="margin-top:10px">回复请直接拨打顾客电话（系统只做留痕与待办，不代发自动回复）。</div>`
+    +`<div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end"><button class="btn ghost" onclick="infoClose()">关闭</button><button class="btn" onclick="infoToggleHandled('${it.kind}',${it.id},${isNew})">${isNew?'标记为已处理':'改回待处理'}</button></div>`
+    +`</div>`;
+  uxDialog({title:'顾客咨询',body:html});
+}
+
+async function infoToggleHandled(kind,id,markHandled){
+  try{
+    await api(`/api/club/${CLUB}/inquiries/${kind}/${id}/handled`,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({handled:!!markHandled})});
+    infoClose();
+    await loadInfoCenter();
+    pollLeaderInquiries();
+    toast(!!markHandled?'已标记为已处理':'已改回待处理');
+  }catch(e){showAlert({title:'操作失败',message:e.message})}
+}
+
+async function loadInfoWecom(){
+  const box=$('#infoWecom'); if(!box)return;
+  try{
+    const d=await api(`/api/club/${CLUB}/integrations`,{cache:'no-store'});
+    const on=!!d.wecomEnabled;
+    box.innerHTML=`<div class="ux-field"><label>企业微信群机器人 Webhook</label>`
+      +`<input id="wecomWebhook" type="url" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." value="${esc(d.wecomWebhook||'')}">`
+      +`<div class="sub">在企微群「群机器人 → 添加机器人」拿到 Webhook 地址。新咨询会作为群消息推送，含顾客姓名 / 电话 / 问题 + 后台深链。</div></div>`
+      +`<label class="sub" style="display:flex;align-items:center;gap:8px;margin:10px 0;cursor:pointer"><input type="checkbox" id="wecomEnabled" ${on?'checked':''}> 启用企业微信通知</label>`
+      +`<div style="display:flex;gap:10px"><button class="btn" onclick="saveWecom()">保存配置</button><button class="btn ghost" onclick="testWecom()">发送测试</button></div>`;
+  }catch(e){box.innerHTML='<div class="empty">读取企微配置失败</div>'}
+}
+async function saveWecom(){
+  const wh=$('#wecomWebhook')?.value||'';
+  const en=$('#wecomEnabled')?.checked||false;
+  try{
+    await api(`/api/club/${CLUB}/integrations`,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({wecomWebhook:wh,wecomEnabled:en})});
+    toast('企微配置已保存');
+  }catch(e){showAlert({title:'保存失败',message:e.message})}
+}
+async function testWecom(){
+  try{
+    await api(`/api/club/${CLUB}/integrations/test`,{method:'POST'});
+    toast('测试消息已发出（请到企微群查看）');
+  }catch(e){showAlert({title:'发送失败',message:e.message})}
+}
+
 /* ===== 活动中心：可搜索的活动栏 + 右侧成品预览（2026-09-26）=====
    过去 #activityRows 里又套了一层 .act-grid：外层网格只给内层一个格子宽，
    于是卡片被压成一列、右边永远空一大片。现在去掉嵌套，改成「左栏活动 + 右栏预览」。 */
@@ -114,12 +269,20 @@ function activitySourceLine(a){
   const si=(a&&a.sourceInfo)||{};
   if(!si.available||si.reconstructed)return '';
   const plans=(si.planFiles||[]).filter(Boolean),photos=Number(si.photoCount||0),extras=(si.photoFiles||[]).length;
+  const lk=(si.link&&si.link.url)?si.link:null;
+  /* 链接抓回来的图在 source 里就是 link_01.jpg 这种文件，混在「单独上传」里说会误导。 */
+  const linkPhotos=(si.photoFiles||[]).filter(n=>/^link_\d+\./i.test(String(n||''))).length;
   const bits=[];
-  bits.push(plans.length?('活动方案《'+plans.map(esc).join('》《')+'》'
+  if(lk){
+    /* 有链接时不再说「没有上传方案文件」—— 那就是误导，老板明明给了资料。 */
+    bits.push('依据链接《'+esc(lk.title||lk.url)+'》（读到 '+Number(si.textLength||0)+' 字）');
+  }else{
+    bits.push(plans.length?('活动方案《'+plans.map(esc).join('》《')+'》'
       +(si.hasPlanText?('（读到 '+Number(si.textLength||0)+' 字）'):'（未读到文字）')):'没有上传方案文件');
-  if(photos)bits.push('可用照片 '+photos+' 张');
-  if(extras)bits.push('其中单独上传 '+extras+' 张');
-  return '<div class="sub" style="margin-top:6px">本场按上传资料生成：'+bits.join(' · ')+'</div>';
+  }
+  if(photos)bits.push(lk&&linkPhotos?`可用照片 ${photos} 张（链接配图 ${linkPhotos} 张）`:`可用照片 ${photos} 张`);
+  if(extras-linkPhotos>0)bits.push('其中单独上传 '+(extras-linkPhotos)+' 张');
+  return '<div class="sub" style="margin-top:6px">'+(lk?'本场按链接生成：':'本场按上传资料生成：')+bits.join(' · ')+'</div>';
 }
 async function openActivity(id){try{LEADER_CTX='activity';if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','AI 详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="panel-title"><div><div class="eyebrow">AI EDITORIAL PREVIEW</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期</div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:'<span class="tag">已发布</span>'}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}&v=${_cverId(a)}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button><button class="btn ghost" onclick="republishActivity(${id})" title="把当前这一版重新发布一次：C 端拿到的永远是最新版，这一步同时刷新 C 端版本戳，已打开的顾客页面会出现「有新版」提示">重新发布 / 同步 C 端</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="notice" style="margin:10px 0 18px">AI 自己决定页面叙事、图片节奏和区块顺序；这里没有模板 A/B/C。${activitySourceLine(a)}</div>${_syncNoticeHtml(a)}<div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面<br><span style="font-size:11px;opacity:.75">可点右侧自动选</span>'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button><button class="btn ghost" onclick="autoCover(${a.id})" title="从这份资料抽出的照片里挑一张做封面（优先沿用详情首图）">AI 从素材选一张</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
    现在每行都给出「改时间 / 价格」与「删除」；并把两种容易被当成 bug 的状态直接标出来：
@@ -327,7 +490,11 @@ $('#createForm').onsubmit=async e=>{
        图片数照样是 5，toast 还是绿油油的「已完成」，用户完全无法察觉方案没被读到。
        现在把「几份资料 / 多少字方案 / 几张图」一起报，字数为 0 时再补一条明确提示。 */
     let src=r.source||{},docs=(src.docFiles||[]).length,chars=Number(src.textLength||0),imgs=Number(src.imageCount||0);
-    toast(`活动详情已完成 · ${docs} 份资料 · ${chars} 字方案 · ${imgs} 张图片`);
+    const _lnk=src.link;
+    /* 贴了链接就必须说清「链接被读到了多少」，否则老板会怀疑系统根本没打开那条推文。 */
+    toast(_lnk
+      ? `活动详情已完成 · 链接《${(_lnk.title||_lnk.url||'').slice(0,16)}》读到 ${Number(_lnk.textLength||0)} 字 · ${Number(_lnk.imageCount||0)} 张配图`
+      : `活动详情已完成 · ${docs} 份资料 · ${chars} 字方案 · ${imgs} 张图片`);
     /* 被跳过的文件必须当场说清：以前不支持的格式是静默丢弃的，老板传了几张 HEIC 手机照、
        系统只字不提，他只会以为「系统读错了文件」。 */
     const _skip=src.skippedFiles||[],_rerr=(src.readErrors||[]).map(x=>(x&&x.name)||'文件');
@@ -582,7 +749,9 @@ async function loadContent(){
   const pickHost=actPickHost();
   if(!acts.length){
     if(pickHost)pickHost.innerHTML='<div class="act-pick__btn" style="cursor:default;color:var(--muted)">还没有活动</div>';
-    $('#channelArea').innerHTML='<div class="empty">先创建一场活动，再让 AI 做内容。</div>';
+    $('#channelArea').innerHTML='<div class="empty">先创建一场活动，再让 AI 做公众号 / 小红书 / 海报 / 长图等宣发内容。</div>';
+    // 活动回顾不依赖系统里的活动：即使一场活动都还没建，也能直接填信息生成回顾
+    renderRecapPanel();
     $('#contentList').innerHTML='<div class="empty">还没有渠道内容</div>';
     return;
   }
@@ -602,10 +771,14 @@ async function loadContent(){
     ['poster','活动招募海报','用活动真实封面 + AI 文案在本地合成 1080×1440 海报，可直接下载']
   ];
   $('#channelArea').innerHTML=cards.map(x=>`<div class="card channel-card"><div><strong>${x[1]}</strong><p>${x[2]}</p><div class="sub">当前活动：${esc(a.title)}</div></div><button class="btn secondary" onclick="genChannel('${x[0]}',${a.id})">AI 生成${x[1]}</button></div>`).join('');
-  renderRecapPanel(acts);
+  renderRecapPanel();
   // 已生成内容里补上「这是哪场活动的」——以前只显示 活动 #12，活动一多就认不出来。
+  // activity_id<=0 的是「独立回顾」（不绑定系统活动，见 2026-10-30 解耦），单独标注。
   const byId={}; acts.forEach(x=>{byId[x.id]=x});
-  $('#contentList').innerHTML=(content||[]).map(x=>{const t=byId[x.activity_id];const cur=Number(x.activity_id)===Number(window.__contentActId);return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title||channelLabel(x.channel))}</div><div class="list-row__sub">${t?`活动：${esc(t.title)}`:`活动 #${x.activity_id}`} · ${esc(x.created_at||'')}</div></div><div class="list-row__end"><span class="tag">${esc(channelLabel(x.channel))}</span>${t&&!cur?`<button class="btn ghost" onclick="actPickChoose(${x.activity_id})">切到这场</button>`:''}<button class="btn secondary" onclick="openContentAsset(${x.id})">查看成品</button><button class="btn ghost" style="color:var(--danger,#b54644)" title="删除这条已生成内容" onclick="deleteContentAsset(${x.id})">删除</button></div></div>`}).join('')
+  $('#contentList').innerHTML=(content||[]).map(x=>{const t=byId[x.activity_id];const cur=Number(x.activity_id)===Number(window.__contentActId);
+    const isStandalone=Number(x.activity_id)<=0;
+    const actLabel=isStandalone?'独立回顾':(t?`活动：${esc(t.title)}`:`活动 #${x.activity_id}`);
+    return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title||channelLabel(x.channel))}</div><div class="list-row__sub">${actLabel} · ${esc(x.created_at||'')}</div></div><div class="list-row__end"><span class="tag">${esc(channelLabel(x.channel))}</span>${!isStandalone&&t&&!cur?`<button class="btn ghost" onclick="actPickChoose(${x.activity_id})">切到这场</button>`:''}<button class="btn secondary" onclick="openContentAsset(${x.id})">查看成品</button><button class="btn ghost" style="color:var(--danger,#b54644)" title="删除这条已生成内容" onclick="deleteContentAsset(${x.id})">删除</button></div></div>`}).join('')
     ||'<div class="empty">还没有渠道内容</div>';
   }catch(e){loaderError('#channelArea',e,'内容中心加载失败')}
 }
@@ -671,42 +844,20 @@ async function openContentAsset(assetId){
     await openChannelOutput(d.channel,d.content||{},{activityId:Number(d.activity_id)});
   }catch(e){showAlert({title:'打开失败',message:e.message})}
 }
-/* ===== 活动回顾（2026-10-18 独立流程，老板定的逻辑）=====
-   回顾不是宣发渠道：它挂在「为哪场活动做内容」里、对还没开始的活动生成是 bug。
-   正确流程：活动结束 → 上传现场照片 + 填几句基础文案 → 系统生成回顾图文。
-   这里只列「已结束」的活动；日期解析规则与后端 _activity_last_date 保持一致（两边一起改）。 */
-function actLastDate(a){
-  const s=[a.event_date,(a.activityMaster||{}).date].filter(Boolean).join(' ');
-  if(!s)return null;
-  let last=null,year=null,d;
-  const mk=(y,m,dd)=>{d=new Date(y,m-1,dd);return (d.getFullYear()===y&&d.getMonth()===m-1&&d.getDate()===dd)?d:null};
-  String(s).replace(/(\d{4})\s*[年\-\/.]\s*(\d{1,2})\s*[月\-\/.]\s*(\d{1,2})/g,(_,y,m,dd)=>{
-    year=+y;d=mk(+y,+m,+dd);if(d&&(!last||d>last))last=d;return '';
-  });
-  if(year!=null){
-    // 缺年份的后半段（如「2026年10月30日—11月1日」里的 11月1日）继承年份
-    String(s).replace(/(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?/g,(_,m,dd)=>{
-      d=mk(year,+m,+dd);if(d&&(!last||d>last))last=d;return '';
-    });
-  }
-  return last;
-}
-function actEnded(a){
-  const d=actLastDate(a);if(!d)return false;
-  const t=new Date();t.setHours(0,0,0,0);
-  return d<t;   // 最后一天在今天之前 = 已结束（进行中/未开始都不算）
-}
-function renderRecapPanel(acts){
+/* ===== 活动回顾（2026-10-30 解耦：不绑定系统里的活动）=====
+   老板的新逻辑：俱乐部管理人员直接输入关键活动信息（名称/日期/地点/规模）+ 现场照片 + 基础文案，
+   系统就自动生成回顾图文，不必先在系统里建一场「已结束的活动」。
+   素材门槛不变（至少 1 张现场照片或 1 段现场记录）——回顾只写真事。 */
+function renderRecapPanel(){
   const host=$('#recapBody');if(!host)return;
-  const ended=(acts||[]).filter(actEnded);
-  if(!ended.length){
-    host.innerHTML='<div class="empty">还没有已结束的活动。活动结束后，在这里上传现场照片生成回顾。</div>';
-    return;
-  }
-  if(!Number(window.__recapActId||0)||!ended.some(a=>a.id===Number(window.__recapActId)))window.__recapActId=ended[0].id;
   host.innerHTML=`
-    <div class="sub" style="margin-bottom:6px">选择已结束的活动（共 ${ended.length} 场；未结束的活动不能生成回顾）</div>
-    <select id="recapActSel" style="max-width:460px;padding:8px 10px">${ended.map(a=>`<option value="${a.id}"${a.id===Number(window.__recapActId)?' selected':''}>${esc(a.title)}${a.event_date?` · ${esc(a.event_date)}`:''}</option>`).join('')}</select>
+    <div class="sub" style="margin-bottom:10px">不挑活动：直接填这场活动的关键信息 + 现场照片，系统自动生成回顾图文。</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;max-width:760px">
+      <div><div class="sub" style="margin-bottom:4px">活动名称 *</div><input id="recapTitle" style="width:100%;padding:8px 10px" placeholder="例如：神农架三天两夜徒步"></div>
+      <div><div class="sub" style="margin-bottom:4px">活动日期</div><input id="recapDate" style="width:100%;padding:8px 10px" placeholder="例如：2026年10月2日—4日"></div>
+      <div><div class="sub" style="margin-bottom:4px">活动地点</div><input id="recapLoc" style="width:100%;padding:8px 10px" placeholder="例如：湖北神农架"></div>
+      <div><div class="sub" style="margin-bottom:4px">活动规模</div><input id="recapScale" style="width:100%;padding:8px 10px" placeholder="例如：12 人小队"></div>
+    </div>
     <div style="margin-top:12px"><div class="sub" style="margin-bottom:4px">现场照片（可多选；手机 HEIC 直传支持，自动转 JPEG）</div>
     <input type="file" id="recapFiles" multiple accept="image/*,.heic,.heif,.bmp,.gif,.tif,.tiff,.avif"></div>
     <div style="margin-top:12px"><div class="sub" style="margin-bottom:4px">基础文案 / 领队记录（可不填，但写了回顾才真实）</div>
@@ -715,14 +866,16 @@ function renderRecapPanel(acts){
       <button class="btn secondary" id="recapGo">AI 生成活动回顾</button>
       <span class="sub" id="recapHint"></span>
     </div>`;
-  $('#recapActSel').onchange=e=>{window.__recapActId=Number(e.target.value)||0};
   const fi=$('#recapFiles');
   fi.onchange=()=>{$('#recapHint').textContent=fi.files.length?`已选 ${fi.files.length} 张照片`:''};
   $('#recapGo').onclick=genRecap;
 }
 async function genRecap(){
-  const id=Number(window.__recapActId||0);
-  if(!id){toast('请先选择一场已结束的活动');return}
+  const title=($('#recapTitle')?.value||'').trim();
+  if(!title){toast('请先填写活动名称');$('#recapTitle')?.focus();return}
+  const event_date=($('#recapDate')?.value||'').trim();
+  const location=($('#recapLoc')?.value||'').trim();
+  const scale=($('#recapScale')?.value||'').trim();
   const note=($('#recapNote')?.value||'').trim();
   const files=[...($('#recapFiles')?.files||[])];
   if(!files.length&&!note){
@@ -731,12 +884,18 @@ async function genRecap(){
   }
   const mat=[files.length?`${files.length} 张现场照片`:'',note?'你填写的现场记录':''].filter(Boolean).join(' 和 ');
   if(window.uxConfirm&&!await uxConfirm({title:'生成活动回顾',
-    message:`系统会结合这场活动的资料${mat?'、'+mat:''}调用 AI 生成回顾图文，产生一次 AI Credits 计费。生成后可直接预览、复制、下载。`,
+    message:`系统会结合你填写的活动信息${mat?'、'+mat:''}调用 AI 生成回顾图文，产生一次 AI Credits 计费。生成后可直接预览、复制、下载。`,
     confirmText:'开始生成'}))return;
-  const fd=new FormData();fd.append('note',note);
+  const fd=new FormData();
+  fd.append('title',title);
+  if(event_date)fd.append('event_date',event_date);
+  if(location)fd.append('location',location);
+  if(scale)fd.append('scale',scale);
+  fd.append('note',note);
   files.forEach(f=>fd.append('files',f));
   try{
-    const d=await api(`/api/club/${CLUB}/activities/${id}/recap`,{method:'POST',body:fd});
+    // 解耦版端点：不传活动 id，后端用自由输入的最小 master 直接生成
+    const d=await api(`/api/club/${CLUB}/recap`,{method:'POST',body:fd});
     // 生成异步化（与长图同理）：live 真模型带完整写作契约常超 55s 网关上限，
     // 立即返回轮询 status，完成后自动打开成品；期间页面可正常使用。
     if(d&&d.pending){
@@ -745,14 +904,14 @@ async function genRecap(){
       while(Date.now()-started<8*60*1000){
         await new Promise(r=>setTimeout(r,6000));
         let st;
-        try{st=await api(`/api/club/${CLUB}/activities/${id}/recap/status`)}
+        try{st=await api(`/api/club/${CLUB}/recap/status`)}
         catch(_e){continue}
         if(st.status==='done'){
           toast('活动回顾生成完成');
           if(st.skipped&&st.skipped.length)toast(`有 ${st.skipped.length} 个文件不是可识别的图片，已跳过`);
           const full=await api(`/api/club/${CLUB}/content/${st.assetId}`);
-          window.channelRenderResetCtx&&channelRenderResetCtx(id);
-          await openChannelOutput('recap',full.content||{},{activityId:id});
+          window.channelRenderResetCtx&&channelRenderResetCtx(0);
+          await openChannelOutput('recap',full.content||{},{activityId:0});
           await loadContent();
           if(window.loadCredits)await loadCredits();
           return;
@@ -766,8 +925,8 @@ async function genRecap(){
     // 兼容：mock/旧实现直接同步返回成品
     if(d&&d.skippedFiles&&d.skippedFiles.length)toast(`有 ${d.skippedFiles.length} 个文件不是可识别的图片，已跳过`);
     toast('活动回顾已生成');
-    window.channelRenderResetCtx&&channelRenderResetCtx(id);
-    await openChannelOutput('recap',d,{activityId:id});
+    window.channelRenderResetCtx&&channelRenderResetCtx(0);
+    await openChannelOutput('recap',d,{activityId:0});
     await loadContent();
     if(window.loadCredits)await loadCredits();
   }catch(e){showAlert({title:'生成失败',message:e.message})}
@@ -1111,34 +1270,110 @@ async function requestVisibility(pid,action){
   try{await api(`/api/club/${CLUB}/mall/products/${pid}/visibility`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,note:f.note||''})});
     toast('申请已提交，等待总平台处理');await loadInventory()}catch(e){showAlert({title:'提交失败',message:e.message})}
 }
-/* 「积分策略」二级页：把每场活动的「活动积分规则」摊平在一张表里，点一行就地改。
-   规则就落在 activities 的列上（见 app.py club_activities），所以列表接口带出来即可，
-   不用为每一行再打一次 points-policy。
-   ★ 本页只配「俱乐部自己的活动积分」。总平台装备积分（Gear Points）是另一套体系、
-   另一个资金池，不在俱乐部后台出现（用户 2026-09-29 明确：这里只配俱乐部活动积分）。
-   ★ 点行必须就地弹窗。早先写的是 `onclick="openActivity(id)"`，而详情容器
-   `#activityDetail` 在 `#activities` 视图里 —— 站在本页时 `.view.active` 是 `#points`，
-   等于把内容写进一个 display:none 的 section，用户点「修改」页面毫无反应
-   （原话：「这里还是不能改呀」）。 */
+/* 「积分策略」二级页：上面是「新活动默认规则」（俱乐部级，新建活动继承），
+   下面是各活动的实际规则（摊平的表，可勾选批量改 / 点一行单独改）。
+   2026-10-31：以前每场活动都撞 activities 表写死的默认值（全开 + 可抵 100%），
+   想全场收紧得逐场点一遍。现在默认值提到俱乐部级，设一次即对新活动生效；
+   存量活动用下面的「批量设置」一次性刷齐。
+   ★ 点行必须就地弹窗（不可 openActivity）—— 详情容器 #activityDetail 在 #activities
+   视图里，站在本页时它是 display:none，写进去用户看不到任何反应。 */
 let pointsActivities=[];
+let pointsDefault=null;
 async function loadPointsPolicy(){
   skel('#pointsList',6);
   try{
-  const list=await api(`/api/club/${CLUB}/activities`);
-  pointsActivities=list||[];
-  $('#pointsList').innerHTML=pointsActivities.map(a=>{
-    const tags=[];
-    const enabled=Number(a.points_enabled??1)>0;
-    if(enabled&&Number(a.earn_club_points??1)>0)tags.push('报名可获得');
-    if(enabled&&Number(a.accept_club_points??1)>0)tags.push('可抵 '+Number(a.club_points_max_discount_percent??100)+'%');
-    if(Number(a.member_discount_enabled??0)>0)tags.push('会员优惠');
-    const tagHtml=tags.length?tags.map(t=>'<span class="tag info">'+esc(t)+'</span>').join(' '):'<span class="tag orange">不参与积分</span>';
-    return '<div class="list-row" role="button" tabindex="0" data-points-act="'+a.id+'" onclick="editActivityPoints('+a.id+')" aria-label="修改 '+esc(a.title)+' 的积分规则">'
-      +'<div class="list-row__main"><div class="list-row__title">'+esc(a.title)+'</div>'
-      +'<div class="list-row__sub">'+esc(a.event_date||'')+' · '+esc(a.location||'')+' · 报名 '+money(a.price||0)+'</div></div>'
-      +'<div class="list-row__end">'+tagHtml+'<span class="sub">修改 ›</span></div></div>';
-  }).join('')||'<div class="empty">还没有活动</div>';
+    /* 默认值读不到（接口异常 / 老库）就退回「全开 100%」，与 activities 表历史默认一致，
+       绝不因为加功能让整页白屏。 */
+    try{pointsDefault=await api(`/api/club/${CLUB}/points-default`)}catch(e){pointsDefault=null}
+    paintPointsDefault();
+    const list=await api(`/api/club/${CLUB}/activities`);
+    pointsActivities=list||[];
+    const d=pointsDefault||{enabled:true,earnClubPoints:true,acceptClubPoints:true,clubPointsMaxDiscountPercent:100};
+    $('#pointsList').innerHTML=pointsActivities.map(a=>{
+      const tags=[];
+      const enabled=Number(a.points_enabled??1)>0;
+      if(enabled&&Number(a.earn_club_points??1)>0)tags.push('报名可获得');
+      if(enabled&&Number(a.accept_club_points??1)>0)tags.push('可抵 '+Number(a.club_points_max_discount_percent??100)+'%');
+      if(Number(a.member_discount_enabled??0)>0)tags.push('会员优惠');
+      if(isCustomPoints(a,d))tags.push('已单独设置');
+      const tagHtml=tags.length?tags.map(t=>'<span class="tag info">'+esc(t)+'</span>').join(' '):'<span class="tag orange">不参与积分</span>';
+      /* 复选框要 stopPropagation：否则点勾选会冒泡到行的 onclick，顺手把编辑弹窗也打开了。 */
+      return '<div class="list-row" role="button" tabindex="0" data-points-act="'+a.id+'" onclick="editActivityPoints('+a.id+')" aria-label="修改 '+esc(a.title)+' 的积分规则">'
+        +'<input type="checkbox" class="points-pick" data-points-pick="'+a.id+'" onclick="event.stopPropagation()" aria-label="选中 '+esc(a.title)+'">'
+        +'<div class="list-row__main"><div class="list-row__title">'+esc(a.title)+'</div>'
+        +'<div class="list-row__sub">'+esc(a.event_date||'')+' · '+esc(a.location||'')+' · 报名 '+money(a.price||0)+'</div></div>'
+        +'<div class="list-row__end">'+tagHtml+'<span class="sub">修改 ›</span></div></div>';
+    }).join('')||'<div class="empty">还没有活动</div>';
   }catch(e){loaderError('#pointsList',e,'积分策略加载失败')}
+}
+/* 与俱乐部默认值不一致 = 运营单独调过，标出来方便一眼看出例外。 */
+function isCustomPoints(a,d){
+  const on=(v,dv)=>Number(v??dv)>0;
+  return on(a.points_enabled,1)!==!!d.enabled
+    || on(a.earn_club_points,1)!==!!d.earnClubPoints
+    || on(a.accept_club_points,1)!==!!d.acceptClubPoints
+    || Number(a.club_points_max_discount_percent??100)!==Number(d.clubPointsMaxDiscountPercent??100);
+}
+/* 顶部「新活动默认规则」卡片：只读展示 + 一个修改入口。 */
+function paintPointsDefault(){
+  const d=pointsDefault||{enabled:true,earnClubPoints:true,acceptClubPoints:true,clubPointsMaxDiscountPercent:100};
+  const lines=[d.enabled?'新活动默认参与积分体系':'新活动默认不参与积分体系'];
+  if(d.enabled){
+    lines.push(d.earnClubPoints?'报名后累计活动积分':'报名不累计活动积分');
+    lines.push(d.acceptClubPoints?('允许活动积分抵现金，最多抵 '+Number(d.clubPointsMaxDiscountPercent??100)+'%'):'不允许活动积分抵现金');
+  }
+  $('#pointsDefault').innerHTML='<div class="notice">'+lines.map(t=>'<div>'+esc(t)+'</div>').join('')
+    +'<div class="sub" style="margin-top:6px">只影响<b>之后新建</b>的活动；已有活动不会被这里改动 —— 要改存量请用下面的「批量设置」。</div></div>'
+    +'<div style="margin-top:10px"><button class="btn secondary" onclick="editPointsDefault()">修改默认规则</button></div>';
+}
+async function editPointsDefault(){
+  const d=pointsDefault||{};
+  const f=await uxForm({
+    title:'新活动默认规则',
+    hint:'设一次即对所有「之后新建」的活动生效。已有活动不受影响，可用下面的「批量设置」一次性刷齐。',
+    fields:[
+      {name:'enabled',label:'新活动默认参与积分体系',type:'select',full:true,value:d.enabled?'1':'0',options:[{value:'1',label:'参与'},{value:'0',label:'不参与'}]},
+      {name:'earnClubPoints',label:'报名后累计活动积分',type:'select',value:d.earnClubPoints?'1':'0',options:[{value:'1',label:'累计'},{value:'0',label:'不累计'}],help:'积分成本由本俱乐部承担。'},
+      {name:'acceptClubPoints',label:'允许活动积分抵现金',type:'select',value:d.acceptClubPoints?'1':'0',options:[{value:'1',label:'允许抵扣'},{value:'0',label:'不允许抵扣'}]},
+      {name:'clubPointsMaxDiscountPercent',label:'最多抵扣活动金额（%）',type:'number',full:true,min:0,max:100,step:1,value:String(Number(d.clubPointsMaxDiscountPercent??100)),help:'0 表示不能抵。'}
+    ],
+    submitText:'保存默认规则'
+  });
+  if(!f)return;
+  try{
+    await api(`/api/club/${CLUB}/points-default`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      enabled:f.enabled==='1',earnClubPoints:f.earnClubPoints==='1',acceptClubPoints:f.acceptClubPoints==='1',
+      clubPointsMaxDiscountPercent:Number(f.clubPointsMaxDiscountPercent||0)
+    })});
+    toast('默认积分规则已保存');
+    await loadPointsPolicy();
+  }catch(e){showAlert({title:'保存默认规则失败',message:e.message})}
+}
+/* 批量改勾选活动的积分规则：一个请求一个事务，不留「改了一半」的中间态。 */
+async function bulkEditPoints(){
+  const ids=[...document.querySelectorAll('.points-pick:checked')].map(x=>Number(x.dataset.pointsPick)).filter(Boolean);
+  if(!ids.length)return showAlert({title:'还没勾选活动',message:'先勾选要修改的活动，再点「批量设置」。'});
+  const d=pointsDefault||{};
+  const f=await uxForm({
+    title:'批量设置 '+ids.length+' 场活动',
+    hint:'勾选的活动会被统一改成下面这套规则，未勾选的不受影响。装备积分仍由总平台控制，不受这里影响。',
+    fields:[
+      {name:'enabled',label:'参与积分体系',type:'select',full:true,value:d.enabled?'1':'0',options:[{value:'1',label:'参与'},{value:'0',label:'不参与'}]},
+      {name:'earnClubPoints',label:'报名后累计活动积分',type:'select',value:d.earnClubPoints?'1':'0',options:[{value:'1',label:'累计'},{value:'0',label:'不累计'}]},
+      {name:'acceptClubPoints',label:'允许活动积分抵现金',type:'select',value:d.acceptClubPoints?'1':'0',options:[{value:'1',label:'允许抵扣'},{value:'0',label:'不允许抵扣'}]},
+      {name:'clubPointsMaxDiscountPercent',label:'最多抵扣活动金额（%）',type:'number',full:true,min:0,max:100,step:1,value:String(Number(d.clubPointsMaxDiscountPercent??100))}
+    ],
+    submitText:'应用到 '+ids.length+' 场活动'
+  });
+  if(!f)return;
+  try{
+    const r=await api(`/api/club/${CLUB}/activities/points-policy/bulk`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      activityIds:ids,enabled:f.enabled==='1',earnClubPoints:f.earnClubPoints==='1',acceptClubPoints:f.acceptClubPoints==='1',
+      clubPointsMaxDiscountPercent:Number(f.clubPointsMaxDiscountPercent||0)
+    })});
+    toast('已更新 '+r.updated+' 场活动的积分规则');
+    await loadPointsPolicy();
+  }catch(e){showAlert({title:'批量设置失败',message:e.message})}
 }
 /* 行是 div[role=button]，onclick 只绑 click、不绑键盘，Enter/Space 不会触发 —— 自己补一条通路。
    事件委托绑在 document 上，列表重渲染后不用重绑。 */
@@ -1216,6 +1451,11 @@ async function startClub(){
   // 先拿上次缓存的品牌名渲染，刷新时不会先闪一眼占位名
   try{const cached=localStorage.getItem('clubos_club_name_'+CLUB);if(cached)applyClubName(cached,{cache:false})}catch(e){}
   try{const club=await api('/api/public/clubs/'+CLUB,{cache:'no-store'});if(club?.name)applyClubName(club.name)}catch(e){}
+  /* 领队咨询提示（2026-10-28）：进后台先拉一次，侧栏角标立刻可见；之后 60 秒一次，
+     页面从后台切回前台时再补一次 —— 手机上切走再回来不会漏掉新问题的提醒。 */
+  pollLeaderInquiries();
+  setInterval(pollLeaderInquiries,60000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollLeaderInquiries()});
   await loadDash();
   loadCreateEngine();
 }
@@ -1326,7 +1566,7 @@ async function openExecution(oid){
   </div>
   <div class="grid g2 section">
     <div class="card"><div class="panel-title"><h3>集合与应急信息</h3><button class="btn secondary" onclick="editExecutionSettings(${oid})">编辑</button></div><div><strong>集合时间</strong><div class="sub">${esc(st.meeting_time||'待设置')}</div></div><div style="margin-top:10px"><strong>集合地点</strong><div class="sub">${esc(st.meeting_location||'待设置')}</div></div><div style="margin-top:10px"><strong>应急电话</strong><div class="sub">${esc(st.emergency_phone||'待设置')}</div></div><div style="margin-top:10px"><strong>领队备注</strong><div class="sub">${esc(st.leader_note||'—')}</div></div></div>
-    <div class="card"><div class="panel-title"><h3>领队</h3><button class="btn secondary" onclick="addExecutionLeader(${oid})">＋ 领队</button></div><div class="sub" style="margin-bottom:8px">与俱乐部领队资源库同步：这里派了谁，C 端活动页「带队领队」就显示谁（带头像与擅长）。</div>${leaders.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${leaderAvatar(x.name||'',x.avatar_url,'sm')}${esc(x.name)}${x.leader_id?'':'<span class="tag orange" style="margin-left:6px" title="历史手打记录，对不上资源库">未入册</span>'}</div> · ${esc(x.role||'领队')}<div class="list-row__sub">${esc(x.phone||'')}${x.note?' · '+esc(x.note):''}</div></div><button class="btn ghost" title="撤下这位领队" onclick="removeExecutionLeader(${oid},${x.id})">撤下</button></div>`).join('')||'<div class="empty">尚未安排领队</div>'}</div>
+    <div class="card"><div class="panel-title"><h3>领队</h3><button class="btn secondary" onclick="addExecutionLeader(${oid})">＋ 领队</button></div><div class="sub" style="margin-bottom:8px">与俱乐部领队资源库同步：这里派了谁，C 端活动页「带队领队」就显示谁（带头像与擅长）。</div>${leaders.map(x=>`<div class="list-row ex-lead"><span class="ex-lead__av">${leaderAvatar(x.name||'',x.avatar_url,'lg')}</span><div class="ex-lead__main"><div class="ex-lead__top"><b>${esc(x.name)}</b>${x.leader_id?'':'<span class="tag orange" title="历史手打记录，对不上资源库">未入册</span>'}</div><div class="ex-lead__meta"><i>${esc(x.role||'领队')}</i>${x.phone?`<u>${esc(x.phone)}</u>`:''}</div>${x.note?`<div class="ex-lead__note">${esc(x.note)}</div>`:''}</div><button class="btn ghost" title="撤下这位领队" onclick="removeExecutionLeader(${oid},${x.id})">撤下</button></div>`).join('')||'<div class="empty">尚未安排领队</div>'}</div>
   </div>
   <div class="grid g2 section"><div class="card"><div class="panel-title"><h3>车辆 / 分组</h3><button class="btn secondary" onclick="addExecutionGroup(${oid})">＋ 分组</button></div>${groups.map(g=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(g.name)}</div> <span class="tag">${esc(g.group_type)}</span><div class="list-row__sub">${g.assigned_count||0}/${g.capacity||'不限'} · ${esc(g.leader_name||'')}</div></div></div>`).join('')||'<div class="empty">尚未分组</div>'}</div>
   <div class="card"><div class="panel-title"><h3>活动通知</h3><button class="btn secondary" onclick="addExecutionNotice(${oid})">＋ 通知</button></div><div class="sub" style="margin-bottom:8px">标记发送后同步到 C 端顾客订单的「出行指引」；草稿仅内部可见。</div>${notices.map(n=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(n.title)}</div> <span class="tag ${n.status==='sent'?'':'orange'}">${n.status==='sent'?'已发送':'草稿'}</span> <span class="tag">${esc(n.channel||'manual')}</span><div class="list-row__sub">${esc(n.content)}${n.sent_at?' · 发送于 '+esc(String(n.sent_at).slice(0,16)):''}</div>${n.status!=='sent'?`<button class="btn ghost" style="margin-top:6px" onclick="sendExecutionNotice(${oid},${n.id})">标记发送</button>`:''}</div></div>`).join('')||'<div class="empty">尚未创建通知</div>'}</div></div>
@@ -1593,7 +1833,9 @@ function renderLeaderCard(a,id){
   const rosterRows=roster.map(r=>`<div class="list-row leader-row"><div class="list-row__main">`
       +`<div class="list-row__title">${leaderAvatar(r.name,r.avatar_url,'sm')}${esc(r.name)} <span class="tag ${r.status==='active'?'':'orange'}">${r.status==='active'?'在岗':'已停用'}</span></div>`
       +`<div class="list-row__sub">${esc(r.role||'领队')}${r.phone?' · '+esc(r.phone):''}${r.base_city?' · 常驻 '+esc(r.base_city):''} · 累计带队 ${Number(r.assignedCount||0)} 次</div>`
-      +`<div class="list-row__sub">擅长：${(r.specialties||[]).length?esc(r.specialties.join('、')):'未填写'}</div></div>`
+      +`<div class="list-row__sub">擅长：${(r.specialties||[]).length?esc(r.specialties.join('、')):'未填写'}`
+      +`${r.ratingCount?` · ★${Number(r.ratingAvg||0).toFixed(2)}（${Number(r.ratingCount)} 条评价）`:' · 暂无评价'}`
+      +`${Number(r.newInquiries||0)?` · <b style="color:#b8722d">咨询待回复 ${Number(r.newInquiries)}</b>`:''}</div></div>`
       +`<div class="list-row__end"><button class="btn ghost" onclick="editLeader(${r.id},${id})">编辑</button>`
       +`<button class="btn ghost" onclick="removeLeader(${r.id},${id})">${r.status==='active'?'停用':'删除'}</button></div></div>`).join('')
     ||'<div class="empty">资源库还没有领队：可到左侧菜单「领队资源库」统一建档，也可以直接在这里新增</div>';
@@ -1655,7 +1897,7 @@ let LEADER_FORM=null;
    对方打开的表单 —— #leaderInlineForm / #leaderCrop 是全局唯一 id，
    两个宿主同时挂着表单会出现重复 id，裁剪面板会挂到第一个命中的那个上。 */
 let LEADER_CTX='activity';
-let POOL_ROSTER=[],POOL_SPECS=[];
+let POOL_ROSTER=[],POOL_SPECS=[],POOL_INBOX=null;
 
 function refreshLeaderPane(){
   if(LEADER_CTX==='pool'){renderPoolPane();return}
@@ -1701,9 +1943,12 @@ function leaderFormHtml(actId,r){
       <label>联系电话<input name="phone" value="${esc(r.phone||'')}" placeholder="手机号"></label>
       <label>角色<select name="role">${LEADER_ROLE_OPTS.map(o=>`<option value="${o.value}"${o.value===(r.role||'领队')?' selected':''}>${o.label}</option>`).join('')}</select></label>
       <label>常驻城市<input name="baseCity" value="${esc(r.base_city||'')}" placeholder="如 成都"></label>
+      <label>带队年限<input name="yearsExp" type="number" min="0" max="60" step="1" value="${Number(r.years_exp||0)||''}" placeholder="如 9"></label>
+      <label>资质核验<select name="certVerified">${[['1','已核验（C 端显示「资质已核验」）'],['0','未核验']].map(([v,l])=>`<option value="${v}"${String(Number(r.cert_verified||0))===v?' selected':''}>${l}</option>`).join('')}</select></label>
       <label>状态<select name="status">${['active','inactive'].map(v=>`<option value="${v}"${v===(r.status||'active')?' selected':''}>${v==='active'?'在岗':'停用'}</option>`).join('')}</select></label>
       <label class="full">擅长方向<input name="specialties" value="${esc((r.specialties||[]).join(','))}" placeholder="从这些里选：${esc(specs.join('、'))}"></label>
-      <label class="full">备注<textarea name="note" rows="2" placeholder="领队资质、带线经历等">${esc(r.note||'')}</textarea></label>
+      <label class="full">领队简介（C 端显示）<textarea name="bio" rows="3" placeholder="一两句说清 TA 是什么样的人、擅长带什么线、带团风格。例：8 年川西带队经验，走过 40 多次高原线路，节奏偏稳，擅长照顾第一次上高原的队员。">${esc(r.bio||'')}</textarea></label>
+      <label class="full">备注（仅内部可见）<textarea name="note" rows="2" placeholder="证件编号、紧急联系人、内部约定等，不会出现在 C 端">${esc(r.note||'')}</textarea></label>
     </div>
     <input type="hidden" name="avatarUrl" value="${esc(av)}">
     <div class="leader-inline__foot">
@@ -1940,7 +2185,9 @@ async function submitLeaderForm(){
   if(!name){toast('姓名不能为空');box.querySelector('[name=name]').focus();return}
   const editing=LEADER_FORM.mode==='edit';
   const payload={name,phone:g('phone'),role:g('role')||'领队',baseCity:g('baseCity'),
-                 specialties:g('specialties'),note:g('note')};
+                 specialties:g('specialties'),note:g('note'),
+                 bio:g('bio'),yearsExp:g('yearsExp')===''?0:Number(g('yearsExp')),
+                 certVerified:g('certVerified')==='1'};
   const av=g('avatarUrl');
   if(av)payload.avatarUrl=av;
   const st=g('status');
@@ -2047,15 +2294,18 @@ async function loadLeaders(){
     const r=await api(`/api/club/${CLUB}/leaders`);
     POOL_ROSTER=(r&&r.leaders)||[];
     POOL_SPECS=(r&&r.specialties)||[];
+    await loadLeaderInbox();
     renderPoolPane();
-  }catch(e){POOL_ROSTER=[];POOL_SPECS=[];renderPoolPane();loaderError('#lpRoster',e,'领队资源库加载失败')}
+  }catch(e){POOL_ROSTER=[];POOL_SPECS=[];POOL_INBOX=null;renderPoolPane();loaderError('#lpRoster',e,'领队资源库加载失败')}
 }
 
 function poolRosterRows(roster){
   return roster.map(r=>`<div class="list-row leader-row"><div class="list-row__main">`
       +`<div class="list-row__title">${leaderAvatar(r.name,r.avatar_url,'sm')}${esc(r.name)} <span class="tag ${r.status==='active'?'':'orange'}">${r.status==='active'?'在岗':'已停用'}</span></div>`
       +`<div class="list-row__sub">${esc(r.role||'领队')}${r.phone?' · '+esc(r.phone):''}${r.base_city?' · 常驻 '+esc(r.base_city):''} · 累计带队 ${Number(r.assignedCount||0)} 次</div>`
-      +`<div class="list-row__sub">擅长：${(r.specialties||[]).length?esc(r.specialties.join('、')):'未填写'}</div></div>`
+      +`<div class="list-row__sub">擅长：${(r.specialties||[]).length?esc(r.specialties.join('、')):'未填写'}`
+      +`${r.ratingCount?` · ★${Number(r.ratingAvg||0).toFixed(2)}（${Number(r.ratingCount)} 条评价）`:' · 暂无评价'}`
+      +`${Number(r.newInquiries||0)?` · <b style="color:#b8722d">咨询待回复 ${Number(r.newInquiries)}</b>`:''}</div></div>`
       +`<div class="list-row__end"><button class="btn ghost" onclick="lpEditLeader(${r.id})">编辑</button>`
       +`<button class="btn ghost" onclick="lpRemoveLeader(${r.id})">${r.status==='active'?'停用':'删除'}</button></div></div>`).join('')
     ||'<div class="empty">资源库还没有领队：点右上角「＋ 新增领队」建好名册，之后每场活动直接挑人，系统也能开始按历史记录推荐。</div>';
@@ -2074,9 +2324,46 @@ function renderPoolPane(){
   if(fEl)fEl.innerHTML=(LEADER_FORM&&LEADER_FORM.mode)
     ?leaderFormHtml(0,LEADER_FORM.mode==='edit'?(roster.find(x=>Number(x.id)===Number(LEADER_FORM.leaderId))||{}):{})
     :'';
+  renderLeaderInbox();
   mountLeaderCrop();
 }
 
+/* 领队咨询箱（2026-10-27）：C 端「咨询领队」留的问题落在这里。
+   没有这一块，C 端那个按钮就是往黑洞里发消息 —— 顾客以为问了，实际没人看见。 */
+async function loadLeaderInbox(){
+  try{POOL_INBOX=await api(`/api/club/${CLUB}/leader-inbox`)}catch(_e){POOL_INBOX=null}
+}
+function renderLeaderInbox(){
+  const el=$('#lpInbox');if(!el)return;
+  if(!POOL_INBOX){el.innerHTML='';return}
+  const iq=POOL_INBOX.inquiries||[],rv=POOL_INBOX.reviews||[];
+  const newN=iq.filter(x=>x.status==='new').length;
+  el.innerHTML=`<details class="leader-inbox"${newN?' open':''}><summary>领队咨询与评价${newN?` · <b>待回复 ${newN}</b>`:''}</summary>`
+    +`<div class="leader-inbox__h">顾客咨询（${iq.length}）${newN?` · 待回复 ${newN}`:' · 全部已回'}</div>`
+    +(iq.length?iq.map(i=>`<div class="list-row"><div class="list-row__main">`
+        +`<div class="list-row__title">${esc(i.name||'山友')} 咨询 ${esc(i.leaderName||'领队')} <span class="tag ${i.status==='new'?'orange':''}">${i.status==='new'?'待回复':'已回复'}</span></div>`
+        +`<div class="list-row__sub">${esc(i.message)}</div>`
+        +`<div class="list-row__sub">${esc(i.phone)}${i.activityTitle?' · 来自《'+esc(i.activityTitle)+'》':''} · ${esc(String(i.createdAt||'').slice(0,16))}</div></div>`
+        +`<div class="list-row__end"><a class="btn ghost" href="tel:${esc(i.phone)}">打电话</a>`
+        +`<button class="btn ghost" onclick="toggleInquiry(${Number(i.id)},${i.status==='new'?1:0})">${i.status==='new'?'标记已回复':'改回待回复'}</button></div></div>`).join('')
+      :'<div class="empty">还没有顾客咨询。顾客在 C 端点开领队卡点「咨询领队」，问题就会出现在这里。</div>')
+    +`<div class="leader-inbox__h">顾客评价（${rv.length}）</div>`
+    +(rv.length?rv.map(r=>{const st=Math.max(0,Math.min(5,Number(r.rating)||0));return `<div class="list-row"><div class="list-row__main">`
+        +`<div class="list-row__title">${esc(r.leaderName||'领队')} <span class="tag">${'★'.repeat(st)}${'☆'.repeat(5-st)}</span> <span style="font-size:12px;color:#6b7a70">${esc(r.author||'匿名山友')}</span></div>`
+        +`<div class="list-row__sub">${esc(r.comment||'（只打了分，没写内容）')}</div>`
+        +`<div class="list-row__sub">${esc(String(r.createdAt||'').slice(0,16))}</div></div></div>`}).join('')
+      :'<div class="empty">还没有顾客评价。C 端领队主页里的「给 TA 评分」提交后会出现在这里。</div>')
+    +`</div></details>`;
+}
+async function toggleInquiry(id,handled){
+  await uxFlow('inquiryHandled',async()=>{
+    await api(`/api/club/${CLUB}/leader-inquiries/${Number(id)}/handled`,{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({handled:!!Number(handled)})});
+    toast(Number(handled)?'已标记为已回复':'已改回待回复');
+    await loadLeaders();
+    pollLeaderInquiries();   // 处理完立刻把角标 / 标题数字降下来，别等下一轮轮询
+  });
+}
 function lpToggleForm(){toggleLeaderForm('add',0);
   // 设置页里表单长在名册下方：展开后滚到位，避免名册长时用户以为点了没反应。
   if(LEADER_FORM&&LEADER_FORM.mode==='add'){const f=$('#lpForm');if(f&&f.offsetParent!==null)f.scrollIntoView({behavior:'smooth',block:'nearest'})}}

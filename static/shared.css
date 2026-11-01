@@ -41,11 +41,11 @@
   position:relative;
   background:var(--ed-bg);
   color:var(--ed-ink);
-  border-radius:20px;
+  border-radius:18px;
   overflow:hidden;
   border:1px solid var(--ed-line);
-  box-shadow:0 18px 48px rgba(28,36,32,.07);
-  max-width:760px;
+  box-shadow:0 8px 30px rgba(28,36,32,.045);
+  max-width:820px;
   margin:0 auto;
   -webkit-font-smoothing:antialiased;
   container-type:inline-size;
@@ -136,6 +136,14 @@
   font-size:11.5px;letter-spacing:.4px}
 .ed-caption{grid-column:1/-1;color:var(--ed-muted);font-size:var(--ed-cap);
   line-height:1.75;margin:9px 0 0}
+/* ── 图片图注：绿色胶囊标签（还原原产品 H5 的图注特征）─────────────── */
+.ed-cap-pill{display:inline-flex;align-items:center;gap:6px;
+  margin:12px var(--ed-pad) 0;background:var(--ed-accent-soft);color:#234a37;
+  border:1px solid #cfdfd5;border-radius:999px;padding:6px 13px;
+  font-size:11.5px;font-weight:700;letter-spacing:.3px;line-height:1.4}
+.ed-cap-pill::before{content:'';width:6px;height:6px;border-radius:50%;
+  background:var(--ed-accent);flex:0 0 auto}
+.ed-media--full .ed-cap-pill{margin:10px var(--ed-pad) 0}
 
 /* ── 图片组：单图 / 并排 / 一大两小 / 整版铺满 ───────────────────────── */
 .ed-media{padding:var(--ed-gap) var(--ed-pad)}
@@ -177,6 +185,23 @@
 .ed-imagetext__media{display:grid;gap:10px}
 .ed-imagetext__media.two{grid-template-columns:1fr 1fr}
 .ed-imagetext__media .editorial-media{aspect-ratio:4/5}
+
+/* ── 链接来源的整段设计图（.nat）：通栏、原始比例、完整呈现，禁止任何裁切 ──
+   2026-10-29 用户对照原产品实锤：秀米等推文链接抓来的图常是原页面的整段设计成品
+   （标题字效+摄影+配色融为一体）。此前被 4:3 / 1:1 网格 object-fit:cover 裁断，
+   原设计全毁。这类图必须像原产品那样整幅依次呈现。!important 用于压过
+   上下文里的 aspect-ratio / grid-row / min-height 裁切规则（含 @container 内的）。 */
+.editorial-media.nat{aspect-ratio:auto!important;border-radius:0;
+  grid-column:1/-1;grid-row:auto!important;min-height:0!important}
+.editorial-media.nat img{height:auto!important;object-fit:cover}
+/* bigimage / 整版铺满分支遇到设计段图：不再当背景叠字，改为图下图注的通栏原图 */
+.ed-bigimage--nat{background:none!important;min-height:0!important;display:block;
+  padding:0 0 var(--ed-gap)}
+.ed-bigimage--nat::after{display:none}
+.ed-bigimage--nat .ed-bigimage__cap{max-width:none;padding:10px var(--ed-pad) 0}
+.ed-bigimage--nat .ed-bigimage__cap h3{color:var(--ed-ink);text-shadow:none}
+.ed-bigimage--nat .ed-bigimage__cap p{color:var(--ed-ink2);text-shadow:none}
+.ed-bigimage--nat .ed-bigimage__cap .ed-caption{color:var(--ed-muted)}
 .ed-imagetext__copy h2{font-size:var(--ed-h2);line-height:1.3;font-weight:800;
   letter-spacing:-.005em;margin:10px 0 14px}
 
@@ -208,14 +233,14 @@
 .ed-cta h2{font-size:var(--ed-h2);margin:8px 0 10px}
 .ed-cta p{color:#d1dfd9;line-height:1.7;max-width:34em}
 
-/* ── 数字统计条（取代旧的墨绿仪表盘卡）────────────────────────────── */
+/* ── 数字统计条（取代旧的墨绿仪表盘卡 / 2×2 厚卡）──────────────────── */
 .ed-numbercards{
   display:grid;grid-template-columns:repeat(2,1fr);
-  gap:10px;background:none;
+  gap:18px var(--ed-pad);background:none;
   margin:var(--ed-gap) var(--ed-pad);
 }
-.ed-numcard{background:var(--ed-card);border-radius:14px;
-  padding:clamp(16px,3.6vw,22px) clamp(15px,3.6vw,20px);
+.ed-numcard{background:transparent;border:0;border-radius:0;padding:0;
+  border-top:2px solid var(--ed-accent);padding-top:12px;
   color:var(--ed-ink);position:static;overflow:visible}
 .ed-numcard::after{display:none}
 .ed-numcard__num{display:flex;align-items:baseline;gap:2px}
@@ -235,6 +260,27 @@
 .timeline-item time{font-size:13px;font-weight:800;color:var(--ed-accent);
   font-variant-numeric:tabular-nums;line-height:1.7}
 .timeline-item p{margin:0;font-size:var(--ed-body);line-height:1.85;color:var(--ed-ink2)}
+/* 每日元信息 chips（住宿/餐饮/车辆）：圆胶囊，跨满两列，不挤进行程正文 */
+.tl-meta{display:flex;flex-wrap:wrap;gap:6px;grid-column:1/-1;margin-top:4px}
+.tl-chip{background:var(--ed-accent-soft);color:var(--ed-ink);border-radius:999px;
+  padding:3px 10px;font-size:11.5px;line-height:1.4;font-weight:600;white-space:nowrap}
+.itin-day__meta{flex:1 1 100%;margin:0;padding:0 14px 8px}
+.itin-day__meta .tl-meta{margin-top:2px}
+
+/* ── 表格块（团期价格 / 规格矩阵 / 费用对比）：真 <table>，对齐多列数字 ── */
+.ed-table-wrap{background:var(--ed-card)}
+.ed-table-scroll{margin:var(--ed-gap) var(--ed-pad);overflow-x:auto;-webkit-overflow-scrolling:touch}
+.ed-table{border-collapse:collapse;width:100%;min-width:420px;font-size:13.5px;
+  font-variant-numeric:tabular-nums;line-height:1.5;color:var(--ed-ink2)}
+.ed-table th,.ed-table td{padding:11px 12px;text-align:left;vertical-align:middle;
+  border-bottom:1px solid var(--ed-line);white-space:nowrap}
+.ed-table th{font-size:12px;font-weight:800;letter-spacing:.04em;color:var(--ed-ink);
+  background:var(--ed-bg);position:sticky;top:0}
+.ed-table tbody tr:nth-child(even){background:color-mix(in srgb,var(--ed-bg) 55%,transparent)}
+.ed-table td:first-child{font-weight:700;color:var(--ed-ink)}
+.ed-table tbody tr:hover{background:var(--ed-accent-soft)}
+.ed-table .num{text-align:right}
+.ed-table-note{margin:0 var(--ed-pad) var(--ed-gap);font-size:12px;color:var(--ed-muted);line-height:1.6}
 
 /* ── 「出发前知道」：编号须知，去卡片 ──────────────────────────────── */
 .ed-info{background:none}

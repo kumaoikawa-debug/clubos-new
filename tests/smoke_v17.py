@@ -17,6 +17,13 @@ def ok(method,url,**kw):
     assert r.status_code<400,(url,r.status_code,r.text)
     return r
 
+def deliver(order_id):
+    pick=ok('post',f'/api/platform/orders/{order_id}/pick').json()
+    ok('post',f"/api/platform/warehouse/tasks/{pick['id']}/picked")
+    ok('post',f'/api/platform/orders/{order_id}/pack',json={})
+    ok('post',f'/api/platform/orders/{order_id}/shipment',json={'carrierCode':'SF','trackingNo':f'TEST-COMMISSION-{order_id}'})
+    return ok('patch',f'/api/platform/orders/{order_id}',json={'status':'delivered'})
+
 def amount(v): return round(float(v),2)
 
 h=ok('get','/api/health').json(); assert h['version'].startswith(('0.17','0.18','0.19','0.20','0.21','0.22','0.23','0.24','0.25'))
@@ -29,7 +36,7 @@ with app.conn() as db:
     l1=dict(db.execute("SELECT * FROM commission_ledger WHERE order_id=? AND ledger_type='earn'",(id1,)).fetchone())
 assert l1['status']=='pending'
 
-delivered=ok('patch',f'/api/platform/orders/{id1}',json={'status':'delivered'}).json()
+delivered=deliver(id1).json()
 assert delivered['commission']['status']=='frozen'
 with app.conn() as db:
     l1=dict(db.execute("SELECT * FROM commission_ledger WHERE order_id=? AND ledger_type='earn'",(id1,)).fetchone())
@@ -52,7 +59,7 @@ assert l1['status']=='settled' and l1['settlement_id']==s1['id'] and l1['settled
 # 3) Refund before settlement: pending/frozen/available commission is reversed, never payable.
 o2=ok('post','/api/public/clubs/1/gear-orders',json={'userId':1,'items':[{'productId':2,'quantity':1}]}).json()
 id2=int(o2['orderId']); comm2=amount(o2['clubCommission']); assert comm2==29.9
-ok('patch',f'/api/platform/orders/{id2}',json={'status':'delivered'})
+deliver(id2)
 ok('post','/api/platform/commissions/release',json={'clubId':1})
 r2=ok('post',f'/api/platform/orders/{id2}/refund',json={'reason':'结算前退款'}).json()
 assert amount(r2['commissionReversed'])==comm2 and amount(r2['commissionFutureOffset'])==0
@@ -64,7 +71,7 @@ assert earn2['status']=='reversed' and rev2['status']=='reversed' and amount(rev
 # 4) Refund after settlement: preserve historical paid settlement and create next-period negative offset.
 o3=ok('post','/api/public/clubs/1/gear-orders',json={'userId':1,'items':[{'productId':1,'quantity':1}]}).json()
 id3=int(o3['orderId']); comm3=amount(o3['clubCommission'])
-ok('patch',f'/api/platform/orders/{id3}',json={'status':'delivered'})
+deliver(id3)
 ok('post','/api/platform/commissions/release',json={'clubId':1})
 s2=ok('post','/api/platform/settlements',json={'clubId':1,'paymentRef':'BANK-V17-002'}).json(); assert amount(s2['netAmount'])==comm3
 r3=ok('post',f'/api/platform/orders/{id3}/refund',json={'reason':'结算后退款'}).json()
@@ -79,7 +86,7 @@ assert earn3['status']=='settled' and rev3['status']=='available' and amount(rev
 # 5) New positive commission automatically offsets the prior negative balance in the next settlement.
 o4=ok('post','/api/public/clubs/1/gear-orders',json={'userId':1,'items':[{'productId':1,'quantity':2}]}).json()
 id4=int(o4['orderId']); comm4=amount(o4['clubCommission']); assert comm4==111.84
-ok('patch',f'/api/platform/orders/{id4}',json={'status':'delivered'})
+deliver(id4)
 ok('post','/api/platform/commissions/release',json={'clubId':1})
 p4=ok('get','/api/platform/settlements/preview?club_id=1').json()
 assert amount(p4['grossAmount'])==comm4 and amount(p4['deductionAmount'])==comm3 and amount(p4['netAmount'])==amount(comm4-comm3)

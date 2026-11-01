@@ -105,6 +105,8 @@ def install_tables() -> None:
           BEGIN SELECT RAISE(ABORT,'audit events are append-only'); END;
         ''')
 
+    with conn() as c:
+        if 'platform_department' not in {r[1] for r in c.execute('PRAGMA table_info(auth_accounts)')}:c.execute("ALTER TABLE auth_accounts ADD COLUMN platform_department TEXT NOT NULL DEFAULT 'all'")
 
 def hash_password(password: str) -> str:
     if len(password) < 14:
@@ -164,8 +166,42 @@ def issue_session(request: Request, username: str, password: str) -> tuple[str, 
     return result
 
 
+def platform_department_allowed(identity,path,method,payload=None):
+    department=identity.get('platform_department') or 'all'
+    if department=='all':return True
+    payload=payload or {}
+    product_write=('/products' in path and method not in ('GET','HEAD'))
+    if product_write:
+        has_stock=payload.get('stock') is not None or bool(payload.get('skuStock')) or path.endswith('/matrix')
+        has_price=payload.get('price') is not None
+        if department=='operations' and has_stock and not (method=='POST' and path=='/api/platform/products' and int(payload.get('stock') or 0)==0 and not payload.get('skuStock')):return False
+        if department=='warehouse' and has_price:return False
+        if department=='operations' and method=='PATCH' and re.search(r'/variants/\d+$',path) and not has_stock and set(payload)<= {'price'}:return True
+        if department=='procurement' and method=='POST' and '/variants' in path and not int(payload.get('stock') or 0):
+            m=re.search(r'/products/(\d+)/variants$',path)
+            if m:
+                with conn() as c:
+                    p=c.execute('SELECT status FROM products WHERE id=?',(int(m[1]),)).fetchone()
+                return bool(p and p[0]=='draft')
+        if department=='procurement' and method=='POST' and path=='/api/platform/products':
+            return not int(payload.get('stock') or 0) and not payload.get('skuStock') and payload.get('status','draft')=='draft'
+    if path.startswith('/api/platform/warehouse') or path.startswith('/api/platform/stock/reconciliation') or re.search(r'/orders/\d+/(pick|pack|ship|shipment|fulfill|delivered)',path) or (method=='PATCH' and re.search(r'/orders/\d+$',path)):required='warehouse'
+    elif '/supplier-payments' in path or '/finance/' in path or '/profit/' in path or '/settlements' in path or path.endswith('/credit'):required='finance'
+    elif '/procurement/' in path:
+        required='warehouse' if path.endswith(('/receive','/ship','/exceptions')) else 'procurement'
+        if method=='GET':return department in ('procurement','warehouse','finance')
+    elif '/suppliers' in path:required='procurement'
+    elif '/inventory/' in path:required='warehouse'
+    elif '/products' in path or '/brands' in path or '/categories' in path or '/product-visibility' in path:
+        if method=='GET':return department in ('operations','procurement','warehouse','finance')
+        required='warehouse' if ('/variants' in path or path.endswith('/import')) else 'operations'
+    elif method=='GET' and (path.startswith('/api/platform/orders') or path=='/api/platform/order-filters'):return True
+    else:return False
+    return department==required
+
+
 def public_identity(account: dict) -> dict:
-    return {'accountId':account['id'],'username':account['username'],'role':account['role'],
+    return {'platformDepartment':account.get('platform_department') or 'all','accountId':account['id'],'username':account['username'],'role':account['role'],
             'clubId':account.get('club_id'),'userId':account.get('user_id')}
 
 
@@ -251,7 +287,7 @@ def _member_owns_path(path: str, request: Request, identity: dict, payload: dict
     needs_user_body=(re.match(r'^/api/public/clubs/\d+/(?:gear-checkout|benefits/\d+/redeem)$',path))
     if needs_user_query and 'user_id' not in request.query_params: _forbidden('authenticated user_id required',400)
     if needs_user_body and 'userId' not in payload: _forbidden('authenticated userId required',400)
-    for key in ('userId','user_id'):
+    for key in ('userId','user_id','toUserId'):
         if key in payload and str(payload[key])!=str(uid): _forbidden()
         if key in request.query_params and str(request.query_params[key])!=str(uid): _forbidden()
     if re.search(r'^/api/public/activities/\d+/checkout$', path):
@@ -260,7 +296,7 @@ def _member_owns_path(path: str, request: Request, identity: dict, payload: dict
         if not user or not user['phone'] or str(payload.get('phone','')) != str(user['phone']): _forbidden('payer identity mismatch')
     if re.search(r'^/api/public/club-applications',path): _forbidden('application details are not public')
     if request.method in ('POST','PATCH','PUT','DELETE'):
-        club_match=re.match(r'^/api/public/clubs/(\d+)/(?:gear-checkout|benefits)',path)
+        club_match=re.match(r'^/api/public/clubs/(\d+)/',path)
         if club_match:
             with conn() as c: active=row(c.execute('SELECT status FROM clubs WHERE id=?',(club_match[1],)))
             if not active or active['status']!='active': _forbidden('club is not active')
@@ -380,6 +416,11 @@ async def _authorize_shared(request: Request, strict: bool) -> dict | None:
     if path=='/api/auth/me': return identity
     if path.startswith('/api/platform/'):
         if role!='platform': _forbidden()
+        data={}
+        if method not in ('GET','HEAD','DELETE') and '/products' in path and 'application/json' in request.headers.get('content-type',''):
+            try:data=await request.json()
+            except Exception:_forbidden('invalid JSON',400)
+        if not platform_department_allowed(identity,path,method,data):_forbidden('当前岗位无权执行此操作')
     elif path.startswith('/api/club/'):
         m = re.match(r'^/api/club/(\d+)(?:/|$)',path)
         if role!='club' or not m or int(m[1])!=identity['club_id']: _forbidden()

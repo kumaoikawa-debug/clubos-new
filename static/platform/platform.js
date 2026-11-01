@@ -1,4 +1,4 @@
-navInit();window.onView=v=>{if(v==='clubs')loadClubs();if(v==='pcredits')loadCredits();if(v==='ppoints')loadPointPolicy();if(v==='pbenefits'){try{loadPlatformCoupons()}catch(e){}}if(v==='products'){loadProducts();loadVisibilityRequests()}if(v==='supply')loadSupplyChain();if(v==='warehouse')loadWarehouse();if(v==='finance')loadFinance();if(v==='analytics')loadAnalytics();if(v==='orders')loadOrders();if(v==='aftersales')loadAfterSales();if(v==='commissions')loadCommissions()};
+navInit();window.onView=v=>{if(v==='clubs')loadClubs();if(v==='pcredits')loadCredits();if(v==='ppoints')loadPointPolicy();if(v==='pbenefits'){try{loadPlatformCoupons()}catch(e){}}if(v==='products'){loadProducts();loadVisibilityRequests()}if(v==='supply')loadSupplyChain();if(v==='warehouse')loadWarehouse();if(v==='finance')loadFinance();if(v==='analytics'){loadAnalytics();loadPendingListing()}if(v==='orders')loadOrders();if(v==='aftersales')loadAfterSales();if(v==='commissions')loadCommissions()};
 /* logo 裂图兜底用事件委托绑一次（俱乐部表整块重渲染，逐个绑 onerror 会漏）。 */
 document.addEventListener('error',platLogoFallback,true);
 async function dash(){let d=await api('/api/platform/dashboard'),ai=d.aiBilling||{};$('#pMetrics').innerHTML=[['入驻俱乐部',d.clubs],['活跃俱乐部',d.activeClubs],['AI本月收入',money(ai.cashRevenueCny||0)],['装备GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');loadPlatformAttention()}
@@ -172,7 +172,7 @@ async function setClubGearPercent(clubId,current,planPercent){
 }
 async function resetClubGearPercent(clubId){await api(`/api/platform/points-policy/clubs/${clubId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({clearOverride:true})});toast('已恢复为套餐默认比例');loadPointPolicy()}
 
-/* ── 装备商品中心（2026-10-24 多品牌化）───────────────────────────────────
+/* ── 商品管理中心（2026-10-24 多品牌化）───────────────────────────────────
    维度进字典表：品牌 / 品类是 product_brands / product_categories，商品存外键；
    颜色 / 尺码下沉到规格层（product_variants）。SKU 由后端按
    「品牌-品类-商品-颜色-尺码」自动生成，前端不手拼 —— 手填在多品牌下必然撞号，
@@ -206,6 +206,7 @@ async function applyProductFilter(){
   if(c)qs.set('category_id',c);
   if(g)qs.set('gender',g);
   if(kw)qs.set('q',kw);
+  if(prodStatusFilter)qs.set('status',prodStatusFilter);
   const q=qs.toString();
   try{
     skel('#productRows',4);
@@ -214,13 +215,31 @@ async function applyProductFilter(){
     const hit=$('#prodFilterHit');if(hit)hit.textContent=a.length?a.length+' 件商品':'';
   }catch(e){loaderError('#productRows',e,'商品筛选失败')}
 }
-function clearProductFilter(){['#prodFilterBrand','#prodFilterCat','#prodFilterGender','#prodFilterQ'].forEach(s=>{const el=$(s);if(el)el.value=''});applyProductFilter()}
+/* 进销存 V1.1（任务书 6.1）：商品状态 chips —— 「待上架」有了独立入口，
+   收货后自动流转过来的商品不再淹没在全量列表里。 */
+const PROD_STATUS_CHIPS=[['','全部'],['pending_listing','待上架'],['active','在售'],['draft','草稿'],['pending_inbound','待入库'],['partially_received','部分入库'],['inactive','已下架']];
+let prodStatusFilter='';
+function prodStatusChips(){
+  const el=$('#prodStatusChips');if(!el)return;
+  el.innerHTML=PROD_STATUS_CHIPS.map(s=>{const on=prodStatusFilter===s[0];
+    return `<button class="btn ${on?'secondary':'ghost'}" style="padding:3px 14px;border-radius:999px;font-size:12px" onclick="setProdStatus('${s[0]}')">${s[1]}</button>`}).join('');
+}
+function setProdStatus(s){prodStatusFilter=s;prodStatusChips();applyProductFilter()}
+function clearProductFilter(){['#prodFilterBrand','#prodFilterCat','#prodFilterGender','#prodFilterQ'].forEach(s=>{const el=$(s);if(el)el.value=''});prodStatusFilter='';prodStatusChips();applyProductFilter()}
 function prodRowHtml(x){
   const brand=x.brand_name?esc(x.brand_name):'<span class="sub">未设品牌</span>';
   const cat=x.category_name?esc(x.category_name)+(x.parent_category_name?`<div class="sub">${esc(x.parent_category_name)}</div>`:''):'<span class="sub">未分类</span>';
-  return `<tr><td><div class="plat-prod-cell">${productCoverHtml(x)}<div><strong>${esc(x.name)}</strong><div class="sub">${esc(x.gender?PROD_GENDERS.find(g=>g.value===x.gender)?.label||x.gender:'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0} · ${x.description?'有介绍':'无介绍'}</div></div></div></td><td>${brand}<div class="sub">${cat}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.stock}</td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="editProduct(${x.id})">编辑</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`;
+  return `<tr><td><div class="plat-prod-cell">${productCoverHtml(x)}<div><strong>${esc(x.name)}</strong><div class="sub">${esc(x.gender?PROD_GENDERS.find(g=>g.value===x.gender)?.label||x.gender:'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0} · ${x.description?'有介绍':'无介绍'}</div></div></div></td><td>${brand}<div class="sub">${cat}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.stock}<div class="sub">${invStatusTag(x)}</div></td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="editProduct(${x.id})">编辑</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`;
 }
-async function loadProducts(){try{await loadProductDicts()}catch(e){/* 字典拉不到也要让列表自己报错，别静默 */}applyProductFilter()}
+/* 进销存 V1：库存状态标签（与商品上架状态分离，已上架商品仍可显示「售罄」）。 */
+function invStatusTag(x){
+  const s=x.inventory_status;
+  if(!s)return '';
+  const map={out_of_stock:['售罄','orange'],low_stock:['库存偏低','orange'],restocking:['补货中','blue'],in_stock:['有货','green']};
+  const m=map[s]||[enumCn(s),''];
+  return `<span class="tag ${m[1]}">${m[0]}</span>`;
+}
+async function loadProducts(){prodStatusChips();try{await loadProductDicts()}catch(e){/* 字典拉不到也要让列表自己报错，别静默 */}applyProductFilter()}
 async function addProduct(){return platformAddProduct()}
 /* 色值文本 → #RRGGBB；非法返回 ''。
    2026-10-25 用户要求「颜色只手动填写，不要系统色块选择器」：原生 <input type="color">
@@ -258,6 +277,40 @@ async function platformAddProduct(){
   }
   await loadProductDicts();
   await openProductEditor({});
+}
+/* 进销存 V1.3（2026-10-31）：「从仓库上架」入口 —— 货品已经在仓储 WMS（采购收货入库），
+   这里不让人重录库存，只挑一件「已收货未上架」的货，进编辑器补头图 / 详情图 / 营销信息后上架。
+   货品池 = products.status='pending_listing'（收货后由 receive_purchase_order 自动置位，
+   与「商城经营 → 待上架」是同一批货，只是那里只翻状态、这里能传图）。
+   复用 productCoverHtml / openProductEditor（都在本文件 / product-editor.js 全局可用）。 */
+async function openWarehouseListing(){
+  const dlg=uxDialog({title:'从仓库上架',wide:true,
+    desc:'下面都是采购收货入库、还没上架到 C 端的货品。挑一件进编辑器，补头图 / 详情图 / 营销信息后上架 —— 库存与规格由仓库系统带出，不用重录。',
+    body:'<div id="whList" class="plat-whlist"><div class="empty">加载中…</div></div>',
+    foot:'<button class="btn ghost" type="button" data-close>关闭</button>'});
+  dlg.querySelector('[data-close]').onclick=()=>dlg.uxClose();
+  const box=dlg.querySelector('#whList');
+  try{
+    const list=await api('/api/platform/products?status=pending_listing');
+    if(!list||!list.length){
+      box.innerHTML='<div class="empty">仓库里没有待上架的货。先去「供应链 → 采购单」收货入库，货品会自动出现在这里。</div>';
+      return;
+    }
+    box.innerHTML=list.map(x=>`<div class="plat-whlist__row" data-id="${x.id}">
+        ${productCoverHtml(x)}
+        <div class="plat-whlist__main">
+          <div class="plat-whlist__name">${esc(x.name)}</div>
+          <div class="sub">${esc(x.sku||'')} · 规格 ${x.variants_count||0} · 可售 ${x.stock||0}${x.warehouse?(' · 仓：'+esc(x.warehouse)):''}</div>
+        </div>
+        <span class="tag orange">待上架</span>
+        <button class="btn" type="button" data-pick="${x.id}">去上架</button>
+      </div>`).join('');
+    const go=id=>{dlg.uxClose();openProductEditor({id,fromWarehouse:true})};
+    box.querySelectorAll('[data-pick]').forEach(b=>{b.onclick=()=>go(Number(b.dataset.pick))});
+    box.querySelectorAll('.plat-whlist__row').forEach(r=>{
+      r.onclick=e=>{if(e.target.closest('[data-pick]'))return;go(Number(r.dataset.id))};
+    });
+  }catch(e){box.innerHTML='<div class="empty">加载失败：'+esc(e.message)+'</div>'}
 }
 /* ── 规格矩阵弹层 ─────────────────────────────────────────────────────────
    返回 {colors:[{name,hex}],sizes:[…]}（确定）/ {colors:[],sizes:[]}（跳过矩阵）/ null（取消）。
@@ -360,7 +413,11 @@ async function editProduct(id){
   await loadProductDicts();
   await openProductEditor({id});
 }
-async function toggleProduct(id,status){await api(`/api/platform/products/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:status==='active'?'inactive':'active'})});loadProducts()}
+/* V1.1：上架受「图/详情/售价」三道闸校验（后端 400），失败必须把原因弹给人看。 */
+async function toggleProduct(id,status){
+  try{await api(`/api/platform/products/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:status==='active'?'inactive':'active'})});loadProducts()}
+  catch(e){showAlert({title:status==='active'?'暂不能上架':'操作失败',message:e.message})}
+}
 /* 俱乐部提交的上下架申请。平台自己有 toggleProduct 直接改，但俱乐部没有这个权限，
    只能走申请；批准即写 products.status，C 端商城的可见性才跟着变。 */
 async function loadVisibilityRequests(){try{skel('#visibilityRequestList',3);let list=await api('/api/platform/product-visibility-requests');$('#visibilityRequestList').innerHTML=list.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.club_name)} · ${esc(x.product_name)} <span class="tag ${x.action==='on'?'':'orange'}">${x.action==='on'?'申请上架':'申请下架'}</span></div><div class="list-row__sub">当前 ${esc(enumCn(x.product_status))} · ${esc(x.note||'')} · 提交于 ${esc(x.created_at||'')}${x.decided_note?' · 处理意见 '+esc(x.decided_note):''}</div></div><div class="list-row__end">${x.status==='pending'?`<button class="btn secondary" onclick="decideVisibility(${x.id},'approved')">批准</button> <button class="btn ghost" onclick="decideVisibility(${x.id},'rejected')">驳回</button>`:`<span class="tag">${x.status==='approved'?'已批准':'已驳回'}</span>`}</div></div>`).join('')||'<div class="empty">暂无上下架申请</div>'}catch(e){loaderError('#visibilityRequestList',e,'loadVisibilityRequests 加载失败')}}
@@ -376,11 +433,11 @@ function orderLogCell(x){
 }
 function orderRowHtml(x){
   const shipBtn=x.status==='refunded'?'':`<button class="btn secondary" onclick="openShipmentDialog(${x.id})">${x.tracking_no?'更新物流':'发货'}</button>`;
-  return `<tr><td>#${x.id}</td><td>${esc(x.source_club)}</td><td>${esc(x.buyer)}${x.buyer_phone?`<div class="sub">${esc(x.buyer_phone)}</div>`:''}</td>`
+  return `<tr data-order-id="${x.id}" data-status="${esc(x.status)}"><td>#${x.id}</td><td>${esc(x.source_club)}</td><td>${esc(x.buyer)}${x.buyer_phone?`<div class="sub">${esc(x.buyer_phone)}</div>`:''}</td>`
     +`<td>${x.shipping_consignee?esc(x.shipping_consignee)+(x.shipping_phone?' '+esc(x.shipping_phone):'')+(x.shipping_address?'<div class="sub">'+esc(x.shipping_address)+'</div>':''):'<span class="sub">历史订单无地址</span>'}</td>`
     +`<td>${money(x.total)}</td><td><span class="tag ${x.status==='paid'?'orange':''}">${esc(enumCn(x.status))}</span></td>`
     +`<td>${orderLogCell(x)}</td><td>${x.after_sales_status||'无'}</td>`
-    +`<td><div style="display:flex;gap:6px;flex-wrap:wrap">${x.packed?'<span class="tag">已打包</span>':`<button class="btn ghost" onclick="packOrder(${x.id})">完成打包</button>`}${shipBtn}${x.status==='shipped'?`<button class="btn ghost" onclick="markDelivered(${x.id})">标记签收</button>`:''}${x.status!=='refunded'?`<button class="btn ghost" onclick="refundOrder(${x.id})">全额退款</button>`:''}</div></td></tr>`;
+    +`<td><div style="display:flex;gap:6px;flex-wrap:wrap">${x.commerce_sync_status==='shipment_error'?`<button class="btn ghost" onclick="retryOrderCommerce(${x.id})">重试交易同步</button>`:''}${x.packed?'<span class="tag">已打包</span>':`<button class="btn ghost" onclick="packOrder(${x.id})">完成打包</button>`}${shipBtn}${x.status==='shipped'?`<button class="btn ghost" onclick="markDelivered(${x.id})">标记签收</button>`:''}${x.status!=='refunded'?`<button class="btn ghost" onclick="refundOrder(${x.id})">全额退款</button>`:''}</div></td></tr>`;
 }
 async function loadOrders(){
   try{
@@ -562,29 +619,117 @@ async function exchangeShipAS(id){const v=await showForm({title:'填写换货物
 async function loadSupplyChain(){
   skel('#inventorySummary',4);try{let [sum,sups,pos,moves]=await Promise.all([api('/api/platform/inventory/summary'),api('/api/platform/suppliers'),api('/api/platform/procurement/purchase-orders'),api('/api/platform/inventory/movements?limit=80')]);
   $('#inventorySummary').innerHTML=[['库存 SKU',sum.skuCount],['现货件数',sum.units],['库存成本',money(sum.inventoryValue)],['在途采购',`${sum.openPurchaseOrders} 单 · ${money(sum.openPurchaseValue)}`]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');
-  $('#supplierList').innerHTML=sups.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}</div> <div class="list-row__sub">${esc(x.code)} · 供货商品 ${x.product_count} · 交期 ${x.lead_time_days||0} 天 · 在途 ${x.open_po_count||0} 单</div><button class="btn ghost" style="margin-top:7px" onclick="linkSupplier(null,${x.id})">关联商品</button><div class="list-row__end"><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></div></div>`).join('')||'<div class="empty">暂无供应商</div>';
+  $('#supplierList').innerHTML=`<div class="sup-grid">`+sups.map(x=>{const ini=(x.name||'?').trim().charAt(0).toUpperCase();const on=x.status==='active';return `<div class="sup-card">
+    <div class="sup-card__hd">
+      <div class="sup-card__ava">${esc(ini)}</div>
+      <div class="sup-card__id">
+        <div class="sup-card__name">${esc(x.name)}</div>
+        <div class="sup-card__code">${esc(x.code||'—')}</div>
+      </div>
+      <span class="sup-tag ${on?'sup-tag--ok':'sup-tag--off'}">${esc(enumCn(x.status))}</span>
+    </div>
+    <div class="sup-card__meta">
+      <div class="sup-stat"><div class="sup-stat__k">供货商品</div><div class="sup-stat__v">${x.product_count||0}</div></div>
+      <div class="sup-stat"><div class="sup-stat__k">交期</div><div class="sup-stat__v">${x.lead_time_days||0}<i>天</i></div></div>
+      <div class="sup-stat"><div class="sup-stat__k">在途</div><div class="sup-stat__v">${x.open_po_count||0}<i>单</i></div></div>
+    </div>
+    <div class="sup-card__ft">
+      <button class="btn ghost" type="button" onclick="linkSupplier(null,${x.id})">关联商品</button>
+      <button class="btn ghost sm plat-plan__del" type="button" onclick="deleteSupplier(${x.id})">删除</button>
+    </div>
+  </div>`}).join('')+`</div>`||'<div class="empty">暂无供应商</div>';
   const st={draft:'草稿',approved:'已审核',ordered:'已下单',partially_received:'部分到货',received:'已完成',cancelled:'已取消'};
-  $('#purchaseOrderList').innerHTML=pos.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.id)}</div> · ${esc(x.supplier_name)} <div class="list-row__sub">${money(x.total_amount)} · 到货 ${x.received_qty}/${x.ordered_qty}</div><div style="margin-top:7px">${x.status==='draft'?`<button class="btn ghost" onclick="approvePO('${x.id}')">审核</button> <button class="btn ghost" onclick="cancelPO('${x.id}')">取消</button>`:''}${x.status==='approved'?`<button class="btn ghost" onclick="orderPO('${x.id}')">确认下单</button>`:''}${['ordered','partially_received'].includes(x.status)?`<button class="btn secondary" onclick="receivePO('${x.id}')">到货入库</button>`:''}${Number(x.received_qty||0)>0?`<button class="btn ghost" onclick="createPurchaseReturn('${x.id}')">采购退货</button>`:''}</div><div class="list-row__end"><span class="tag ${['draft','approved','ordered','partially_received'].includes(x.status)?'orange':''}">${st[x.status]||esc(enumCn(x.status))}</span></div></div>`).join('')||'<div class="empty">暂无采购单</div>';
+  $('#purchaseOrderList').innerHTML=pos.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.id)}</div> · ${esc(x.supplier_name)} <div class="list-row__sub">${money(x.total_amount)} · 到货 ${x.received_qty||0}/${x.ordered_qty||0}${Number(x.rejected_qty||0)>0?` · <span style="color:#b45309">异常/拒收 ${x.rejected_qty}</span>`:''}</div><div style="margin-top:7px">${x.status==='draft'?`<button class="btn ghost" onclick="approvePO('${x.id}')">审核</button> <button class="btn ghost" onclick="cancelPO('${x.id}')">取消</button>`:''}${x.status==='approved'?`<button class="btn ghost" onclick="orderPO('${x.id}')">确认下单</button>`:''}${['ordered','partially_received'].includes(x.status)?`<button class="btn secondary" onclick="receivePO('${x.id}')">到货入库</button> <button class="btn ghost" onclick="registerPOException('${x.id}')">异常登记</button>`:''}${Number(x.received_qty||0)>0?`<button class="btn ghost" onclick="createPurchaseReturn('${x.id}')">采购退货</button>`:''}</div><div class="list-row__end"><span class="tag ${['draft','approved','ordered','partially_received'].includes(x.status)?'orange':''}">${st[x.status]||esc(enumCn(x.status))}</span></div></div>`).join('')||'<div class="empty">暂无采购单</div>';
   const mt={opening_balance:'期初库存',purchase_inbound:'采购入库',sale_outbound:'销售出库',refund_restock:'退款回库',after_sales_return:'售后退货',manual_in:'盘盈/调增',manual_out:'盘亏/调减'};
   $('#inventoryMovementList').innerHTML=moves.map(x=>`<div style="display:grid;grid-template-columns:1.3fr .8fr .6fr .8fr 1.5fr;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);align-items:center"><div><strong>${esc(x.product_name)}</strong><div class="sub">${esc(x.product_sku)}</div></div><div>${mt[x.movement_type]||esc(x.movement_type)}</div><div><strong>${x.quantity_delta>0?'+':''}${x.quantity_delta}</strong></div><div>${x.stock_before} → ${x.stock_after}</div><div class="sub">${esc(x.note||'')} · ${esc(x.created_at||'')}</div></div>`).join('')||'<div class="empty">暂无库存流水</div>';
   try{const rets=await api('/api/platform/procurement/purchase-returns');const rst={draft:'草稿',approved:'已审核',shipped:'已出库',credited:'已贷项'};$('#purchaseReturnList').innerHTML=rets.length?rets.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">退货单 ${esc(x.id)} · ${esc(x.supplier_name)}</div> · ${money(x.total_amount||0)}<div class="list-row__sub">${rst[x.status]||esc(enumCn(x.status))}${x.note?` · ${esc(x.note)}`:''} · ${esc(x.created_at||'')}</div></div><div class="list-row__end"><span class="tag ${x.status==='draft'?'orange':''}">${rst[x.status]||esc(enumCn(x.status))}</span></div></div>`).join(''):'<div class="empty">暂无采购退货</div>'}catch(e){$('#purchaseReturnList').innerHTML=`<div class="notice warn">采购退货加载失败：${esc(e.message)}</div>`}
 }catch(e){loaderError('#inventorySummary',e,'loadSupplyChain 加载失败')}}
-async function addSupplier(){const v=await showForm({title:'新增供应商',submitText:'创建',fields:[{name:'name',label:'供应商名称',required:true},{name:'contact',label:'联系人',value:''},{name:'phone',label:'联系电话',value:''},{name:'lead',label:'默认交期（天）',type:'number',value:7,min:0}]});if(!v||!v.name)return;await api('/api/platform/suppliers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v.name,contactName:v.contact||'',phone:v.phone||'',leadTimeDays:Number(v.lead||0)})});toast('供应商已创建');loadSupplyChain()}
+/* addSupplier 真身在 ux/workflows-platform.js（后加载整体覆盖本处，与 createPO/receivePO 同理）。
+   2026-11-02：品牌名称字段 + 品牌↔供应商自动关联也改在真身处；本文件请勿重复定义 addSupplier。 */
+async function deleteSupplier(id){
+  if(!await showConfirm({title:'删除供应商',message:'删除后该供应商将从列表移除，且无法恢复。若它已关联商品或存在采购单，系统会阻止删除（请先解除关联或作废采购单）。',confirmText:'确认删除',danger:true}))return;
+  try{ await api('/api/platform/suppliers/'+id,{method:'DELETE'}); toast('供应商已删除'); loadSupplyChain(); }
+  catch(e){ showAlert({title:'无法删除',message:e.message||'删除失败'}); }
+}
 async function linkSupplier(productId=null,supplierId=null){let ps=await api('/api/platform/products');let ss=await api('/api/platform/suppliers?status=active');if(!ps.length||!ss.length){showAlert({title:'缺少数据',message:'需要先有商品和供应商。'});return}const v=await showForm({title:'建立供货关系',submitText:'保存',fields:[{name:'pid',label:'商品',type:'select',value:String(productId||ps[0].id),options:ps.map(x=>({value:String(x.id),label:x.name}))},{name:'sid',label:'供应商',type:'select',value:String(supplierId||ss[0].id),options:ss.map(x=>({value:String(x.id),label:x.name}))},{name:'price',label:'采购单价',type:'number',value:100,min:0},{name:'moq',label:'最小采购量 MOQ',type:'number',value:1,min:1}]});if(!v)return;const pid=Number(v.pid),sid=Number(v.sid);await api(`/api/platform/products/${pid}/suppliers`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({supplierId:sid,purchasePrice:Number(v.price||0),minOrderQty:Number(v.moq||1),isPrimary:true})});toast('供货关系已保存');loadSupplyChain();if($('#products').classList.contains('active'))loadProducts()}
-async function createPO(){let ss=await api('/api/platform/suppliers?status=active'),ps=await api('/api/platform/products');if(!ss.length){showAlert({title:'缺少供应商',message:'请先创建供应商。'});return}const v=await showForm({title:'新建采购单',submitText:'创建采购草稿',fields:[{name:'sid',label:'供应商',type:'select',value:String(ss[0].id),options:ss.map(x=>({value:String(x.id),label:x.name}))},{name:'pid',label:'采购商品',type:'select',value:String(ps[0]?.id||''),options:ps.map(x=>({value:String(x.id),label:`${x.name} · 库存${x.stock}`}))},{name:'qty',label:'采购数量',type:'number',value:10,min:1,required:true},{name:'unit',label:'采购单价（已配置供货价可留空）',type:'number',value:'',min:0}]});if(!v)return;let item={productId:Number(v.pid),quantity:Number(v.qty||0)};if(v.unit!==undefined&&v.unit!==null&&v.unit!=='')item.unitCost=Number(v.unit);await api('/api/platform/procurement/purchase-orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({supplierId:Number(v.sid),items:[item],note:'平台采购'})});toast('采购单草稿已创建');loadSupplyChain()}
+/* createPO 真身在 ux/workflows-platform.js（该文件在 platform.js 之后加载，会整体覆盖本处定义）。
+   V1.2 修复：V1.1 把「采购单内联快速建商品」误写在这里，被后加载的 workflows-platform.js 覆盖，
+   导致线上采购单从 V1.1 起一直只能选已有商品、无法现场建新商品。现统一收口到 workflows-platform.js。
+   请勿在此重复定义 createPO —— 改这里不会生效。 */
 async function approvePO(id){await api(`/api/platform/procurement/purchase-orders/${id}/approve`,{method:'POST'});toast('采购单已审核');loadSupplyChain()}
 async function cancelPO(id){const v=await showForm({title:'取消采购单',desc:'取消后该草稿采购单不可再审核或下单。',submitText:'确认取消',danger:true,fields:[{name:'note',label:'取消原因',type:'textarea',value:'采购计划调整',required:true}]});if(!v)return;await api(`/api/platform/procurement/purchase-orders/${id}/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:v.note})});toast('采购单已取消');loadSupplyChain()}
 async function orderPO(id){await api(`/api/platform/procurement/purchase-orders/${id}/order`,{method:'POST'});toast('采购单已确认下单');loadSupplyChain()}
-async function receivePO(id){let po=await api(`/api/platform/procurement/purchase-orders/${id}`);const rows=(po.items||[]).map(x=>({x,remain:x.quantity_ordered-x.quantity_received})).filter(r=>r.remain>0);if(!rows.length){showAlert({title:'无需入库',message:'该采购单没有待入库数量。'});return}const v=await showForm({title:'确认到货入库',submitText:'确认入库',fields:rows.map(r=>({name:'q_'+r.x.id,label:`${r.x.product_name}（未到货 ${r.remain}）`,type:'number',value:r.remain,min:0}))});if(!v)return;const items=rows.map(r=>({purchaseOrderItemId:r.x.id,quantity:Number(v['q_'+r.x.id]||0)})).filter(i=>i.quantity>0);if(!items.length)return;let r=await api(`/api/platform/procurement/purchase-orders/${id}/receive`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({items,note:'平台仓库确认到货'})});let badSync=(r.commerceSync||[]).filter(x=>x.status==='error');toast(badSync.length?'已入库；Medusa库存同步待重试':'到货已入库');loadSupplyChain();loadProducts()}
+/* receivePO / poOpenBarcodeCamera 真身在 ux/workflows-platform.js（该文件在 platform.js 之后加载，
+   会整体覆盖本处定义）。V1.2 修复：V1.2.1 把「条码扫码入库」误写在这里被覆盖，
+   导致线上收货扫码从没真正生效；现已把带扫码版收口到 workflows-platform.js。
+   请勿在此重复定义 receivePO —— 改这里不会生效。 */
+/* V1.1 拒收/异常登记（任务书 4.2③）：到货短少/破损/错发登记后不再计入未到货，
+   采购单才能在「永远不会到的量」上正常收完。 */
+async function registerPOException(poId){
+  let po=await api(`/api/platform/procurement/purchase-orders/${poId}`);
+  const rows=(po.items||[]).filter(x=>Number(x.quantity_outstanding||0)>0);
+  if(!rows.length){showAlert({title:'无可登记明细',message:'该采购单所有明细均已到货，异常请走采购退货。'});return}
+  const opts=rows.map(r=>({value:String(r.id),label:`${r.product_name}（未到货 ${r.quantity_outstanding}）`}));
+  const v=await showForm({title:'登记到货异常 / 拒收',submitText:'登记',
+    desc:'登记后该数量从「未到货」中扣除，不影响已收货部分。',
+    fields:[{name:'item',label:'采购明细',type:'select',options:opts,required:true},
+            {name:'type',label:'异常类型',type:'select',options:[{value:'shortage',label:'短少'},{value:'damaged',label:'破损'},{value:'wrong_item',label:'错发'},{value:'rejected',label:'拒收'},{value:'other',label:'其他'}],required:true},
+            {name:'qty',label:'异常数量',type:'number',min:1,required:true},
+            {name:'note',label:'情况说明',type:'textarea',value:''}]});
+  if(!v)return;
+  try{await api(`/api/platform/procurement/purchase-orders/${poId}/exceptions`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({purchaseOrderItemId:Number(v.item),exceptionType:v.type,quantity:Number(v.qty),note:v.note||''})});
+    toast('异常已登记');loadSupplyChain()}
+  catch(e){showAlert({title:'登记失败',message:e.message})}
+}
 async function manualAdjust(){let ps=await api('/api/platform/products');const v=await showForm({title:'库存调整',submitText:'提交调整',fields:[{name:'pid',label:'商品',type:'select',value:String(ps[0]?.id||''),options:ps.map(x=>({value:String(x.id),label:`${x.name} · 库存${x.stock}`}))},{name:'delta',label:'库存调整数量（盘亏输入负数）',type:'number',value:1,required:true},{name:'reason',label:'调整原因',value:'仓库盘点'}]});if(!v||!v.delta)return;await api('/api/platform/inventory/adjustments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({productId:Number(v.pid),quantityDelta:Number(v.delta||0),reason:v.reason||'仓库盘点'})});toast('库存调整已记入流水');loadSupplyChain();loadProducts()}
 
 async function loadWarehouse(){
  skel('#warehouseSummary',4);try{let [sum,ws,inv,tasks]=await Promise.all([api('/api/platform/warehouse/summary'),api('/api/platform/warehouses'),api('/api/platform/warehouse/inventory'),api('/api/platform/warehouse/tasks')]);
  $('#warehouseSummary').innerHTML=[['实物库存',sum.onHand],['锁定库存',sum.reserved],['可用库存',sum.available],['待拣货',sum.pendingPickTasks]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');
- $('#warehouseList').innerHTML=ws.map(w=>`<div class="notice" style="margin-bottom:8px"><strong>${esc(w.name)}</strong> · ${esc(w.code)}${w.is_default?' · 默认仓':''}<div class="sub">${(w.locations||[]).map(l=>`${esc(l.code)} ${esc(l.name)}｜实物 ${l.on_hand||0}｜锁定 ${l.reserved||0}`).join('<br>')}</div></div>`).join('')||'<div class="empty">暂无仓库</div>';
- $('#warehouseInventory').innerHTML=`<table class="table"><thead><tr><th>商品</th><th>仓库</th><th>库位</th><th>区域</th><th>实物</th><th>锁定</th><th>可用</th></tr></thead><tbody>${inv.map(x=>`<tr><td>${esc(x.product_name)}</td><td>${esc(x.warehouse_name)}</td><td>${esc(x.location_code)}</td><td>${esc(x.zone_type)}</td><td>${x.on_hand}</td><td>${x.reserved}</td><td><strong>${x.available}</strong></td></tr>`).join('')}</tbody></table>`;
+ $('#warehouseList').innerHTML = ws.length ? `<div class="wh-grid">`+ws.map(w=>{
+    const locs=(w.locations||[]);
+    const onHand=locs.reduce((s,l)=>s+(l.on_hand||0),0);
+    const reserved=locs.reduce((s,l)=>s+(l.reserved||0),0);
+    const locRows = locs.length ? locs.map(l=>`<div class="wh-loc"><span class="wh-loc__code">${esc(l.code)}</span><span class="wh-loc__name">${esc(l.name||'')}</span><span class="wh-loc__on">实物 ${l.on_hand||0}</span><span class="wh-loc__rs">锁定 ${l.reserved||0}</span></div>`).join('') : '<div class="wh-loc wh-loc--empty">该仓库暂无库位</div>';
+    return `<div class="wh-card">
+      <div class="wh-card__head">
+        <div class="wh-card__id"><strong class="wh-card__name">${esc(w.name)}</strong>${w.is_default?'<span class="tag wh-default">默认仓</span>':''}<span class="wh-card__code">${esc(w.code)}</span></div>
+        <button class="btn ghost sm" type="button" onclick="openWarehouseDetail('${esc(w.code)}')">独立查看</button>
+      </div>
+      <div class="wh-card__sum"><span><b>${locs.length}</b> 库位</span><span><b>${onHand}</b> 实物</span><span><b>${reserved}</b> 锁定</span></div>
+      <div class="wh-card__locs">${locRows}</div>
+    </div>`;
+  }).join('')+`</div>` : '<div class="empty">暂无仓库</div>';
+ $('#warehouseInventory').innerHTML=`<table class="table"><thead><tr><th>商品</th><th>仓库</th><th>库位</th><th>区域</th><th>实物</th><th>锁定</th><th>可用</th></tr></thead><tbody>${inv.map(x=>`<tr><td>${esc(x.product_name)}<div class="sub">${esc(x.variant_name||'')} · ${esc(x.product_sku||'')}</div></td><td>${esc(x.warehouse_name)}</td><td>${esc(x.location_code)}</td><td>${esc(x.zone_type)}</td><td>${x.on_hand}</td><td>${x.reserved}</td><td><strong>${x.available}</strong></td></tr>`).join('')}</tbody></table>`;
  $('#warehouseTasks').innerHTML=tasks.map(t=>`<div class="notice" style="margin-bottom:8px"><strong>#${t.order_id} · ${t.task_type==='pick'?'拣货':'打包'}</strong><span class="tag" style="margin-left:8px">${esc(enumCn(t.status))}</span>${t.task_type==='pick'&&t.status==='pending'?` <button class="btn secondary" onclick="markPicked('${t.id}')">完成拣货</button>`:''}</div>`).join('')||'<div class="empty">暂无仓库任务</div>';
 }catch(e){loaderError('#warehouseSummary',e,'loadWarehouse 加载失败')}}
+
+async function openWarehouseDetail(code){
+  let w=null;
+  try{ const ws=await api('/api/platform/warehouses'); w=(ws||[]).find(x=>String(x.code)===String(code)||String(x.id)===String(code)); }catch(e){ w=null; }
+  const dlg=uxDialog({title:'仓库详情 · '+code, wide:true,
+    desc:'该仓库独立视图：库位明细与库存快照。',
+    body:'<div id="whDetail" class="wh-detail"></div>',
+    foot:'<button class="btn ghost" type="button" data-close>关闭</button>'});
+  dlg.querySelector('[data-close]').onclick=()=>dlg.uxClose();
+  const box=dlg.querySelector('#whDetail');
+  if(!w){ box.innerHTML='<div class="empty">未找到该仓库数据</div>'; return; }
+  const locs=(w.locations||[]);
+  const onHand=locs.reduce((s,l)=>s+(l.on_hand||0),0);
+  const reserved=locs.reduce((s,l)=>s+(l.reserved||0),0);
+  let meta='<div class="wh-detail__meta">'
+    +'<div class="wh-detail__meta-row"><span>仓库名</span><b>'+esc(w.name)+'</b></div>'
+    +'<div class="wh-detail__meta-row"><span>编码</span><b>'+esc(w.code)+'</b></div>'
+    +'<div class="wh-detail__meta-row"><span>类型</span><b>'+(w.is_default?'默认仓':'普通仓')+'</b></div>'
+    +'<div class="wh-detail__meta-row"><span>实物合计</span><b>'+onHand+'</b></div>'
+    +'<div class="wh-detail__meta-row"><span>锁定合计</span><b>'+reserved+'</b></div>'
+    +'<div class="wh-detail__meta-row"><span>可用合计</span><b>'+(onHand-reserved)+'</b></div>'
+    +'</div>';
+  let rows = locs.length ? locs.map(function(l){
+    return '<div class="wh-detail__tr"><span>'+esc(l.code)+'</span><span>'+esc(l.name||'')+'</span><span>'+(l.on_hand||0)+'</span><span>'+(l.reserved||0)+'</span></div>';
+  }).join('') : '<div class="wh-detail__empty">该仓库暂无库位</div>';
+  box.innerHTML = meta + '<div class="wh-detail__table"><div class="wh-detail__th"><span>库位编码</span><span>名称</span><span>实物</span><span>锁定</span></div>' + rows + '</div>';
+}
 async function markPicked(id){await api(`/api/platform/warehouse/tasks/${id}/picked`,{method:'POST'});toast('拣货完成');loadWarehouse()}
 
 async function loadFinance(){try{skel('#supplierFinanceList',4);let [ss,sum,orders,products]=await Promise.all([api('/api/platform/finance/supplier-summary'),api('/api/platform/profit/summary'),api('/api/platform/profit/orders?limit=50'),api('/api/platform/profit/products')]);let payable=ss.reduce((a,x)=>a+Number(x.outstanding||0),0),overdue=ss.reduce((a,x)=>a+Number(x.overdue||0),0);$('#financeMetrics').innerHTML=[['供应商应付',money(payable)],['逾期应付',money(overdue)],['贡献利润',money(sum.contributionProfit)],['贡献毛利率',`${Number(sum.contributionMarginPct||0).toFixed(1)}%`]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');$('#supplierFinanceList').innerHTML=ss.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.supplierName)}</div> · 应付 ${money(x.outstanding)}${x.overdue>0?` <span class="tag orange">逾期 ${money(x.overdue)}</span>`:''}<div class="list-row__sub">已付 ${money(x.paidAmount)} · 已冲贷项 ${money(x.creditsApplied)} · 未用贷项 ${money(x.availableCredit)} · 采购价差 ${money(x.purchasePriceVariance)}</div><button class="btn ghost" style="margin-top:7px" onclick="paySupplier(${x.supplierId},${x.outstanding})">登记付款</button></div></div>`).join('')||'<div class="empty">暂无供应商应付</div>';$('#orderProfitList').innerHTML=orders.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">订单 #${x.orderId}</div> · 净销售 ${money(x.netSales)} · <b>${money(x.contributionProfit)}</b> <div class="list-row__sub">COGS ${money(x.cogs)} · 佣金 ${money(x.clubCommission)} · 积分/福利 ${money(Number(x.platformPointSubsidy)+Number(x.platformBenefitSubsidy))} · 物流包装 ${money(Number(x.shippingCost)+Number(x.packagingCost))}</div><button class="btn ghost" style="margin-top:6px" onclick="setOrderCosts(${x.orderId},${x.shippingCost||0},${x.packagingCost||0})">录入物流成本</button><div class="list-row__end"><span class="tag ${x.contributionProfit<0?'orange':''}">${Number(x.contributionMarginPct||0).toFixed(1)}%</span></div></div></div>`).join('')||'<div class="empty">暂无商城订单</div>';$('#productProfitList').innerHTML=`<table class="table"><thead><tr><th>商品</th><th>净销量</th><th>净销售</th><th>COGS</th><th>毛利</th><th>毛利率</th></tr></thead><tbody>${products.map(x=>`<tr><td>${esc(x.name)}<div class="sub">${esc(x.sku)}</div></td><td>${x.netUnits}</td><td>${money(x.netSales)}</td><td>${money(x.cogs)}</td><td><strong>${money(x.grossProfit)}</strong></td><td>${Number(x.grossMarginPct||0).toFixed(1)}%</td></tr>`).join('')}</tbody></table>`}catch(e){loaderError('#supplierFinanceList',e,'loadFinance 加载失败')}}
@@ -605,6 +750,30 @@ async function loadAnalytics(){
  $('#productAnalyticsList').innerHTML=`<table class="table"><thead><tr><th>商品</th><th>${d.windowDays}天销量</th><th>销售额</th><th>毛利率</th><th>可售</th><th>覆盖</th></tr></thead><tbody>${products.map(x=>`<tr><td>${esc(x.name)}<div class="sub">${esc(x.sku)}</div></td><td>${x.soldUnits}</td><td>${money(x.windowSales)}</td><td>${Number(x.windowGrossMarginPct||0).toFixed(1)}%</td><td>${x.available}</td><td>${x.daysCover===null?'—':Number(x.daysCover).toFixed(1)+'天'}</td></tr>`).join('')}</tbody></table>`;
  $('#supplierAnalyticsList').innerHTML=suppliers.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.supplierName)}</div><div class="list-row__sub">到货率 ${Number(x.fillRatePct||0).toFixed(1)}% · 平均交期 ${x.averageLeadDays===null?'—':x.averageLeadDays+'天'} · 采购退货率 ${Number(x.returnRatePct||0).toFixed(1)}% · 应付 ${money(x.outstandingPayable)}</div></div></div>`).join('')||'<div class="empty">暂无供应商数据</div>';
 }catch(e){loaderError('#analyticsMetrics',e,'loadAnalytics 加载失败')}}
+
+/* ── V1.2 商城经营独立待上架列表（任务书 4）────────────────────────────────
+   pending_listing 商品在「商城经营」有自己的独立面板：收货入库自动进来，
+   缺什么（图/详情/售价）直接标出来；三道闸在服务端，前端只是把缺项提前说人话。 */
+async function loadPendingListing(){
+  const el=$('#pendingListingList');if(!el)return;
+  try{
+    const list=await api('/api/platform/products?status=pending_listing');
+    el.innerHTML=list.length?list.map(x=>{
+      const miss=[];
+      if(!(x.images_count>0)&&!x.image_url)miss.push('商品图');
+      if(!String(x.description||'').trim())miss.push('详情介绍');
+      if(!(x.price>0))miss.push('零售价');
+      return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}${x.brand_name?` <span class="sub">· ${esc(x.brand_name)}</span>`:''}</div>
+        <div class="list-row__sub">可售 ${x.stock} · ${money(x.price)} · 规格 ${x.variants_count||0}${miss.length?` · <span style="color:#b45f06">还缺：${miss.join(' / ')}</span>`:' · <span style="color:#2e7d32">已齐备，可直接上架</span>'}</div></div>
+        <div class="list-row__end"><button class="btn ghost" onclick="editProduct(${x.id})">去补齐</button>
+        <button class="btn sm" onclick="approveListing(${x.id})">直接上架</button></div></div>`;
+    }).join(''):'<div class="empty">没有待上架商品。采购收货后，入库前状态的商品会自动进入这里。</div>';
+  }catch(e){el.innerHTML='<div class="empty">待上架列表加载失败：'+esc(e.message)+'</div>'}
+}
+async function approveListing(id){
+  try{await api(`/api/platform/products/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'active'})});toast('已上架');loadPendingListing()}
+  catch(e){showAlert({title:'暂不能上架',message:e.message})}
+}
 async function setReplenishmentPolicy(){let p=await api('/api/platform/replenishment/policy');const v=await showForm({title:'补货策略',submitText:'保存策略',fields:[{name:'windowDays',label:'销量计算窗口（7~180天）',type:'number',value:p.salesWindowDays,min:7,max:180,required:true},{name:'targetCoverDays',label:'到货后目标库存覆盖天数（7~120天）',type:'number',value:p.targetCoverDays,min:7,max:120,required:true},{name:'safetyDays',label:'安全库存天数（0~60天）',type:'number',value:p.safetyDays,min:0,max:60,required:true},{name:'slowMovingDays',label:'多少天无销售视为慢动销（30~365天）',type:'number',value:p.slowMovingDays,min:30,max:365,required:true}]});if(!v)return;await api('/api/platform/replenishment/policy',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({salesWindowDays:Number(v.windowDays),targetCoverDays:Number(v.targetCoverDays),safetyDays:Number(v.safetyDays),slowMovingDays:Number(v.slowMovingDays)})});toast('补货策略已更新');loadAnalytics()}
 async function createReplenishmentPO(productId,qty){const v=await showForm({title:'创建补货采购单',submitText:'创建采购草稿',fields:[{name:'q',label:'确认补货数量',type:'number',value:Number(qty||0),min:1,required:true}]});if(!v)return;let r=await api(`/api/platform/replenishment/products/${productId}/create-po`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({quantity:Number(v.q||0)})});toast(`已创建采购草稿 ${r.purchaseOrder.id}`);loadAnalytics();if($('#supply').classList.contains('active'))loadSupplyChain()}
 
@@ -627,7 +796,30 @@ function brandFormDialog(cur){
     const body='<div style="display:grid;gap:12px">'
       +'<label style="display:block"><span class="sub">品牌名 *</span>'
       +'<input id="pbName" maxlength="60" style="width:100%;margin-top:4px" value="'+esc(cur?cur.name:'')+'" placeholder="例如 Arc\'teryx"></label>'
-      +'<div><span class="sub">品牌 Logo</span><div id="pbLogoRow" style="display:flex;gap:10px;align-items:center;margin-top:6px;flex-wrap:wrap"></div></div></div>';
+      +'<label style="display:block"><span class="sub">英文名</span>'
+      +'<input id="pbNameEn" maxlength="60" style="width:100%;margin-top:4px" value="'+esc(cur?cur.name_en:'')+'"></label>'
+      +'<div><span class="sub">品牌 Logo</span><div id="pbLogoRow" style="display:flex;gap:10px;align-items:center;margin-top:6px;flex-wrap:wrap"></div></div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+      +'<label style="display:block"><span class="sub">分类</span><input id="pbIndustry" style="width:100%;margin-top:4px" value="'+esc(cur?cur.industry:'')+'"></label>'
+      +'<label style="display:block"><span class="sub">国家 / 地区</span><input id="pbCountry" style="width:100%;margin-top:4px" value="'+esc(cur?cur.country:'')+'"></label>'
+      +'<label style="display:block"><span class="sub">官网</span><input id="pbSite" style="width:100%;margin-top:4px" value="'+esc(cur?cur.official_website:'')+'"></label>'
+      +'<label style="display:block"><span class="sub">合作状态</span><select id="pbCoop" style="width:100%;margin-top:4px"><option value="pending"'+((cur&&cur.cooperation_status||'pending')==='pending'?' selected':'')+'>待合作</option><option value="cooperating"'+((cur&&cur.cooperation_status)==='cooperating'?' selected':'')+'>合作中</option><option value="suspended"'+((cur&&cur.cooperation_status)==='suspended'?' selected':'')+'>已暂停</option></select></label>'
+      +'</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+      +'<label style="display:block"><span class="sub">来源</span><select id="pbSource" style="width:100%;margin-top:4px"><option value="platform_self"'+((cur&&cur.source_type||'platform_self')==='platform_self'?' selected':'')+'>平台自营</option><option value="external_api"'+((cur&&cur.source_type)==='external_api'?' selected':'')+'>外部品牌</option></select></label>'
+      +'<label style="display:block"><span class="sub">商城展示</span><select id="pbDisplay" style="width:100%;margin-top:4px"><option value="show"'+((cur&&cur.mall_display_status||'show')==='show'?' selected':'')+'>展示</option><option value="hide"'+((cur&&cur.mall_display_status)==='hide'?' selected':'')+'>隐藏</option></select></label>'
+      +'</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+      +'<label style="display:block"><span class="sub">结算模式</span><select id="pbSettleMode" style="width:100%;margin-top:4px"><option value="sales_ratio"'+((cur&&(cur.settlement_mode||'sales_ratio'))==='sales_ratio'?' selected':'')+'>按销售额比例</option><option value="fixed_price"'+((cur&&cur.settlement_mode)==='fixed_price'?' selected':'')+'>固定结算价（逐 SKU）</option></select></label>'
+      +'<label style="display:block"><span class="sub">销售额比例 %（品牌应结 = 销售额 × 比例）</span><input id="pbSettleRatio" type="number" min="0" max="100" step="0.1" style="width:100%;margin-top:4px" value="'+(cur&&cur.settlement_ratio!=null?cur.settlement_ratio:'')+'" placeholder="例如 85"></label>'
+      +'</div>'
+      +'<div class="sub" id="pbSettleHint">固定结算价模式：结算价在「商品管理 → 规格」里逐个 SKU 设置，未设置的规格按成交价兜底。</div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">'
+      +'<label style="display:block"><span class="sub">联系人</span><input id="pbContact" style="width:100%;margin-top:4px" value="'+esc(cur?cur.contact_name:'')+'"></label>'
+      +'<label style="display:block"><span class="sub">联系电话</span><input id="pbPhone" style="width:100%;margin-top:4px" value="'+esc(cur?cur.contact_phone:'')+'"></label>'
+      +'</div>'
+      +'<label style="display:block"><span class="sub">品牌介绍</span><textarea id="pbIntro" style="width:100%;margin-top:4px;min-height:60px">'+esc(cur?cur.intro:'')+'</textarea></label>'
+      +'</div>';
     const dlg=uxDialog({title:cur?'编辑品牌':'新增品牌',desc:'Logo 从本地选择文件上传（png/jpg/webp，≤10MB），不做贴图链接。',
       body,foot:'<button class="btn ghost" type="button" data-act="cancel">取消</button><button class="btn" type="button" data-act="ok">保存</button>'});
     const row=dlg.querySelector('#pbLogoRow');
@@ -649,7 +841,21 @@ function brandFormDialog(cur){
     dlg.querySelector('[data-act="cancel"]').onclick=()=>{dlg.uxClose();resolve(null)};
     dlg.querySelector('[data-act="ok"]').onclick=()=>{const name=dlg.querySelector('#pbName').value.trim();
       if(!name){toast('请填写品牌名');return}
-      dlg.uxClose();resolve({name:name,logoUrl:logoUrl})};
+      dlg.uxClose();resolve({
+        name:name,logoUrl:logoUrl,
+        nameEn:dlg.querySelector('#pbNameEn').value.trim()||null,
+        industry:dlg.querySelector('#pbIndustry').value.trim()||null,
+        country:dlg.querySelector('#pbCountry').value.trim()||null,
+        officialWebsite:dlg.querySelector('#pbSite').value.trim()||null,
+        cooperationStatus:dlg.querySelector('#pbCoop').value,
+        sourceType:dlg.querySelector('#pbSource').value,
+        mallDisplayStatus:dlg.querySelector('#pbDisplay').value,
+        settlementMode:dlg.querySelector('#pbSettleMode').value,
+        settlementRatio:(()=>{const r=parseFloat(dlg.querySelector('#pbSettleRatio').value);return isNaN(r)?0:Math.max(0,Math.min(100,r))})(),
+        contactName:dlg.querySelector('#pbContact').value.trim()||null,
+        contactPhone:dlg.querySelector('#pbPhone').value.trim()||null,
+        intro:dlg.querySelector('#pbIntro').value.trim()||null
+      })};
   });
 }
 function prodDictDialog(kind){
@@ -658,12 +864,25 @@ function prodDictDialog(kind){
   const label=isBrand?'品牌':'品类';
   const paint=async dlg=>{
     const list=await api(base);
-    dlg.querySelector('.pd-list').innerHTML=list.length?list.map(x=>{
+    const rowHtml=x=>{
       const sub=isBrand?(x.logo_url?'<div class="list-row__sub" style="word-break:break-all">'+esc(x.logo_url)+'</div>':'')
         :(x.parent_id?'<div class="list-row__sub">上级：'+esc((list.find(p=>Number(p.id)===Number(x.parent_id))||{}).name||'—')+'</div>':'<div class="list-row__sub">一级品类</div>');
       return `<div class="list-row" data-id="${x.id}"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}${x.status!=='active'?' <span class="tag orange">已停用</span>':''}</div>${sub}</div>
         <div class="list-row__end"><button class="btn ghost" data-act="edit">编辑</button> <button class="btn ghost" data-act="del" style="color:#a44435">删除</button></div></div>`;
-    }).join(''):'<div class="empty">还没有'+label+'。新建商品时可以直接在表单里选，或导入 CSV 时自动创建。</div>';
+    };
+    if(isBrand){
+      /* V1.2 品牌来源分区：平台自营 / 外部品牌 两组分开渲染，一眼分清自有与外部 */
+      const selfList=list.filter(x=>(x.source_type||'platform_self')==='platform_self');
+      const extList=list.filter(x=>x.source_type==='external_api');
+      const head=(t,n)=>'<div class="sub" style="margin:10px 0 4px;font-weight:600">'+t+'（'+n+'）</div>';
+      dlg.querySelector('.pd-list').innerHTML=list.length
+        ?(head('平台自营',selfList.length)+(selfList.map(rowHtml).join('')||'<div class="empty">暂无</div>'))
+          +((extList.length?'<div style="border-top:1px solid var(--line);margin-top:12px"></div>':'')
+            +(extList.length?head('外部品牌',extList.length)+extList.map(rowHtml).join(''):''))
+        :'<div class="empty">还没有'+label+'。新建商品时可以直接在表单里选，或导入 CSV 时自动创建。</div>';
+      return;
+    }
+    dlg.querySelector('.pd-list').innerHTML=list.length?list.map(rowHtml).join(''):'<div class="empty">还没有'+label+'。新建商品时可以直接在表单里选，或导入 CSV 时自动创建。</div>';
   };
   const dlg=uxDialog({title:label+'管理',desc:isBrand?'商品可归属品牌；删除品牌只会把商品的品牌置空，不会删除商品。':'支持两级品类；有下级品类的父品类不能删除。',wide:true,
     body:'<div class="pd-list"></div>',
@@ -768,7 +987,7 @@ async function manageVariants(pid){
     const vs=await list();
     dlg.querySelector('.pv-list').innerHTML=vs.length?vs.map(v=>`<div class="list-row" data-id="${v.id}">
         <div class="list-row__main"><div class="list-row__title">${v.color_hex?`<span class="plat-mx__swatch" style="background:${esc(v.color_hex)};display:inline-block;vertical-align:-4px;margin-right:6px"></span>`:''}${esc(v.name)}${v.is_default?' <span class="tag">占位</span>':''}</div>
-          <div class="list-row__sub">${esc(v.sku||'')}${v.barcode?' · 条码 '+esc(v.barcode):''}<br>${v.price!=null?money(v.price):'跟随商品价'} · 库存 ${v.stock}${v.status!=='active'?' · 已停用':''}</div></div>
+          <div class="list-row__sub">${esc(v.sku||'')}${v.barcode?' · 条码 '+esc(v.barcode):''}<br>${v.price!=null?money(v.price):'跟随商品价'} · 库存 ${v.stock} · 结算价 ${(v.settlement_price||0)>0?money(v.settlement_price):'未设'}${v.status!=='active'?' · 已停用':''}</div></div>
         <div class="list-row__end"><button class="btn ghost" data-act="edit">编辑</button> <button class="btn ghost" data-act="del">删除</button></div>
       </div>`).join(''):'<div class="empty">还没有规格。没有规格的商品在 C 端不显示规格选择。</div>';
   };
@@ -801,13 +1020,14 @@ async function manageVariants(pid){
       {name:'size',label:'尺码',placeholder:'例如 M'},
       {name:'barcode',label:'条码',placeholder:'可留空'},
       {name:'price',label:'规格价',type:'number',value:'',min:0,help:'留空则跟随商品价格'},
+      {name:'settlementPrice',label:'固定结算价（品牌为固定结算价模式时用）',type:'number',value:0,min:0},
       {name:'stock',label:'该规格库存',type:'number',value:0,min:0,required:true}],validate:platHexOk});
     if(!v)return;
     if(!v.name&&!v.color&&!v.size){showAlert({title:'保存失败',message:'规格名、颜色、尺码至少要填一个'});return}
     try{
       const r=await api(`/api/platform/products/${pid}/variants`,{method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({name:v.name||'',color:v.color||'',colorHex:platNormHex(v.colorHex),size:v.size||'',barcode:v.barcode||'',
-          price:(v.price===''||v.price==null)?null:Number(v.price),stock:Number(v.stock||0)})});
+          price:(v.price===''||v.price==null)?null:Number(v.price),settlementPrice:Number(v.settlementPrice||0),stock:Number(v.stock||0)})});
       toast(r.movedStock?`规格已新增（占位规格的 ${r.movedStock} 件库存已转入）`:'规格已新增');
       await paint(dlg);loadProducts();
     }catch(e){showAlert({title:'新增失败',message:e.message})}
@@ -830,11 +1050,12 @@ async function manageVariants(pid){
         {name:'size',label:'尺码',value:cur.size||'',placeholder:'例如 M'},
         {name:'barcode',label:'条码',value:cur.barcode||'',placeholder:'可留空'},
         {name:'price',label:'规格价',type:'number',value:cur.price==null?'':cur.price,min:0,help:'留空则跟随商品价格'},
+        {name:'settlementPrice',label:'固定结算价（品牌为固定结算价模式时用）',type:'number',value:cur.settlement_price||0,min:0},
         {name:'stock',label:'库存',type:'number',value:cur.stock,min:0,required:true}],validate:platHexOk});
       if(!v)return;
       try{await api(`/api/platform/products/${pid}/variants/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({name:v.name,color:v.color||'',colorHex:platNormHex(v.colorHex),size:v.size||'',barcode:v.barcode||'',
-          price:(v.price===''||v.price==null)?null:Number(v.price),stock:Number(v.stock||0)})});
+          price:(v.price===''||v.price==null)?null:Number(v.price),settlementPrice:Number(v.settlementPrice||0),stock:Number(v.stock||0)})});
         await paint(dlg);loadProducts();toast('已保存')}
       catch(err){showAlert({title:'保存失败',message:err.message})}
     }

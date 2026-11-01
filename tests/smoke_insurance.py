@@ -66,11 +66,13 @@ assert len(cjobs)==1 and cjobs[0]['status']=='done'
 
 # ---- 3. 出发后不退保（已出发团期退款 → skipped，保险保留）----
 start_past=(datetime.now()-timedelta(days=3)).replace(microsecond=0).isoformat(sep=' ')
-oid2=ok('post',f'/api/club/1/activities/{aid}/occurrences',json={'startAt':start_past,'price':260,'capacity':6,'label':'保险自动化-过去团'}).json()['id']
+start_future=(datetime.now()+timedelta(days=3)).replace(microsecond=0).isoformat(sep=' ')
+oid2=ok('post',f'/api/club/1/activities/{aid}/occurrences',json={'startAt':start_future,'price':260,'capacity':6,'label':'保险自动化-过去团'}).json()['id']
 ok('post',f'/api/club/1/activities/{aid}/publish')
 co2=ok('post',f'/api/public/activities/{aid}/checkout',json={'name':'保险乙','phone':'13830000002','occurrenceId':oid2,'participants':[{'name':'保险乙','phone':'13830000002','relationToPayer':'本人','idType':'身份证','idNumber':'510100199001010312','emergencyContactName':'乙家属','emergencyContactPhone':'13930000002'}]}).json()
 rid2=ok('post',f"/api/public/checkouts/{co2['checkoutId']}/pay",json={'provider':'local','simulateSuccess':True}).json()['result']['registrationId']
 with app.conn() as dbc:
+    dbc.execute('UPDATE activity_occurrences SET start_at=? WHERE id=?',(start_past,oid2))
     occ2=dict(dbc.execute('SELECT * FROM activity_occurrences WHERE id=?',(oid2,)).fetchone())
     p2b=dict(dbc.execute('SELECT * FROM registration_participants WHERE registration_id=?',(rid2,)).fetchone())
     res=InsuranceOrchestrator().cancel_for_participant(dbc, participant=p2b, occurrence=occ2, bearer='club')

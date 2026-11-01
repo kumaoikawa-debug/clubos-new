@@ -12,7 +12,8 @@
      俱乐部端的 _leader_plan_for 带 phone 是给经营者看的，C 端一律不给；
   3. 头像必须是 /api/public/leaders/... 公开代理：顾客没有 club 角色，
      /api/club/{c}/leaders/{id}/avatar.png 那条取不到；
-  4. 每位领队只下发白名单内的六样字段（name/role/credential/specialties/baseCity/avatarUrl）；
+  4. 每位领队只下发白名单内的字段（基础六样 + 领队 V1 扩容：leaderId/bio/yearsExp/
+     certVerified/ratingAvg/ratingCount/leadCount —— 详见 LEADER_KEYS）；
   5. 生产白名单（IS_PROD 分支）必须放行 leaders —— 否则线上会静默丢掉整块，
      「本地演示跑通了」不等于线上能出。
 """
@@ -76,8 +77,12 @@ def seed():
         c.close()
 
 
-# 活动级白名单：每位领队只允许这六样
-LEADER_KEYS = {'name', 'role', 'credential', 'specialties', 'baseCity', 'avatarUrl'}
+# 活动级白名单（2026-10-27 领队 V1 扩容）：每位领队只允许这十样。
+# 六样基础字段 + leaderId（点开领队主页）+ bio/yearsExp/certVerified（更丰富的档案）
+# + ratingAvg/ratingCount/leadCount（口碑统计，来自 _leader_stats）。
+LEADER_KEYS = {'name', 'role', 'credential', 'specialties', 'baseCity', 'avatarUrl',
+               'leaderId', 'bio', 'yearsExp', 'certVerified',
+               'ratingAvg', 'ratingCount', 'leadCount'}
 
 
 def main():
@@ -156,7 +161,7 @@ def main():
     praw = json.dumps(prod, ensure_ascii=False)
     ok('leaders' in prod, 'IS_PROD 白名单放行 leaders')
     ok('/api/public/leaders/' in praw, 'IS_PROD 下头像仍是公开代理地址')
-    ok(all(set(x.keys()) <= LEADER_KEYS for x in prod['leaders']), 'IS_PROD 下仍是白名单内的六样字段')
+    ok(all(set(x.keys()) <= LEADER_KEYS for x in prod['leaders']), 'IS_PROD 下仍是白名单内的字段')
     ok('13800000001' not in praw, 'IS_PROD 下手机号依然不出现在返回体里')
     ok('recommendations' not in praw, 'IS_PROD 下推荐名单依然不下发')
 

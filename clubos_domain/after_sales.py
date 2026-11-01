@@ -139,6 +139,10 @@ class AfterSalesEngine:
                         else: c.execute('UPDATE products SET stock=stock+? WHERE id=?',(int(it['quantity']),int(it['product_id'])))
                     restocked_products.append(int(it['product_id']))
                     c.execute('UPDATE after_sales_items SET restocked=1 WHERE id=?',(it['id'],))
+        if not restock and self.inventory and self.inventory.warehouse:
+            wh=self.inventory.warehouse;lid=wh.ensure_defaults(c)['returnLocation']['id']
+            for it in case['items']:
+                wh.inbound(c,product_id=int(it['product_id']),variant_id=it.get('variant_id'),quantity=int(it['quantity']),location_id=lid,reference_type='after_sales_quarantine',reference_id=f'{case_id}:{it["id"]}',note='退回待检，不计可售')
         c.execute("UPDATE gear_orders SET after_sales_status=? WHERE id=?",(next_status,case['order_id']))
         out=self._case(c,case_id)
         out['restockedProductIds']=sorted(set(restocked_products))
@@ -149,6 +153,9 @@ class AfterSalesEngine:
         if case['status']=='completed': return {**case,'idempotent':True}
         if case['case_type']!='exchange' or case['status']!='exchange_pending_shipment': raise ValueError('当前售后单不能执行换货发货')
         if not str(tracking_no or '').strip(): raise ValueError('trackingNo required')
+        for it in case['items']:
+            if self.inventory and self.inventory.warehouse:
+                self.inventory.warehouse.outbound_available(c,product_id=int(it['product_id']),variant_id=it.get('variant_id'),quantity=int(it['quantity']),reference_type='exchange',reference_id=case_id,idempotency_key=f'exchange:{case_id}:{it["id"]}',note='换货实物出库')
         c.execute('''UPDATE after_sales_cases SET status='completed',exchange_carrier=?,exchange_tracking_no=?,exchange_shipped_at=CURRENT_TIMESTAMP,
                      completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?''',(str(carrier or ''),str(tracking_no),case_id))
         self._refresh_order(c,int(case['order_id']))

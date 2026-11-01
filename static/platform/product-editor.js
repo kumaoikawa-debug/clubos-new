@@ -1,4 +1,4 @@
-/* 装备商品「单页编辑器」（总平台 · 2026-10-24）
+/* 商品「单页编辑器」（总平台 · 2026-10-24）
    ──────────────────────────────────────────────────────────────────────
    为什么不再分三步弹窗：
    旧流程是「填基本信息 → 下一步配规格矩阵 → 保存 → 再弹图片管理器」，
@@ -99,6 +99,7 @@
   window.openProductEditor = async function (opts) {
     const cfg = opts || {};
     const pid = cfg.id ? Number(cfg.id) : null;
+    const fromWarehouse = !!cfg.fromWarehouse;   // 从「从仓库上架」进来：货已在 WMS，库存/规格由仓库带出，只补图+营销后上架
 
     await loadProductDicts();
 
@@ -154,7 +155,10 @@
     }
 
     const isEdit = !!pid;
-    const title = isEdit ? ('编辑商品 · ' + (prod.name || '')) : '新建装备商品';
+    const title = fromWarehouse ? ('从仓库上架 · ' + (prod ? prod.name : ''))
+                               : (isEdit ? ('编辑商品 · ' + (prod.name || '')) : '新建商品');
+    /* fromWarehouse 场景：货已在仓库，操作本质是「上架」，按钮文案统一叫「上架」而非「保存修改」。 */
+    const saveLabel = fromWarehouse ? '上架' : (isEdit ? '保存修改' : '保存并上架');
 
     /* ---------- 骨架 ---------- */
     const root = document.createElement('div');
@@ -166,11 +170,12 @@
           <div class="plat-pe__title">${esc(title)}</div>
           <div class="plat-pe__baracts">
             <span class="plat-pe__msg" id="peMsg"></span>
-            <button class="btn" type="button" data-act="save">${isEdit ? '保存修改' : '保存并上架'}</button>
+            <button class="btn" type="button" data-act="save">${saveLabel}</button>
           </div>
         </header>
 
         <div class="plat-pe__scroll">
+          ${fromWarehouse ? `<div class="plat-pe__banner">📦 此货品已在仓库系统（采购入库），库存与规格由仓库带出、不可在此手填。这里只需补 <b>头图 / 详情图</b> 与营销信息，然后点「上架」发布到 C 端。</div>` : ''}
           <section class="plat-pe__sec">
             <div class="plat-pe__sec-h"><h3>基础信息</h3><p>价格、最高佣金率、库存与仓库都在这里；佣金率是来源俱乐部的销售分成上限 —— 针对单个俱乐部调整的比例不能超过它。</p></div>
             <div class="plat-pe__grid">
@@ -194,9 +199,32 @@
                 <em>记录这批货存在哪个仓</em></label>
               <label class="plat-pe__f"><span>状态</span>
                 <select id="peStatus">
+                  <option value="draft"${prod && prod.status === 'draft' ? ' selected' : ''}>草稿（不入商城）</option>
+                  <option value="pending_inbound"${prod && prod.status === 'pending_inbound' ? ' selected' : ''}>待入库</option>
+                  <option value="partially_received"${prod && prod.status === 'partially_received' ? ' selected' : ''}>部分入库</option>
+                  <option value="pending_listing"${prod && prod.status === 'pending_listing' ? ' selected' : ''}>待上架</option>
                   <option value="active"${!prod || prod.status === 'active' ? ' selected' : ''}>上架（C 端可见）</option>
-                  <option value="inactive"${prod && prod.status !== 'active' ? ' selected' : ''}>下架</option>
+                  <option value="inactive"${prod && prod.status === 'inactive' ? ' selected' : ''}>下架</option>
+                  <option value="discontinued"${prod && prod.status === 'discontinued' ? ' selected' : ''}>停用</option>
                 </select></label>
+              <label class="plat-pe__f"><span>来源</span>
+                <select id="peSource">
+                  <option value="platform_self"${!prod || (prod.source || 'platform_self') === 'platform_self' ? ' selected' : ''}>平台自营</option>
+                  <option value="external_api"${prod && prod.source === 'external_api' ? ' selected' : ''}>外部品牌</option>
+                </select></label>
+              <label class="plat-pe__f"><span>库存模式</span>
+                <select id="peInventoryMode">
+                  <option value="platform_owned"${!prod || (prod.inventory_mode || 'platform_owned') === 'platform_owned' ? ' selected' : ''}>平台自有库存</option>
+                  <option value="external_api"${prod && prod.inventory_mode === 'external_api' ? ' selected' : ''}>外部库存</option>
+                </select></label>
+              <label class="plat-pe__f"><span>履约模式</span>
+                <select id="peFulfillmentMode">
+                  <option value="platform_warehouse"${!prod || (prod.fulfillment_mode || 'platform_warehouse') === 'platform_warehouse' ? ' selected' : ''}>平台仓发货</option>
+                  <option value="supplier_fulfillment"${prod && prod.fulfillment_mode === 'supplier_fulfillment' ? ' selected' : ''}>供应商直发</option>
+                </select></label>
+              <label class="plat-pe__f"><span>负责人 ID</span>
+                <input id="peOwner" type="number" min="0" step="1" placeholder="用户 ID（可空）" value="${prod && prod.owner_id ? prod.owner_id : ''}">
+                <em>商品负责人，对应 users.id</em></label>
             </div>
           </section>
 
@@ -237,9 +265,11 @@
 
           <section class="plat-pe__sec">
             <div class="plat-pe__sec-h"><h3>颜色 · 尺码 · 期初库存</h3>
-              <p>${isEdit
-                ? '每个颜色下面加它有的尺码，尺码后面填本次入库数量。已存在的「颜色 + 尺码」只显示现有库存（矩阵不会重复生成），要改库存请用下面的「管理已有规格」。'
-                : '先建颜色，再在每个颜色下加这个颜色有的尺码和期初数量 —— 一个「颜色 + 尺码」就是一个 SKU。每个颜色的尺码可以不一样（黑色 S/M/L，白色只有 M/L）。不配则只建一个「默认」规格。'}</p></div>
+              <p>${fromWarehouse
+                ? '货品已在仓库系统（采购入库），颜色 / 尺码 / 库存由仓库带出并已锁定展示。要调整库存或条码请用下方「管理已有规格」，这里不再手填期初数量。'
+                : (isEdit
+                  ? '每个颜色下面加它有的尺码，尺码后面填本次入库数量。已存在的「颜色 + 尺码」只显示现有库存（矩阵不会重复生成），要改库存请用下面的「管理已有规格」。'
+                  : '先建颜色，再在每个颜色下加这个颜色有的尺码和期初数量 —— 一个「颜色 + 尺码」就是一个 SKU。每个颜色的尺码可以不一样（黑色 S/M/L，白色只有 M/L）。不配则只建一个「默认」规格。')}</p></div>
             <div class="plat-pe__mx">
               <div class="plat-pe__specs" id="peColors"></div>
               <div class="plat-pe__specfoot">
@@ -266,14 +296,31 @@
         </div>
 
         <footer class="plat-pe__foot">
-          <span class="sub">${isEdit ? '修改会立即生效' : '保存后商品立即上架（可随时下架）'}</span>
+          <span class="sub">${fromWarehouse ? '补完图片与营销信息后点「上架」即发布到 C 端' : (isEdit ? '修改会立即生效' : '保存后商品立即上架（可随时下架）')}</span>
           <div class="plat-pe__footacts">
             <button class="btn ghost" type="button" data-act="close">取消</button>
-            <button class="btn" type="button" data-act="save">${isEdit ? '保存修改' : '保存并上架'}</button>
+            <button class="btn" type="button" data-act="save">${saveLabel}</button>
           </div>
         </footer>
       </div>`;
     document.body.appendChild(root);
+
+    /* fromWarehouse：货已收货入库，进来的目的就是上架 —— 默认把状态选成「上架（C 端可见）」，
+       保存时走 wantActive 分支（先落 pending_listing 存图，再校验图/详情/售价后翻 active）。
+       若只想先补图不急着上架，运营可手动改回「待上架」。 */
+    if (fromWarehouse) {
+      const sel = root.querySelector('#peStatus');
+      if (sel) sel.value = 'active';
+      /* 从仓库上架：货已在 WMS，仓库名直接带出（基础信息入库时就有），不用运营手填。
+         非阻塞：拉不到也不影响上架，运营仍可手改。 */
+      if (pid) {
+        api('/api/platform/warehouse/inventory?product_id=' + pid).then(inv => {
+          const whs = [...new Set((inv || []).map(x => x.warehouse_name).filter(Boolean))];
+          const wInput = root.querySelector('#peWarehouse');
+          if (wInput && whs.length && !wInput.value) wInput.value = whs.join(' / ');
+        }).catch(() => {});
+      }
+    }
 
     let dirty = false;
     let closed = false;
@@ -736,12 +783,17 @@
       buttons.forEach(b => { b.disabled = true; b.textContent = '保存中…'; });
       if (msg) msg.textContent = '';
 
+      /* V1.1 上架闸（后端 PATCH status=active 校验图/详情/售价）：先落 pending_listing，
+         等图片/详情全部保存完成后再单独 PATCH active —— 顺序反了「先上架后传图」
+         必然 400，用户会被一句莫名的报错挡住。失败原因会在 catch 里弹给人看。 */
+      const curStatus = (st.prod && st.prod.status) || '';
+      const wantActive = (val('#peStatus') || 'active') === 'active' && curStatus !== 'active';
       const fields = {
         name,
         price,
         description: (val('#peDesc') || ''),
         gender: val('#peGender') || 'unisex',
-        status: val('#peStatus') || 'active',
+        status: wantActive ? 'pending_listing' : (val('#peStatus') || 'active'),
         reorderPoint: Number(val('#peReorder') || 0),
         brand_id: val('#peBrand') ? Number(val('#peBrand')) : null,
         category_id: val('#peCategory') ? Number(val('#peCategory')) : null,
@@ -749,7 +801,11 @@
         series: (val('#peSeries') || '').trim() || null,
         material: (val('#peMaterial') || '').trim() || null,
         warehouse: (val('#peWarehouse') || '').trim() || null,
-        commission_rate: Number(val('#peCommission') || 0) / 100
+        commission_rate: Number(val('#peCommission') || 0) / 100,
+        source: val('#peSource') || 'platform_self',
+        inventoryMode: val('#peInventoryMode') || 'platform_owned',
+        fulfillmentMode: val('#peFulfillmentMode') || 'platform_warehouse',
+        ownerId: val('#peOwner') ? Number(val('#peOwner')) : null
       };
 
       const skuPlan = skuList(st).length;
@@ -806,14 +862,20 @@
           } catch (e) { /* 头图设置失败不阻断保存 */ }
         }
 
+        /* 图/详情都已落库，此时才走上架校验（图/详情/售价三道闸）。 */
+        if (wantActive) {
+          if (msg) msg.textContent = '校验上架条件…';
+          await api('/api/platform/products/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'active' }) });
+        }
+
         dirty = false;
-        toast(isEdit ? '商品已更新' : '商品已上架' + (skuPlan ? ` · ${skuPlan} 个规格` : ''));
+        toast(fromWarehouse ? '已上架' + (skuPlan ? ` · ${skuPlan} 个规格` : '') : (isEdit ? '商品已更新' : '商品已上架' + (skuPlan ? ` · ${skuPlan} 个规格` : '')));
         hardClose();
         if (typeof loadProducts === 'function') loadProducts();
       } catch (e) {
         if (msg) msg.textContent = '';
-        buttons.forEach(b => { b.disabled = false; b.textContent = isEdit ? '保存修改' : '保存并上架'; });
-        await showAlert({ title: isEdit ? '保存失败' : '上架失败', message: e.message || '未知错误' });
+        buttons.forEach(b => { b.disabled = false; b.textContent = saveLabel; });
+        await showAlert({ title: (fromWarehouse || !isEdit) ? '上架失败' : '保存失败', message: e.message || '未知错误' });
       }
     }
 

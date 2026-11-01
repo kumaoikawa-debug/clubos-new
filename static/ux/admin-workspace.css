@@ -1,0 +1,172 @@
+/* Administrative surfaces only; consumer and leader layouts keep their own styles. */
+/* v2 2026-10-30: Admin Design System v1（见项目根 ADMIN_DESIGN_SYSTEM.md）
+   —— 冷鼠尾草灰底 + 松绿品牌 + 现代圆角/阴影/焦点环；选择器结构与响应式断点不变。 */
+body.admin-workspace {
+  --bg: #f3f6f2;
+  --panel: #ffffff;
+  --text: #1b2a20;
+  --muted: #5e6e62;
+  --line: #e2e8df;
+  --line-strong: #c9d4c8;
+  --brand: #2e6b4e;
+  --brand-strong: #22543c;
+  --brand-deep: #22352b;
+  --brand-soft: #e8f2eb;
+  --accent: #c8452d;
+  --radius-card: 12px;
+  --radius-ctl: 8px;
+  --shadow-rest: 0 1px 2px rgba(27, 42, 32, .05);
+  --shadow-pop: 0 8px 24px rgba(27, 42, 32, .09);
+  --sidebar-width: 224px;
+  --focus: #2e6b4e;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.55;
+  font-variant-numeric: tabular-nums;
+  caret-color: var(--brand);
+  scrollbar-color: #b6c4b4 transparent;
+}
+.admin-workspace :focus-visible {outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px;}
+.admin-workspace .sidebar {padding: 24px 14px; background: #fbfcfa; border: 0; border-right: 1px solid var(--line); color: var(--text);}
+.admin-workspace .brand {font-size: 17px; padding: 0 6px 24px; gap: 10px; border-color: var(--line); letter-spacing: -.3px;}
+.admin-workspace .brand small {font-size: 11px; letter-spacing: .4px; color: #6a7a6c;}
+.admin-workspace .brand-symbol {background: var(--brand); color: #fff; width: 32px; height: 32px; flex-basis: 32px; border-radius: var(--radius-ctl); box-shadow: var(--shadow-rest);}
+.admin-workspace .nav-group-label {color: #6a7a6c; font-size: 10px; letter-spacing: 1px; margin: 24px 10px 8px; font-weight: 500;}
+.admin-workspace .nav-group {gap: 3px;}
+.admin-workspace .nav button {border-radius: var(--radius-ctl); padding: 9px 12px; min-height: 40px; font-size: 13px; font-weight: 500; color: #3d5044; transition: background .15s, color .15s, box-shadow .15s;}
+.admin-workspace .nav button.active {color: #fff; background: var(--brand); box-shadow: 0 2px 8px rgba(46, 107, 78, .28); font-weight: 600;}
+.admin-workspace .nav button:hover {background: #eff4ec; border-color: transparent; color: var(--brand-deep);}
+.admin-workspace .nav button.active:hover {background: var(--brand-strong); color: #fff;}
+.admin-workspace .nav-glyph svg {width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round;}
+.admin-workspace .nav button.active .nav-glyph {color: #e7f2ea;}
+.admin-workspace .sidebar-foot {font-size: 11px; color: #6a7a6c; padding: 18px 6px 0; border-color: var(--line);}
+.admin-workspace .sidebar-foot strong {display: none;}
+.admin-workspace .main {padding: 0 38px 56px; max-width: 1800px;}
+.admin-workspace .workspace-bar {min-height: 68px; margin: 0 0 28px; padding: 12px 0; border-bottom: 1px solid var(--line); gap: 14px;}
+.admin-workspace .workspace-crumb {font-size: 13px; color: var(--muted); min-width: 0; flex-wrap: wrap;}
+.admin-workspace .workspace-crumb strong {font-weight: 600;}
+.admin-workspace .workspace-tools {min-width: 0;}
+.admin-workspace .workspace-search {width: 236px; padding: 8px 10px; border-radius: var(--radius-ctl); min-width: 0; background: #fff; border-color: var(--line-strong); transition: border-color .15s, box-shadow .15s;}
+.admin-workspace .workspace-search:focus-within {border-color: var(--brand); box-shadow: 0 0 0 3px rgba(46, 107, 78, .14);}
+.admin-workspace .workspace-search input {font-size: 13px; background: transparent;}
+.admin-workspace .workspace-search kbd {background: #f0f4ec; border-color: var(--line); border-radius: 5px;}
+.admin-workspace .workspace-search input::placeholder {color: #7d8c7e;}
+.admin-workspace .topbar {padding: 0; border: 0; margin: 0 0 30px; gap: 16px; align-items: center;}
+.admin-workspace .topbar > div {min-width: 0;}
+.admin-workspace .topbar .eyebrow {display: none;}
+.admin-workspace .topbar .title {display: block; font-size: 26px; line-height: 1.35; letter-spacing: -.5px; font-weight: 650; margin: 0; color: var(--brand-deep);}
+.admin-workspace .topbar .title > .sub {display: block; font-size: 13px; font-weight: 400; letter-spacing: 0; margin: 5px 0 0; color: var(--muted);}
+.admin-workspace .topbar .sub {color: var(--muted); line-height: 1.6; font-size: 13px; max-width: 70ch;}
+.admin-workspace .topbar .pill {padding: 6px 12px; color: var(--brand-strong); background: var(--brand-soft); font-size: 12px; font-weight: 550; border: 1px solid transparent; border-radius: 999px;}
+.admin-workspace .view > .panel-title {margin-bottom: 18px; gap: 14px; align-items: flex-start; flex-wrap: wrap;}
+.admin-workspace .view > .panel-title > div:first-child {flex: 1 1 320px; min-width: 0;}
+.admin-workspace .view > .panel-title > div:has(.btn) {display: flex; flex: 0 1 auto; flex-wrap: wrap; gap: 8px; max-width: 100%;}
+.admin-workspace .panel-title h2, .admin-workspace .view > h2 {font-size: 20px; line-height: 1.45; font-weight: 650; letter-spacing: -.2px; margin: 0; color: var(--brand-deep);}
+.admin-workspace .panel-title .sub {font-size: 13px; line-height: 1.65; max-width: 76ch; color: var(--muted);}
+.admin-workspace .section {margin-top: 22px;}
+.admin-workspace .section h3 {font-size: 16px; font-weight: 650; line-height: 1.45; color: var(--brand-deep);}
+.admin-workspace .card, .admin-workspace .stat-tile {border: 1px solid var(--line); border-radius: var(--radius-card); padding: 22px; box-shadow: var(--shadow-rest); background: var(--panel); transition: box-shadow .15s, border-color .15s;}
+.admin-workspace .card:hover {border-color: #d3ded2; box-shadow: var(--shadow-pop);}
+.admin-workspace .g4:has(> .stat-tile) {gap: 12px; border: 0; background: transparent;}
+.admin-workspace .g4 > .stat-tile {border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--panel); box-shadow: var(--shadow-rest); transition: box-shadow .15s, border-color .15s;}
+.admin-workspace .g4 > .stat-tile:hover {border-color: #d3ded2; box-shadow: var(--shadow-pop);}
+.admin-workspace .g4 > .stat-tile:last-child {border-right: 1px solid var(--line);}
+.admin-workspace .stat-tile::before, .admin-workspace .metric::before {display: none;}
+.admin-workspace .stat-tile .k, .admin-workspace .metric .k {font-size: 13px; color: var(--muted); font-weight: 450;}
+.admin-workspace .stat-tile .v, .admin-workspace .metric .v {font-size: 30px; line-height: 1.2; letter-spacing: -.8px; font-weight: 550; margin-top: 10px; color: var(--brand-deep);}
+.admin-workspace .stat-tile .hint, .admin-workspace .metric .hint {font-size: 12px; color: #587258;}
+.admin-workspace .hero-action {padding: 28px 0; background: transparent; color: var(--text); border: 0; border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; gap: 24px; align-items: center;}
+.admin-workspace .hero-action h2 {font-size: 30px; line-height: 1.4; font-weight: 650; letter-spacing: -.6px; margin-bottom: 10px; color: var(--brand-deep);}
+.admin-workspace .hero-action p {font-size: 14px; color: var(--muted); max-width: 64ch;}
+.admin-workspace .hero-action > div:last-child {flex-shrink: 0; display: flex; flex-wrap: wrap; gap: 8px;}
+.admin-workspace .hero-action .btn {margin: 0; background: var(--brand); color: #fff; white-space: nowrap; box-shadow: 0 2px 8px rgba(46, 107, 78, .24);}
+.admin-workspace .hero-action .btn.secondary {background: var(--brand-soft); color: var(--brand-strong); border: 1px solid transparent; box-shadow: none;}
+.admin-workspace .btn {font-size: 13px; font-weight: 550; min-height: 38px; border-radius: var(--radius-ctl); padding: 8px 14px; line-height: 1.5; letter-spacing: .3px; white-space: nowrap; transition: background .15s, color .15s, border-color .15s, box-shadow .15s;}
+.admin-workspace .btn:hover:not(:disabled) {filter: none; box-shadow: var(--shadow-pop); background: var(--brand-strong); color: #fff;}
+.admin-workspace .btn.secondary {background: var(--brand-soft); color: var(--brand-strong); box-shadow: none;}
+.admin-workspace .btn.ghost {border: 1px solid var(--line-strong); background: transparent; color: var(--text); box-shadow: none;}
+.admin-workspace .btn.secondary:hover:not(:disabled), .admin-workspace .btn.ghost:hover:not(:disabled) {background: #dcebe1; color: var(--brand-strong); box-shadow: none;}
+.admin-workspace .btn:disabled {opacity: .5; cursor: not-allowed;}
+.admin-workspace input, .admin-workspace textarea, .admin-workspace select {border-radius: var(--radius-ctl); border-color: var(--line-strong); color: var(--text); accent-color: var(--brand); transition: border-color .15s, box-shadow .15s;}
+.admin-workspace input:focus, .admin-workspace textarea:focus, .admin-workspace select:focus {border-color: var(--brand); box-shadow: 0 0 0 3px rgba(46, 107, 78, .14); outline: none;}
+.admin-workspace input::placeholder, .admin-workspace textarea::placeholder {color: #7d8c7e;}
+.admin-workspace .field label, .admin-workspace .ux-field label {font-size: 13px; color: #3d5044; font-weight: 550;}
+.admin-workspace .tabs button, .admin-workspace .set-tab {border-radius: var(--radius-ctl); font-size: 13px;}
+.admin-workspace .set-tabs {gap: 6px; flex-wrap: wrap; padding-bottom: 14px;}
+.admin-workspace .table {font-variant-numeric: tabular-nums;}
+.admin-workspace .table th {background: #f4f7f2; color: #55685a; font-weight: 550; font-size: 12px; white-space: nowrap; padding: 11px 14px;}
+.admin-workspace .table td {font-size: 13px; padding: 13px 14px; line-height: 1.6; vertical-align: middle; word-break: normal;}
+.admin-workspace .table td:not(:first-child) {white-space: nowrap;}
+.admin-workspace #products .table:has(#productRows) td:first-child {min-width: 210px;}
+.admin-workspace #products .table:has(#productRows) td:nth-child(2) {min-width: 125px;}
+.admin-workspace .table tbody tr {transition: background .12s;}
+.admin-workspace .table tbody tr:hover {background: #f6f9f4;}
+.admin-workspace .table .btn {min-height: 32px; font-size: 12px; padding: 5px 10px;}
+.admin-workspace .ux-table-tools {margin: 0 0 14px; gap: 12px; padding: 0; background: none; border: 0; flex-wrap: wrap;}
+.admin-workspace .ux-table-search {border-radius: var(--radius-ctl); padding: 7px 10px; background: #fff; border-color: var(--line-strong); max-width: 340px; transition: border-color .15s, box-shadow .15s;}
+.admin-workspace .ux-table-search:focus-within {border-color: var(--brand); box-shadow: 0 0 0 3px rgba(46, 107, 78, .14);}
+.admin-workspace .ux-table-search input {font-size: 13px;}
+.admin-workspace .ux-clear-filter {padding: 2px 5px; background: none; border: 0; color: var(--brand); font-size: 12px; flex-shrink: 0;}
+.admin-workspace .ux-table-count {font-size: 12px; color: var(--muted);}
+.admin-workspace .ux-view-feedback {margin: 0 0 14px; min-height: 20px; font-size: 12px; color: var(--muted);}
+.admin-workspace .tag, .admin-workspace .badge {border-radius: 999px; font-weight: 500; font-size: 12px; padding: 3px 9px;}
+.admin-workspace .empty, .admin-workspace .ux-empty {font-size: 13px; color: var(--muted); padding: 26px 12px;}
+.admin-workspace .notice, .admin-workspace .ux-help {border-radius: 10px; line-height: 1.7;}
+.admin-workspace .ux-dialog, .admin-workspace .modal-box {border-radius: 14px; box-shadow: 0 16px 54px rgba(27, 42, 32, .18);}
+.admin-workspace .ux-dialog-head {padding: 20px 24px 16px;}
+.admin-workspace .ux-dialog-head .eyebrow {display: none;}
+.admin-workspace .ux-dialog-head h2 {font-size: 20px; font-weight: 650; margin: 0; color: var(--brand-deep);}
+.admin-workspace .ux-dialog-body {padding: 20px 24px;}
+.admin-workspace .ux-dialog-foot {padding: 14px 24px; background: #f7faf5; border-top: 1px solid var(--line); border-radius: 0 0 14px 14px; gap: 10px;}
+.admin-workspace .ux-dialog-foot .btn {min-width: 80px;}
+.admin-workspace .x {border-radius: var(--radius-ctl); background: #eef3ea;}
+.admin-workspace .ux-mobile-toggle {border-radius: var(--radius-ctl); background: #eef3ea;}
+.admin-workspace .ux-mobile-toggle svg {width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round;}
+.admin-workspace .ux-nav-empty {padding: 18px 12px; color: #55685a; font-size: 13px;}
+@media (min-width: 1191px) {
+  .admin-workspace .g4 {grid-template-columns: repeat(4, minmax(0, 1fr));}
+}
+@media (max-width: 1190px) {
+  .admin-workspace .g4 {grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;}
+}
+@media (max-width: 1190px) and (min-width: 901px) {
+  .admin-workspace {--sidebar-width: 218px;}
+  .admin-workspace .main {padding-inline: 22px;}
+  .admin-workspace .hero-action {flex-wrap: wrap;}
+}
+@media (max-width: 900px) {
+  .admin-workspace .main {padding: 0 18px 40px;}
+  .admin-workspace .sidebar {width: min(290px, 88vw); height: 100dvh; padding: 20px 14px;}
+  .admin-workspace .sidebar .workspace-search {display: flex; width: 100%; margin: 6px 0 2px; background: #fff; color: #55685a; padding: 9px 10px; flex-shrink: 0;}
+  .admin-workspace .sidebar .workspace-search input {display: block; font-size: 16px;}
+  .admin-workspace .sidebar .workspace-search kbd {display: none;}
+  .admin-workspace .workspace-bar {min-height: 62px; margin-bottom: 18px;}
+  .admin-workspace .nav button {min-height: 44px;}
+}
+@media (max-width: 650px) {
+  .admin-workspace .main {padding-inline: 14px;}
+  .admin-workspace .topbar {align-items: flex-start; flex-wrap: wrap; gap: 10px; margin-bottom: 22px;}
+  .admin-workspace .topbar .title {font-size: 22px !important;}
+  .admin-workspace .topbar .pill {font-size: 12px;}
+  .admin-workspace .panel-title {gap: 10px;}
+  .admin-workspace .view > .panel-title > div:first-child {flex-basis: 100%;}
+  .admin-workspace .view > .panel-title > div:has(.btn) {flex: 1 1 100%;}
+  .admin-workspace .panel-title > div:has(.btn) {max-width: 100%; flex-wrap: wrap;}
+  .admin-workspace .card {padding: 16px;}
+  .admin-workspace .g4 {grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;}
+  .admin-workspace .g4:has(> .stat-tile) {gap: 10px;}
+  .admin-workspace .stat-tile, .admin-workspace .metric {padding: 14px; min-height: 108px;}
+  .admin-workspace .stat-tile .v, .admin-workspace .metric .v {font-size: 24px;}
+  .admin-workspace .hero-action {padding: 22px 0; display: block;}
+  .admin-workspace .hero-action h2 {font-size: 25px;}
+  .admin-workspace .hero-action > div:last-child {margin-top: 18px; display: flex; gap: 8px;}
+  .admin-workspace .hero-action .btn {flex: 1; padding-inline: 10px;}
+  .admin-workspace .btn {min-height: 42px;}
+  .admin-workspace .table th, .admin-workspace .table td {white-space: nowrap;}
+  .admin-workspace .ux-table-tools {align-items: stretch;}
+  .admin-workspace .ux-table-search {flex: 1 1 180px; max-width: none;}
+  .admin-workspace .ux-table-search input, .admin-workspace .field input, .admin-workspace .field select, .admin-workspace .field textarea, .admin-workspace .ux-field input, .admin-workspace .ux-field select, .admin-workspace .ux-field textarea {font-size: 16px; min-width: 0; max-width: 100%;}
+  .admin-workspace .ux-dialog {width: 100%; max-height: 94dvh;}
+  .admin-workspace .ux-dialog-head, .admin-workspace .ux-dialog-body {padding: 18px;}
+  .admin-workspace .ux-dialog-foot {padding: 12px 18px;}
+}

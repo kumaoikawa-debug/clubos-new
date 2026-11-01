@@ -1,11 +1,4 @@
-"""规格层库存的读写口（v0.27）。
-
-库存真源从 products.stock 下沉到 product_variants.stock 之后，所有写库存的地方
-都必须经过这里：它负责写规格、并把 products.stock 重算成各规格之和。
-
-单独成模块而不是挂在 ProcurementEngine 上，是因为采购（procurement）和仓储
-（warehouse）都要用，互相 import 会绕成循环依赖。
-"""
+"""SKU stock projection helpers. warehouse_sku_balances owns physical stock; product stocks are read-compatible projections."""
 from __future__ import annotations
 
 
@@ -49,3 +42,42 @@ def write_variant_stock(c, *, product_id:int, variant_id:int, new_stock:int, syn
     else:
         c.execute('UPDATE products SET stock=? WHERE id=?',(int(total),int(product_id)))
     return before
+
+
+def resync_product_stock(c, *, product_id:int) -> int:
+    """把 products.stock 重算成各在售规格库存之和（防御性重算）。
+
+    采购入库、销售出库等关键路径都走 write_variant_stock 自动重算，但历史代码里
+    仍有「直接 UPDATE products.stock」的旁路（无规格商品入库、售后回库等），
+    任何一条漏掉都会让列表汇总和规格明细对不上。新增产品在外部手工改过库存后，
+    统一用本函数兜底一次，代价只是一次聚合查询，可反复调用。
+    """
+    total=c.execute("SELECT COALESCE(SUM(stock),0) s FROM product_variants WHERE product_id=? AND status='active'",(int(product_id),)).fetchone()['s']
+    c.execute('UPDATE products SET stock=? WHERE id=?',(int(total),int(product_id)))
+    return int(total)
+
+
+# ── 库存真源反转（进销存 V1.2，2026-10-31）────────────────────────────────────
+# 口径变更：warehouse_inventory.on_hand 是「实物真源」（收货/发货/盘点/调整只认它），
+# product_variants.stock 降级为「可售派生」= WMS 可售总额（Σon_hand−Σreserved−Σunsellable）
+# 按业务事件分摊到规格。派生重算的触发点：
+#   采购收货 / 销售出库(锁库) / 退款回库 / 售后回库 / 手工调整 / 采购退货出库 /
+#   盘点 / 订单发货 —— 全部走 resync_sellable_from_wms 收口。
+def wms_sellable_total(c, *, product_id:int) -> int:
+    """WMS 侧可售总额 = Σ(on_hand − reserved − unsellable)，跨全部库位。
+
+    reserved（锁库）与 unsellable（不可售）都已从实物里扣掉，剩下的才是 C 端能卖的。"""
+    r=c.execute('SELECT COALESCE(SUM(on_hand-reserved-unsellable),0) s FROM warehouse_inventory WHERE product_id=?',(int(product_id),)).fetchone()
+    return max(0,int(r['s'] or 0))
+
+
+def resync_sellable_from_wms(c, *, product_id:int) -> dict:
+    from . import stock_control as sc
+    p=dict(c.execute('SELECT * FROM products WHERE id=?',(product_id,)).fetchone())
+    if p.get('inventory_mode')!='platform_owned' or p.get('source')=='external_api':
+        return {'resynced':False,'external':True}
+    if c.execute('SELECT 1 FROM stock_reconciliation WHERE product_id=? AND status="pending"',(product_id,)).fetchone():
+        return {'resynced':False,'pendingReconciliation':True}
+    sc.sync(c,product_id)
+    total=c.execute('SELECT stock FROM products WHERE id=?',(product_id,)).fetchone()[0]
+    return {'wmsSellable':total,'variantSum':total,'drift':0,'resynced':True}

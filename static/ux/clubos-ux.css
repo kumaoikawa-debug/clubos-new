@@ -160,6 +160,17 @@ button.is-busy::after,.btn.is-busy::after{content:'';position:absolute;top:0;bot
 @keyframes flashPulse{0%{box-shadow:0 0 0 3px #9fd0a6,0 10px 28px #10251733}100%{box-shadow:0 0 0 3px #cfe3cf,0 10px 24px #1025171f}}
 @media (prefers-reduced-motion:reduce){.product.flash{animation:none}}
 /* ---- 带队领队 / 领队资源库 ---- */
+/* 2026-10-27 领队咨询与评价箱：C 端「咨询领队 / 给 TA 评分」的落点。
+   默认折叠，有待回复时自动展开（renderLeaderInbox 控制 open）。 */
+.leader-inbox{margin-top:14px;border:1px solid var(--line);border-radius:13px;background:#fbfdfa;padding:10px 13px}
+.leader-inbox>summary{cursor:pointer;font-size:13px;font-weight:800;color:#224c38;list-style:none}
+.leader-inbox>summary::-webkit-details-marker{display:none}
+.leader-inbox>summary::before{content:"▸ ";color:#7ba08a}
+.leader-inbox[open]>summary::before{content:"▾ "}
+.leader-inbox>summary b{color:#b8722d}
+.leader-inbox__h{margin:12px 0 4px;font-size:11.5px;font-weight:800;letter-spacing:.03em;color:#6b8a7b}
+.leader-inbox .list-row{padding:8px 0;border-top:1px dashed #e4eee6}
+.leader-inbox .list-row:first-of-type{border-top:0}
 .leader-summary{font-size:12px;color:var(--muted);margin:2px 0 10px}
 .leader-summary b{color:#224c38;font-size:14px}
 .leader-occs{display:grid;gap:10px}
@@ -737,3 +748,9 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
   .cpv-scr{max-height:400px}
   .cpv-grid{grid-template-columns:minmax(0,1fr)}
 }
+
+/* ── 顶栏 AI Credits 徽章收进面包屑工具区（俱乐部端，2026-11-01）────
+   原 .topbar 整条撤掉后，余额徽章常驻面包屑右侧（搜索框旁）。 */
+.workspace-credit{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border:1px solid #dfe8da;border-radius:999px;background:#f0f5ef;color:#3d6b50;font-size:12px;font-weight:700;white-space:nowrap;cursor:default}
+.workspace-credit:before{content:'✦';font-size:11px;color:#427d62}
+@media(max-width:650px){.workspace-credit{padding:5px 9px;font-size:10.5px}}

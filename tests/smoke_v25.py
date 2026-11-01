@@ -25,8 +25,13 @@ from db import conn
 from security_v025 import hash_password
 from fastapi.testclient import TestClient
 client=TestClient(app.app,base_url='https://testserver')
-demo_image=next((ROOT/'static'/'demo'/'icebreaker').glob('*.png'))
-demo_rel=demo_image.relative_to(ROOT/'static').as_posix()
+app.STATIC=Path(tmp.name)/'static'
+app.UPLOAD=app.STATIC/'uploads'
+demo_image=app.STATIC/'demo'/'icebreaker'/'fixture.png'
+demo_image.parent.mkdir(parents=True)
+from PIL import Image
+Image.new('RGB',(4,4),(230,230,230)).save(demo_image)
+demo_rel=demo_image.relative_to(app.STATIC).as_posix()
 with conn() as c:
     assert c.execute('SELECT COUNT(*) FROM clubs').fetchone()[0]==0, 'no production demo clubs'
     assert c.execute('SELECT COUNT(*) FROM payment_accounts').fetchone()[0]==0, 'no local production payments'

@@ -11,6 +11,14 @@ CREATE TABLE IF NOT EXISTS clubs (
   home_banners_json TEXT,
   membership_purchase_enabled INTEGER NOT NULL DEFAULT 0, -- 2026-10-26 是否开通「购买会员」（0 关 / 1 开）
   referral_coupon_benefit_id INTEGER NOT NULL DEFAULT 0,  -- 2026-10-26 拉新：注册/邀请成功自动发放的活动券（0=未设定）
+  -- 2026-10-31 俱乐部级「新活动默认积分规则」：新建活动时显式继承这四个值。
+  -- 没有它，每场新活动都会撞上 activities 表写死的默认值（全开 + 可抵 100%），
+  -- 运营想全场收紧就得逐场改一遍。默认值与 activities 的历史行为保持一致，
+  -- 存量俱乐部升级后表现不变，等于「以前默认什么，现在还是默认什么」。
+  default_points_enabled INTEGER NOT NULL DEFAULT 1,
+  default_earn_club_points INTEGER NOT NULL DEFAULT 1,
+  default_accept_club_points INTEGER NOT NULL DEFAULT 1,
+  default_club_points_max_discount_percent REAL NOT NULL DEFAULT 100,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -207,7 +215,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_activity_detail_pending ON activity_detail
 CREATE TABLE IF NOT EXISTS content_assets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   club_id INTEGER NOT NULL,
-  activity_id INTEGER NOT NULL,
+  activity_id INTEGER,
   channel TEXT NOT NULL,
   title TEXT,
   body_json TEXT NOT NULL,
@@ -361,6 +369,7 @@ CREATE TABLE IF NOT EXISTS products (
   stock INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',
   image_url TEXT,
+  description TEXT,
   category TEXT,
   commission_rate REAL NOT NULL DEFAULT 0.08,
   warehouse TEXT,
@@ -368,6 +377,18 @@ CREATE TABLE IF NOT EXISTS products (
   last_purchase_cost REAL NOT NULL DEFAULT 0,
   last_inbound_at TEXT,
   reorder_point INTEGER NOT NULL DEFAULT 5,
+  cover_url TEXT,
+  brand_id INTEGER,
+  category_id INTEGER,
+  gender TEXT NOT NULL DEFAULT 'unisex',
+  season TEXT,
+  series TEXT,
+  material TEXT,
+  -- 进销存 V1（2026-10-31）：来源与库存/履约模式，外部品牌扩展地基（不写死 PEAKTRACE）
+  source TEXT NOT NULL DEFAULT 'platform_self',        -- platform_self / external_api
+  inventory_mode TEXT NOT NULL DEFAULT 'platform_owned', -- platform_owned / external_api
+  fulfillment_mode TEXT NOT NULL DEFAULT 'platform_warehouse', -- platform_warehouse / supplier_fulfillment
+  owner_id INTEGER,                                      -- 商品负责人
   commerce_product_id TEXT,
   commerce_variant_id TEXT,
   commerce_inventory_item_id TEXT,
@@ -398,6 +419,7 @@ CREATE TABLE IF NOT EXISTS gear_orders (
   commerce_cart_id TEXT,
   commerce_fulfillment_id TEXT,
   commerce_sync_status TEXT NOT NULL DEFAULT 'local',
+  commerce_sync_error TEXT,
   shipped_at TEXT,
   delivered_at TEXT,
   payment_status TEXT NOT NULL DEFAULT 'succeeded',
@@ -421,6 +443,13 @@ CREATE TABLE IF NOT EXISTS gear_order_items (
   -- 会随谈判结果变动；退款冲回必须用成交当时的费率，不能重读商品当前费率，
   -- 否则平台改一次费率，历史订单的退款冲回金额就会漂移。
   commission_rate_snapshot REAL NOT NULL DEFAULT 0,
+  variant_id INTEGER,            -- 下单时选定的规格
+  variant_name TEXT,
+  sku_id INTEGER,                -- 规格 ID（混合订单分流预埋，V1 全默认自营）
+  supplier_id INTEGER,
+  inventory_mode TEXT NOT NULL DEFAULT 'platform_owned',
+  fulfillment_mode TEXT NOT NULL DEFAULT 'platform_warehouse',
+  warehouse_id INTEGER,
   FOREIGN KEY (order_id) REFERENCES gear_orders(id),
   FOREIGN KEY (product_id) REFERENCES products(id)
 );
@@ -1045,11 +1074,57 @@ CREATE TABLE IF NOT EXISTS club_leaders (
   avatar_url TEXT,
   status TEXT NOT NULL DEFAULT 'active',
   note TEXT,
+  -- 2026-10-27 C 端领队卡「介绍得更丰富一点」（用户要求，参考同行领队卡版式）：
+  -- 简介 / 带队年限 / 资质已核验 三个字段。都是俱乐部自己填的资料，系统不猜、不编：
+  -- 没填就不印（卡片高度自适应），绝不拿活动数据的统计值冒充「N 年经验」。
+  bio TEXT,
+  years_exp INTEGER NOT NULL DEFAULT 0,
+  cert_verified INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(club_id) REFERENCES clubs(id)
 );
 CREATE INDEX IF NOT EXISTS idx_club_leaders ON club_leaders(club_id,status);
+
+-- 2026-10-27 领队口碑：C 端可以给领队评分（1-5 星 + 一句话评价），
+-- rater_key 是浏览器本地生成的去重键（会员登录时用 u:<userId>），
+-- 同一个人对同一位领队只留一条（重复提交 = 改自己的评价，不叠数）。
+CREATE TABLE IF NOT EXISTS leader_reviews (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  leader_id INTEGER NOT NULL,
+  activity_id INTEGER,
+  user_id INTEGER,
+  rater_key TEXT NOT NULL,
+  author TEXT,
+  rating INTEGER NOT NULL,
+  comment TEXT,
+  status TEXT NOT NULL DEFAULT 'visible',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(leader_id) REFERENCES club_leaders(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_leader_reviews_once ON leader_reviews(club_id,leader_id,rater_key);
+CREATE INDEX IF NOT EXISTS idx_leader_reviews_leader ON leader_reviews(leader_id,status);
+
+-- 2026-10-27 领队咨询：顾客在 C 端点「咨询领队」留下的问题，
+-- 落到俱乐部端「领队资源库」的咨询箱里，由俱乐部回复（回复走线下电话/微信，这里只做留痕与待办）。
+CREATE TABLE IF NOT EXISTS leader_inquiries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  leader_id INTEGER,
+  activity_id INTEGER,
+  name TEXT,
+  phone TEXT NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'new',
+  source TEXT NOT NULL DEFAULT 'web',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  handled_at TEXT,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_leader_inquiries_club ON leader_inquiries(club_id,status,id);
 
 CREATE TABLE IF NOT EXISTS execution_groups (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1263,6 +1338,7 @@ CREATE TABLE IF NOT EXISTS warehouse_locations (
 );
 CREATE TABLE IF NOT EXISTS warehouse_inventory (
   id INTEGER PRIMARY KEY AUTOINCREMENT, product_id INTEGER NOT NULL, location_id INTEGER NOT NULL, on_hand INTEGER NOT NULL DEFAULT 0, reserved INTEGER NOT NULL DEFAULT 0,
+  on_order INTEGER NOT NULL DEFAULT 0, unsellable INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(product_id,location_id), FOREIGN KEY(product_id) REFERENCES products(id), FOREIGN KEY(location_id) REFERENCES warehouse_locations(id)
 );
 CREATE TABLE IF NOT EXISTS warehouse_reservations (
@@ -1440,6 +1516,15 @@ CREATE TABLE IF NOT EXISTS product_variants (
   status TEXT NOT NULL DEFAULT 'active',
   sort INTEGER NOT NULL DEFAULT 0,
   is_default INTEGER NOT NULL DEFAULT 0,
+  color TEXT,
+  color_hex TEXT,
+  size TEXT,
+  barcode TEXT,
+  spec_json TEXT,                -- 规格属性 JSON（V1 埋结构）
+  purchase_cost REAL NOT NULL DEFAULT 0,  -- 采购成本（按规格）
+  settlement_price REAL NOT NULL DEFAULT 0, -- V1.2 固定结算价（品牌 fixed_price 模式逐 SKU 定价）
+  inventory_mode TEXT NOT NULL DEFAULT 'platform_owned',
+  fulfillment_mode TEXT NOT NULL DEFAULT 'platform_warehouse',
   commerce_variant_id TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE CASCADE
@@ -1507,6 +1592,19 @@ CREATE TABLE IF NOT EXISTS product_brands (
   logo_url TEXT,
   sort INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',   -- active / inactive
+  -- 进销存 V1（2026-10-31）：品牌档案补全 + 来源/商城展示状态
+  name_en TEXT,
+  intro TEXT,
+  industry TEXT,                -- 分类（如 服装 / 装备 / 食品）
+  official_website TEXT,
+  country TEXT,
+  contact_name TEXT,
+  contact_phone TEXT,
+  cooperation_status TEXT NOT NULL DEFAULT 'pending',  -- pending / cooperating / suspended
+  source_type TEXT NOT NULL DEFAULT 'platform_self',   -- platform_self / external_api
+  mall_display_status TEXT NOT NULL DEFAULT 'show',    -- show / hide
+  settlement_mode TEXT NOT NULL DEFAULT 'sales_ratio', -- V1.2 结算模式：sales_ratio(按销售额比例) / fixed_price(固定结算价)
+  settlement_ratio REAL NOT NULL DEFAULT 0,            -- V1.2 销售额比例%（sales_ratio 用）
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_product_brands_name ON product_brands(name);
@@ -1524,3 +1622,132 @@ CREATE TABLE IF NOT EXISTS product_categories (
   FOREIGN KEY(parent_id) REFERENCES product_categories(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_product_categories_parent ON product_categories(parent_id,sort,id);
+
+-- 2026-10-29 线路咨询：顾客在 C 端活动详情点「咨询这条线路」留下的问题，
+-- 落到俱乐部端「信息」统一收件箱（与领队咨询合并视图）。只做留痕与待办，回复走线下电话/微信。
+CREATE TABLE IF NOT EXISTS route_inquiries (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  activity_id INTEGER,
+  name TEXT,
+  phone TEXT NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'new',
+  source TEXT NOT NULL DEFAULT 'web',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  handled_at TEXT,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_route_inquiries_club ON route_inquiries(club_id,status,id);
+
+-- 2026-10-29 俱乐部企微集成配置：群机器人 Webhook（轻量通知，非硬依赖）。
+-- enabled=0 时不推送，未配置也不影响任何业务功能。
+CREATE TABLE IF NOT EXISTS club_integrations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  wecom_webhook TEXT,
+  wecom_enabled INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_club_integrations_club ON club_integrations(club_id);
+
+-- 2026-10-31 进销存 V1：供应商↔品牌关联（一个品牌可多供应商、一个供应商可多品牌）。
+CREATE TABLE IF NOT EXISTS brand_suppliers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  brand_id INTEGER NOT NULL,
+  supplier_id INTEGER NOT NULL,
+  is_primary INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(brand_id,supplier_id),
+  FOREIGN KEY(brand_id) REFERENCES product_brands(id) ON DELETE CASCADE,
+  FOREIGN KEY(supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_brand_suppliers_brand ON brand_suppliers(brand_id);
+CREATE INDEX IF NOT EXISTS idx_brand_suppliers_supplier ON brand_suppliers(supplier_id);
+
+-- 2026-10-31 进销存 V1：品牌结算（平台↔品牌方）。V1 只建结构 + 后台查看，不自动分账。
+CREATE TABLE IF NOT EXISTS brand_settlements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  brand_id INTEGER NOT NULL,
+  settlement_no TEXT,
+  period_from TEXT,
+  period_to TEXT,
+  sales_amount REAL NOT NULL DEFAULT 0,   -- 该品牌本期销售额
+  platform_fee REAL NOT NULL DEFAULT 0,  -- 平台服务费
+  settlement_amount REAL NOT NULL DEFAULT 0, -- 应付品牌方
+  status TEXT NOT NULL DEFAULT 'draft',  -- draft / confirmed / paid
+  settled_at TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(brand_id) REFERENCES product_brands(id)
+);
+CREATE INDEX IF NOT EXISTS idx_brand_settlements_brand ON brand_settlements(brand_id,status,id);
+
+-- 2026-10-31 进销存 V1：外部品牌通用映射（第一阶段只建表，不接 PEAKTRACE 真接口）。
+CREATE TABLE IF NOT EXISTS external_product_mappings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  brand_id INTEGER NOT NULL,
+  external_product_id TEXT,
+  external_sku_id TEXT,
+  external_inventory_id TEXT,
+  product_id INTEGER,
+  variant_id INTEGER,
+  external_sync_status TEXT NOT NULL DEFAULT 'pending', -- pending / synced / failed
+  last_inventory_sync_at TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(brand_id,external_product_id,external_sku_id),
+  FOREIGN KEY(brand_id) REFERENCES product_brands(id) ON DELETE CASCADE,
+  FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL,
+  FOREIGN KEY(variant_id) REFERENCES product_variants(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_external_mappings_brand ON external_product_mappings(brand_id);
+
+-- 2026-10-31 进销存 V1：外部库存同步日志（缓存是否过期判断用）。
+CREATE TABLE IF NOT EXISTS external_inventory_sync_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mapping_id INTEGER NOT NULL,
+  synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  result TEXT NOT NULL DEFAULT 'ok',  -- ok / fail
+  snapshot_json TEXT,
+  error TEXT,
+  FOREIGN KEY(mapping_id) REFERENCES external_product_mappings(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_external_sync_logs_mapping ON external_inventory_sync_logs(mapping_id,synced_at);
+
+
+-- 2026-10-31 进销存 V1.1：采购拒收/异常登记（任务书 4.2③）。
+-- 未到货量 = ordered - received - rejected；异常量不阻塞采购单收完。
+CREATE TABLE IF NOT EXISTS purchase_order_exceptions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  purchase_order_id TEXT NOT NULL,
+  purchase_order_item_id INTEGER NOT NULL,
+  product_id INTEGER NOT NULL,
+  exception_type TEXT NOT NULL,  -- shortage(短少) / damaged(破损) / wrong_item(错发) / rejected(拒收) / other(其他)
+  quantity INTEGER NOT NULL,
+  note TEXT,
+  registered_by TEXT NOT NULL DEFAULT 'platform',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(purchase_order_item_id) REFERENCES purchase_order_items(id),
+  FOREIGN KEY(product_id) REFERENCES products(id)
+);
+CREATE INDEX IF NOT EXISTS idx_po_exceptions_po ON purchase_order_exceptions(purchase_order_id,purchase_order_item_id);
+
+-- SKU physical inventory; legacy WMS tables are aggregate compatibility projections.
+
+    CREATE TABLE IF NOT EXISTS warehouse_sku_balances(
+      id INTEGER PRIMARY KEY,product_id INTEGER NOT NULL,variant_id INTEGER NOT NULL,location_id INTEGER NOT NULL,
+      on_hand INTEGER NOT NULL DEFAULT 0,reserved INTEGER NOT NULL DEFAULT 0,unsellable INTEGER NOT NULL DEFAULT 0,
+      UNIQUE(variant_id,location_id), CHECK(on_hand>=0 AND reserved>=0 AND unsellable>=0 AND reserved+unsellable<=on_hand),
+      FOREIGN KEY(product_id) REFERENCES products(id),FOREIGN KEY(variant_id) REFERENCES product_variants(id),
+      FOREIGN KEY(location_id) REFERENCES warehouse_locations(id));
+    CREATE TABLE IF NOT EXISTS warehouse_sku_reservations(
+      id INTEGER PRIMARY KEY,checkout_id TEXT,order_id INTEGER,product_id INTEGER NOT NULL,variant_id INTEGER NOT NULL,
+      quantity INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'reserved',allocations_json TEXT NOT NULL,
+      UNIQUE(checkout_id,variant_id),UNIQUE(order_id,variant_id),FOREIGN KEY(variant_id) REFERENCES product_variants(id));
+    CREATE TABLE IF NOT EXISTS stock_reconciliation(
+      product_id INTEGER PRIMARY KEY,status TEXT NOT NULL DEFAULT 'pending',snapshot_json TEXT NOT NULL,
+      note TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,resolved_at TEXT);
+    
+CREATE TABLE IF NOT EXISTS purchase_shipments(id INTEGER PRIMARY KEY,purchase_order_id TEXT NOT NULL,request_key TEXT NOT NULL UNIQUE,carrier TEXT,tracking_no TEXT,items_json TEXT NOT NULL,shipped_at TEXT NOT NULL,FOREIGN KEY(purchase_order_id) REFERENCES purchase_orders(id));

@@ -126,11 +126,11 @@
     if (!v || !v.trackingNo) return;
     const carrier = ((cfg.carriers || []).find(c => c.code === v.carrierCode) || {}).name || '';
     try {
-      await api(`/api/platform/orders/${orderId}/shipment`, {
+      const result = await api(`/api/platform/orders/${orderId}/shipment`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ carrierCode: v.carrierCode, carrier, trackingNo: v.trackingNo })
       });
-      toast('已发货');
+      toast(result.commerceSync?.status==='error'?'实物已出库，交易引擎同步待重试':'已发货');
       if (typeof loadOrders === 'function') loadOrders();
       const fresh = await api(`/api/platform/orders/${orderId}/shipment`);
       openTimeline(orderId, fresh);

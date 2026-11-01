@@ -66,9 +66,12 @@ async function meLoadAll(force){
   ME.claimable=Array.isArray(claimable)?claimable:[];
   ME.mineCoupons=Array.isArray(mine)?mine:[];
   ME.city=(prof&&prof.city)||'';
+  ME.avatar=(prof&&prof.avatarUrl)||''; ME.wechatAvatar=(prof&&prof.wechatAvatarUrl)||'';
   ME.ts=Date.now();
   ME.cardNo='YT'+String(CLUB).padStart(2,'0')+String(USER).padStart(4,'0');
   if(!ME.club){ try{ ME.club=await api(`/api/public/clubs/${CLUB}`); }catch(e){ ME.club=ME.club||{}; } }
+  /* 角标要跟着数据走：顾客一进小程序就停在首页，不点「我的」也得看得见有新通知。 */
+  try{ paintNoticeHint(); }catch(e){}
 }
 const meWallet   =()=> (ME.mc&&ME.mc.wallet)||{};
 const meTiers    =()=> (ME.mc&&ME.mc.tiers)||[];
@@ -139,11 +142,56 @@ function drawMeQr(canvasId,text){
   const c=document.getElementById(canvasId); if(!c||!window.ClubOSQR)return;
   try{ window.ClubOSQR.draw(c, text); }catch(e){}
 }
+
+/* ── 会员码：默认隐藏，点击会员卡上的「会员码 ›」弹出底部抽屉 ───────────────
+   抽屉内含头像、用户名、会员码编号（条状装饰 + 文字）、二维码（真实会员码）、
+   每 60 秒自动刷新提示。刷新为前端按 60s 时间桶重绘二维码 —— 无后端签名令牌时
+   仅为展示刷新动作（二维码内容随桶变化）；关闭抽屉时清掉定时器。 */
+let _meCodeTimer=null;
+function closeMemberCodeSheet(){
+  const el=document.getElementById('meCodeSheet'); if(el)el.remove();
+  document.documentElement.classList.remove('w-sheet-open');
+  if(_meCodeTimer){ clearInterval(_meCodeTimer); _meCodeTimer=null; }
+}
+function openMemberCodeSheet(){
+  let el=document.getElementById('meCodeSheet');
+  if(!el){
+    el=document.createElement('div');el.id='meCodeSheet';el.className='w-sheet';
+    el.innerHTML=`<div class="w-sheet__mask" data-close></div><div class="w-sheet__panel me-code" role="dialog" aria-modal="true" aria-label="会员码">`
+      +`<button type="button" class="w-sheet__x" data-close aria-label="关闭">×</button>`
+      +`<div class="me-code__body">
+          <div class="me-code__av" id="meCodeAv"></div>
+          <div class="me-code__name" id="meCodeName"></div>
+          <div class="me-code__bar" id="meCodeBar" aria-hidden="true"></div>
+          <div class="me-code__no" id="meCodeNo"></div>
+          <div class="me-code__qrwrap"><canvas class="me-code__qr" id="meCodeQr" width="200" height="200"></canvas></div>
+          <div class="me-code__tip">每 60 秒自动刷新 · 请向工作人员出示</div>
+        </div></div>`;
+    document.body.appendChild(el);
+    document.documentElement.classList.add('w-sheet-open');
+    el.addEventListener('click',e=>{ const t=e.target.closest('[data-close]'); if(t&&el.contains(t))closeMemberCodeSheet(); });
+  }
+  const name=ME.name||'会员';
+  const no='NO. '+(ME.cardNo||'—');
+  const nm=document.getElementById('meCodeName'); if(nm)nm.textContent=name;
+  const nov=document.getElementById('meCodeNo'); if(nov)nov.textContent=no;
+  const av=document.getElementById('meCodeAv'); if(av)av.innerHTML=meAvatarInner(name,(ME.avatar||''));
+  /* 条状装饰：依会员编号生成确定性条纹（纯展示，不宣称可扫描）。 */
+  const bar=document.getElementById('meCodeBar');
+  if(bar){ const s=String(ME.cardNo||'CLUBOS'); let html=''; for(let i=0;i<s.length;i++){ const w=2+((s.charCodeAt(i)*7)%5); html+='<i style="width:'+w+'px"></i>'; } bar.innerHTML=html; }
+  const draw=()=>{ const bucket=Math.floor(Date.now()/60000); drawMeQr('meCodeQr', location.origin+'/web?club_id='+CLUB+'&user='+USER+'&t='+bucket+'#member'); };
+  draw();
+  if(_meCodeTimer)clearInterval(_meCodeTimer);
+  _meCodeTimer=setInterval(draw, 60000);
+}
+window.openMemberCodeSheet=openMemberCodeSheet;
+window.closeMemberCodeSheet=closeMemberCodeSheet;
 function mePaintHome(){
   const w=meWallet();
   setT('meClubPts', w.clubPoints??0);
   setT('meGearPts', w.gearPoints??0);
   setT('meName', ME.name);
+  meApplyAvatar();
   setT('meTier', w.memberLevel||'普通会员');
   setT('meCardNo', 'NO. '+(ME.cardNo||'—'));
   setT('meGrow', (Math.round(Number(w.lifetimeActivitySpend)||0)).toLocaleString('zh-CN'));
@@ -159,6 +207,7 @@ function mePaintHome(){
   drawMeQr('meQr', location.origin+'/web?club_id='+CLUB+'&user='+USER+'#member');
   renderMeQuad();
   renderMeOrders();
+  paintNoticeHint();
 }
 function renderMeQuad(){
   const box=document.getElementById('meQuad'); if(!box)return;
@@ -170,7 +219,7 @@ function renderMeQuad(){
   ];
   box.innerHTML=cells.map(([t,n,go,ic])=>
     `<button class="wme-quad__c" type="button" onclick="pushMe('${go}')">
-       <span class="wme-quad__ic">${meIcon(ic)}${n?`<i class="wme-quad__n">${n>99?'99+':n}</i>`:''}</span>
+       <span class="wme-quad__ic">${meIcon(ic)}${(go==='myregs'&&meNoticeUnread().length)?'<i class="wme-quad__ndot"></i>':''}${n?`<i class="wme-quad__n">${n>99?'99+':n}</i>`:''}</span>
        <span class="wme-quad__t">${esc(t)}</span>
      </button>`).join('');
 }
@@ -217,8 +266,12 @@ function meEnsureStack(){
   }
   return s;
 }
-function pushMe(k,param){ meEnsureStack(); meStack.push({k,param}); renderMeSub(); }
-function popMe(){ if(meStack.length)meStack.pop(); renderMeSub(); }
+function pushMe(k,param){
+  /* 打开「我的报名」即视为已读该用户的俱乐部通知：角标（铃铛 / 我的 tab / 我的报名红点）随之清除。 */
+  if(k==='myregs'){ if(meMarkNoticesRead()){ try{ paintNoticeHint(); renderMeQuad(); }catch(e){} } }
+  meEnsureStack(); meStack.push({k,param}); window.__meCurSub={k,param:param}; renderMeSub();
+}
+function popMe(){ if(meStack.length)meStack.pop(); const t=meStack[meStack.length-1]; window.__meCurSub=t||null; renderMeSub(); }
 function meSetTab(st){ if(meStack.length){ meStack[meStack.length-1].param=st; renderMeSub(); } }
 function renderMeSub(){
   const s=meEnsureStack();
@@ -241,6 +294,178 @@ window.wv=function(id,b){
   return _wv?_wv(id,b):undefined;
 };
 
+/* ── 俱乐部通知数据（2026-10-29 用户反馈「后台发布的通知，C 端客户没有提示」）─────────
+   只汇总**已支付**活动订单里后端下发的 status='sent' 通知（草稿与内部备注到不了前端）。
+   这些通知不再在「我的」首页插一条卡片，而是统一通过顶栏「信息」铃铛（#msgDot）、
+   底部导航「我的」红点、以及「我的报名」宫格红点提示；点开铃铛弹出 wNoticeSheet 看详情。 */
+/* ── 通知删除：C 端用户可把已读通知从本地视图清除（仅本地，不影响后台）────── */
+function meNoticeDeletedKey(){ return 'clubos_notice_del_'+CLUB+'_'+USER; }
+function meNoticeDeletedSet(){
+  try{ return new Set(JSON.parse(localStorage.getItem(meNoticeDeletedKey())||'[]')); }catch(e){ return new Set(); }
+}
+function meNoticeDelete(id){
+  const d=meNoticeDeletedSet(); d.add(Number(id));
+  try{ localStorage.setItem(meNoticeDeletedKey(), JSON.stringify([...d])); }catch(e){}
+}
+function meNoticeItems(){
+  const out=[];
+  const del=meNoticeDeletedSet();
+  meActivity().forEach(o=>{
+    if(o.status!=='paid')return;
+    const t=o.trip||{};
+    (t.notices||[]).forEach(n=>{
+      const id=Number(n.id||0);
+      if(id && del.has(id))return;
+      out.push({
+        id,title:String(n.title||'出行通知'),content:String(n.content||''),sentAt:n.sentAt,
+        act:String(o.activity_title||'活动报名'),occ:String(o.occurrence_label||o.start_at||'')
+      });
+    });
+  });
+  return out;
+}
+/* ── 通知已读：用户「看过」之后角标自动清除 ────────────────────────────────
+   用 localStorage 记录已读通知 id（按 club+user 命名空间，避免多账号串台）。
+   角标只统计「未读」；打开「信息」铃铛或「我的报名」即视为已读。 */
+function meNoticeReadKey(){ return 'clubos_notice_read_'+CLUB+'_'+USER; }
+function meNoticeReadSet(){
+  try{ return new Set(JSON.parse(localStorage.getItem(meNoticeReadKey())||'[]')); }catch(e){ return new Set(); }
+}
+function meNoticeUnread(){
+  const read=meNoticeReadSet();
+  return meNoticeItems().filter(n=>n.id && !read.has(n.id));
+}
+function meMarkNoticesRead(){
+  const all=meNoticeItems(); if(!all.length) return false;
+  const read=meNoticeReadSet(); let changed=false;
+  all.forEach(n=>{ if(n.id && !read.has(n.id)){ read.add(n.id); changed=true; } });
+  if(changed){ try{ localStorage.setItem(meNoticeReadKey(), JSON.stringify([...read])); }catch(e){} }
+  return changed;
+}
+
+/* ── 带队领队（2026-10-29 用户反馈「领队功能没实现：要显示头像，还要能咨询领队」）───
+   出行指引里原先只印一串名字，顾客认不出是谁、更没法咨询。这里改成带头像的 chip，
+   点开直接进领队主页（可咨询 / 评分），与 C 端活动详情页的领队卡是同一套交互。
+   只有 leaderId（在册领队）才给点击：执行端手打的临时增援没有档案，点了只有空壳。 */
+function meLeaderChip(l){
+  const lid=Number((l&&l.leaderId)||0);
+  const role=String((l&&l.role)||'').trim()||'领队';
+  const name=String((l&&l.name)||'').trim()||'领队';
+  const av=leaderAvatarHtml(name,(l&&l.avatarUrl)||null);
+  const inner=`<span class="me-trip__lav">${av}</span><span class="me-trip__lname">${esc(name)}</span>`
+    +(role!=='领队'?`<i class="me-trip__lrole">${esc(role)}</i>`:'');
+  return lid
+    ? `<button type="button" class="me-trip__leader" title="查看领队资料并咨询" onclick="openLeaderSheet(${lid})">${inner}</button>`
+    : `<span class="me-trip__leader is-static">${inner}</span>`;
+}
+
+/* ── 通知角标：顶栏「信息」+ 底部导航「我的」───────────────────────────────
+   通知条活在「我的」页里，顾客停在首页 / 活动页时完全察觉不到后台发了通知 ——
+   所以提示要做到**页面之外**：顶栏一个「信息」标签带条数，底部「我的」挂一个红点。
+   两处都只在真有通知时亮；没有通知就整块不留痕迹（空角标比没角标更让人困惑）。 */
+function paintNoticeHint(){
+  let n=0;
+  try{ n=meNoticeUnread().length; }catch(e){ n=0; }
+  const dot=document.getElementById('msgDot');
+  if(dot){ dot.hidden=!n; dot.textContent=n>99?'99+':String(n); }
+  const nd=document.getElementById('meNavDot');
+  if(nd) nd.hidden=!n;
+  return n;
+}
+window.paintNoticeHint=paintNoticeHint;
+
+/* ── 顶栏「信息」面板 ──────────────────────────────────────────────────────
+   与领队主页同一套底部抽屉（appendChild 到 body，不吃 .web-shell 的作用域），
+   z-index 同样低于 .ux-overlay(1100)。列出全部已发送通知，底部给一个直达入口。 */
+function closeNoticeSheet(){
+  const el=document.getElementById('wNoticeSheet');
+  if(el)el.remove();
+  document.documentElement.classList.remove('w-sheet-open');
+}
+function openNoticeSheet(){
+  const items=(typeof meNoticeItems==='function')?meNoticeItems():[];
+  let el=document.getElementById('wNoticeSheet');
+  if(!el){
+    el=document.createElement('div');el.id='wNoticeSheet';el.className='w-sheet';
+    el.innerHTML=`<div class="w-sheet__mask" data-close></div><div class="w-sheet__panel" role="dialog" aria-modal="true" aria-label="俱乐部通知">`
+      +`<button type="button" class="w-sheet__x" data-close aria-label="关闭">×</button>`
+      +`<div class="w-sheet__body" id="wNoticeBody"></div></div>`;
+    document.body.appendChild(el);
+    document.documentElement.classList.add('w-sheet-open');
+    /* 打开「信息」面板＝用户已阅读：标记全部通知为已读，角标立即清除（铃铛 / 我的 tab / 我的报名红点）。 */
+    if(meMarkNoticesRead()){ try{ paintNoticeHint(); renderMeQuad(); }catch(e){} }
+    /* 关闭走事件委托、且挂在壳上：别用 {once:true} —— 抽屉里点任何东西都会把那个
+       一次性监听吃掉，之后错误态里的「关闭」就点不动了（领队抽屉踩过同一个坑）。 */
+    el.addEventListener('click',e=>{
+      const t=e.target.closest('[data-close]');
+      if(t&&el.contains(t))closeNoticeSheet();
+    });
+  }
+  const body=el.querySelector('#wNoticeBody');
+  const read=meNoticeReadSet();
+  body.innerHTML=`<div class="w-sh__noticehd"><b>俱乐部通知</b><span>${items.length} 条</span></div>`
+    +`<div class="w-sh__noticelist" id="wNoticeList">`
+    +(items.length
+      ? items.map(n=>{
+          const isRead=read.has(n.id);
+          return `<div class="w-sh__noticeitem${isRead?' is-read':''}" data-nid="${n.id}">`
+            +`<button type="button" class="w-sh__noticedel" onclick="meNoticeDeleteFromSheet(${n.id})">删除</button>`
+            +`<div class="w-sh__noticefg">`
+              +`<div class="w-sh__noticetop"><b>${esc(n.title)}</b>${n.sentAt?`<i>${esc(String(n.sentAt).slice(5,16))}</i>`:''}${isRead?'':`<em class="w-sh__unread"></em>`}</div>`
+              +`<div class="w-sh__noticemeta">${esc(n.act)}${n.occ?' · '+esc(n.occ):''}</div>`
+              + (n.content?`<p>${esc(n.content)}</p>`:'')
+            +`</div>`
+          +`</div>`;
+        }).join('')
+      : '<div class="w-sh__none">暂时没有俱乐部通知。出发前的集合与装备提醒会发到这里。</div>')
+    +`</div>`
+    +`<div class="w-sh__noticego"><button type="button" class="w-sh__btn is-primary" onclick="closeNoticeSheet();wv('wme');pushMe('myregs')">查看我的报名</button></div>`;
+  meInitNoticeSwipe(document.getElementById('wNoticeList'));
+}
+window.closeNoticeSheet=closeNoticeSheet;
+window.openNoticeSheet=openNoticeSheet;
+
+/* ── 通知：左滑删除（仅已读项；打开面板时已全部标记为已读，故默认可删）──────────
+   手势只认横向滑动：竖向滑动立即放弃，交给列表原生滚动，绝不抢手势。
+   fg 左移超过阈值则吸附到 -76px 露出红色删除按钮；否则回弹归位。 */
+function meInitNoticeSwipe(list){
+  if(!list)return;
+  let cur=null,sx=0,sy=0,curX=0,dragging=false,locked=false;
+  list.addEventListener('touchstart',e=>{
+    const fg=e.target.closest('.w-sh__noticefg'); if(!fg)return;
+    const item=fg.closest('.w-sh__noticeitem'); if(!item||!item.classList.contains('is-read'))return;
+    cur=fg; curX=parseFloat(fg.dataset.x||'0')||0; sx=e.touches[0].clientX; sy=e.touches[0].clientY; dragging=true; locked=false;
+    fg.style.transition='';
+  },{passive:true});
+  list.addEventListener('touchmove',e=>{
+    if(!dragging||!cur)return;
+    const dx=e.touches[0].clientX-sx, dy=e.touches[0].clientY-sy;
+    if(!locked){ if(Math.abs(dy)>Math.abs(dx)){ dragging=false; return; } locked=true; }
+    let nx=curX+dx; if(nx>0)nx=0; if(nx<-76)nx=-76;
+    cur.style.transform='translateX('+nx+'px)';
+  },{passive:true});
+  list.addEventListener('touchend',e=>{
+    if(!dragging||!cur)return; dragging=false;
+    const m=cur.style.transform.match(/translateX\(([-\d.]+)px\)/); const nx=m?parseFloat(m[1]):0;
+    cur.style.transition='transform .2s ease';
+    if(nx<-40){ cur.style.transform='translateX(-76px)'; cur.dataset.x='-76'; }
+    else { cur.style.transform='translateX(0)'; cur.dataset.x='0'; }
+    cur=null;
+  });
+}
+/* 删除：从本地删除记录移除该通知 id，并就地重绘列表与计数（不重新拉接口）。 */
+function meNoticeDeleteFromSheet(id){
+  meNoticeDelete(id);
+  const item=document.querySelector('.w-sh__noticeitem[data-nid="'+id+'"]');
+  if(item)item.remove();
+  const hd=document.querySelector('#wNoticeBody .w-sh__noticehd span');
+  const rem=document.querySelectorAll('#wNoticeBody .w-sh__noticeitem').length;
+  if(hd)hd.textContent=rem+' 条';
+  if(rem===0){ const list=document.getElementById('wNoticeList'); if(list)list.innerHTML='<div class="w-sh__none">暂时没有俱乐部通知。出发前的集合与装备提醒会发到这里。</div>'; }
+}
+window.meNoticeDeleteFromSheet=meNoticeDeleteFromSheet;
+window.meInitNoticeSwipe=meInitNoticeSwipe;
+
 /* ── 出行指引（2026-10-22 用户反馈「分车、活动通知保存之后能同步到 C 端用户吗」）───
    集合 / 应急电话 / 带队人 / 本人分车 / 已发送通知。数据来自俱乐部端「活动执行」页的
    团期执行数据，后端只在真有内容时才下发 trip；一块都没有时整块不渲染 —— 空壳卡片
@@ -251,7 +476,7 @@ function meTrip(o){
   const t=o.trip||{}; const rows=[];
   if(t.meeting)rows.push(`<div class="me-trip__row"><span>集合</span><b>${esc(t.meeting.time||'时间待定')} · ${esc(t.meeting.location||'地点待定')}</b></div>`);
   if(t.emergencyPhone)rows.push(`<div class="me-trip__row"><span>应急电话</span><b>${esc(t.emergencyPhone)}</b></div>`);
-  if(t.leaders&&t.leaders.length)rows.push(`<div class="me-trip__row"><span>带队</span><b>${t.leaders.map(l=>esc(l.name)+(l.role&&l.role!=='领队'?'（'+esc(l.role)+'）':'')).join('、')}</b></div>`);
+  if(t.leaders&&t.leaders.length)rows.push(`<div class="me-trip__row"><span>带队</span><b class="me-trip__leaders">${t.leaders.map(meLeaderChip).join('')}</b></div>`);
   /* 分车按参加人逐人显示：同一天报名的一家人可能被分在不同车；已退出的不计。 */
   const veh=(o.participants||[]).filter(p=>p.status!=='refunded'&&t.vehicles&&t.vehicles[String(p.id)])
     .map(p=>esc(p.name)+' · '+esc(t.vehicles[String(p.id)]));
@@ -302,6 +527,46 @@ function meOrderCard(o){
   </div>`;
 }
 
+/* ── 自助签到码（2026-10-30）：C 端「我的报名」每个参加人一个二维码 ──────── */
+function meCheckinBlock(o){
+  // 仅已支付、未退款的报名，且参加人处于 active 时才出码（与后端 checkin-qr 口径一致）。
+  if(!(o.status==='paid' && ['none','rejected'].includes(o.refund_status||'none'))) return '';
+  const ps=(o.participants||[]).filter(p=>p.status==='active');
+  if(!ps.length) return '';
+  const rows=ps.map(p=>{
+    const signed = p.checkinStatus==='checked_in';
+    return `<div class="me-ck" data-pid="${p.id}">
+      <img class="me-ck__qr" src="/api/public/participants/${p.id}/checkin-qr?user_id=${USER}&club_id=${CLUB}" alt="签到码"
+           onclick="meZoomQr(${p.id},'${esc(p.name||'')}')"/>
+      <div class="me-ck__info">
+        <div class="me-ck__name">${esc(p.name||'')}</div>
+        <div class="me-ck__st ${signed?'on':''}">${signed?'已签到':'未签到'}</div>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="me-ck-wrap">
+    <div class="me-ck-hd">签到码 <span>活动当日向领队出示 · 扫码签到</span></div>
+    <div class="me-ck-list">${rows}</div>
+  </div>`;
+}
+function meZoomQr(pid,name){
+  const url=`/api/public/participants/${pid}/checkin-qr?user_id=${USER}&club_id=${CLUB}`;
+  let layer=document.getElementById('meQrZoom');
+  if(!layer){
+    layer=document.createElement('div');
+    layer.id='meQrZoom'; layer.className='me-qr-zoom';
+    layer.onclick=function(){ this.style.display='none'; };
+    document.body.appendChild(layer);
+  }
+  layer.innerHTML=`<div class="me-qr-zoom__box" onclick="event.stopPropagation()">
+      <div class="me-qr-zoom__name">${esc(name||'')}</div>
+      <img src="${url}" alt="签到码"/>
+      <div class="me-qr-zoom__tip">请向领队出示此码，由领队扫码完成现场签到</div>
+      <button class="me-btn me-btn--block" onclick="document.getElementById('meQrZoom').style.display='none'">关闭</button>
+    </div>`;
+  layer.style.display='flex';
+}
+
 /* ── 子页面实现 ───────────────────────────────────────────────────────── */
 SUB_ME.myregs=function(){
   const list=meActivity();
@@ -319,6 +584,7 @@ SUB_ME.myregs=function(){
       <div class="me-card2__meta">${esc(o.occurrence_label||o.start_at||'团期待定')} · ${o.participantCount||ps.length} 人</div>
       <div class="me-card2__amt">实付 <b>${money(o.amount||0)}</b></div>
       ${meTrip(o)}
+      ${meCheckinBlock(o)}
       ${pax?`<div class="me-paxs">${pax}</div>`:''}
       <div class="me-card2__ref">退款：${esc((typeof refundStateText==='function')?refundStateText(o):'')}</div>
       ${act?`<div class="me-card2__ops">${act}</div>`:''}
@@ -601,7 +867,7 @@ SUB_ME.membercard=function(){
   return `<div class="me-mc">
       <div class="me-mc__card">
         <div class="me-mc__top">
-          <div class="me-mc__ava">${esc((ME.name||'远')[0])}</div>
+          <div class="me-mc__ava" id="meMcAva">${meAvatarInner(ME.name||'远',ME.avatar||'')}</div>
           <div class="me-mc__id"><div class="me-mc__tier">${esc(w.memberLevel||'普通会员')}</div><div class="me-mc__no">NO. ${esc(ME.cardNo||'')}</div></div>
           <span class="me-mc__qrtile"><canvas class="me-mc__qr" id="meMcQr" width="92" height="92"></canvas></span>
         </div>
@@ -623,8 +889,8 @@ SUB_ME.membercard=function(){
           +p.tiers.map(t=>`<div class="me-bnf">
               <div class="me-bnf__hd"><b>${esc(t.name)} 会员卡</b></div>
               <div class="me-bnf__cost"><b>${money(t.price||0)}</b> / ${t.valid_months||12} 个月</div>
-              <div class="me-bnf__ft"><span class="me-note">购买后立即生效，有效期内享受该等级权益</span>
-                <button class="me-btn" onclick="meBuyTier(${t.id},'${esc(t.name)}',${Number(t.price||0)})">立即购买</button></div>
+              <div class="me-bnf__ft"><span class="me-note">${p.paymentAvailable===false?'会员购买暂未开放，当前权益不受影响':'购买后立即生效，有效期内享受该等级权益'}</span>
+                <button class="me-btn" ${p.paymentAvailable===false?'disabled':''} onclick="meBuyTier(${t.id},'${esc(t.name)}',${Number(t.price||0)})">${p.paymentAvailable===false?'暂未开放购买':'立即购买'}</button></div>
             </div>`).join('');
       })()}
     </div>`;
@@ -745,6 +1011,89 @@ window.meLogout=meLogout;
 /* 积分商城 / 购买会员 / 拉新邀请（inline onclick 引用，必须挂 window —— me.js 整体是 IIFE，裸 function 不上 window） */
 window.meBuyTier=meBuyTier; window.meRedeemMall=meRedeemMall; window.meMallFilter=meMallFilter;
 window.meClaimByCode=meClaimByCode; window.meFillInviteCode=meFillInviteCode;
+
+/* ── 头像（2026-10-31）：两种方案 —— 自定义上传 / 自动同步微信头像 ──────────────
+   显示优先级：自定义 avatar_url > 微信 wechat_avatar_url > 首字母。
+   微信登录尚未接入时 wechat_avatar_url 为空，「使用微信头像」按钮置灰提示；
+   一旦接入并授权，顾客点一下即可把微信头像同步过来（后端把 wechat_avatar_url 复制到 avatar_url）。 */
+function meAvatarInner(name,url){
+  const letter=esc((name||'远')[0]||'远');
+  if(url) return `<img class="me-ava__img" src="${esc(url)}" alt="${esc(name||'')}" onerror="this.parentNode.textContent='${letter}'">`;
+  return letter;
+}
+function meApplyAvatar(){
+  const name=ME.name||'远', url=ME.avatar||'';
+  ['meAva','meCodeAv','meMcAva'].forEach(function(id){
+    const el=document.getElementById(id);
+    if(el) el.innerHTML=meAvatarInner(name,url);
+  });
+}
+function closeAvatarSheet(){
+  const el=document.getElementById('meAvatarSheet'); if(el)el.remove();
+  document.documentElement.classList.remove('w-sheet-open');
+}
+function openAvatarSheet(){
+  let el=document.getElementById('meAvatarSheet');
+  if(!el){
+    el=document.createElement('div');el.id='meAvatarSheet';el.className='w-sheet';
+    el.innerHTML=`<div class="w-sheet__mask" data-close></div>
+      <div class="w-sheet__panel me-av" role="dialog" aria-modal="true" aria-label="设置头像">
+        <button type="button" class="w-sheet__x" data-close aria-label="关闭">×</button>
+        <div class="me-av__body">
+          <div class="me-av__preview" id="meAvPrev"></div>
+          <div class="me-av__name">${esc(ME.name||'会员')}</div>
+          <input type="file" id="meAvFile" accept="image/*" hidden>
+          <button class="me-btn me-btn--block" type="button" onclick="mePickAvatar()">从相册选择图片</button>
+          ${ME.wechatAvatar?`<button class="me-btn me-btn--block" type="button" onclick="meUseWechatAvatar()">使用微信头像</button>`
+                            :`<button class="me-btn me-btn--block" type="button" disabled title="需在微信中授权后自动同步">使用微信头像（未授权）</button>`}
+          ${ME.avatar?`<button class="me-btn me-btn--block me-btn--danger" type="button" onclick="meClearAvatar()">恢复默认头像</button>`:''}
+        </div>
+      </div>`;
+    document.body.appendChild(el);
+    document.documentElement.classList.add('w-sheet-open');
+    el.addEventListener('click',function(e){ const t=e.target.closest('[data-close]'); if(t&&el.contains(t))closeAvatarSheet(); });
+    const fi=document.getElementById('meAvFile');
+    if(fi&&!fi._wired){ fi._wired=true; fi.addEventListener('change',meOnAvatarFile); }
+  }
+  const prev=document.getElementById('meAvPrev'); if(prev)prev.innerHTML=meAvatarInner(ME.name||'远',ME.avatar||'');
+}
+function mePickAvatar(){ const fi=document.getElementById('meAvFile'); if(fi)fi.click(); }
+function meOnAvatarFile(e){
+  const f=e.target.files&&e.target.files[0]; if(!f) return;
+  if(f.size>3*1024*1024){ if(window.toast)toast('图片不能超过 3MB'); return; }
+  const rd=new FileReader();
+  rd.onload=function(){
+    const prev=document.getElementById('meAvPrev'); if(prev)prev.innerHTML='<img class="me-ava__img" src="'+rd.result+'">';
+    meUploadAvatar(rd.result);
+  };
+  rd.readAsDataURL(f);
+}
+async function meUploadAvatar(dataUrl){
+  try{
+    const r=await api(`/api/public/users/${USER}/avatar`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({avatarData:dataUrl})});
+    ME.avatar=r.avatarUrl||ME.avatar; meApplyAvatar();
+    if(window.toast)toast('头像已更新');
+    if(document.getElementById('meAvatarSheet')){ closeAvatarSheet(); openAvatarSheet(); }
+  }catch(e){ if(window.toast)toast((e&&e.message)||e); }
+}
+async function meUseWechatAvatar(){
+  try{
+    const r=await api(`/api/public/users/${USER}/avatar`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({useWechat:true})});
+    ME.avatar=r.avatarUrl||''; meApplyAvatar();
+    if(window.toast)toast('已使用微信头像');
+    if(document.getElementById('meAvatarSheet')){ closeAvatarSheet(); openAvatarSheet(); }
+  }catch(e){ if(window.toast)toast((e&&e.message)||e); }
+}
+async function meClearAvatar(){
+  try{
+    await api(`/api/public/users/${USER}/avatar`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({clear:true})});
+    ME.avatar=''; meApplyAvatar();
+    if(window.toast)toast('已恢复默认头像');
+    if(document.getElementById('meAvatarSheet')){ closeAvatarSheet(); openAvatarSheet(); }
+  }catch(e){ if(window.toast)toast((e&&e.message)||e); }
+}
+window.openAvatarSheet=openAvatarSheet; window.closeAvatarSheet=closeAvatarSheet;
+window.mePickAvatar=mePickAvatar; window.meUseWechatAvatar=meUseWechatAvatar; window.meClearAvatar=meClearAvatar;
 
 /* 若脚本在 我的 已激活后注入，立即刷新一次 */
 if(document.getElementById('wme') && !document.getElementById('wme').hasAttribute('hidden')===false){

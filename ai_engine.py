@@ -24,7 +24,7 @@ SYSTEM = """你是 ClubOS 的 AI 活动内容主编（Editorial Director），�
 8. 输出严格 JSON，不要 Markdown，不要解释。
 """
 
-BLOCK_TYPES = "hero|lead|narrative|statement|media|gallery|facts|timeline|info|quote|divider|cta|bigimage|imagetext|cards|numbercards|highlight|columns"
+BLOCK_TYPES = "hero|lead|narrative|statement|media|gallery|facts|timeline|info|quote|divider|cta|bigimage|imagetext|cards|numbercards|highlight|columns|table"
 
 # 文案契约（2026-10-07 重写）。
 # 旧契约要求「eyebrow 用 2~6 字场景词 / body 拆成一行一个 ≤30 字短句 / 每段都配一句对仗 pull」，
@@ -113,7 +113,22 @@ _WRITING_CONTRACT = """文案与排版契约（2026-10-07 第二版，用户反�
 ★ eyebrow 字段可选，只在确实需要场景锚点时才用，且不要连续两节都用。
 ★ 全页穿插 1~2 个 statement（整页大字观点句，≤18 字）与至多 1 个 quote；金句必须从本次活动的
   真实体验里长出来（地名 / 海拔 / 动作 / 时刻），不许放之四海皆准。
-★ lead 是开场引言：2~3 句，第一句给画面、最后一句给出发的理由。不要写成「本次活动旨在…」。"""
+★ lead 是开场引言：2~3 句，第一句给画面、最后一句给出发的理由。不要写成「本次活动旨在…」。
+
+- 禁令 K｜数字卡不许编造（2026-10-29 用户反馈：详情里出现「D2全天 / 7+ / 6 / ≥90分钟」这类凭空
+  捏造的统计卡）。numbercards / cards / highlight 里的每一个数字和事实，**必须能在资料或
+  Activity Master 里找到出处**；资料里没有可公开的硬指标时，就整组省略 numbercards，
+  绝不为「凑视觉组件」而编一组占位数字。一张没有真实数字来源的卡，等于在详情页里对顾客说谎。
+
+- 禁令 L｜忠实还原原排版的结构（2026-10-29 用户反馈「抓取内容也要重新学习」）：当原始资料本身
+  就是一份**已经分好节、有场景式小标题、有图片图注的成品排版**（例如从秀米 / H5 抓回来的页面）
+  时，你要**保留它真实的分节顺序与场景式标题**，而不是套一层通用模板把它重写成千篇一律的样子。
+  原排版里那些有画面感的小标题（如「魔界日出：不是等待，是蹲守的仪式感」）和生动描述，
+  只要不违反事实纪律，就尽量沿用；不要为了「换句式」把它们改成更泛、更空的标题。
+
+- 禁令 M｜图片图注要保留（2026-10-29）：原始资料里图片旁的中文说明 / 标签（抓取时标记为
+  「（图：…）」），要还原成对应 media / bigimage / gallery 块的 caption 字段，不要丢掉。
+  图注是成品排版的一部分，写 caption 时只写画面上真实存在的东西，不要另编承诺。"""
 
 
 # ---------------------------------------------------------------------------
@@ -1530,8 +1545,12 @@ _LAYOUT_CONTRACT = """
    让顾客第一屏就看到画面，不要一上来三屏纯文字。
 4. **gallery 不少于 2 组**：至少做 2 个 gallery 区块，每组 3~6 张**同主题**实拍，分别挂在不同的行程 / 体验 /
    住宿段落下面（gallery 是消耗照片最快、最像画报的手法）。
-5. **numbercards 至少 1 组**：用大数字突出 距离 / 海拔 / 天数 / 人数 / 累计爬升 等硬指标，做成 numbercards。
-   每张卡**必须有真实数字**（value/number 字段），不许只给一句 label 没有数字；数字取自资料，不许编造。
+5. **numbercards 只在有真实硬指标时才用**：距离 / 海拔 / 天数 / 人数 / 累计爬升 / 费用 等，
+   只有当资料或 Activity Master 里**确实存在**可公开的对应数字时，才做成 numbercards 突出。
+   每张卡必须有真实数字（value/number 字段），且数字必须能追溯到一个真实来源事实。
+   ★ **严禁编造占位统计卡**（2026-10-29 用户反馈：详情里出现过「D2全天 / 7+ / 6 / ≥90分钟」这类
+   凭空捏造的数字卡）：若资料里没有任何可公开的硬指标，就**整组省略 numbercards**，
+   宁可少一个视觉组件，也不要放一组没有出处的占位数字——那比没有更损害顾客信任。
 6. **主题维度覆盖**：资料里出现的维度（目的地风貌 / 行程 / 住宿 / 体验活动 / 后勤须知 / 报名方式）都要有对应
    区块，不要只写行程和费用两块就结束。
 7. **节奏交替**：禁止连续超过 3 个纯文字 block 不配图；图文穿插，每 2~3 个文字块就插一个视觉块或 gallery。
@@ -1539,10 +1558,60 @@ _LAYOUT_CONTRACT = """
    服务承诺 / 费用包含 / 交通接送 / 住宿安排 / 高原须知 / 证件要求，每个主题全篇只允许出现在**一个**区块里。
    facts 与 info（出发前知道）严禁重复同一主题——写 info 前先检查前面 blocks 已经讲过什么，只补充还没讲过的信息。
 9. **timeline 只写节奏，不抄行程**：timeline 块的 value 是「行程节奏 / 高原适应策略」的说明文字
-   （headline + text），**不要**在 timeline.items 里逐条复制行程时刻——逐条行程由页面结构化的
+   （headline + text），**不要**在 timeline.items 里逐条复制行程时刻——逐日行程由页面结构化的
    「详细行程 ITINERARY」区完整呈现，正文再排一份就是同页两个行程板块。仅当原始资料里根本没有
    逐日行程时，才允许 timeline 携带 items 充当唯一时刻表。
-以上 9 条是下限，达成后鼓励更丰富。若可用照片不足 N*0.6 张，就以「全部可用照片」为下限（绝不要求超过实际拥有）。"""
+10. **链接来源的整段设计图禁止裁切与拼网格**（2026-10-29 用户对照原产品实锤）：链接抓取的照片清单里，
+   竖长图（高 ≥1.4 倍宽、desc 显示「画面含文字标题」）是**来源推文的整段设计成品**——标题字效、
+   摄影、配色已融为一体，等于原产品的一个章节。这类图必须**每张独占一个 bigimage 或 media
+   （layout=full）块**、按原图顺序整幅呈现；**严禁**塞进 gallery 网格 / imagetext 侧栏 / pair 并排
+   （那会把原设计拦腰裁断），也不要在它上面叠大段正文——文字放在这类图**之间**做衔接，每段 ≤3 句。
+以上 10 条是下限，达成后鼓励更丰富。若可用照片不足 N*0.6 张，就以「全部可用照片」为下限（绝不要求超过实际拥有）。"""
+
+# 内容自适应排版标准（2026-10-29 新增｜直接回应「所有活动都长一个样，希望按资料类型各有排版标准」）。
+# 旧链路无论上传什么，模型都默认排成「首屏 + 引言 + 三段图文 + 费用 + 须知」一套模板，
+# 于是行程单、产品册、品牌故事、攻略清单全看起来一样。这里强制「先判型、再配块」，
+# 把资料骨架映射到不同的 ed-* 块序列；每个块仍忠于资料、绝不编造资料没有的内容。
+_LAYOUT_STANDARD = """
+★★ 内容自适应排版标准（2026-10-29 新增｜直接覆盖「所有活动都长一个样」）：
+上传的资料千差万别——有的只有一段品牌故事 + 一堆实拍、有的是十几页行程报价单、
+有的是产品册、有的是攻略清单、有的是活动公告。详情页版式必须**跟着资料的骨架走**，
+而不是把任何资料都塞进同一套「首屏 + 引言 + 几段图文 + 费用 + 须知」。
+
+★★ 落笔前第一步永远是「判型」：先判断这份资料属于哪一类（可多选），再决定版式重心。
+  - 行程类（研学 / 徒步 / 跟团 / 多日游）：资料重心在「逐日行程 + 团期 + 多档报价 + 费用说明」。
+    版式重心 = 整版大图开场 → 行程时间线（timeline 的 items 带 meta，或 master.itinerary 写成
+    `{day, schedule:[{time,text}], meta:[…]}` 让每天挂住宿/餐饮/车辆 chips）→ 团期价格表（**table 块**）
+    → 费用说明（info，按 包含/不含/赠送 定性分栏，绝不定量）→ 实拍 gallery 穿插 → 报名须知。
+    团期与多档价格是这类资料的灵魂，必须用 table 块原样对齐呈现，不要拆成卡片网格。
+  - 产品类（装备 / 线路套餐 / 会员卡）：资料重心在「规格 + 价格矩阵 + 卖点」。
+    版式重心 = 产品大图 → cards 列卖点 → **table 块**列规格 / 价格档位 → 场景实拍 → 购买引导。
+  - 图文故事类（品牌故事 / 营地日记 / 风景随笔）：资料重心在「情绪 + 影像」。
+    版式重心 = 大图铺陈（bigimage / media full）→ narrative 长图文错落（image-left/right/full）
+    → gallery 成组 → 少量 statement 金句 → 短 info。这类**尽量少用表格与数字卡**，让画面说话。
+  - 清单攻略类（准备清单 / 避坑指南 / 装备攻略）：资料重心在「结构化条列」。
+    版式重心 = lead 引言 → info / cards 把清单条目做成可扫读的块（每条带小标题）
+    → 少量配图 → 关键提醒 highlight。
+  - 活动公告类（招募启事 / 限时活动 / 赛事）：资料重心在「一句话主张 + 时间地点 + 怎么参与」。
+    版式重心 = hero / lead 主张 → facts 关键事实（时间/地点/对象/名额）→ timeline 节点
+    → 报名规则 highlight（页面已有常驻报名入口，这里只讲规则）→ 实拍佐证。
+
+★★ 第二步「按型配块」，但**每个 block 仍忠于资料**——资料里没有的内容绝不编造：
+  - 资料是「团期 × 多档价格」表格 → 必须用一个 table 块完整呈现（head=列名、rows=每行一格），
+    不要拆成卡片网格（表格的价值是让顾客一眼比价，卡片会打乱对齐）。
+  - 资料是「逐日行程且每天带住宿/餐饮/车辆」→ timeline 的 items 带 meta 数组；
+    或 master.itinerary 写成 `{day, schedule:[{time,text,meta:[…]}], meta:[…]}`（Day 包装项带 meta）。
+    前端会把 meta 渲染成每日 chips，让「逐日行程」一眼看到当天住哪、吃什么、怎么走。
+  - 资料是「整段设计图」（链接来源、竖长、自带标题字）→ 每张独占一个 bigimage（layout=full）
+    或 media（layout=full）块、按原图顺序整幅呈现，严禁裁切 / 拼网格（见 _LAYOUT_CONTRACT 第 10 条）。
+  - 资料图片多 → 优先 gallery / bigimage 铺满；图片少 → 用 narrative 长文 + cards + highlight 撑起吸引力，
+    但不硬凑数字卡（numbercards 只在有真实硬指标时用，见 _LAYOUT_CONTRACT 第 5 条）。
+
+★★ 硬禁止（违反即不合格）：
+  - 禁止「一套模板通吃」：不先判型就直接排「首屏 + 引言 + 三段图文 + 费用 + 须知」的，一律重排。
+  - 禁止对型错配：图文故事类硬塞一张团期表、产品类硬写逐日行程，都算判型失败。
+  - 禁止把表格数据拆进卡片：只要资料本身是表格（团期 / 价格 / 规格 / 费用对比），就用 table 块。
+"""
 
 # 宣传区 HTML（promoHtml）契约（2026-10-22 重构：**按活动题材分配风格家族**）。
 # 2026-10-21 把详情统一改成「极简画报」后，用户反馈「所有活动详情都长成同一个样子，
@@ -1567,6 +1636,9 @@ _PROMOHTML_BASE = """
   每张图配一句 `figcaption`（≤30 字，只写画面里真实存在的时刻 / 地点 / 动作 / 光线，不写形容词堆砌）。
 - **图片高度必须封顶**：单图 `height:300~560px; object-fit:cover`，双图各 260~340px；
   **禁止**让竖构图按原始比例通栏——实测会撑到 900px 以上，一屏一张图，读起来像相册而不是宣传页。
+  ★ **例外——整段设计图不裁切**（2026-10-29）：链接来源、竖长（高 ≥1.4 倍宽）且画面自带标题文字的
+  设计成品图，必须 `width:100%;height:auto` 完整呈现、按原图顺序每张独占一屏；
+  **严禁**对它 object-fit:cover 裁切或多张并排网格——那是把原排版的设计成品拦腰砍断。
 - **开场不要整幅大图**：页面顶部已经有封面大图，promoHtml 的第一块用「眉标 + 标题 + 一句引言」开场，
   第一张图放在这段文字之后（否则等于在封面下面又放了一个首屏）。
 - **只允许这些标签**：section div p h1 h2 h3 h4 strong em img figure figcaption ul ol li blockquote hr span small；
@@ -2195,9 +2267,12 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
   同一份清单就会在页面上出现两遍。checklist 只写进 activity_master，不要做成 block。
 
 字段硬性契约（违反会导致前端渲染成空）：
-- itinerary 必须是数组，每项形如 {{"time":"Day 1 08:00-12:00","text":"成都集合出发 → 康定城区"}}。
-  逐日行程要完整展开成多条（半天到一天一条），绝不能省略成 {{"day":"Day 1","schedule":[...]}} 这类嵌套形状。
-  行程是户外活动的核心事实：资料里有几天就写几天，一条都不能丢。
+- itinerary 必须是数组，两种形状二选一（都禁止丢天）：
+  ① 扁平：每项 {{"time":"Day 1 08:00-12:00","text":"成都集合出发 → 康定城区"}}，半天到一天一条、完整展开；
+  ② 按天嵌套（资料每天还带住宿/餐饮/车辆等元信息时优先用这种）：
+     [{{"day":"Day 1","schedule":[{{"time":"08:00","text":"..."}}],"meta":["住宿：当地四星酒店","餐饮：含早+特色餐","车辆：35座大巴"]}}]。
+     schedule 必须完整展开当天所有时段；meta 是挂在「这一天」上的短标签数组（住宿/餐饮/车辆/领队等），
+     前端会渲染成每日 chips；不写元信息就省略 meta 字段。两种形状都不许省略任何一天。
 - checklist 必须是「具体装备品类」字符串数组（如 冲锋衣、抓绒外套、登山杖、头灯、防晒帽、保温杯、雨衣、充电宝、急救包），
   根据本次活动的地点海拔、季节、天数与难度推导；不要输出「高原适应准备」「防晒防寒装备」这类抽象分类——
   它们无法对应到商城在售装备。证件、个人药品这类非装备个人物品放在最后，最多两三项。
@@ -2242,12 +2317,14 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
 }}
 
 block 语义（全部可自由省略 / 重复 / 排序，不要机械凑章节）：
-hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言；narrative=图文叙事（layout 可为 text-top/image-left/image-right/full）；statement=强观点短句；media=单图/双图/拼图/整版大图（layout: single/pair/mosaic/grid/full）；gallery=图片组；facts=关键事实条；timeline=时间线；info=出发前须知（装备与着装建议/注意事项/证件与集合/退改规则，**严禁写行程、费用、出行清单**）；quote=引用；divider=节奏分隔；bigimage=整版铺满大图 + 可选叠字标题/图注（最适合做画报式跨页图）；imagetext=杂志左右图文（layout: left/right）；cards=图标+标题+要点 的卡片网格（把「为什么值得/包含什么」做成视觉块）；numbercards=大数字统计卡（距离/海拔/天数/人数用大字号突出）；highlight=高亮提示框（强调一句关键承诺或须知）；columns=双栏长文（无图时的多段排版）。
+hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言；narrative=图文叙事（layout 可为 text-top/image-left/image-right/full）；statement=强观点短句；media=单图/双图/拼图/整版大图（layout: single/pair/mosaic/grid/full）；gallery=图片组；facts=关键事实条；timeline=时间线（items 可带 meta 数组，挂每日住宿/餐饮/车辆 chips）；info=出发前须知（装备与着装建议/注意事项/证件与集合/退改规则，**严禁写行程、费用、出行清单**）；quote=引用；divider=节奏分隔；bigimage=整版铺满大图 + 可选叠字标题/图注（最适合做画报式跨页图）；imagetext=杂志左右图文（layout: left/right）；cards=图标+标题+要点 的卡片网格（把「为什么值得/包含什么」做成视觉块）；numbercards=大数字统计卡（距离/海拔/天数/人数用大字号突出）；highlight=高亮提示框（强调一句关键承诺或须知）；columns=双栏长文（无图时的多段排版）；table=多列结构化数据表（团期价格 / 规格矩阵 / 费用对比：head=列名数组、rows=每行一格的二维数组，必须用真 <table> 对齐呈现，严禁拆成卡片网格）。
 ★★ 排版自由铁律（2026-10-08 用户要求：第一段要像公众号长图文一样美观、每版都不同）：
    C 端招募详情是一场活动的主视觉宣传，按「公众号长图文」的标准做 —— 多变的版式、大图铺陈、
-   图文穿插、卡片化要点。主动组合 bigimage / imagetext / numbercards / cards 这类视觉组件，
+   图文穿插、卡片化要点。   主动组合 bigimage / imagetext / numbercards / cards 这类视觉组件，
    避免从头到尾都是同一套「标题 + 正文 + 图」。照片多时优先做视觉编排，照片少时用文字与卡片把吸引力撑起来。
 {_LAYOUT_CONTRACT}
+
+{_LAYOUT_STANDARD}
 
 {_promohtml_contract(_style_key)}
 
@@ -2359,9 +2436,11 @@ async def regenerate_detail(club_id:int,source:dict[str,Any],master:dict[str,Any
 }}
 
 block 语义：
-hero=首屏；lead=短引言；narrative=图文叙事；statement=强观点短句；media=单图/双图/拼图；gallery=图片组；facts=关键事实条；timeline=时间线；info=出发前须知（装备与着装建议/注意事项/证件与集合/退改规则，**严禁写行程、费用、出行清单**）；quote=引用；divider=节奏。
+hero=首屏；lead=短引言；narrative=图文叙事（layout: text-top/image-left/image-right/full）；statement=强观点短句；media=单图/双图/拼图/整版大图（layout: single/pair/mosaic/grid/full）；gallery=图片组；facts=关键事实条；timeline=时间线（items 可带 meta 数组，挂每日住宿/餐饮/车辆 chips）；info=出发前须知（装备与着装建议/注意事项/证件与集合/退改规则，**严禁写行程、费用、出行清单**）；quote=引用；divider=节奏；bigimage=整版铺满大图；imagetext=杂志左右图文；cards=图标+标题+要点 卡片网格；numbercards=大数字统计卡；highlight=高亮提示框；columns=双栏长文；table=多列结构化数据表（团期价格 / 规格矩阵 / 费用对比：head=列名数组、rows=每行一格的二维数组，必须用真 <table> 对齐，严禁拆成卡片网格）。
 任何 block 都可省略、重复、自由排序。不要为了「结构完整」机械凑章节。
 {_LAYOUT_CONTRACT}
+
+{_LAYOUT_STANDARD}
 
 {_promohtml_contract(_style_key)}
 
@@ -2741,6 +2820,13 @@ async def generate_recap(club_id:int,master:dict[str,Any],note:str,photos:list[d
 {{"title":"","summary":"","blocks":[{{"type":"lead|narrative|media|gallery|quote|timeline|facts|cta","headline":"","body":"","mediaRefs":[],"items":[{{"label":"","value":""}}]}}]}}
 正文必须全部放进 blocks 数组，形状与公众号一致。
 严格 JSON，不要 Markdown，不要解释。"""
+    # 回顾成品要能脱离活动独立渲染（2026-10-30 解耦）：把图片池直接打进内容 JSON，
+    # 渲染端不再回查活动的 master.media，活动资料以后怎么改都不会让老回顾裂图。
+    media_for_render=[{'ref':p.get('ref'),'url':p.get('url'),
+                       'name':p.get('name') or p.get('desc') or '',
+                       'desc':p.get('desc') or '',
+                       'width':p.get('width'),'height':p.get('height')}
+                      for p in photos if p.get('ref')]
     gw=await generate_json(club_id=club_id,task_type='recap',system_prompt=SYSTEM,user_prompt=prompt)
     if gw:
         data=gw.data or {}
@@ -2751,6 +2837,7 @@ async def generate_recap(club_id:int,master:dict[str,Any],note:str,photos:list[d
             data['blocks']=_sanitize_blocks(data['blocks'],allowed_refs=set(refs))
         data,_changed=scrub_cost_data(data)
         if not str(data.get('title') or '').strip():data['title']=f'{title}｜活动回顾'
+        data['media']=media_for_render
         return data,gw
     # 离线 / mock 兜底：用真实照片 + 记录拼一篇诚实的基础回顾（不编故事）
     blocks=[{'type':'lead','headline':f'{title}｜活动回顾',
@@ -2758,5 +2845,6 @@ async def generate_recap(club_id:int,master:dict[str,Any],note:str,photos:list[d
              'mediaRefs':refs[:1]}]
     if len(refs)>1:
         blocks.append({'type':'gallery','headline':'现场相册','mediaRefs':refs[1:]})
-    data={'title':f'{title}｜活动回顾','summary':note.strip()[:80],'blocks':blocks}
+    data={'title':f'{title}｜活动回顾','summary':note.strip()[:80],'blocks':blocks,
+          'media':media_for_render}
     return data,record_mock_usage(club_id,'recap',prompt,data)

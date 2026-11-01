@@ -321,7 +321,13 @@ function esc(v=''){
 }
 function mediaMap(master){let m={};for(const x of master?.media||[]){if(typeof x==='string'){if(x)m[x]=m[x]||{ref:x};continue}if(x?.ref)m[x.ref]=x}return m}
 function resolvedRefs(refs,map){return (refs||[]).filter(r=>r&&map[r]&&map[r].url)}
-function mediaHtml(ref,map,cls=''){const x=map[ref];if(!x?.url)return `<div class="editorial-media missing ${cls}"><span>${esc(ref||'image')}</span></div>`;return `<figure class="editorial-media ${cls}"><img src="${esc(x.url)}" alt="" loading="lazy"></figure>`}
+/* 链接来源的整段设计图（2026-10-29 用户对照原产品实锤）：秀米等推文链接抓下来的图，
+   很多是原页面的「整段设计成品」——标题字效 + 摄影 + 配色在图里融为一体（790 宽竖长图）。
+   这种图进 4:3 / 1:1 网格被 object-fit:cover 拦腰裁断，原设计就全毁了。
+   判定：来自 /link/ 抓取目录即按原产品的方式呈现——通栏、原始比例、完整显示。 */
+function isSectionArt(x){const u=String(x?.url||'');if(!u.includes('/link/'))return false;
+  const w=+x?.width||0;return !w||w>=400}
+function mediaHtml(ref,map,cls=''){const x=map[ref];if(!x?.url)return `<div class="editorial-media missing ${cls}"><span>${esc(ref||'image')}</span></div>`;return `<figure class="editorial-media${isSectionArt(x)?' nat':''} ${cls}"><img src="${esc(x.url)}" alt="" loading="lazy"></figure>`}
 /* 把任意形状的值归一成**纯文本**，且任何形状都不许产出 "[object Object]"。
    真模型（通义千问等）输出的字段形状不稳定：同一处可能给字符串、字符串数组，
    也可能给对象数组（[{text:'…'},{para:'…'}]）。直接 String() 就会把
@@ -645,13 +651,16 @@ function renderPromo(detail,master={},opts={}){
       const pull=b.pull?`<p class="ed-pull">${esc(b.pull)}</p>`:'';
       const copy=`<div class="ed-copy">${_kicker(b.eyebrow)}<h2>${esc(b.headline||'')}</h2>${edParas(b.body||b.text||'')}${pull}</div>`;
       const layout=b.layout||'text-top';
-      if((layout==='image-left'||layout==='image-right')&&ok.length){
+      /* 整段设计图不做 split/full 叠字版式（2026-10-29）：设计图自带标题文字，
+         再叠一层文案等于双重文字，且 split 侧栏会把它裁小——一律回退通栏堆叠。 */
+      const _hasArt=ok.some(r=>isSectionArt(mm[r]));
+      if((layout==='image-left'||layout==='image-right')&&ok.length&&!_hasArt){
         h+=`<section class="ed-narrative ed-narrative--split ${layout==='image-right'?'img-right':'img-left'} has-media">${layout==='image-right'?copy+media:media+copy}</section>`;
-      }else if(layout==='full'&&ok.length){
+      }else if(layout==='full'&&ok.length&&!_hasArt){
         const url=mm[ok[0]]?.url||'';
-        h+=`<section class="ed-narrative ed-narrative--full${url?' has-photo':''}"${url?` style="background-image:url('${esc(url)}')"`:''}><div class="ed-narrative__fullcopy">${copy}</div></section>`;
+        h+=`<section class="ed-narrative ed-narrative--full${url?' has-photo':''}"${url?` style="background-image:url('${esc(url)}')"`:''}><div class="ed-narrative__fullcopy">${copy}</div>${b.caption?`<p class="ed-cap-pill">${esc(b.caption)}</p>`:''}</section>`;
       }else{
-        h+=`<section class="ed-narrative ${ok.length?'has-media':''}${pull?' has-pull':''}">${copy}${media}</section>`;
+        h+=`<section class="ed-narrative ${ok.length?'has-media':''}${pull?' has-pull':''}">${copy}${media}${b.caption?`<p class="ed-cap-pill">${esc(b.caption)}</p>`:''}</section>`;
       }
     }    else if(b.type==='media'){
       // 解析不到 url 的 ref 直接不排版：宁可少一张图，也不要满屏灰色占位块。
@@ -659,10 +668,12 @@ function renderPromo(detail,master={},opts={}){
       if(ok.length||b.caption){
         if(b.layout==='full'&&ok.length){
           // 整版铺满大图：让一张照片占满整段，公众号式的跨页视觉冲击。
-          h+=`<section class="ed-media ed-media--full">${ok.map(r=>{const u=mm[r]?.url||'';return `<figure class="editorial-media full-bleed"${u?` style="background-image:url('${esc(u)}')"`:''}></figure>`}).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
+          h+=`<section class="ed-media ed-media--full">${ok.map(r=>{const x=mm[r];const u=x?.url||'';
+            if(isSectionArt(x))return `<figure class="editorial-media nat"><img src="${esc(u)}" alt="" loading="lazy"></figure>`;
+            return `<figure class="editorial-media full-bleed"${u?` style="background-image:url('${esc(u)}')"`:''}></figure>`}).join('')}${b.caption?`<p class="ed-cap-pill">${esc(b.caption)}</p>`:''}</section>`;
         }else{
           const layout=b.layout==='mosaic'?'mosaic':ok.length===2?'pair':ok.length>=3?'grid':'single';
-          h+=`<section class="ed-media ${layout}">${ok.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
+          h+=`<section class="ed-media ${layout}">${ok.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-cap-pill">${esc(b.caption)}</p>`:''}</section>`;
         }
       }
     }    /* ---- 2026-10-08 新增画报式组件：让第一段（引言宣传）拥有公众号长图级别的版式自由度 ---- */
@@ -670,9 +681,15 @@ function renderPromo(detail,master={},opts={}){
       // 整版铺满大图 + 可选叠字标题/图注：画报式跨页图，给页面一个"呼吸的大瞬间"。
       const ok=resolvedRefs(refs,mm);
       if(ok.length){
-        const url=mm[ok[0]]?.url||'';
+        const _x0=mm[ok[0]];
+        const url=_x0?.url||'';
         const cap=(b.title||b.text||b.caption)?`<div class="ed-bigimage__cap">${b.title?`<h3>${esc(b.title)}</h3>`:''}${b.text?`<p>${esc(b.text)}</p>`:''}${b.caption?`<span class="ed-caption">${esc(b.caption)}</span>`:''}</div>`:'';
+        if(isSectionArt(_x0)){
+          /* 整段设计图：自带标题字效，禁止当背景再叠字（2026-10-29）——通栏原图 + 图下说明 */
+          h+=`<section class="ed-bigimage ed-bigimage--nat"><figure class="editorial-media nat"><img src="${esc(url)}" alt="" loading="lazy"></figure>${cap}</section>`;
+        }else{
         h+=`<section class="ed-bigimage${url?' has-photo':''}"${url?` style="background-image:url('${esc(url)}')"`:''}>${cap}</section>`;
+        }
       }
     }
     else if(b.type==='imagetext'){
@@ -720,9 +737,25 @@ function renderPromo(detail,master={},opts={}){
       const t=edPlain(b.text||b.body||'');
       if(t.trim())h+=`<section class="ed-columns">${edParas(b.text||b.body||'')}</section>`;
     }
+    else if(b.type==='table'){
+      /* 表格块（2026-10-29 新增）：团期价格表 / 规格矩阵 / 费用对比 这类「多列结构化数据」，
+         用真正的 <table> 而非卡片网格——卡片会把对齐的多列数字拆成无法对照的方块。
+         head=列标题数组；rows=二维字符串数组；可选 footnote 一行说明。
+         窄屏用横向滚动容器包住，不挤压列宽、不折行错列。 */
+      const head=(b.head||[]).filter(x=>x!=null&&String(x).trim()!=='');
+      const rows=(b.rows||[]).filter(r=>Array.isArray(r)&&r.length&&r.some(c=>String(c==null?'':c).trim()!==''));
+      if(rows.length){
+        const th=head.length?`<thead><tr>${head.map(c=>`<th>${esc(String(c))}</th>`).join('')}</tr></thead>`:'';
+        const tb=`<tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${esc(String(c==null?'':c))}</td>`).join('')}</tr>`).join('')}</tbody>`;
+        h+=`<section class="ed-section ed-table-wrap">`
+          +`<div class="ed-section-head">${b.title?`<div class="ed-kicker">TABLE</div><h2>${esc(b.title)}</h2>`:''}</div>`
+          +`<div class="ed-table-scroll"><table class="ed-table">${th}${tb}</table></div>`
+          +`${b.footnote?`<p class="ed-table-note">${esc(b.footnote)}</p>`:''}</section>`;
+      }
+    }
     else if(b.type==='gallery'){
       const ok=resolvedRefs(refs,mm);
-      if(ok.length)h+=`<section class="ed-gallery count-${Math.min(ok.length,4)}">${ok.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-caption">${esc(b.caption)}</p>`:''}</section>`;
+      if(ok.length)h+=`<section class="ed-gallery count-${Math.min(ok.length,4)}">${ok.map(r=>mediaHtml(r,mm)).join('')}${b.caption?`<p class="ed-cap-pill">${esc(b.caption)}</p>`:''}</section>`;
     }
     else if(b.type==='timeline'){
       /* 模型输出的行程项形状不稳定（字符串 / {time,text} / {day,schedule:[...]}），
@@ -738,7 +771,7 @@ function renderPromo(detail,master={},opts={}){
       /* b.body 在 timeline 里可能是 items 数组（rows 的来源），只有字符串才能当说明文字 */
       const noteBody=String(typeof b.text==='string'?b.text:(typeof b.body==='string'?b.body:'')).trim();
       if(rows.length&&!masterHasItin){
-        h+=`<section class="ed-section ed-timeline"><div class="ed-section-head"><div class="ed-kicker">SCHEDULE</div><h2>${esc(b.title||b.headline||'行程')}</h2></div><div class="timeline-list">${rows.map(x=>`<div class="timeline-item"><time>${esc(x.time)}</time><p>${esc(x.text)}</p></div>`).join('')}</div></section>`;
+        h+=`<section class="ed-section ed-timeline"><div class="ed-section-head"><div class="ed-kicker">SCHEDULE</div><h2>${esc(b.title||b.headline||'行程')}</h2></div><div class="timeline-list">${rows.map(x=>`<div class="timeline-item"><time>${esc(x.time)}</time><p>${esc(x.text)}</p>${_metaChips(x.meta)}</div>`).join('')}</div></section>`;
       }else if(noteHead||noteBody){
         h+=`<section class="ed-highlight">${noteHead?`<div class="ed-kicker">${esc(noteHead)}</div>`:''}${edParas(noteBody)}</section>`;
       }
@@ -1112,11 +1145,11 @@ function itineraryRows(list){
       if(String(day).trim())rows.push({time:String(day).trim(),text:''});
       for(const s of sched){
         if(typeof s==='string'){if(s.trim())rows.push({time:'',text:s.trim()});continue}
-        if(s&&typeof s==='object')rows.push({time:String(s.time||s.period||'').trim(),text:String(s.text||s.content||s.desc||s.detail||s.description||'').trim()});
+        if(s&&typeof s==='object')rows.push({time:String(s.time||s.period||'').trim(),text:String(s.text||s.content||s.desc||s.detail||s.description||'').trim(),meta:(s.meta||null)});
       }
       continue;
     }
-    rows.push({time:String(x.time||x.period||'').trim(),text:String(x.text||x.content||x.desc||x.detail||x.description||'').trim()});
+    rows.push({time:String(x.time||x.period||'').trim(),text:String(x.text||x.content||x.desc||x.detail||x.description||'').trim(),meta:(x.meta||null)});
   }
   return rows.filter(r=>r.time||r.text);
 }
@@ -1191,29 +1224,52 @@ function stripDayPrefix(s){
 }
 /* 归一后的行按天分组。日期前缀既可能在 time（"Day 1 06:30"）也可能在 text（"Day 1：抵达营地"）；
    `{day,schedule:[…]}` 这类嵌套形状经 itineraryRows 会变成一条「Day N / 空正文」的标题行 ——
-   所以纯标题行只用来开新分组，不产出数据行。 */
+   所以纯标题行只用来开新分组，不产出数据行。
+   ★ 每日元信息（2026-10-29 新增）：Day 包装项可带 `meta`（住宿/餐饮/车辆 等短标签），
+   挂到对应分组上，在折叠摘要里以芯片呈现 —— 让「逐日行程」一眼看到当天住哪、吃什么、怎么走，
+   而不是只列时刻。纯标题行只开组、不产数据行，meta 仍随组保留。 */
 function itineraryGroups(list){
   const out=[],seen={};let cur=null;
+  // 先把「Day 包装项」的 meta 按天号记下来（扁平化会丢掉包装层，需提前取）
+  const metaByNum={};
+  for(const x of (list||[])){
+    if(!x||typeof x!=='object')continue;
+    const dw=x.day||x.date||x.title||'';
+    const num=dayNumOf(String(dw).trim());
+    if(num&&x.meta)metaByNum[num]=x.meta;
+  }
   for(const r of itineraryRows(list)){
     const rawT=(r.time||'').trim(),rawX=(r.text||'').trim();
     const num=dayNumOf(rawT)||dayNumOf(rawX);
     let time=rawT,text=rawX;
     if(num){time=stripDayPrefix(rawT);if(!time)text=stripDayPrefix(rawX);}
     if(num){
-      if(!seen[num]){cur={num:num,rows:[]};seen[num]=cur;out.push(cur);}
+      if(!seen[num]){cur={num:num,rows:[],meta:metaByNum[num]||null};seen[num]=cur;out.push(cur);}
       else cur=seen[num];
       if(!text)continue;
     }else if(!cur){
-      cur={num:'',rows:[]};out.push(cur);
+      cur={num:'',rows:[],meta:null};out.push(cur);
     }
-    cur.rows.push({time:time,text:text});
+    cur.rows.push({time:time,text:text,meta:r.meta||null});
   }
   return out.filter(g=>g.rows.length);
 }
-function itinRowHtml(x){return `<div>${x.time?`<b>${esc(x.time)}</b>`:''}<p>${esc(x.text)}</p></div>`;}
+function itinRowHtml(x){return `<div>${x.time?`<b>${esc(x.time)}</b>`:''}<p>${esc(x.text)}</p>${_metaChips(x.meta)}</div>`;}
 function itinDigest(rows){
   const t=rows.map(r=>r.text).filter(Boolean).join(' · ');
   return t.length>38?t.slice(0,38)+'…':t;
+}
+/* 每日元信息 chips：把「住宿/餐饮/车辆」这类短标签渲染成圆胶囊。
+   支持两种来源形状：纯字符串数组（['住宿：当地四星','餐饮：含早']）或
+   {label,text}/{label,value} 对象数组；空/缺失一律返回空串（不影响旧数据）。 */
+function _metaChips(meta){
+  const arr=Array.isArray(meta)?meta:[];
+  const parts=arr.filter(x=>x!=null&&String(x).trim()!=='').map(x=>{
+    if(typeof x==='object'){const l=String(x.label||'').trim();const t=String(x.text||x.value||'').trim();return (l?l+'：':'')+t;}
+    return String(x).trim();
+  }).filter(Boolean);
+  if(!parts.length)return '';
+  return `<div class="tl-meta">${parts.map(p=>`<span class="tl-chip">${esc(p)}</span>`).join('')}</div>`;
 }
 function itineraryBodyHtml(master){
   const groups=itineraryGroups((master||{}).itinerary);
@@ -1228,7 +1284,8 @@ function itineraryBodyHtml(master){
       +`<summary><span class="itin-day__no"><i>DAY</i><b>${esc(g.num||String(i+1))}</b></span>`
       +`<span class="itin-day__main"><b class="itin-day__range">${esc(range||('第 '+(i+1)+' 天'))}</b>`
       +`<small class="itin-day__digest">${esc(itinDigest(g.rows))}</small></span>`
-      +`<span class="itin-day__count">${g.rows.length} 项</span></summary>`
+      +`<span class="itin-day__count">${g.rows.length} 项</span>`
+      +`${g.meta?`<span class="itin-day__meta">${_metaChips(g.meta)}</span>`:''}</summary>`
       +`<div class="detail-list">${g.rows.map(itinRowHtml).join('')}</div></details>`;
   }).join('')+'</div>';
 }
@@ -1307,7 +1364,10 @@ const ENUM_CN={
   /* 售后流程的六个态此前没进来，中文界面会直接漏出 pending_review / awaiting_return 这类原始枚举。
      放在 shared 里而不是某一端，是为了让四端显示同一个名字。 */
   pending_review:'待审核',reviewing:'审核中',awaiting_return:'待寄回',returned:'已寄回',
-  exchanging:'换货中',exchanged:'已换货'
+  exchanging:'换货中',exchanged:'已换货',
+  /* 进销存 V1 商品状态机（与库存状态分离）：草稿 / 待入库 / 部分入库 / 待上架 / 已上架 / 已下架 / 停用 */
+  pending_inbound:'待入库',partially_received:'部分入库',pending_listing:'待上架',
+  discontinued:'已停用',in_stock:'有货',low_stock:'库存偏低',out_of_stock:'售罄',restocking:'补货中'
 };
 function enumCn(v,fallback){
   const k=String(v==null?'':v).trim();

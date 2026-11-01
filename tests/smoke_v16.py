@@ -72,7 +72,7 @@ h=ok('get','/api/health').json(); assert h['version'].startswith(('0.16','0.17',
 st=ok('get','/api/platform/commerce/status').json(); assert st['provider']=='medusa' and st['reachable'] is True
 
 # Platform catalog becomes a Medusa-backed catalog: create product + variant + inventory level.
-p=ok('post','/api/platform/products',json={'name':'v16测试冲锋衣','sku':'V16-JKT-001','price':699,'stock':12,'status':'active','category':'服装'}).json()
+p=ok('post','/api/platform/products',json={'name':'v16测试冲锋衣','sku':'V16-JKT-001','price':699,'stock':12,'status':'active','category':'服装','image_url':'/static/uploads/products/gear-1-1.jpg','description':'测试商品完整介绍'}).json()
 pid=p['id']; assert p['commerce']['commerceProductId']=='prod_1' and p['commerce']['commerceInventoryItemId']=='iitem_1'
 with app.conn() as db:
     row=dict(db.execute('SELECT * FROM products WHERE id=?',(pid,)).fetchone())
@@ -161,6 +161,8 @@ with app.conn() as db:
     db.execute("INSERT INTO gear_order_items(order_id,product_id,quantity,unit_price) VALUES(?,?,1,729)",(oid,1))
 
 ful=ok('post',f'/api/platform/orders/{oid}/fulfill').json(); assert ful['fulfillmentId']=='ful_1'
+# Shipment now requires actual pick and pack confirmation; keep the original Medusa assertions.
+pick=ful['pickTask'];ok('post',f"/api/platform/warehouse/tasks/{pick['id']}/picked");ok('post',f'/api/platform/orders/{oid}/pack',json={})
 ship=ok('post',f'/api/platform/orders/{oid}/ship',json={'trackingNo':'SF123456789','carrier':'顺丰'}).json(); assert ship['status']=='shipped'
 deliv=ok('post',f'/api/platform/orders/{oid}/delivered').json(); assert deliv['status']=='delivered'
 with app.conn() as db: o=dict(db.execute('SELECT * FROM gear_orders WHERE id=?',(oid,)).fetchone())

@@ -220,6 +220,11 @@ def save_uploads(files, upload_dir: Path, *, max_total_bytes: int | None = None,
     if max_total_bytes is not None and len(files)>20:
         raise ValueError('at most 20 source files per generation')
     for f in files:
+        # 浏览器在「没选文件」时也会发一个 filename="" 的空 part（只贴链接/只写一句话的
+        # 提交就会带上它）。它不算「类型不支持」—— 记进 skipped 会让前端弹一条
+        # 「有文件没能读进去：已跳过：（…）」的空警告，纯属噪音。
+        if not str(f.filename or '').strip():
+            continue
         orig=Path(f.filename or '')
         ext=orig.suffix.lower()
         if ext not in ALLOWED and ext not in _LEGACY_OFFICE:

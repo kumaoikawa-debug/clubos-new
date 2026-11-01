@@ -118,15 +118,12 @@ class CommerceAnalyticsEngine:
         ).fetchone()
         return dict(r) if r else None
 
-    def _inbound_open(self, c, product_id: int) -> int:
-        r = c.execute(
-            """SELECT COALESCE(SUM(CASE WHEN poi.quantity_ordered>poi.quantity_received
-                          THEN poi.quantity_ordered-poi.quantity_received ELSE 0 END),0)
-               FROM purchase_order_items poi JOIN purchase_orders po ON po.id=poi.purchase_order_id
-               WHERE poi.product_id=? AND po.status IN ('ordered','partially_received')""",
-            (product_id,),
-        ).fetchone()
-        return self._int(r[0])
+    def _inbound_open(self,c,product_id:int)->int:
+        r=c.execute("""SELECT COALESCE(SUM(MAX(0,poi.quantity_ordered-poi.quantity_received-
+          COALESCE((SELECT SUM(e.quantity) FROM purchase_order_exceptions e WHERE e.purchase_order_item_id=poi.id AND e.resolution='closed'),0))),0)
+          FROM purchase_order_items poi JOIN purchase_orders po ON po.id=poi.purchase_order_id
+          WHERE poi.product_id=? AND po.status IN ('ordered','partially_received')""",(product_id,)).fetchone()
+        return int(r[0])
 
     def product_analytics(self, c, *, window_days: int | None = None) -> list[dict[str, Any]]:
         policy = self.policy(c)
@@ -134,7 +131,7 @@ class CommerceAnalyticsEngine:
         recent = self._product_sales_window(c, window)
         out: list[dict[str, Any]] = []
         now = datetime.utcnow()
-        for p0 in c.execute("SELECT * FROM products ORDER BY id").fetchall():
+        for p0 in c.execute("SELECT * FROM products WHERE inventory_mode='platform_owned' AND source!='external_api' ORDER BY id").fetchall():
             p = dict(p0)
             pid = int(p["id"])
             sales = recent.get(pid, {"units": 0, "grossSales": 0.0, "cogs": 0.0, "orderIds": set()})

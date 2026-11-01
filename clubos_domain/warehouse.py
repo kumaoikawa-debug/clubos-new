@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import uuid
+import json
+from . import stock_control as sc
 from typing import Any
-from clubos_domain.product_stock import variant_of, write_variant_stock
+from clubos_domain.product_stock import variant_of, write_variant_stock, resync_sellable_from_wms
 
 
 class WarehouseEngine:
@@ -30,22 +32,22 @@ class WarehouseEngine:
         return {'warehouse':dict(wh),'defaultLocation':dict(loc),'returnLocation':dict(ret)}
 
     def backfill_opening(self,c):
-        d=self.ensure_defaults(c); loc_id=int(d['defaultLocation']['id'])
-        for p in c.execute('SELECT id,stock FROM products ORDER BY id').fetchall():
+        d=self.ensure_defaults(c);lid=int(d['defaultLocation']['id'])
+        for p0 in c.execute('SELECT * FROM products ORDER BY id').fetchall():
+            p=dict(p0)
+            try:sc.owned(c,p['id'])
+            except ValueError:continue
             if not c.execute('SELECT 1 FROM warehouse_inventory WHERE product_id=?',(p['id'],)).fetchone():
-                q=max(0,int(p['stock'] or 0))
-                c.execute('INSERT INTO warehouse_inventory(product_id,location_id,on_hand,reserved) VALUES(?,?,?,0)',(p['id'],loc_id,q))
-                self._move(c,product_id=int(p['id']),movement_type='opening_balance',quantity=q,to_location_id=loc_id,
-                           reference_type='migration',reference_id='v0.20',note='v0.20 承接历史可售库存为中心仓期初实物库存',
-                           idempotency_key=f'v020-opening:{p["id"]}')
+                c.execute('INSERT INTO warehouse_inventory(product_id,location_id,on_hand,reserved) VALUES(?,?,?,0)',(p['id'],lid,max(0,int(p['stock'] or 0))))
+            sc.migrate_product(c,p['id'])
 
     def _move(self,c,*,product_id:int,movement_type:str,quantity:int,from_location_id:int|None=None,to_location_id:int|None=None,
-              reference_type:str='',reference_id:str='',note:str='',actor_type:str='system',idempotency_key:str|None=None):
+              reference_type:str='',reference_id:str='',note:str='',actor_type:str='system',idempotency_key:str|None=None,variant_id:int|None=None):
         key=idempotency_key or f'{movement_type}:{uuid.uuid4().hex}'
         old=c.execute('SELECT * FROM warehouse_movements WHERE idempotency_key=?',(key,)).fetchone()
         if old:return dict(old)
-        c.execute('''INSERT INTO warehouse_movements(product_id,movement_type,quantity,from_location_id,to_location_id,reference_type,reference_id,note,actor_type,idempotency_key)
-                     VALUES(?,?,?,?,?,?,?,?,?,?)''',(product_id,movement_type,int(quantity),from_location_id,to_location_id,reference_type,reference_id,note,actor_type,key))
+        c.execute('''INSERT INTO warehouse_movements(product_id,movement_type,quantity,from_location_id,to_location_id,reference_type,reference_id,note,actor_type,idempotency_key,variant_id)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?)''',(product_id,movement_type,int(quantity),from_location_id,to_location_id,reference_type,reference_id,note,actor_type,key,variant_id))
         return dict(c.execute('SELECT * FROM warehouse_movements WHERE id=last_insert_rowid()').fetchone())
 
     def _row(self,c,product_id:int,location_id:int):
@@ -59,92 +61,70 @@ class WarehouseEngine:
         if on_hand<0 or reserved<0 or reserved>on_hand: raise ValueError('仓库库存状态非法')
         c.execute('UPDATE warehouse_inventory SET on_hand=?,reserved=?,updated_at=CURRENT_TIMESTAMP WHERE product_id=? AND location_id=?',(on_hand,reserved,product_id,location_id))
 
-    def inbound(self,c,*,product_id:int,quantity:int,reference_type:str,reference_id:str,note:str='',location_id:int|None=None,actor_type:str='platform',idempotency_key:str|None=None):
-        q=max(1,int(quantity)); d=self.ensure_defaults(c); lid=int(location_id or d['defaultLocation']['id'])
-        key=idempotency_key or f'wms-in:{reference_type}:{reference_id}:{product_id}'
-        old=c.execute('SELECT * FROM warehouse_movements WHERE idempotency_key=?',(key,)).fetchone()
+    def inbound(self,c,*,product_id:int,quantity:int,reference_type:str,reference_id:str,note:str='',location_id:int|None=None,actor_type:str='platform',idempotency_key:str|None=None,variant_id:int|None=None):
+        v=sc.sku(c,product_id,variant_id);q=int(quantity)
+        if q<=0:raise ValueError('入库数量必须大于 0')
+        lid=int(location_id or self.ensure_defaults(c)['defaultLocation']['id'])
+        key=idempotency_key or f'wms-in:{reference_type}:{reference_id}:{v["id"]}'
+        old=c.execute('SELECT id FROM warehouse_movements WHERE idempotency_key=?',(key,)).fetchone()
         if old:return {'idempotent':True,'movementId':old['id']}
-        r=self._row(c,product_id,lid); self._update(c,product_id,lid,int(r['on_hand'])+q,int(r['reserved']))
-        m=self._move(c,product_id=product_id,movement_type='inbound',quantity=q,to_location_id=lid,reference_type=reference_type,reference_id=reference_id,note=note,actor_type=actor_type,idempotency_key=key)
+        r=sc.balance(c,product_id,v['id'],lid);sc.update(c,r,r['on_hand']+q,r['reserved'])
+        m=self._move(c,product_id=product_id,movement_type='inbound',quantity=q,to_location_id=lid,reference_type=reference_type,reference_id=reference_id,note=note,actor_type=actor_type,idempotency_key=key,variant_id=v['id'])
+        sc.sync(c,product_id)
         return {'movementId':m['id'],'locationId':lid,'quantity':q}
 
-    def outbound_available(self,c,*,product_id:int,quantity:int,reference_type:str,reference_id:str,note:str='',actor_type:str='platform',idempotency_key:str|None=None):
-        q=max(1,int(quantity));key=idempotency_key or f'wms-out:{reference_type}:{reference_id}:{product_id}'
-        old=c.execute('SELECT * FROM warehouse_movements WHERE idempotency_key=?',(key,)).fetchone()
-        if old:return {'idempotent':True,'movementId':old['id'],'quantity':q}
-        rows=c.execute("""SELECT wi.*,wl.zone_type,(wi.on_hand-wi.reserved) available FROM warehouse_inventory wi
-                          JOIN warehouse_locations wl ON wl.id=wi.location_id
-                          WHERE wi.product_id=? AND wl.status='active' AND (wi.on_hand-wi.reserved)>0
-                          ORDER BY CASE WHEN wl.zone_type='sellable' THEN 0 ELSE 1 END,wl.is_default DESC,wi.location_id""",(product_id,)).fetchall()
-        if sum(int(x['available']) for x in rows)<q:raise ValueError('仓库可用实物库存不足')
+    def outbound_available(self,c,*,product_id:int,quantity:int,reference_type:str,reference_id:str,note:str='',actor_type:str='platform',idempotency_key:str|None=None,variant_id:int|None=None):
+        v=sc.sku(c,product_id,variant_id);q=int(quantity);key=idempotency_key or f'out:{reference_type}:{reference_id}:{v["id"]}'
+        old=c.execute('SELECT id FROM warehouse_movements WHERE idempotency_key=?',(key,)).fetchone()
+        if old:return {'idempotent':True,'movementId':old['id']}
+        rows=[dict(x) for x in c.execute('SELECT * FROM warehouse_sku_balances WHERE variant_id=? ORDER BY location_id',(v['id'],))]
+        if q<=0 or sum(x['on_hand']-x['reserved']-x['unsellable'] for x in rows)<q:raise ValueError('SKU 可出库实物不足')
         need=q;first=None
-        for x in rows:
-            take=min(need,int(x['available']))
-            if take<=0:continue
-            self._update(c,product_id,int(x['location_id']),int(x['on_hand'])-take,int(x['reserved']))
-            m=self._move(c,product_id=product_id,movement_type='supplier_return_outbound',quantity=take,from_location_id=int(x['location_id']),reference_type=reference_type,reference_id=reference_id,note=note,actor_type=actor_type,idempotency_key=key if first is None and take==q else f'{key}:{x["location_id"]}')
-            if first is None:first=m
-            need-=take
-            if need<=0:break
-        return {'movementId':first['id'] if first else None,'quantity':q}
+        for r in rows:
+            take=min(need,r['on_hand']-r['reserved']-r['unsellable'])
+            if take:
+                sc.update(c,r,r['on_hand']-take,r['reserved']);need-=take
+                moved=self._move(c,product_id=product_id,variant_id=v['id'],movement_type='supplier_return_outbound',quantity=take,from_location_id=r['location_id'],reference_type=reference_type,reference_id=reference_id,note=note,actor_type=actor_type,idempotency_key=key if first is None else f'{key}:{r["location_id"]}')
+                if first is None:first=moved
+            if not need:break
+        m=first
+        sc.sync(c,product_id);return {'quantity':q,'movementId':m['id']}
 
-    def reserve_order(self,c,*,order_id:int,product_id:int,quantity:int,actor_type:str='system'):
-        q=max(1,int(quantity)); key=f'wms-reserve:order:{order_id}:product:{product_id}'
-        old=c.execute('SELECT * FROM warehouse_reservations WHERE order_id=? AND product_id=?',(order_id,product_id)).fetchone()
-        if old:return dict(old)
-        need=q; allocations=[]
-        rows=c.execute('''SELECT wi.*,wl.warehouse_id,(wi.on_hand-wi.reserved) available FROM warehouse_inventory wi
-                          JOIN warehouse_locations wl ON wl.id=wi.location_id
-                          WHERE wi.product_id=? AND wl.status='active' AND wl.zone_type='sellable' AND (wi.on_hand-wi.reserved)>0
-                          ORDER BY wl.is_default DESC,wi.location_id''',(product_id,)).fetchall()
-        if sum(int(x['available']) for x in rows)<q: raise ValueError('仓库可用库存不足')
-        for x in rows:
-            take=min(need,int(x['available']))
-            if take<=0: continue
-            self._update(c,product_id,int(x['location_id']),int(x['on_hand']),int(x['reserved'])+take)
-            allocations.append({'locationId':int(x['location_id']),'quantity':take}); need-=take
-            if need==0:break
-        c.execute('''INSERT INTO warehouse_reservations(order_id,product_id,quantity,status,allocations_json)
-                     VALUES(?,?,?,?,json(?))''',(order_id,product_id,q,'reserved',__import__('json').dumps(allocations,ensure_ascii=False)))
-        self._move(c,product_id=product_id,movement_type='reserve',quantity=q,reference_type='gear_order',reference_id=str(order_id),note=f'装备订单 #{order_id} 锁定仓库库存',actor_type=actor_type,idempotency_key=key)
-        return dict(c.execute('SELECT * FROM warehouse_reservations WHERE order_id=? AND product_id=?',(order_id,product_id)).fetchone())
+    def reserve_order(self,c,*,order_id:int,product_id:int,quantity:int,actor_type:str='system',variant_id:int|None=None):
+        v=sc.sku(c,product_id,variant_id)
+        r=sc.reserve(c,product_id,v['id'],int(quantity),order_id=order_id)
+        self._move(c,product_id=product_id,variant_id=v['id'],movement_type='reserve',quantity=quantity,reference_type='gear_order',reference_id=str(order_id),actor_type=actor_type,idempotency_key=f'reserve:{order_id}:{v["id"]}')
+        return r
 
-    def release_order(self,c,*,order_id:int,product_id:int,quantity:int|None=None,actor_type:str='system'):
-        import json
-        r=c.execute("SELECT * FROM warehouse_reservations WHERE order_id=? AND product_id=? AND status='reserved'",(order_id,product_id)).fetchone()
-        if not r:return {'released':0,'idempotent':True}
-        alloc=json.loads(r['allocations_json'] or '[]'); remain=int(quantity or r['quantity']); released=0
-        for a in alloc:
-            if remain<=0:break
-            take=min(remain,int(a['quantity'])); wi=self._row(c,product_id,int(a['locationId']))
-            self._update(c,product_id,int(a['locationId']),int(wi['on_hand']),int(wi['reserved'])-take)
-            a['quantity']=int(a['quantity'])-take; remain-=take; released+=take
-        left=int(r['quantity'])-released; status='released' if left<=0 else 'reserved'
-        c.execute('UPDATE warehouse_reservations SET quantity=?,status=?,allocations_json=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(max(0,left),status,json.dumps([a for a in alloc if a['quantity']>0]),r['id']))
-        self._move(c,product_id=product_id,movement_type='release',quantity=released,reference_type='gear_order',reference_id=str(order_id),note=f'装备订单 #{order_id} 释放锁定库存',actor_type=actor_type,idempotency_key=f'wms-release:{order_id}:{product_id}:{r["id"]}:{released}')
-        return {'released':released,'remaining':max(0,left)}
+    def release_order(self,c,*,order_id:int,product_id:int,quantity:int|None=None,actor_type:str='system',variant_id:int|None=None):
+        v=sc.sku(c,product_id,variant_id)
+        r=c.execute("SELECT * FROM warehouse_sku_reservations WHERE order_id=? AND variant_id=? AND status='reserved'",(order_id,v['id'])).fetchone()
+        return {'released':sc.release(c,dict(r),quantity) if r else 0}
 
     def validate_dispatch(self,c,order_id:int):
-        items=c.execute('SELECT product_id,quantity FROM gear_order_items WHERE order_id=?',(order_id,)).fetchall()
-        if not items: raise ValueError('订单没有商品明细')
+        order=c.execute('SELECT * FROM gear_orders WHERE id=?',(order_id,)).fetchone()
+        if not order or order['status'] not in ('paid','processing','confirmed'):raise ValueError('只有已付款待发货订单可出库')
+        items=c.execute('SELECT product_id,variant_id,SUM(quantity) q FROM gear_order_items WHERE order_id=? GROUP BY product_id,variant_id',(order_id,)).fetchall()
+        if not items:raise ValueError('订单没有商品明细')
         for it in items:
-            r=c.execute("SELECT quantity FROM warehouse_reservations WHERE order_id=? AND product_id=? AND status='reserved'",(order_id,it['product_id'])).fetchone()
-            if not r or int(r['quantity'])<int(it['quantity']): raise ValueError(f"商品 #{it['product_id']} 未完成仓库锁库")
+            v=sc.sku(c,it['product_id'],it['variant_id'])
+            r=c.execute("SELECT quantity FROM warehouse_sku_reservations WHERE order_id=? AND variant_id=? AND status='reserved'",(order_id,v['id'])).fetchone()
+            if not r or r['quantity']!=it['q']:raise ValueError('订单 SKU 未完整锁库，请核对历史订单')
         return True
 
     def dispatch_order(self,c,*,order_id:int,actor_type:str='platform'):
-        import json
-        old=c.execute("SELECT 1 FROM warehouse_movements WHERE reference_type='gear_order_dispatch' AND reference_id=? LIMIT 1",(str(order_id),)).fetchone()
+        old=c.execute("SELECT 1 FROM warehouse_movements WHERE reference_type='gear_order_dispatch' AND reference_id=?",(str(order_id),)).fetchone()
         if old:return {'ok':True,'idempotent':True}
         self.validate_dispatch(c,order_id)
-        for r0 in c.execute("SELECT * FROM warehouse_reservations WHERE order_id=? AND status='reserved'",(order_id,)).fetchall():
-            r=dict(r0); alloc=json.loads(r['allocations_json'] or '[]')
-            for a in alloc:
-                q=int(a['quantity']); wi=self._row(c,int(r['product_id']),int(a['locationId']))
-                self._update(c,int(r['product_id']),int(a['locationId']),int(wi['on_hand'])-q,int(wi['reserved'])-q)
-                self._move(c,product_id=int(r['product_id']),movement_type='dispatch',quantity=q,from_location_id=int(a['locationId']),reference_type='gear_order_dispatch',reference_id=str(order_id),note=f'装备订单 #{order_id} 发货出库',actor_type=actor_type,idempotency_key=f'wms-dispatch:{order_id}:{r["product_id"]}:{a["locationId"]}')
-            c.execute("UPDATE warehouse_reservations SET status='dispatched',updated_at=CURRENT_TIMESTAMP WHERE id=?",(r['id'],))
-        c.execute("UPDATE warehouse_tasks SET status='shipped',updated_at=CURRENT_TIMESTAMP WHERE order_id=? AND task_type IN ('pick','pack')",(order_id,))
+        for r0 in c.execute("SELECT * FROM warehouse_sku_reservations WHERE order_id=? AND status='reserved'",(order_id,)).fetchall():
+            r=dict(r0)
+            for a in json.loads(r['allocations_json']):
+                b=sc.balance(c,r['product_id'],r['variant_id'],a['locationId']);q=a['quantity']
+                sc.update(c,b,b['on_hand']-q,b['reserved']-q)
+                self._move(c,product_id=r['product_id'],variant_id=r['variant_id'],movement_type='dispatch',quantity=q,from_location_id=a['locationId'],reference_type='gear_order_dispatch',reference_id=str(order_id),actor_type=actor_type,idempotency_key=f'dispatch:{order_id}:{r["variant_id"]}:{a["locationId"]}')
+            c.execute("UPDATE warehouse_sku_reservations SET status='dispatched' WHERE id=?",(r['id'],));sc.sync(c,r['product_id'])
+        sc.mirror_reservations(c,order_id)
+        c.execute("UPDATE warehouse_tasks SET status='shipped' WHERE order_id=?",(order_id,))
         return {'ok':True,'orderId':order_id}
 
     def create_pick_task(self,c,*,order_id:int,warehouse_id:int|None=None):
@@ -166,43 +146,31 @@ class WarehouseEngine:
     def pack_order(self,c,*,order_id:int,note:str=''):
         pick=c.execute("SELECT * FROM warehouse_tasks WHERE order_id=? AND task_type='pick'",(order_id,)).fetchone()
         if not pick: pick=self.create_pick_task(c,order_id=order_id)
-        if pick['status']=='pending': self.mark_picked(c,pick['id'])
+        if pick['status']=='pending': raise ValueError('请先完成拣货核对，再确认打包')
         old=c.execute("SELECT * FROM warehouse_tasks WHERE order_id=? AND task_type='pack'",(order_id,)).fetchone()
         if old:return dict(old)
         tid='pack_'+uuid.uuid4().hex[:10]
         c.execute("INSERT INTO warehouse_tasks(id,order_id,warehouse_id,task_type,status,note,packed_at) VALUES(?,?,?,?,?,?,CURRENT_TIMESTAMP)",(tid,order_id,pick['warehouse_id'],'pack','packed',note))
         return dict(c.execute('SELECT * FROM warehouse_tasks WHERE id=?',(tid,)).fetchone())
 
-    def move_stock(self,c,*,product_id:int,from_location_id:int,to_location_id:int,quantity:int,note:str=''):
-        q=max(1,int(quantity)); src=self._row(c,product_id,from_location_id); dst=self._row(c,product_id,to_location_id)
-        available=int(src['on_hand'])-int(src['reserved'])
-        if available<q:raise ValueError('源库位可移动库存不足')
-        self._update(c,product_id,from_location_id,int(src['on_hand'])-q,int(src['reserved']))
-        self._update(c,product_id,to_location_id,int(dst['on_hand'])+q,int(dst['reserved']))
-        m=self._move(c,product_id=product_id,movement_type='transfer',quantity=q,from_location_id=from_location_id,to_location_id=to_location_id,reference_type='location_transfer',reference_id=str(uuid.uuid4()),note=note,actor_type='platform')
+    def move_stock(self,c,*,product_id:int,from_location_id:int,to_location_id:int,quantity:int,note:str='',variant_id:int|None=None):
+        v=sc.sku(c,product_id,variant_id);q=int(quantity)
+        a=sc.balance(c,product_id,v['id'],from_location_id);b=sc.balance(c,product_id,v['id'],to_location_id)
+        if from_location_id==to_location_id or q<=0 or a['on_hand']-a['reserved']-a['unsellable']<q:raise ValueError('移库数量/库位无效或可移动库存不足')
+        sc.update(c,a,a['on_hand']-q,a['reserved']);sc.update(c,b,b['on_hand']+q,b['reserved']);sc.sync(c,product_id)
+        m=self._move(c,product_id=product_id,variant_id=v['id'],movement_type='transfer',quantity=q,from_location_id=from_location_id,to_location_id=to_location_id,note=note)
         return {'ok':True,'movementId':m['id']}
 
-    def count_location(self,c,*,product_id:int,location_id:int,counted_on_hand:int,note:str=''):
-        counted=max(0,int(counted_on_hand)); r=self._row(c,product_id,location_id); old=int(r['on_hand']); reserved=int(r['reserved'])
-        if counted<reserved:raise ValueError('盘点实物数不能小于已锁定库存')
-        delta=counted-old
-        self._update(c,product_id,location_id,counted,reserved)
-        if delta:
-            # 盘盈盘亏也要落到规格层：只改 products.stock 的话，下一次规格变动
-            # 触发汇总重算就会把这次盘点差异抹掉（它是冗余字段，不是真源）。
-            v=variant_of(c,product_id=product_id)
-            p=c.execute('SELECT stock FROM products WHERE id=?',(product_id,)).fetchone()
-            before=int(v['stock'] or 0) if v else int(p['stock'] or 0); after=before+delta
-            if after<0:raise ValueError('盘点调整后可售库存不能为负数')
-            if v: write_variant_stock(c,product_id=product_id,variant_id=int(v['id']),new_stock=after)
-            else: c.execute('UPDATE products SET stock=? WHERE id=?',(after,product_id))
-        m=self._move(c,product_id=product_id,movement_type='cycle_count',quantity=abs(delta),to_location_id=location_id if delta>=0 else None,from_location_id=location_id if delta<0 else None,reference_type='cycle_count',reference_id=str(uuid.uuid4()),note=note or f'库位盘点差异 {delta:+d}',actor_type='platform') if delta else None
-        return {'ok':True,'productId':product_id,'locationId':location_id,'previousOnHand':old,'countedOnHand':counted,'delta':delta,'movementId':m['id'] if m else None}
+    def count_location(self,c,*,product_id:int,location_id:int,counted_on_hand:int,note:str='',variant_id:int|None=None):
+        v=sc.sku(c,product_id,variant_id);r=sc.balance(c,product_id,v['id'],location_id);n=int(counted_on_hand)
+        sc.update(c,r,n,r['reserved']);sc.sync(c,product_id)
+        m=self._move(c,product_id=product_id,variant_id=v['id'],movement_type='cycle_count',quantity=abs(n-r['on_hand']),to_location_id=location_id,note=note)
+        return {'ok':True,'delta':n-r['on_hand'],'movementId':m['id']}
 
     def summary(self,c):
         self.ensure_defaults(c)
         r=c.execute('''SELECT COALESCE(SUM(on_hand),0) on_hand,COALESCE(SUM(reserved),0) reserved,
-                       COALESCE(SUM(on_hand-reserved),0) available,COUNT(DISTINCT product_id) sku_count FROM warehouse_inventory''').fetchone()
+                       COALESCE(SUM(CASE WHEN location_id IN (SELECT l.id FROM warehouse_locations l JOIN warehouses w ON w.id=l.warehouse_id WHERE l.zone_type='sellable' AND l.status='active' AND w.status='active') THEN on_hand-reserved-unsellable ELSE 0 END),0) available,COUNT(DISTINCT product_id) sku_count FROM warehouse_inventory''').fetchone()
         return {'onHand':int(r['on_hand'] or 0),'reserved':int(r['reserved'] or 0),'available':int(r['available'] or 0),'skuCount':int(r['sku_count'] or 0),
                 'warehouses':int(c.execute("SELECT COUNT(*) FROM warehouses WHERE status='active'").fetchone()[0]),
                 'pendingPickTasks':int(c.execute("SELECT COUNT(*) FROM warehouse_tasks WHERE task_type='pick' AND status='pending'").fetchone()[0])}
@@ -236,13 +204,14 @@ class WarehouseEngine:
         return out
 
     def inventory(self,c,*,warehouse_id:int|None=None,product_id:int|None=None):
-        sql='''SELECT wi.*,p.name product_name,p.sku product_sku,wl.code location_code,wl.name location_name,wl.zone_type,w.id warehouse_id,w.name warehouse_name,
-                      (wi.on_hand-wi.reserved) available
-               FROM warehouse_inventory wi JOIN products p ON p.id=wi.product_id JOIN warehouse_locations wl ON wl.id=wi.location_id JOIN warehouses w ON w.id=wl.warehouse_id WHERE 1=1''';args=[]
+        sql="""SELECT b.*,p.name product_name,v.sku product_sku,v.name variant_name,v.color,v.size,
+          l.code location_code,l.name location_name,l.zone_type,w.id warehouse_id,w.name warehouse_name,
+          CASE WHEN l.zone_type='sellable' AND l.status='active' AND w.status='active' THEN b.on_hand-b.reserved-b.unsellable ELSE 0 END available
+          FROM warehouse_sku_balances b JOIN products p ON p.id=b.product_id JOIN product_variants v ON v.id=b.variant_id
+          JOIN warehouse_locations l ON l.id=b.location_id JOIN warehouses w ON w.id=l.warehouse_id WHERE 1=1""";args=[]
         if warehouse_id is not None:sql+=' AND w.id=?';args.append(warehouse_id)
         if product_id is not None:sql+=' AND p.id=?';args.append(product_id)
-        sql+=' ORDER BY p.name,w.is_default DESC,wl.id'
-        return [dict(x) for x in c.execute(sql,args).fetchall()]
+        return [dict(x) for x in c.execute(sql+' ORDER BY p.name,v.id,l.id',args)]
 
     def tasks(self,c,*,status:str|None=None):
         sql='''SELECT t.*,w.name warehouse_name,o.status order_status,o.tracking_no FROM warehouse_tasks t JOIN warehouses w ON w.id=t.warehouse_id JOIN gear_orders o ON o.id=t.order_id WHERE 1=1''';args=[]

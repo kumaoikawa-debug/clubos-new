@@ -59,17 +59,37 @@ class ProductCatalogService:
             q += " WHERE b.status='active'"
         return [dict(r) for r in c.execute(q + " ORDER BY b.sort,b.id").fetchall()]
 
-    def create_brand(self, c, *, name: str, logo_url: str | None = None, sort: int = 0) -> int:
+    def create_brand(self, c, *, name: str, logo_url: str | None = None, sort: int = 0,
+                     name_en: str | None = None, intro: str | None = None, industry: str | None = None,
+                     official_website: str | None = None, country: str | None = None,
+                     contact_name: str | None = None, contact_phone: str | None = None,
+                     cooperation_status: str = 'pending', source_type: str = 'platform_self',
+                     mall_display_status: str = 'show',
+                     settlement_mode: str | None = None, settlement_ratio: float | None = None) -> int:
         name = str(name or '').strip()
         if not name:
             raise ValueError('品牌名不能为空')
         if c.execute('SELECT id FROM product_brands WHERE name=?', (name,)).fetchone():
             raise ValueError('品牌「%s」已存在' % name)
-        c.execute('INSERT INTO product_brands(name,slug,logo_url,sort,status) VALUES(?,?,?,?,?)',
-                  (name, slugify(name), (logo_url or None), int(sort or 0), 'active'))
+        mode = str(settlement_mode or 'sales_ratio').strip().lower()
+        if mode not in ('sales_ratio', 'fixed_price'):
+            raise ValueError('结算模式只能是 sales_ratio（按销售额比例）或 fixed_price（固定结算价）')
+        c.execute("""INSERT INTO product_brands(name,slug,logo_url,sort,status,name_en,intro,industry,
+                     official_website,country,contact_name,contact_phone,cooperation_status,source_type,mall_display_status,
+                     settlement_mode,settlement_ratio)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                  (name, slugify(name), (logo_url or None), int(sort or 0), 'active',
+                   (name_en or None), (intro or None), (industry or None), (official_website or None),
+                   (country or None), (contact_name or None), (contact_phone or None),
+                   str(cooperation_status), str(source_type), str(mall_display_status),
+                   mode, max(0.0, float(settlement_ratio or 0))))
         return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
 
-    def update_brand(self, c, brand_id: int, *, name=None, logo_url=None, sort=None, status=None):
+    def update_brand(self, c, brand_id: int, *, name=None, logo_url=None, sort=None, status=None,
+                    name_en=None, intro=None, industry=None, official_website=None, country=None,
+                    contact_name=None, contact_phone=None, cooperation_status=None,
+                    source_type=None, mall_display_status=None,
+                    settlement_mode=None, settlement_ratio=None):
         b = c.execute('SELECT * FROM product_brands WHERE id=?', (int(brand_id),)).fetchone()
         if not b:
             raise LookupError('品牌不存在')
@@ -79,11 +99,28 @@ class ProductCatalogService:
         dup = c.execute('SELECT id FROM product_brands WHERE name=? AND id<>?', (name, int(brand_id))).fetchone()
         if dup:
             raise ValueError('品牌「%s」已存在' % name)
-        c.execute('UPDATE product_brands SET name=?,slug=?,logo_url=?,sort=?,status=? WHERE id=?',
+        mode = str(settlement_mode if settlement_mode is not None else (b['settlement_mode'] or 'sales_ratio')).strip().lower()
+        if mode not in ('sales_ratio', 'fixed_price'):
+            raise ValueError('结算模式只能是 sales_ratio（按销售额比例）或 fixed_price（固定结算价）')
+        c.execute("""UPDATE product_brands SET name=?,slug=?,logo_url=?,sort=?,status=?,
+                     name_en=?,intro=?,industry=?,official_website=?,country=?,contact_name=?,contact_phone=?,
+                     cooperation_status=?,source_type=?,mall_display_status=?,settlement_mode=?,settlement_ratio=? WHERE id=?""",
                   (name, slugify(name),
                    (logo_url if logo_url is not None else b['logo_url']),
                    int(sort) if sort is not None else int(b['sort'] or 0),
                    str(status) if status is not None else b['status'],
+                   (name_en if name_en is not None else b['name_en']),
+                   (intro if intro is not None else b['intro']),
+                   (industry if industry is not None else b['industry']),
+                   (official_website if official_website is not None else b['official_website']),
+                   (country if country is not None else b['country']),
+                   (contact_name if contact_name is not None else b['contact_name']),
+                   (contact_phone if contact_phone is not None else b['contact_phone']),
+                   (cooperation_status if cooperation_status is not None else b['cooperation_status']),
+                   (source_type if source_type is not None else b['source_type']),
+                   (mall_display_status if mall_display_status is not None else b['mall_display_status']),
+                   mode,
+                   max(0.0, float(settlement_ratio)) if settlement_ratio is not None else float(b['settlement_ratio'] or 0),
                    int(brand_id)))
 
     def delete_brand(self, c, brand_id: int) -> dict:

@@ -906,7 +906,9 @@
    同步给报了名的顾客。与 .me-card2__ref 同一节奏：虚线分隔 + 小字，
    不抢订单金额的视觉权重。数据只在真有内容时才由后端下发，空则整块不渲染。 */
 .web-shell .me-trip{margin-top:8px;border-top:1px dashed var(--w-line);padding-top:8px}
-.web-shell .me-trip__hd{font-size:12px;font-weight:700;color:var(--w-ink);margin-bottom:6px}
+.web-shell .me-trip{margin-top:12px;background:#fff;border:1px solid var(--w-line);border-radius:14px;padding:12px 14px;box-shadow:0 2px 10px rgba(20,40,30,.04)}
+.web-shell .me-trip__hd{font-size:12px;font-weight:700;color:var(--w-ink);margin-bottom:8px;display:flex;align-items:center;gap:6px}
+.web-shell .me-trip__hd::before{content:"";width:3px;height:12px;border-radius:2px;background:var(--w-brand,#2e6b4e)}
 .web-shell .me-trip__row{display:flex;gap:10px;font-size:12px;line-height:1.75}
 .web-shell .me-trip__row span{flex:0 0 52px;color:var(--w-muted)}
 .web-shell .me-trip__row b{font-weight:600;color:var(--w-ink2)}
@@ -1182,24 +1184,138 @@
 .w-ability__blocks{margin-top:22px;display:grid;gap:10px}
 @media(max-width:680px){.w-ability__stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
+/* ── 领队团队专区（底部导航「领队」入口，独立一屏）──────────────────
+   列出资源库全部激活领队；卡片复用 .w-lead__grid / .w-lc。 */
+.web-shell .w-leaders{padding-top:14px;padding-bottom:24px}
+.web-shell .w-leaders__head{margin:0 2px 12px}
+.web-shell .w-leaders__head h2{margin:0;font-size:21px;font-weight:780;color:#10392a;letter-spacing:.01em}
+.web-shell .w-leaders__head p{margin:6px 0 0;font-size:12.5px;line-height:1.6;color:#7d8c82}
+
 /* ── 带队领队（详情页，报名卡之前）─────────────────────────────────
-   活动级扁平名单：这场活动由哪些领队带队。头像走公开代理（顾客没有 club 角色，
-   取不到俱乐部域那条），没设头像就退回首字占位。手机号不下发，所以这里也不写。 */
-.web-shell .w-lead__grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:12px;margin-top:14px}
-.web-shell .w-lead__card{display:flex;gap:12px;align-items:flex-start;background:#f4f8f5;border:1px solid #dfeae3;border-radius:14px;padding:12px}
-.web-shell .w-lead__av{width:46px;height:46px;flex:0 0 46px;border-radius:999px;overflow:hidden;background:#e7f0ea;display:grid;place-items:center}
-.web-shell .w-lead__av img{width:100%;height:100%;object-fit:cover;display:block}
-.web-shell .w-lead__ph{font-size:18px;font-weight:750;color:#3c6b53}
-.web-shell .w-lead__body{flex:1;min-width:0;display:flex;flex-direction:column;gap:4px}
-.web-shell .w-lead__who{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
-.web-shell .w-lead__who b{font-size:14px;font-weight:750;color:#10392a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.web-shell .w-lead__who i{font-style:normal;font-size:11.5px;color:#3c6b53;background:#e3efe7;border-radius:999px;padding:2px 9px;white-space:nowrap}
-.web-shell .w-lead__meta{font-size:12px;color:var(--w-muted);line-height:1.5}
-.web-shell .w-lead__tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
-.web-shell .w-lead__tag{font-size:10.5px;color:#3c6b53;background:#fff;border:1px solid #dfeae3;border-radius:999px;padding:2px 9px;white-space:nowrap}
-@media(max-width:520px){
-  .web-shell .w-lead__grid{grid-template-columns:1fr;gap:10px}
-}
+   2026-10-27 重做：卡面从「小头像 + 两行字」升级成同行领队卡的版式 —— 大头像（在岗绿点）、
+   头衔、姓名 + 资质已核验、擅长关键词、常驻城市 · N 年经验、★评分。点卡进领队主页（底部抽屉）。
+   版式按「两列并排」设计：手机 375px 下每张约 170px，竖排布局才装得下大头像 + 四行信息。 */
+.web-shell .w-lead__grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:14px}
+@media(min-width:640px){.web-shell .w-lead__grid{grid-template-columns:repeat(auto-fill,minmax(196px,1fr));gap:12px}}
+.web-shell .w-lc{display:flex;flex-direction:column;align-items:flex-start;gap:5px;width:100%;min-width:0;
+  background:#fff;border:1px solid #e3ece5;border-radius:18px;padding:14px 13px 11px;text-align:left;
+  appearance:none;-webkit-appearance:none;font:inherit;color:inherit;cursor:pointer;
+  box-shadow:0 1px 3px rgba(16,57,42,.05);transition:border-color .16s,box-shadow .16s,transform .16s}
+.web-shell .w-lc:hover{border-color:#bcd8c6;box-shadow:0 8px 20px rgba(16,57,42,.09)}
+.web-shell .w-lc:active{transform:scale(.985)}
+.web-shell .w-lc:focus-visible{outline:2px solid #4f8f68;outline-offset:2px}
+.web-shell .w-lc.is-static{cursor:default}
+/* 头像：首字占位垫在图片下面 —— 没头像/图挂了都是稳稳的一块，不是空白圆。 */
+.web-shell .w-lc__av,.web-shell .w-sh__av{position:relative;display:block;flex:0 0 auto;border-radius:999px;overflow:visible}
+.web-shell .w-lc__av{width:74px;height:74px;margin-bottom:3px;background:#e7f0ea}
+.web-shell .w-lc__av img,.web-shell .w-sh__av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:999px;z-index:1;background:#e7f0ea}
+.web-shell .w-lc__ph{position:absolute;inset:0;display:grid;place-items:center;border-radius:999px;
+  font-size:26px;font-weight:750;color:#3c6b53;background:#e7f0ea}
+.web-shell .w-sh__av .w-lc__ph{font-size:30px}
+/* 在岗绿点：只有真的在名册里（有 leaderId）的领队才画 —— 手打的临时增援不冒充在编。 */
+.web-shell .w-lc__dot{position:absolute;right:3px;bottom:7px;width:12px;height:12px;border-radius:50%;
+  background:#48b96e;border:2px solid #fff;z-index:2;box-shadow:0 0 0 1px rgba(72,185,110,.18)}
+.web-shell .w-lc__cred{font-size:11px;color:#7d8c82;letter-spacing:.02em;line-height:1.3;
+  max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.web-shell .w-lc__name{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:15.5px;font-weight:750;
+  color:#10392a;line-height:1.3;max-width:100%}
+.web-shell .w-lc__name em{font-style:normal;font-size:10px;font-weight:600;color:#37714f;background:#e8f4ec;
+  border:1px solid #d3e8da;border-radius:999px;padding:1px 7px;white-space:nowrap}
+.web-shell .w-lc__spec{font-size:11.5px;color:#6f8177;line-height:1.55;word-break:break-word}
+.web-shell .w-lc__foot{display:flex;align-items:center;justify-content:space-between;gap:6px;width:100%;
+  margin-top:auto;padding-top:9px;border-top:1px solid #eff4f0;font-size:11px;color:#7d8c82;min-width:0}
+.web-shell .w-lc__foot>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.web-shell .w-lc__score{flex:0 0 auto;display:inline-flex;align-items:baseline;gap:2px;font-size:12.5px;
+  font-weight:750;color:#22322a;font-style:normal}
+.web-shell .w-lc__score i{font-style:normal;color:#e8833a;font-size:11px}
+.web-shell .w-lc__score em{font-style:normal;font-size:9.5px;font-weight:500;color:#9aa8a0;margin-left:2px}
+.web-shell .w-lc__score.is-empty{color:#a7b3ac;font-weight:500;font-size:11px;gap:3px}
+
+/* ── 领队主页（底部抽屉）— 2026-10-28 重做 ──
+   抽屉由 document.body.appendChild 挂到 body 上，在 .web-shell 之外，
+   所以这里的规则**不带 .web-shell 前缀**；否则头像尺寸/占位规则全部失效，
+   原图会以原始尺寸铺满整个面板（旧版「一张大照片盖住所有文字」就是这么来的）。
+   z-index 980 < .ux-overlay(1100)：抽屉里再弹「咨询 / 评分」时，弹窗必须压在上面。 */
+html.w-sheet-open{overflow:hidden}
+.w-sheet{position:fixed;inset:0;z-index:980;display:flex;align-items:flex-end;justify-content:center}
+.w-sheet__mask{position:absolute;inset:0;background:rgba(8,24,18,.48)}
+.w-sheet__panel{position:relative;width:min(560px,100%);max-height:90vh;max-height:90dvh;overflow:auto;
+  background:#fff;border-radius:24px 24px 0 0;box-shadow:0 -14px 46px rgba(6,22,15,.28);
+  animation:w-sheet-up .26s cubic-bezier(.2,.8,.3,1);
+  padding-bottom:calc(16px + env(safe-area-inset-bottom));-webkit-overflow-scrolling:touch}
+.w-sheet__panel::before{content:"";display:block;width:38px;height:4px;margin:9px auto 0;border-radius:999px;background:#dce7df}
+@keyframes w-sheet-up{from{transform:translateY(26px);opacity:.55}to{transform:none;opacity:1}}
+.w-sheet__x{position:absolute;right:12px;top:12px;z-index:5;width:34px;height:34px;border-radius:50%;
+  border:0;background:rgba(16,57,42,.08);color:#3c6b53;font-size:20px;line-height:1;cursor:pointer;
+  display:grid;place-items:center}
+.w-sheet__x:active{background:rgba(16,57,42,.16)}
+.w-sheet__body{padding:14px 18px 4px}
+.w-sh__loading,.w-sh__empty{padding:36px 14px;text-align:center;font-size:12.5px;color:#7d8c82}
+.w-sh__empty{display:grid;gap:8px;justify-items:center}
+.w-sh__empty b{font-size:14px;color:#22322a}
+.w-sh__empty span{font-size:12px;color:#7d8c82}
+/* 头像：容器定死 86px 圆，图片绝对定位裁进圆里 —— 否则原图会撑爆面板。 */
+.w-sh__hero{display:flex;align-items:center;gap:15px;padding-right:36px}
+.w-sheet .w-sh__av{position:relative;flex:0 0 auto;width:86px;height:86px;border-radius:999px;
+  background:#e7f0ea;overflow:hidden;box-shadow:0 0 0 3px #fff,0 6px 16px rgba(16,57,42,.14)}
+.w-sheet .w-sh__av img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:999px;z-index:1;background:#e7f0ea}
+.w-sheet .w-sh__av .w-lc__ph{position:absolute;inset:0;display:grid;place-items:center;border-radius:999px;
+  font-size:32px;font-weight:750;color:#3c6b53;background:#e7f0ea}
+.w-sheet .w-lc__dot{position:absolute;right:5px;bottom:7px;width:13px;height:13px;border-radius:50%;
+  background:#48b96e;border:2px solid #fff;z-index:3;box-shadow:0 0 0 1px rgba(72,185,110,.18)}
+.w-sh__who{min-width:0;display:flex;flex-direction:column;gap:5px}
+.w-sh__cred{font-size:11px;color:#7d8c82;letter-spacing:.02em}
+.w-sh__who h3{margin:0;font-size:20px;font-weight:780;color:#10392a;line-height:1.2;
+  display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.w-sh__who h3 em{font-style:normal;font-size:10px;font-weight:600;color:#37714f;background:#e8f4ec;
+  border:1px solid #d3e8da;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.w-sh__meta{font-size:12.5px;color:#7d8c82}
+.w-sh__stats{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:17px}
+.w-sh__stats>div{background:#f4f9f5;border:1px solid #eaf2ec;border-radius:15px;padding:11px 8px;text-align:center}
+.w-sh__stats b{display:block;font-size:18px;font-weight:760;color:#10392a;line-height:1.15}
+.w-sh__stats span{display:block;margin-top:3px;font-size:10.5px;color:#839188}
+.w-sh__bio{margin:15px 0 0;font-size:13px;line-height:1.75;color:#46564c}
+.w-sh__tags{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:13px}
+.w-sh__tags>span{font-size:11px;color:#8a9890}
+.w-sh__tags i{font-style:normal;font-size:11.5px;color:#3c6b53;background:#f2f8f4;border:1px solid #e2eee6;
+  border-radius:999px;padding:3px 10px}
+.w-sh__acts{display:flex;gap:10px;margin-top:18px}
+.w-sh__btn{flex:1;min-height:44px;border-radius:13px;border:1px solid #dfeae3;background:#fff;color:#22402f;
+  font-size:14px;font-weight:700;cursor:pointer;font-family:inherit}
+.w-sh__btn.is-primary{background:#1f4b3f;border-color:#1f4b3f;color:#fff;box-shadow:0 6px 16px rgba(31,75,63,.22)}
+.w-sh__btn:active{opacity:.9}
+.w-sh__sec{display:flex;align-items:baseline;gap:7px;margin:24px 0 10px;padding-top:16px;border-top:1px solid #eff4f0;
+  font-size:13px;font-weight:760;color:#10392a}
+.w-sh__sec em{font-style:normal;font-size:11px;font-weight:500;color:#9aa8a0}
+.w-sh__none{font-size:12px;color:#8a9890;line-height:1.6;padding:4px 0 2px}
+.w-sh__actlist{display:grid;gap:9px}
+.w-sh__act{display:flex;align-items:center;gap:11px;width:100%;min-width:0;padding:9px;border-radius:15px;
+  border:1px solid #e8f0ea;background:#fbfdfb;text-align:left;cursor:pointer;font:inherit;color:inherit}
+.w-sh__act:hover{border-color:#cbe0d4;background:#f7fbf8}
+.w-sh__actimg{flex:0 0 auto;width:48px;height:48px;border-radius:12px;background:#e9f1eb;overflow:hidden}
+.w-sh__actimg img{width:100%;height:100%;object-fit:cover;display:block}
+.w-sh__actcopy{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+.w-sh__actcopy b{font-size:12.5px;font-weight:700;color:#1c3327;line-height:1.35;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.w-sh__actcopy em{font-style:normal;font-size:11px;color:#8a9890}
+.w-sh__actgo{flex:0 0 auto;font-size:11.5px;color:#37714f;font-weight:700}
+.w-sh__reviews{display:grid;gap:10px}
+.w-rv{background:#fafcfa;border:1px solid #eef4ef;border-radius:14px;padding:11px 13px}
+.w-rv__top{display:flex;align-items:center;gap:8px;min-width:0}
+.w-rv__top b{font-size:12px;font-weight:700;color:#22322a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.w-rv__stars{font-size:11px;color:#e8833a;letter-spacing:1px;flex:0 0 auto}
+.w-rv__stars i{font-style:normal;color:#dce5df}
+.w-rv__top em{margin-left:auto;font-style:normal;font-size:10.5px;color:#a3b0a8;flex:0 0 auto}
+.w-rv p{margin:6px 0 0;font-size:12.5px;line-height:1.6;color:#4b5b51;overflow-wrap:anywhere}
+.w-sh__note{margin-top:18px;font-size:10.5px;line-height:1.6;color:#9aa8a0;text-align:center}
+
+/* 评分星条（在 uxDialog 里，不挂在 .web-shell 下，选择器不带前缀） */
+.w-rate{display:flex;gap:6px;justify-content:center;margin:2px 0 6px}
+.w-rate button{appearance:none;border:0;background:none;font-size:32px;line-height:1;color:#dbe5de;
+  cursor:pointer;padding:0 2px;transition:color .12s,transform .12s}
+.w-rate button.is-on{color:#f0a03a;transform:translateY(-1px)}
+.w-rate__hint{text-align:center;font-size:12px;color:#7d8c82}
+.w-rate__hint.is-warn{color:#a84735}
 
 /* ═══ C端四块改版（web-biz.js 配套）：瀑布流 / 主推轮播 / 业务区 / 会员中心 ═══ */
 /* 活动瀑布流：2026-10-18 用户反馈「图片自动对齐」——masonry（CSS columns）里两列
@@ -1823,25 +1939,57 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
   background:linear-gradient(145deg,#a8f0cb,#3fbd85 58%,#1c8b60);
   box-shadow:0 6px 14px rgba(0,0,0,.28),0 0 0 2px rgba(255,255,255,.22);
 }
+/* 头像图片填充（自定义上传 / 微信头像）：圆形裁切，覆盖默认首字母 */
+.web-shell .wme-ava img,.web-shell .me-mc__ava img,.me-code__av img,.me-av__preview img{
+  width:100%;height:100%;object-fit:cover;display:block;border-radius:50%;
+}
+.me-av__preview{
+  width:104px;height:104px;margin:4px auto 10px;border-radius:50%;overflow:hidden;
+  display:grid;place-items:center;font-size:40px;font-weight:800;color:#08291d;
+  background:linear-gradient(145deg,#a8f0cb,#3fbd85 58%,#1c8b60);
+  box-shadow:0 8px 20px rgba(0,0,0,.28),0 0 0 3px rgba(255,255,255,.25);
+}
+.me-av__name{font-size:15px;font-weight:700;margin-bottom:14px}
 .web-shell .wme-card__who{min-width:0}
+
 .web-shell .wme-card__name{display:flex;align-items:center;gap:7px}
 .web-shell .wme-card__name span{font-size:16.5px;font-weight:700;letter-spacing:.01em}
 .web-shell .wme-tier{
   font-style:normal;font-size:10px;font-weight:700;line-height:1.5;
   padding:2px 7px;border-radius:99px;color:#d8f7e6;background:rgba(255,255,255,.14);
   box-shadow:inset 0 0 0 1px rgba(255,255,255,.26);
+  display:inline-flex;align-items:center;gap:3px;
+}
+/* 会员等级皇冠（对齐参考图4 的「V3」皇冠标签），纯装饰、不覆盖动态等级文字。 */
+.web-shell .wme-tier::before{
+  content:"";width:11px;height:11px;flex:0 0 11px;
+  background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23f4d58a'%3E%3Cpath d='M3 8l4 4 5-7 5 7 4-4v9H3z'/%3E%3C/svg%3E") no-repeat center/contain;
 }
 .web-shell .wme-card__no{
   margin-top:5px;font-size:11px;letter-spacing:.14em;color:rgba(255,255,255,.56);
   font-variant-numeric:tabular-nums;
 }
-/* 二维码必须落在白底上：深绿底 + 白底 canvas 会在四周留一圈生硬的白边，
-   包一层圆角白卡后它才像「卡片上的码」，扫得动也看得舒服。 */
-.web-shell .wme-card__qrtile{
-  flex:0 0 auto;display:grid;place-items:center;padding:6px;border-radius:13px;background:#fff;
-  box-shadow:0 8px 18px rgba(0,0,0,.26);
+/* 会员码入口：默认隐藏真实二维码，会员卡右上只放一个「会员码 ›」轻按钮，点击才弹抽屉。 */
+.web-shell .wme-card__member{
+  flex:0 0 auto;display:inline-flex;align-items:center;gap:2px;align-self:flex-start;
+  padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.16);
+  color:#eafff4;font-size:12px;font-weight:600;cursor:pointer;-webkit-tap-highlight-color:transparent;
 }
-.web-shell .wme-card__qr{display:block;width:62px;height:62px}
+.web-shell .wme-card__member svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+.web-shell .wme-card__member:active{background:rgba(255,255,255,.28)}
+
+/* 会员码抽屉（点击「会员码 ›」弹出）：白底居中卡，头像 + 用户名 + 编号 + 二维码 + 60s 刷新。 */
+.me-code .me-code__body{padding:26px 22px 22px;display:flex;flex-direction:column;align-items:center;text-align:center}
+.me-code__av{width:64px;height:64px;border-radius:999px;display:grid;place-items:center;
+  background:linear-gradient(135deg,#2e6b4e,#1f4b3f);color:#fff;font-size:26px;font-weight:700;
+  box-shadow:0 6px 16px rgba(31,75,63,.22)}
+.me-code__name{margin-top:12px;font-size:18px;font-weight:700;color:#22332a}
+.me-code__bar{display:flex;align-items:flex-end;gap:2px;height:34px;margin:14px 0 4px;justify-content:center}
+.me-code__bar i{display:block;height:100%;background:#22332a;border-radius:1px}
+.me-code__no{font-size:12px;letter-spacing:.06em;color:#6f8177;font-variant-numeric:tabular-nums}
+.me-code__qrwrap{margin:16px 0 6px;padding:12px;background:#fff;border:1px solid #eef3f0;border-radius:16px;box-shadow:0 4px 14px rgba(20,40,30,.06)}
+.me-code__qr{display:block;width:200px;height:200px}
+.me-code__tip{font-size:11.5px;color:#8a9890;margin-top:6px}
 .web-shell .wme-card__bot{display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-top:14px}
 .web-shell .wme-card__grow{display:flex;align-items:baseline;gap:5px}
 .web-shell .wme-card__grow b{font-size:26px;font-weight:800;line-height:1;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
@@ -2242,3 +2390,130 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 /* 商品介绍里的插图（2026-10-27） */
 .w-pd__descimg{margin:12px 0}
 .w-pd__descimg img{display:block;width:100%;height:auto;border-radius:8px}
+
+/* ════ 俱乐部通知横幅 / 活动页出行指引（2026-10-29「后台通知 C 端没提示」）════
+   横幅刻意放在活动 hero 之下、图文详情之上：顾客一进详情页第一屏就能看到俱乐部发了什么。
+   橙色左边条用来和绿色品牌色区分开 —— 通知是「需要你看一眼」的东西，不该混进正文块里。 */
+.web-shell .w-nbar{margin:8px 0 0;padding:14px 18px 4px;background:#fff;border-left:4px solid #c8622f}
+.web-shell .w-nbar__hd{display:flex;align-items:center;gap:8px;font-size:13.5px}
+.web-shell .w-nbar__hd b{font-weight:750;color:#1f2b24}
+.web-shell .w-nbar__ic{display:inline-flex;width:18px;height:18px;color:#c8622f}
+.web-shell .w-nbar__ic svg{width:100%;height:100%;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.web-shell .w-nbar__cnt{margin-left:auto;font-size:11px;font-weight:700;color:#fff;background:#c8622f;border-radius:999px;padding:1px 8px}
+.web-shell .w-nbar__list{margin-top:6px}
+.web-shell .w-nbar__item{padding:9px 0;border-top:1px solid #f0eee9}
+.web-shell .w-nbar__itop{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.web-shell .w-nbar__itop b{font-size:13px;font-weight:700;color:#1f2b24}
+.web-shell .w-nbar__occ{font-size:10.5px;color:#6f8177;background:#eef4ef;border-radius:999px;padding:1px 8px}
+.web-shell .w-nbar__itop i{margin-left:auto;font-size:10.5px;color:#9aa79e;font-style:normal}
+.web-shell .w-nbar__item p{margin:4px 0 0;font-size:12.5px;line-height:1.65;color:#4a5a50;white-space:pre-wrap}
+
+/* 活动详情页「出行指引」：集合 / 应急电话 / 车辆分组（跟随当前选中团期） */
+.web-shell .w-trip__list{margin-top:10px}
+.web-shell .w-trip__row{display:flex;gap:12px;font-size:13px;line-height:1.9;border-bottom:1px dashed #eef2ee}
+.web-shell .w-trip__row:last-child{border-bottom:0}
+.web-shell .w-trip__row span{flex:0 0 60px;color:#8b988f}
+.web-shell .w-trip__row b{font-weight:650;color:#24352c;word-break:break-word}
+.web-shell .w-trip__row a{color:#1f6b4a;text-decoration:none;font-weight:700}
+.web-shell .w-trip__groups{margin-top:12px}
+.web-shell .w-trip__glabel{font-size:11px;color:#8b988f;margin:8px 0 5px}
+.web-shell .w-trip__chips{display:flex;flex-wrap:wrap;gap:6px}
+.web-shell .w-trip__chip{font-size:11.5px;color:#37614c;background:#eef4ef;border:1px solid #dcebe0;border-radius:8px;padding:4px 9px}
+
+/* 宫格红点：与右上角的数量角标分开 —— 左上是「有新通知」，右上是「有几笔报名」。 */
+.web-shell .wme-quad__ndot{position:absolute;top:-3px;left:-3px;width:9px;height:9px;border-radius:50%;
+  background:#d64545;box-shadow:0 0 0 2px #fff;box-sizing:content-box}
+
+
+
+/* ══════ 顶栏「信息」入口 + 底部导航角标（2026-10-29「一有信息这里就要有提示」）══════
+   通知提示原先只活在「我的」页里，顾客停在首页 / 活动页时完全察觉不到后台发了通知。
+   入口提示做到页面之外：顶栏一个「信息」标签带条数，底部「我的」挂一颗红点。
+   两处都只在真有通知时亮；没有通知就不留任何痕迹。 */
+.web-top__msg{
+  position:relative;width:36px;height:36px;flex:0 0 36px;display:grid;place-items:center;
+  border:0;background:none;color:inherit;cursor:pointer;border-radius:50%;
+  -webkit-tap-highlight-color:transparent;
+}
+.web-top__msg svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.web-top__msg:active{background:rgba(127,138,131,.18)}
+.web-top__msg .web-top__dot{
+  position:absolute;top:0;right:-1px;min-width:16px;height:16px;padding:0 4px;border-radius:999px;
+  background:var(--w-accent);color:#fff;font-size:10px;font-weight:700;font-style:normal;
+  line-height:16px;text-align:center;border:2px solid #fff;box-sizing:content-box;
+}
+.web-top__msg .web-top__dot[hidden]{display:none}
+/* 底部导航「我的」的红点：位置避开 .w-navdot（那颗是选中指示点，落在正下方） */
+.web-shell .web-nav button .w-navbadge{
+  position:absolute;top:6px;right:calc(50% - 16px);width:7px;height:7px;border-radius:99px;
+  background:#ff5a5f;box-shadow:0 0 0 1.5px var(--w-ink);
+}
+.web-shell .web-nav button .w-navbadge[hidden]{display:none}
+
+/* ── 出行指引里的带队领队：带头像、点开可咨询（2026-10-29 用户反馈「领队功能没实现」）
+   ───────────────────────────────────────────────────────────────────────────── */
+.web-shell .me-trip__row .me-trip__leaders{display:flex;flex-direction:column;gap:8px;align-items:flex-start;flex:1 1 auto;min-width:0;font-weight:400}
+/* 带队领队：每位领队独占一行（头像在左、姓名/角色在右），彻底杜绝头像压住姓名。
+   干净的圆形头像 + 姓名/角色，对齐活动详情 leaderCard 形态；点整块仍可进领队主页咨询。 */
+.me-trip__leader{
+  display:flex;align-items:center;gap:10px;width:100%;max-width:100%;min-width:0;
+  padding:5px 12px 5px 5px;border:none;background:#f1f7f4;border-radius:12px;
+  color:var(--w-ink);font:inherit;font-size:12.5px;line-height:1.3;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;text-align:left;
+}
+.me-trip__leader.is-static{cursor:default;color:#5f7168;background:transparent;padding-left:0}
+.me-trip__leader:active{background:#e3efe8}
+.me-trip__lav{
+  position:relative;width:32px;height:32px;flex:0 0 32px;border-radius:999px;overflow:hidden;
+  background:#e7f0ea;display:inline-block;
+  border:2px solid #fff;box-shadow:0 0 0 1px rgba(46,107,78,.18);
+}
+.me-trip__lav img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:1}
+.me-trip__lav .w-lc__ph{
+  position:absolute;inset:0;display:grid;place-items:center;
+  font-size:12px;font-weight:800;color:#fff;background:#9db5a6;
+}
+.me-trip__lname{font-weight:600;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.me-trip__lrole{font-style:normal;font-size:11px;color:#6f8177;margin-left:2px;flex:0 0 auto}
+
+/* ── 顶栏信息面板：俱乐部通知列表 ────────────────────────────────────────────── */
+.w-sh__noticehd{display:flex;align-items:baseline;gap:8px;padding:2px 0 10px}
+.w-sh__noticehd b{font-size:16px}
+.w-sh__noticehd span{font-size:12px;color:#8a9890}
+/* 通知列表：可上下滑动查看（限制高度，独立于面板滚动，底部按钮常驻）。 */
+.w-sh__noticelist{max-height:56vh;max-height:56dvh;overflow-y:auto;-webkit-overflow-scrolling:touch;margin:0 -4px;padding:0 4px}
+.w-sh__noticeitem{position:relative;overflow:hidden;border-radius:12px;margin:8px 0;background:#fff}
+.w-sh__noticeitem+.w-sh__noticeitem{margin-top:0}
+/* 左滑露出的删除按钮（藏在前景之下，右侧）。 */
+.w-sh__noticedel{position:absolute;top:0;right:0;bottom:0;width:76px;border:0;background:#e8503a;color:#fff;
+  font-size:14px;font-weight:600;display:grid;place-items:center;cursor:pointer}
+.w-sh__noticedel:active{background:#cf3f2c}
+/* 前景卡片：默认白底，左滑时被 translateX 拉开往左，露出删除。 */
+.w-sh__noticefg{position:relative;background:#fff;padding:12px 14px;border-radius:12px;
+  box-shadow:0 1px 3px rgba(20,40,30,.05);will-change:transform;touch-action:pan-y}
+.w-sh__noticeitem.is-read .w-sh__noticefg{cursor:grab}
+.w-sh__noticetop{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.w-sh__noticetop b{font-size:13.5px}
+.w-sh__noticetop i{font-style:normal;font-size:11px;color:#8a9890;flex:0 0 auto}
+.w-sh__noticetop em.w-sh__unread{font-style:normal;flex:0 0 auto;width:8px;height:8px;border-radius:50%;background:#e8503a;align-self:center}
+.w-sh__noticemeta{margin-top:3px;font-size:11.5px;color:#6f8177}
+.w-sh__noticeitem p{margin:5px 0 0;font-size:12.5px;line-height:1.6;color:#3c5347;white-space:pre-wrap}
+.w-sh__noticego{margin:14px 0 18px}
+
+/* ── 自助签到码（2026-10-30）：我的报名 → 每个参加人一个二维码 ───────────── */
+.web-shell .me-ck-wrap{margin:10px 0 2px;padding-top:10px;border-top:1px dashed var(--w-line)}
+.web-shell .me-ck-hd{display:flex;align-items:baseline;gap:6px;font-size:13px;font-weight:700;color:var(--w-ink);margin-bottom:8px}
+.web-shell .me-ck-hd span{font-size:11px;font-weight:500;color:var(--w-muted)}
+.web-shell .me-ck-list{display:flex;flex-wrap:wrap;gap:10px}
+.web-shell .me-ck{display:flex;align-items:center;gap:10px;background:var(--w-bg);border:1px solid var(--w-line);border-radius:12px;padding:8px 10px}
+.web-shell .me-ck__qr{width:72px;height:72px;border-radius:8px;background:#fff;border:1px solid var(--w-line);display:block;cursor:pointer;flex:0 0 auto}
+.web-shell .me-ck__info{display:flex;flex-direction:column;gap:4px;min-width:0}
+.web-shell .me-ck__name{font-size:13px;font-weight:600;color:var(--w-ink);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.web-shell .me-ck__st{font-size:11px;font-weight:600;color:var(--w-muted);align-self:flex-start;background:var(--w-bg);border:1px solid var(--w-line);border-radius:999px;padding:1px 8px}
+.web-shell .me-ck__st.on{color:#0f7a43;background:#e7f6ee;border-color:#bfe6d2}
+/* 放大层：点击小码 → 全屏大码 */
+.web-shell .me-qr-zoom{position:fixed;inset:0;z-index:1600;background:rgba(12,18,14,.62);display:none;align-items:center;justify-content:center;padding:24px}
+.web-shell .me-qr-zoom__box{background:#fff;border-radius:18px;padding:20px 20px 18px;width:300px;max-width:86vw;display:flex;flex-direction:column;align-items:center;gap:12px;box-shadow:var(--w-shadow-lg)}
+.web-shell .me-qr-zoom__name{font-size:15px;font-weight:700;color:var(--w-ink)}
+.web-shell .me-qr-zoom__box img{width:240px;height:240px;background:#fff;border-radius:10px;border:1px solid var(--w-line)}
+.web-shell .me-qr-zoom__tip{font-size:12px;color:var(--w-muted);text-align:center;line-height:1.5}

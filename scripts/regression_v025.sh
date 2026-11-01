@@ -164,3 +164,7 @@ python tests/member_coupon_mall_smoke.py
 # 拉新邀请（邀请码/双方得券/幂等绑定）+ 券转赠（输码领取）+ 券面自定义（face_json 色值归一）。
 # 自带临时库隔离。
 python tests/member_v2_smoke.py
+
+# 新增会员接口须在生产模式检查身份与支付边界；收据打印直接执行原处理函数。
+python tests/security_membership_regression.py
+node tests/receipt_smoke.cjs

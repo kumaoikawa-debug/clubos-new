@@ -1434,8 +1434,18 @@
     }
 
     /* 版式：默认第一套；「换一套版式」循环切换（不随机 —— 随机会把最差的一套推给老板） */
-    var FAM = ['magazine', 'noir', 'film'];
-    var ALIAS = { editor: 'magazine', pictorial: 'film', minimal: 'film', poster: 'magazine' };
+    /* 版式家族（2026-10-30 扩展）：原来只有 magazine/noir/film 三套，
+       老板给了 4 张参考海报，按「活动气质」再补 4 套：
+         invite   电影感邀请函（全幅压暗 + 居中细线 + 仪式感衬线大标题）
+         cosmic   极简宇宙（深空渐变 + 星点 + 极简居中白字）
+         forest   暗色雾林（墨绿雾气 + 横向雾带 + 左下大标题）
+         routemap 纪实路线图（牛皮纸网格 + 虚线路线 + 路点 + 纪实图版） */
+    var FAM = ['magazine', 'invite', 'cosmic', 'forest', 'routemap', 'noir', 'film'];
+    var ALIAS = { editor: 'magazine', pictorial: 'film', minimal: 'film', poster: 'magazine',
+      invitation: 'invite', invite: 'invite', cinematic: 'invite', filmic: 'invite',
+      cosmic: 'cosmic', space: 'cosmic', universe: 'cosmic', star: 'cosmic',
+      forest: 'forest', mist: 'forest', misty: 'forest', fog: 'forest', woods: 'forest',
+      route: 'routemap', routemap: 'routemap', map: 'routemap', documentary: 'routemap' };
     var forced = window.__posterFamily || data.posterFamily;
     if (ALIAS[forced]) forced = ALIAS[forced];
     var family = FAM.indexOf(forced) >= 0 ? forced : FAM[_posterCycle++ % FAM.length];
@@ -1540,6 +1550,150 @@
     }
 
     /* ═══ 版式二 noir：深色杂志（居中字距标题 + 信息胶囊 + 居中二维码，参考图 3）═══ */
+    /* ═══ 版式 invite：电影感邀请函（全幅压暗 + 居中细金线 + 仪式感大标题）═══ */
+    else if (family === 'invite') {
+      if (img) { c.save(); drawCover.call(c, img, 0, 0, W, H); c.restore(); }
+      else { c.fillStyle = '#0d0f12'; c.fillRect(0, 0, W, H); }
+      var iv1 = c.createLinearGradient(0, 0, 0, H);
+      iv1.addColorStop(0, 'rgba(6,7,9,.93)');
+      iv1.addColorStop(.42, 'rgba(6,7,9,.34)');
+      iv1.addColorStop(.62, 'rgba(6,7,9,.30)');
+      iv1.addColorStop(1, 'rgba(6,7,9,.95)');
+      c.fillStyle = iv1; c.fillRect(0, 0, W, H);
+      c.strokeStyle = 'rgba(214,178,110,.85)'; c.lineWidth = 2;
+      c.strokeRect(PAD + 8, PAD + 8, W - (PAD + 8) * 2, H - (PAD + 8) * 2);
+      c.textAlign = 'center';
+      c.fillStyle = 'rgba(214,178,110,.95)'; c.font = '500 24px ' + FONT;
+      c.fillText('诚 邀 · INVITATION', W / 2, 250);
+      c.font = '700 88px ' + FONT;
+      var ivL = wrap(c, headline, CW - 60).slice(0, 2);
+      var ivY = 430;
+      c.fillStyle = 'rgba(255,255,255,.97)';
+      ivL.forEach(function (t, i) { c.fillText(t, W / 2, ivY + i * 104); });
+      var ivEnd = ivY + (ivL.length - 1) * 104;
+      c.strokeStyle = 'rgba(214,178,110,.75)'; c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(W / 2 - 120, ivEnd + 56); c.lineTo(W / 2 + 120, ivEnd + 56); c.stroke();
+      if (sub) {
+        c.fillStyle = 'rgba(255,255,255,.82)'; c.font = '400 30px ' + FONT;
+        wrap(c, sub, CW - 120).slice(0, 2).forEach(function (t, i) { c.fillText(t, W / 2, ivEnd + 116 + i * 46); });
+      }
+      if (points.length) {
+        c.fillStyle = 'rgba(255,255,255,.9)'; c.font = '500 26px ' + FONT;
+        points.slice(0, 3).forEach(function (t, i) { c.fillText(t, W / 2, H - 300 + i * 44); });
+      }
+      if (logoImg) { try { c.drawImage(logoImg, W / 2 - 34, H - 190, 68, 68); } catch (e) {} }
+    }
+
+    /* ═══ 版式 cosmic：极简宇宙（深空渐变 + 星点 + 极简居中白字）═══ */
+    else if (family === 'cosmic') {
+      var csR = c.createRadialGradient(W * 0.5, H * 0.34, 40, W * 0.5, H * 0.34, H * 0.78);
+      csR.addColorStop(0, '#1b2440'); csR.addColorStop(.5, '#0d1226'); csR.addColorStop(1, '#04060d');
+      c.fillStyle = csR; c.fillRect(0, 0, W, H);
+      /* 星点用确定性公式，不用 Math.random —— 随机会让同一场活动每次生成都不一样 */
+      for (var csI = 0; csI < 90; csI++) {
+        var csX = (csI * 137) % W, csY = (csI * 271) % Math.round(H * 0.82);
+        c.fillStyle = 'rgba(255,255,255,' + (0.16 + (csI % 5) * 0.06) + ')';
+        c.beginPath(); c.arc(csX, csY, (csI % 3 === 0) ? 2.2 : 1.2, 0, Math.PI * 2); c.fill();
+      }
+      c.strokeStyle = 'rgba(150,190,255,.28)'; c.lineWidth = 1.5;
+      c.beginPath(); c.arc(W / 2, 470, 250, 0, Math.PI * 2); c.stroke();
+      c.strokeStyle = 'rgba(150,190,255,.16)';
+      c.beginPath(); c.arc(W / 2, 470, 330, 0, Math.PI * 2); c.stroke();
+      if (img) {
+        var csW = 620, csH = 380, csX0 = (W - csW) / 2, csY0 = 900;
+        c.save(); c.beginPath();
+        if (c.roundRect) { c.roundRect(csX0, csY0, csW, csH, 18); } else { c.rect(csX0, csY0, csW, csH); }
+        c.clip(); drawCover.call(c, img, csX0, csY0, csW, csH); c.restore();
+        c.strokeStyle = 'rgba(255,255,255,.18)'; c.lineWidth = 1;
+        c.strokeRect(csX0, csY0, csW, csH);
+      }
+      c.textAlign = 'center';
+      c.fillStyle = 'rgba(180,210,255,.9)'; c.font = '500 22px ' + FONT;
+      c.fillText('O U T D O O R   E X P E D I T I O N', W / 2, 250);
+      c.fillStyle = '#fff'; c.font = '700 92px ' + FONT;
+      var csL = wrap(c, headline, CW - 40).slice(0, 2);
+      csL.forEach(function (t, i) { c.fillText(t, W / 2, 400 + i * 108); });
+      if (sub) {
+        c.fillStyle = 'rgba(255,255,255,.66)'; c.font = '400 28px ' + FONT;
+        wrap(c, sub, CW - 160).slice(0, 2).forEach(function (t, i) { c.fillText(t, W / 2, 560 + i * 44); });
+      }
+      if (points.length) {
+        c.fillStyle = 'rgba(255,255,255,.8)'; c.font = '500 25px ' + FONT;
+        points.slice(0, 3).forEach(function (t, i) { c.fillText(t, W / 2, H - 150 + i * 42); });
+      }
+    }
+
+    /* ═══ 版式 forest：暗色雾林（墨绿雾气 + 横向雾带 + 左下大标题）═══ */
+    else if (family === 'forest') {
+      if (img) { c.save(); drawCover.call(c, img, 0, 0, W, H); c.restore(); }
+      else { c.fillStyle = '#101a14'; c.fillRect(0, 0, W, H); }
+      c.fillStyle = 'rgba(12,28,20,.72)'; c.fillRect(0, 0, W, H);
+      for (var frI = 0; frI < 7; frI++) {
+        var frY = 180 + frI * 150;
+        var frG = c.createLinearGradient(0, frY - 70, 0, frY + 70);
+        frG.addColorStop(0, 'rgba(210,225,215,0)');
+        frG.addColorStop(.5, 'rgba(210,225,215,' + (0.20 - frI * 0.02).toFixed(3) + ')');
+        frG.addColorStop(1, 'rgba(210,225,215,0)');
+        c.fillStyle = frG; c.fillRect(0, frY - 70, W, 140);
+      }
+      var frB = c.createLinearGradient(0, H - 520, 0, H);
+      frB.addColorStop(0, 'rgba(6,14,10,0)'); frB.addColorStop(1, 'rgba(6,14,10,.9)');
+      c.fillStyle = frB; c.fillRect(0, H - 520, W, 520);
+      c.textAlign = 'left';
+      c.fillStyle = 'rgba(150,190,160,.95)'; c.fillRect(PAD, H - 376, 96, 4);
+      c.fillStyle = 'rgba(226,238,228,.95)'; c.font = '700 96px ' + FONT;
+      var frL = wrap(c, headline, CW - 20).slice(0, 2);
+      frL.forEach(function (t, i) { c.fillText(t, PAD, H - 330 + i * 108); });
+      if (sub) {
+        c.fillStyle = 'rgba(226,238,228,.78)'; c.font = '400 28px ' + FONT;
+        wrap(c, sub, CW - 40).slice(0, 2).forEach(function (t, i) {
+          c.fillText(t, PAD, H - 330 + frL.length * 108 + 6 + i * 44);
+        });
+      }
+      if (points.length) {
+        c.fillStyle = 'rgba(226,238,228,.72)'; c.font = '500 24px ' + FONT;
+        points.slice(0, 2).forEach(function (t, i) { c.fillText(t, PAD, H - 90 + i * 38); });
+      }
+    }
+
+    /* ═══ 版式 routemap：纪实路线图（牛皮纸网格 + 虚线路线 + 路点）═══ */
+    else if (family === 'routemap') {
+      c.fillStyle = '#efe9dc'; c.fillRect(0, 0, W, H);
+      c.strokeStyle = 'rgba(120,110,90,.16)'; c.lineWidth = 1;
+      for (var rmX = 0; rmX <= W; rmX += 60) { c.beginPath(); c.moveTo(rmX, 0); c.lineTo(rmX, H); c.stroke(); }
+      for (var rmY = 0; rmY <= H; rmY += 60) { c.beginPath(); c.moveTo(0, rmY); c.lineTo(W, rmY); c.stroke(); }
+      c.fillStyle = '#22262a'; c.fillRect(0, 0, W, 150);
+      c.textAlign = 'left';
+      c.fillStyle = 'rgba(255,255,255,.72)'; c.font = '500 22px ' + FONT;
+      c.fillText('R O U T E   D O C U M E N T A R Y   ·   路 线 纪 实', PAD, 66);
+      c.fillStyle = '#fff'; c.font = '700 46px ' + FONT;
+      c.fillText(wrap(c, headline, CW - 40)[0] || '', PAD, 118);
+      var rmPW = CW, rmPH = 520, rmPX = PAD, rmPY = 200;
+      if (img) { c.save(); drawCover.call(c, img, rmPX, rmPY, rmPW, rmPH); c.restore(); }
+      else { c.fillStyle = '#ded6c6'; c.fillRect(rmPX, rmPY, rmPW, rmPH); }
+      c.strokeStyle = 'rgba(40,44,48,.5)'; c.lineWidth = 2; c.strokeRect(rmPX, rmPY, rmPW, rmPH);
+      if (sub) {
+        c.fillStyle = '#5c574c'; c.font = '400 24px ' + FONT;
+        c.fillText(wrap(c, sub, rmPW)[0] || '', rmPX, rmPY + rmPH + 34);
+      }
+      var rmStops = points.length ? points.slice(0, 4) : ['集合出发', '路线途中', '抵达终点'];
+      var rmRY = rmPY + rmPH + 130;
+      c.strokeStyle = '#c0392b'; c.lineWidth = 3; c.setLineDash([12, 10]);
+      c.beginPath(); c.moveTo(rmPX + 30, rmRY); c.lineTo(rmPX + rmPW - 30, rmRY); c.stroke();
+      c.setLineDash([]);
+      var rmSeg = (rmPW - 60) / Math.max(rmStops.length - 1, 1);
+      c.textAlign = 'center';
+      rmStops.forEach(function (t, i) {
+        var rmDX = rmPX + 30 + rmSeg * i;
+        c.fillStyle = '#c0392b'; c.beginPath(); c.arc(rmDX, rmRY, 11, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#fff'; c.beginPath(); c.arc(rmDX, rmRY, 4.5, 0, Math.PI * 2); c.fill();
+        c.fillStyle = '#3a3630'; c.font = '600 24px ' + FONT;
+        c.fillText(String(t).length > 8 ? String(t).slice(0, 8) : String(t), rmDX, rmRY + 52);
+      });
+      c.textAlign = 'left';
+      if (logoImg) { try { c.drawImage(logoImg, PAD, H - 120, 64, 64); } catch (e2) {} }
+    }
+
     else if (family === 'noir') {
       drawPhotoFull();
       var gn = c.createLinearGradient(0, 0, 0, H);
@@ -1706,13 +1860,27 @@
     opts = opts || {};
     data = data || {};
     var activityId = opts.activityId || data.activityId;
-    if (!activityId) { showAlert({ title: '无法渲染', message: '缺少活动信息，无法渲染成品。' }); return; }
     /* 渠道 key 不在白名单里时直接拒绝：以前会渲染出「undefined xxx」这种半成品标题。 */
     if (!LABEL[channel]) { showAlert({ title: '无法渲染', message: '未知的内容渠道：' + channel + '。可用渠道为公众号 / 小红书 / 海报 / 回顾。' }); return; }
-
-    var ctx;
-    try { ctx = await loadCtx(activityId); }
-    catch (e) { showAlert({ title: '无法渲染', message: '读取活动资料失败：' + e.message }); return; }
+    var ctx = null;
+    // 回顾分两种：绑定活动的（activityId>0，资料从活动取）与独立回顾（activityId=0，资料全在内容 JSON 里）
+    if (channel === 'recap' && (!activityId || activityId === 0)) {
+      // 独立回顾不依赖系统里的活动：品牌信息单独取，媒体清单从内容自身带（data.media）
+      try {
+        var _st = await api('/api/club/' + CLUB + '/settings').catch(function () { return null; });
+        ctx = {
+          club: CLUB, activityId: 0, master: {}, mm: {},
+          logoUrl: _st && _st.logoUrl ? abs(_st.logoUrl) + (_st.logoUrl.indexOf('?') < 0 ? '?v=' + Date.now() : '') : '',
+          brandName: _st ? String(_st.name || '') : '',
+          brandSlogan: _st ? String(_st.slogan || '') : '',
+          status: '', title: data.title || '活动回顾', date: '', location: '', price: '', capacity: ''
+        };
+      } catch (e) { ctx = { club: CLUB, activityId: 0, master: {}, mm: {}, logoUrl: '', brandName: '', brandSlogan: '', status: '', title: data.title || '活动回顾' }; }
+    } else {
+      if (!activityId) { showAlert({ title: '无法渲染', message: '缺少活动信息，无法渲染成品。' }); return; }
+      try { ctx = await loadCtx(activityId); }
+      catch (e) { showAlert({ title: '无法渲染', message: '读取活动资料失败：' + e.message }); return; }
+    }
 
     var ov = document.createElement('div');
     ov.className = 'ch-overlay';
@@ -1725,7 +1893,7 @@
       '<div class="ch-panel" role="dialog" aria-modal="true" aria-labelledby="' + chTitleId + '" tabindex="-1">' +
       '<div class="ch-head"><div><div class="eyebrow">AI CHANNEL OUTPUT · 成品预览</div>' +
       '<h2 id="' + chTitleId + '">' + ICON[channel] + ' ' + esc(LABEL[channel] || channel) + '</h2>' +
-      '<div class="sub">' + esc(headTitle) + ' · 活动：' + esc(ctx.title) + '</div></div>' +
+      '<div class="sub">' + esc(headTitle) + (ctx && ctx.activityId ? ' · 活动：' + esc(ctx.title) : ' · 独立回顾') + '</div></div>' +
       '<button class="ch-x" type="button" aria-label="关闭">×</button></div>' +
       '<div class="ch-tools" id="chTools"></div>' +
       '<div class="ch-stage" id="chStage"></div>' +
@@ -1763,6 +1931,32 @@
         '<div class="notice">需要至少一张现场照片（或领队记录），ClubOS 才会基于真实素材写回顾；否则写出来的都是编的。</div>' +
         '<p class="sub">当前活动资料：' + esc(ctx.title) + (ctx.date ? ' · ' + esc(ctx.date) : '') + '</p></div>';
       note.textContent = 'ClubOS 不会替你把没发生过的事写成回顾。';
+      return;
+    }
+
+    // ── 活动回顾：重庆手帐风长图（不依赖活动，媒体从 data.media 解析）──
+    if (channel === 'recap') {
+      var repaintRecap = async function () { canvases = await paintRecap(data, ctx, stage); };
+      canvases = await repaintRecap();
+      btn('下载长图（750px 宽 · 2倍图）', '', async function () {
+        try {
+          btn.disabled = true;
+          var st = await exportLongpicPng(canvases, ctx, safeName(data.title || '活动回顾'));
+          if (st && st.failed > 0) {
+            showAlert({ title: '长图已下载，但有照片没载进来', message: '共 ' + st.total + ' 张照片，其中 ' + st.failed + ' 张没能载入，这些位置在长图里是空白。请确认素材还在，然后再下载一次。' });
+          } else { toast('长图已下载，可直接发公众号 / 朋友圈'); }
+        } catch (e2) {
+          showAlert({ title: '下载失败', message: '这个浏览器不允许把预览转成图片。可在预览区按 Command+P 存成 PDF，或用系统截图。' + (e2 && e2.message ? '（' + e2.message + '）' : '') });
+        } finally { btn.disabled = false; }
+      });
+      btn('复制图文（粘贴进公众号编辑器）', 'secondary', async function () {
+        var html = recapRichHtml(data, ctx), txt = recapPlainText(data, ctx);
+        (await copyRich(html, txt)) ? toast('已复制带格式图文，去公众号编辑器粘贴即可') : showAlert({ title: '复制失败', message: '浏览器拒绝了剪贴板权限，可改用「复制纯文本」。' });
+      });
+      btn('复制纯文本', 'secondary', async function () {
+        (await copyText(recapPlainText(data, ctx))) ? toast('纯文本已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
+      });
+      note.textContent = '活动回顾：手写手帐风长图，可直接下载 PNG，或复制图文到公众号。';
       return;
     }
 
@@ -1876,6 +2070,198 @@
       (await copyText(plainText(model, ctx))) ? toast('纯文本已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
     });
     note.textContent = '复制后到公众号编辑器直接粘贴，标题/小标题/图片排版都会保留。';
+  }
+
+  // ══ 活动回顾：重庆手帐风长图渲染（与长图同理走 iframe + exportLongpicPng）══
+  // 设计参考：暖米色纸感底 + 行楷大标题 + 壹/贰/叁 章节序号 + 深绿页脚（白 logo）。
+  var CN_NUM = ['零','壹','贰','叁','肆','伍','陆','柒','捌','玖','拾'];
+  var RK_CH = [
+    { c: '启程', e: 'Departure' }, { c: '途中', e: 'On the way' }, { c: '高处', e: 'Summit' },
+    { c: '花絮', e: 'Moments' }, { c: '归途', e: 'Return' }, { c: '拾遗', e: 'Leftovers' },
+    { c: '回响', e: 'Echo' }, { c: '余韵', e: 'Lingering' }, { c: '终章', e: 'Finale' }
+  ];
+  function recapMediaMap(data) {
+    var m = {}; (data.media || []).forEach(function (x) { if (x && x.ref) m[x.ref] = x; }); return m;
+  }
+  // 回顾照片走俱乐部鉴权路由（生产 /static/uploads/* 整体 404）；不依赖活动
+  function recapMediaUrl(raw) {
+    var s = String(raw || '');
+    if (!/^\/static\/uploads\//.test(s)) return s;
+    var rel = s.replace(/^\/static\//, '');
+    return '/api/club/' + CLUB + '/recap-media/' + rel.split('/').map(encodeURIComponent).join('/');
+  }
+  function recapImg(ref, mm, cls) {
+    var m = mm[ref] || {};
+    var raw = m.url || '';
+    var u = raw ? abs(recapMediaUrl(raw)) : '';
+    if (!u) return '';
+    var cap = m.desc ? '<div class="rk-cap">' + esc(m.desc) + '</div>' : '';
+    return '<figure class="rk-fig ' + (cls || '') + '"><img src="' + esc(u) + '" alt="' + esc(m.name || '') + '">' + cap + '</figure>';
+  }
+  function recapHtml(data, mm, ctx) {
+    data = data || {};
+    var title = esc(data.title || (ctx && ctx.title) || '活动回顾');
+    var summary = esc(data.summary || '');
+    var blocks = data.blocks || [];
+    /* 变量名不能叫 head：IIFE 里已有 function head(b) 取块标题，本地同名字符串会遮蔽它，
+       blocks.forEach 里的 head(b) 会变成「把字符串当函数调用」→ TypeError: head is not a function。 */
+    var rkHead = '<div class="rk-head"><div class="rk-kicker">活动回顾 · CLUB REVIEW</div>' +
+      '<h1 class="rk-title">' + title + '</h1>' +
+      (summary ? '<p class="rk-summary">' + summary + '</p>' : '') +
+      '<div class="rk-rule"></div></div>';
+    var ci = 0;
+    var body = '<div class="rk-body">';
+    blocks.forEach(function (b) {
+      var type = (b.type || '').toLowerCase();
+      var h = esc(head(b));
+      var txt = paras(textOf(b)).map(function (p) { return '<p>' + esc(p) + '</p>'; }).join('');
+      var refs = (b.mediaRefs || []).filter(Boolean);
+      if (type === 'lead') {
+        body += '<div class="rk-lead">' + (refs.length ? recapImg(refs[0], mm, 'rk-lead-img') : '') +
+          (h ? '<h2 class="rk-h2">' + h + '</h2>' : '') + txt + '</div>';
+      } else if (type === 'media') {
+        body += '<div class="rk-media">' + (h ? '<h3 class="rk-h3">' + h + '</h3>' : '') +
+          refs.map(function (r) { return recapImg(r, mm); }).join('') + txt + '</div>';
+      } else if (type === 'gallery') {
+        body += '<div class="rk-gallery">' + (h ? '<h3 class="rk-h3">' + h + '</h3>' : '') +
+          refs.map(function (r) { return recapImg(r, mm, 'rk-grid'); }).join('') + '</div>';
+      } else if (type === 'quote') {
+        body += '<blockquote class="rk-quote">' + (h ? ('<strong>' + h + '</strong><br>') : '') + txt + '</blockquote>';
+      } else if (type === 'timeline') {
+        var items = (b.items || []).map(function (it) {
+          return '<li><span class="rk-tl-k">' + esc(it.label || '') + '</span><span class="rk-tl-v">' + esc(it.value || '') + '</span></li>';
+        }).join('');
+        body += '<div class="rk-timeline">' + (h ? '<h3 class="rk-h3">' + h + '</h3>' : '') + '<ul>' + items + '</ul>' + txt + '</div>';
+      } else if (type === 'facts') {
+        var fitems = (b.items || []).map(function (it) {
+          return '<div class="rk-fact"><div class="rk-fact-v">' + esc(it.value || '') + '</div><div class="rk-fact-l">' + esc(it.label || '') + '</div></div>';
+        }).join('');
+        body += '<div class="rk-facts">' + (h ? '<h3 class="rk-h3">' + h + '</h3>' : '') + fitems + '</div>';
+      } else if (type === 'cta') {
+        body += '<div class="rk-cta">' + (h ? '<div class="rk-cta-h">' + h + '</div>' : '') + txt + '</div>';
+      } else {
+        var ch = RK_CH[ci % RK_CH.length]; ci++;
+        var imgs = refs.map(function (r) { return recapImg(r, mm); }).join('');
+        body += '<section class="rk-chap"><div class="rk-chap-no">' + (CN_NUM[ci] || CN_NUM[CN_NUM.length - 1]) +
+          '<span class="rk-chap-en">' + ch.c + ' · ' + ch.e + '</span></div>' +
+          (h ? '<h2 class="rk-h2">' + h + '</h2>' : '') + txt + imgs + '</section>';
+      }
+    });
+    body += '</div>';
+    var logo = (ctx && ctx.logoUrl) ? '<img class="rk-logo" src="' + esc(abs(ctx.logoUrl)) + '" alt="' + esc((ctx.brandName) || '') + '">' : '';
+    var foot = '<div class="rk-foot">' + logo +
+      '<div class="rk-foot-tx"><div class="rk-foot-name">' + esc((ctx && ctx.brandName) || '本俱乐部') + '</div>' +
+      ((ctx && ctx.brandSlogan) ? '<div class="rk-foot-sl">' + esc(ctx.brandSlogan) + '</div>' : '') +
+      '<div class="rk-foot-sub">活动回顾 · 由 ClubOS AI 生成</div></div></div>';
+    return rkHead + body + foot;
+  }
+  function recapDoc(html, ctx) {
+    var css = [
+      '*{box-sizing:border-box}',
+      'html,body{margin:0;padding:0}',
+      'body{width:' + LONG_WIDTH + 'px;color:#2e2a24;font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}',
+      '.rk-head{padding:56px 52px 0}',
+      '.rk-kicker{font-size:22px;letter-spacing:4px;color:#7a8a5e;font-family:Georgia,serif}',
+      '.rk-title{font-family:"STXingkai","Xingkai SC","KaiTi","STKaiti",cursive;font-size:66px;line-height:1.18;margin:14px 0 18px;color:#2e2a24;font-weight:400}',
+      '.rk-summary{font-size:27px;line-height:1.7;color:#5b554a;margin:0 0 22px;font-family:Georgia,"Songti SC",serif}',
+      '.rk-rule{height:2px;background:linear-gradient(90deg,#9aa872,#e7e0cc);margin:6px 0 8px}',
+      '.rk-body{padding:18px 52px 0}',
+      '.rk-lead{margin:0 0 30px}',
+      '.rk-lead-img{margin:0 0 22px}',
+      '.rk-h2{font-family:Georgia,"Songti SC",serif;font-size:38px;line-height:1.3;margin:0 0 14px;color:#33302a}',
+      '.rk-h3{font-family:Georgia,"Songti SC",serif;font-size:30px;margin:0 0 12px;color:#3a362e}',
+      '.rk-lead p,.rk-chap p,.rk-media p,.rk-timeline p{font-size:26px;line-height:1.85;color:#413d35;margin:0 0 16px}',
+      '.rk-fig{margin:0 0 20px;background:#fff;padding:12px 12px 14px;border:1px solid #ddd5c0;box-shadow:0 6px 16px rgba(80,70,40,.12);transform:rotate(-.6deg)}',
+      '.rk-fig img{width:100%;display:block}',
+      '.rk-cap{font-size:21px;color:#7a7264;font-style:italic;margin-top:8px;text-align:center;font-family:Georgia,"Songti SC",serif}',
+      '.rk-media{margin:0 0 30px}',
+      '.rk-gallery{margin:0 0 30px}',
+      '.rk-gallery .rk-grid{display:inline-block;width:46%;margin:1.5%;vertical-align:top;transform:rotate(.5deg)}',
+      '.rk-chap{margin:0 0 34px;padding-top:18px;border-top:1px dashed #c9bfa3}',
+      '.rk-chap-no{font-family:Georgia,serif;font-size:46px;color:#9aa872;line-height:1;margin-bottom:6px}',
+      '.rk-chap-en{font-size:20px;letter-spacing:2px;color:#9aa872;margin-left:14px;font-family:Georgia,serif}',
+      '.rk-quote{margin:0 0 30px;padding:22px 26px;background:#e9e2cd;border-left:6px solid #9aa872;font-size:27px;line-height:1.7;color:#4a463c;font-family:Georgia,"Songti SC",serif}',
+      '.rk-timeline{margin:0 0 30px}',
+      '.rk-timeline ul{list-style:none;margin:0;padding:0}',
+      '.rk-timeline li{display:flex;justify-content:space-between;padding:12px 4px;border-bottom:1px solid #ddd5c0;font-size:25px}',
+      '.rk-tl-k{color:#7a7264}.rk-tl-v{color:#2e2a24;font-weight:600}',
+      '.rk-facts{display:flex;flex-wrap:wrap;margin:0 0 30px}',
+      '.rk-fact{flex:1 1 40%;margin:8px;background:#e9e2cd;border:1px solid #ddd5c0;border-radius:8px;padding:18px;text-align:center}',
+      '.rk-fact-v{font-family:Georgia,serif;font-size:34px;color:#9aa872}',
+      '.rk-fact-l{font-size:21px;color:#6b6457;margin-top:4px}',
+      '.rk-cta{margin:0 0 20px;font-size:26px;color:#5b554a;text-align:center;font-family:Georgia,"Songti SC",serif}',
+      '.rk-foot{background:#274033;color:#f4efe2;padding:46px 52px;margin-top:46px;display:flex;align-items:center;gap:24px}',
+      '.rk-logo{max-height:84px;max-width:160px;background:#fff;border-radius:8px;padding:8px}',
+      '.rk-foot-name{font-size:32px;font-weight:600}',
+      '.rk-foot-sl{font-size:22px;opacity:.85;margin-top:4px}',
+      '.rk-foot-sub{font-size:19px;opacity:.7;margin-top:10px;letter-spacing:1px}'
+    ].join('');
+    var bg = '#efe9d8';
+    var bgimg = 'radial-gradient(circle at 18% 12%,rgba(120,140,90,.10),transparent 42%),radial-gradient(circle at 86% 82%,rgba(150,120,70,.10),transparent 46%)';
+    return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><style>body{background:' + bg + ';background-image:' + bgimg + '}' + css + '</style></head><body>' + hardenLongpic(html) + '</body></html>';
+  }
+  async function paintRecap(data, ctx, stage) {
+    var mm = recapMediaMap(data);
+    var html = recapHtml(data, mm, ctx);
+    stage.innerHTML = '<div class="ch-long-wrap"><div class="ch-long-frame"><iframe id="chRecapFrame" title="活动回顾预览" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe></div><div class="ch-long-meta"><span>正在排版…</span></div></div>';
+    var frame = stage.querySelector('#chRecapFrame');
+    frame.srcdoc = recapDoc(html, ctx);
+    try {
+      await new Promise(function (res) {
+        var done = false;
+        var finish = function () { if (!done) { done = true; res(1); } };
+        frame.onload = function () {
+          var d = frame.contentDocument; if (!d) return finish();
+          var imgs = Array.prototype.slice.call(d.images || []);
+          if (!imgs.length) return setTimeout(finish, 300);
+          var left = imgs.filter(function (i) { return !i.complete; }).length;
+          if (!left) return setTimeout(finish, 200);
+          var timer = setTimeout(finish, 4000);
+          imgs.forEach(function (i) {
+            i.addEventListener('load', function () { if (--left <= 0) { clearTimeout(timer); finish(); } });
+            i.addEventListener('error', function () { if (--left <= 0) { clearTimeout(timer); finish(); } });
+          });
+        };
+        setTimeout(finish, 6000);
+      });
+    } catch (e) { /* 预览失败不该挡住「复制 / 下载」两条出路 */ }
+    var h = 0;
+    try { h = frame.contentDocument ? frame.contentDocument.body.scrollHeight : 0; } catch (e2) { h = 0; }
+    frame.style.height = (h || 1200) + 'px';
+    var scaled = window.matchMedia && window.matchMedia('(max-width:800px)').matches ? 0.52 : 1;
+    var holder = stage.querySelector('.ch-long-frame');
+    if (holder && scaled !== 1) holder.style.height = Math.ceil((h || 1200) * scaled) + 'px';
+    var meta = stage.querySelector('.ch-long-meta span');
+    if (meta && h) meta.textContent = '宽度 ' + LONG_WIDTH + 'px（手帐风长图）· 实际高度约 ' + h + 'px';
+    return { html: html, frame: frame };
+  }
+  function recapRichHtml(data, ctx) {
+    data = data || {}; var mm = recapMediaMap(data);
+    var out = '<div style="font-family:-apple-system,\'PingFang SC\',sans-serif;color:#2e2a24;max-width:680px">';
+    out += '<h1 style="font-size:30px;margin:0 0 10px">' + esc(data.title || (ctx && ctx.title) || '活动回顾') + '</h1>';
+    if (data.summary) out += '<p style="color:#5b554a;font-size:16px;line-height:1.7">' + esc(data.summary) + '</p>';
+    (data.blocks || []).forEach(function (b) {
+      var h = esc(head(b));
+      var t = paras(textOf(b)).map(function (p) { return '<p style="font-size:15px;line-height:1.8">' + esc(p) + '</p>'; }).join('');
+      var refs = (b.mediaRefs || []).filter(Boolean);
+      var imgs = refs.map(function (r) {
+        var m = mm[r] || {}; var raw = m.url || ''; var u = raw ? abs(recapMediaUrl(raw)) : '';
+        return u ? '<img src="' + esc(u) + '" style="width:100%;margin:8px 0">' : '';
+      }).join('');
+      if (h) out += '<h2 style="font-size:20px;margin:16px 0 6px">' + h + '</h2>';
+      out += t + imgs;
+    });
+    out += '</div>';
+    return out;
+  }
+  function recapPlainText(data, ctx) {
+    data = data || {}; var lines = [data.title || (ctx && ctx.title) || '活动回顾'];
+    if (data.summary) lines.push(data.summary);
+    (data.blocks || []).forEach(function (b) {
+      var h = head(b); if (h) lines.push('\n' + h);
+      paras(textOf(b)).forEach(function (p) { lines.push(p); });
+    });
+    return lines.join('\n');
   }
 
   window.openChannelOutput = openChannelOutput;

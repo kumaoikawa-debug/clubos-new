@@ -39,9 +39,9 @@ def _ensure_column(c, table, column, ddl):
 def _backfill_v019_opening_inventory(c):
     # Preserve pre-v0.19 on-hand stock as an auditable opening balance. This is not
     # fabricated supplier history: it is explicitly marked as a migration balance.
-    for p in c.execute('SELECT id,stock,average_cost FROM products').fetchall():
+    for p in c.execute("SELECT id,stock,average_cost FROM products WHERE inventory_mode='platform_owned' AND source!='external_api'").fetchall():
         key=f"v019-opening:{p['id']}"
-        if not c.execute('SELECT 1 FROM inventory_movements WHERE idempotency_key=?',(key,)).fetchone():
+        if not c.execute('SELECT 1 FROM inventory_movements WHERE product_id=?',(p['id'],)).fetchone():
             qty=int(p['stock'] or 0)
             c.execute('''INSERT INTO inventory_movements(product_id,movement_type,quantity_delta,stock_before,stock_after,unit_cost,total_cost,reference_type,reference_id,note,actor_type,idempotency_key)
                          VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',(p['id'],'opening_balance',qty,0,qty,float(p['average_cost'] or 0),round(qty*float(p['average_cost'] or 0),2),'migration','v0.19','v0.19 升级时承接历史库存余额','system',key))
@@ -57,7 +57,7 @@ def _backfill_v021_finance(c):
     from clubos_domain.merchandise_finance import MerchandiseFinanceEngine
     finance=MerchandiseFinanceEngine()
     c.execute("""UPDATE gear_order_items SET unit_cost_snapshot=COALESCE((SELECT average_cost FROM products p WHERE p.id=gear_order_items.product_id),0)
-                 WHERE unit_cost_snapshot IS NULL OR unit_cost_snapshot=0""")
+                 WHERE unit_cost_snapshot IS NULL""")
     for r in c.execute('SELECT id FROM purchase_receipts ORDER BY received_at,id').fetchall():
         finance.register_receipt_payable(c,receipt_id=str(r['id']))
 
@@ -197,6 +197,13 @@ def _run_compat_migrations(c):
     _ensure_column(c,'clubs','application_note','application_note TEXT')
     _ensure_column(c,'clubs','business_license_ref','business_license_ref TEXT')
     _ensure_column(c,'clubs','reviewed_at','reviewed_at TEXT')
+    # 2026-10-31 俱乐部级「新活动默认积分规则」：新建活动继承这四个值，
+    # 运营在「积分策略」页设一次即全场生效，不用逐场进活动详情改。
+    # 默认值沿用 activities 的历史默认（全开 + 可抵 100%），存量俱乐部升级后行为不变。
+    _ensure_column(c,'clubs','default_points_enabled','default_points_enabled INTEGER NOT NULL DEFAULT 1')
+    _ensure_column(c,'clubs','default_earn_club_points','default_earn_club_points INTEGER NOT NULL DEFAULT 1')
+    _ensure_column(c,'clubs','default_accept_club_points','default_accept_club_points INTEGER NOT NULL DEFAULT 1')
+    _ensure_column(c,'clubs','default_club_points_max_discount_percent','default_club_points_max_discount_percent REAL NOT NULL DEFAULT 100')
     _ensure_column(c,'clubs','reviewed_by','reviewed_by TEXT')
     _ensure_column(c,'clubs','disabled_reason','disabled_reason TEXT')
     # 入驻来源（2026-10-26）：官网「申请体验」表单提交的申请与平台手动
@@ -232,6 +239,9 @@ def _run_compat_migrations(c):
     _ensure_column(c,'member_benefits','share_enabled','share_enabled INTEGER NOT NULL DEFAULT 1')
     # 用户注册城市：城市定向投放（成都区域的用户在 11 月都能领一张券）要按它圈人。
     _ensure_column(c,'users','city','city TEXT')
+    # 2026-10-31 C 端头像：自定义上传（avatar_url）+ 微信授权头像（wechat_avatar_url，自动同步入口）
+    _ensure_column(c,'users','avatar_url','avatar_url TEXT')
+    _ensure_column(c,'users','wechat_avatar_url','wechat_avatar_url TEXT')
     _ensure_column(c,'activities','points_enabled','points_enabled INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'activities','earn_club_points','earn_club_points INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'activities','accept_club_points','accept_club_points INTEGER NOT NULL DEFAULT 1')
@@ -310,6 +320,113 @@ def _run_compat_migrations(c):
     _ensure_column(c,'product_variants','color_hex','color_hex TEXT')
     _ensure_column(c,'product_variants','size','size TEXT')
     _ensure_column(c,'product_variants','barcode','barcode TEXT')
+    # 进销存 V1（2026-10-31）：规格层补采购成本 / 规格属性 / 库存与履约模式
+    _ensure_column(c,'product_variants','spec_json','spec_json TEXT')
+    _ensure_column(c,'product_variants','purchase_cost','purchase_cost REAL NOT NULL DEFAULT 0')
+    _ensure_column(c,'product_variants','inventory_mode',"inventory_mode TEXT NOT NULL DEFAULT 'platform_owned'")
+    _ensure_column(c,'product_variants','fulfillment_mode',"fulfillment_mode TEXT NOT NULL DEFAULT 'platform_warehouse'")
+    # 商品来源与库存/履约模式（外部品牌扩展地基，不写死 PEAKTRACE）
+    _ensure_column(c,'products','source',"source TEXT NOT NULL DEFAULT 'platform_self'")
+    _ensure_column(c,'products','inventory_mode',"inventory_mode TEXT NOT NULL DEFAULT 'platform_owned'")
+    _ensure_column(c,'products','fulfillment_mode',"fulfillment_mode TEXT NOT NULL DEFAULT 'platform_warehouse'")
+    _ensure_column(c,'products','owner_id','owner_id INTEGER')
+    # 订单明细：混合订单分流预埋（V1 全默认自营）
+    _ensure_column(c,'gear_order_items','sku_id','sku_id INTEGER')
+    _ensure_column(c,'gear_order_items','supplier_id','supplier_id INTEGER')
+    _ensure_column(c,'gear_order_items','inventory_mode',"inventory_mode TEXT NOT NULL DEFAULT 'platform_owned'")
+    _ensure_column(c,'gear_order_items','fulfillment_mode',"fulfillment_mode TEXT NOT NULL DEFAULT 'platform_warehouse'")
+    _ensure_column(c,'gear_order_items','warehouse_id','warehouse_id INTEGER')
+    # WMS：在途 / 不可售数量（5.2 库存数量关系）
+    _ensure_column(c,'warehouse_inventory','on_order','on_order INTEGER NOT NULL DEFAULT 0')
+    _ensure_column(c,'warehouse_inventory','unsellable','unsellable INTEGER NOT NULL DEFAULT 0')
+    _ensure_column(c,'gear_orders','commerce_sync_error','commerce_sync_error TEXT')
+    _ensure_column(c,'warehouse_movements','variant_id','variant_id INTEGER')
+    _ensure_column(c,'purchase_order_exceptions','variant_id','variant_id INTEGER')
+    _ensure_column(c,'purchase_order_exceptions','resolution',"resolution TEXT NOT NULL DEFAULT 'closed'")
+    _ensure_column(c,'purchase_order_items','variant_id','variant_id INTEGER')
+    _ensure_column(c,'purchase_order_items','sku_plan_json','sku_plan_json TEXT')
+    _ensure_column(c,'purchase_receipt_items','variant_id','variant_id INTEGER')
+    _ensure_column(c,'purchase_receipts','request_key','request_key TEXT')
+    _ensure_column(c,'purchase_receipts','request_hash','request_hash TEXT')
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_receipt_request ON purchase_receipts(request_key)')
+    _ensure_column(c,'purchase_return_items','variant_id','variant_id INTEGER')
+    # 品牌档案补全 + 来源 / 商城展示状态
+    _ensure_column(c,'product_brands','name_en','name_en TEXT')
+    _ensure_column(c,'product_brands','intro','intro TEXT')
+    _ensure_column(c,'product_brands','industry','industry TEXT')
+    _ensure_column(c,'product_brands','official_website','official_website TEXT')
+    _ensure_column(c,'product_brands','country','country TEXT')
+    _ensure_column(c,'product_brands','contact_name','contact_name TEXT')
+    _ensure_column(c,'product_brands','contact_phone','contact_phone TEXT')
+    _ensure_column(c,'product_brands','cooperation_status',"cooperation_status TEXT NOT NULL DEFAULT 'pending'")
+    _ensure_column(c,'product_brands','source_type',"source_type TEXT NOT NULL DEFAULT 'platform_self'")
+    _ensure_column(c,'product_brands','mall_display_status',"mall_display_status TEXT NOT NULL DEFAULT 'show'")
+    # 进销存 V1.2（2026-10-31 第二批）：品牌结算模式配置（按销售额比例 / 固定结算价）
+    #   sales_ratio：品牌应结 = 销售额 × settlement_ratio%（0 = 沿用结算单生成时的 platformFeeRate 口径）
+    #   fixed_price：品牌应结 = Σ(件数 × 规格 settlement_price)，逐 SKU 在规格里定价
+    _ensure_column(c,'product_brands','settlement_mode',"settlement_mode TEXT NOT NULL DEFAULT 'sales_ratio'")
+    _ensure_column(c,'product_brands','settlement_ratio','settlement_ratio REAL NOT NULL DEFAULT 0')
+    _ensure_column(c,'product_variants','settlement_price','settlement_price REAL NOT NULL DEFAULT 0')
+    # 商品状态兼容（V1.2）：历史库里可能存着旧状态机的别名值，统一归一到新 7 态。
+    # 只映射确认的别名，未知值保留原样（前端按原文显示，不猜）。
+    c.execute("UPDATE products SET status='active' WHERE status IN ('on_sale','online','published','in_stock','selling')")
+    c.execute("UPDATE products SET status='inactive' WHERE status IN ('off','offline','unlisted','delisted','removed','off_shelf')")
+    c.execute("UPDATE products SET status='pending_inbound' WHERE status IN ('incoming','inbound_pending','to_inbound')")
+    c.execute("UPDATE products SET status='partially_received' WHERE status IN ('partial','partial_inbound')")
+    # 进销存 V1 新表：供应商↔品牌关联 / 品牌结算 / 外部品牌通用映射 / 外部库存同步日志
+    c.execute('''CREATE TABLE IF NOT EXISTS brand_suppliers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, brand_id INTEGER NOT NULL, supplier_id INTEGER NOT NULL,
+        is_primary INTEGER NOT NULL DEFAULT 0, note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(brand_id,supplier_id),
+        FOREIGN KEY(brand_id) REFERENCES product_brands(id) ON DELETE CASCADE,
+        FOREIGN KEY(supplier_id) REFERENCES suppliers(id) ON DELETE CASCADE)''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_brand_suppliers_brand ON brand_suppliers(brand_id)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_brand_suppliers_supplier ON brand_suppliers(supplier_id)')
+    c.execute('''CREATE TABLE IF NOT EXISTS brand_settlements (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, brand_id INTEGER NOT NULL, settlement_no TEXT,
+        period_from TEXT, period_to TEXT, sales_amount REAL NOT NULL DEFAULT 0,
+        platform_fee REAL NOT NULL DEFAULT 0, settlement_amount REAL NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'draft', settled_at TEXT, note TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(brand_id) REFERENCES product_brands(id))''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_brand_settlements_brand ON brand_settlements(brand_id,status,id)')
+    c.execute('''CREATE TABLE IF NOT EXISTS external_product_mappings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, brand_id INTEGER NOT NULL,
+        external_product_id TEXT, external_sku_id TEXT, external_inventory_id TEXT,
+        product_id INTEGER, variant_id INTEGER, external_sync_status TEXT NOT NULL DEFAULT 'pending',
+        last_inventory_sync_at TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(brand_id,external_product_id,external_sku_id),
+        FOREIGN KEY(brand_id) REFERENCES product_brands(id) ON DELETE CASCADE,
+        FOREIGN KEY(product_id) REFERENCES products(id) ON DELETE SET NULL,
+        FOREIGN KEY(variant_id) REFERENCES product_variants(id) ON DELETE SET NULL)''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_external_mappings_brand ON external_product_mappings(brand_id)')
+    c.execute('''CREATE TABLE IF NOT EXISTS external_inventory_sync_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, mapping_id INTEGER NOT NULL,
+        synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, result TEXT NOT NULL DEFAULT 'ok',
+        snapshot_json TEXT, error TEXT,
+        FOREIGN KEY(mapping_id) REFERENCES external_product_mappings(id) ON DELETE CASCADE)''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_external_sync_logs_mapping ON external_inventory_sync_logs(mapping_id,synced_at)')
+    # 进销存 V1.1（2026-10-31）：采购拒收/异常登记（任务书 4.2③）。
+    # 未到货量公式 = ordered - received - rejected：异常量不参与未到货，采购单才能正常收完。
+    c.execute('''CREATE TABLE IF NOT EXISTS purchase_order_exceptions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, purchase_order_id TEXT NOT NULL,
+        purchase_order_item_id INTEGER NOT NULL, product_id INTEGER NOT NULL,
+        exception_type TEXT NOT NULL, quantity INTEGER NOT NULL,
+        note TEXT, registered_by TEXT NOT NULL DEFAULT 'platform',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(purchase_order_item_id) REFERENCES purchase_order_items(id),
+        FOREIGN KEY(product_id) REFERENCES products(id))''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_po_exceptions_po ON purchase_order_exceptions(purchase_order_id,purchase_order_item_id)')
+    # 老商品规格回填（2026-10-31，进销存 V1）：库存真源已下沉到规格层，
+    # 但历史种子/老库存在「商品有 stock、无任何规格行」的数据 —— 汇总重算一跑
+    # 就会把商品库存抹成 0，双账本自检也永远不一致。这里为无规格商品补一条
+    # 默认规格（继承商品价格与库存），回填后商品汇总与规格之和自然对齐。
+    c.execute('''INSERT INTO product_variants(product_id,name,sku,price,stock,status,sort,is_default)
+                 SELECT p.id,p.name,p.sku,p.price,p.stock,'active',0,1 FROM products p
+                 WHERE NOT EXISTS(SELECT 1 FROM product_variants v WHERE v.product_id=p.id)''')
+    c.execute('''UPDATE products SET stock=(
+                     SELECT COALESCE(SUM(v.stock),0) FROM product_variants v
+                     WHERE v.product_id=products.id AND v.status='active')''')
     # 物流履约（2026-10-24）：运单与轨迹分两张表。
     # 为什么独立于点单上的 carrier/tracking_no 两列：那两列只能存「最后一次填的值」，
     # 换承运商、补录轨迹、服务商回调都会把历史抹掉。运单表按住 order_id 唯一，
@@ -559,6 +676,45 @@ def _run_compat_migrations(c):
                  SELECT club_id,tier_id,benefit_id,0,enabled FROM tier_gift_rules''')
     c.execute('''INSERT OR IGNORE INTO tier_reward_log(club_id,user_id,tier_id,benefit_id,points_award)
                  SELECT club_id,user_id,tier_id,benefit_id,0 FROM tier_gift_log''')
+    # 2026-10-27 C 端领队卡「介绍得更丰富一点」+ 可咨询 / 可评分（用户要求）：
+    # 卡面要多出「资质 / 常驻城市 · N 年经验 / ★评分」，点开还能看简介、TA 带的近期活动、
+    # 顾客评价，并直接留咨询。三列为空/0 时前端不印，不做任何猜测性填充。
+    _ensure_column(c,'club_leaders','bio','bio TEXT')
+    _ensure_column(c,'club_leaders','years_exp','years_exp INTEGER NOT NULL DEFAULT 0')
+    _ensure_column(c,'club_leaders','cert_verified','cert_verified INTEGER NOT NULL DEFAULT 0')
+    # 评价与咨询两张表：rater_key 做「一人一评」去重（会员用 u:<id>，游客用本机随机键）。
+    # 全部 CREATE TABLE IF NOT EXISTS，老库首次启动即建好，不需要回填。
+    c.execute('''CREATE TABLE IF NOT EXISTS leader_reviews (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id INTEGER NOT NULL,
+      leader_id INTEGER NOT NULL,
+      activity_id INTEGER,
+      user_id INTEGER,
+      rater_key TEXT NOT NULL,
+      author TEXT,
+      rating INTEGER NOT NULL,
+      comment TEXT,
+      status TEXT NOT NULL DEFAULT 'visible',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(club_id) REFERENCES clubs(id),
+      FOREIGN KEY(leader_id) REFERENCES club_leaders(id))''')
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_leader_reviews_once ON leader_reviews(club_id,leader_id,rater_key)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_leader_reviews_leader ON leader_reviews(leader_id,status)')
+    c.execute('''CREATE TABLE IF NOT EXISTS leader_inquiries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      club_id INTEGER NOT NULL,
+      leader_id INTEGER,
+      activity_id INTEGER,
+      name TEXT,
+      phone TEXT NOT NULL,
+      message TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'new',
+      source TEXT NOT NULL DEFAULT 'web',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      handled_at TEXT,
+      FOREIGN KEY(club_id) REFERENCES clubs(id))''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_leader_inquiries_club ON leader_inquiries(club_id,status,id)')
     c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_club_members_invite_code ON club_members(invite_code) WHERE invite_code IS NOT NULL')
     c.execute('CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_checkout ON benefit_redemptions(held_checkout_id,status)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_benefit_redemptions_order ON benefit_redemptions(used_order_kind,used_order_id,status)')
@@ -858,10 +1014,43 @@ def _migrate_v031_coupon_club_nullable(c):
     c.commit()
 
 
+def _migrate_content_assets_activity_nullable(c):
+    """活动回顾解耦（2026-10-30）：独立回顾不绑定系统活动，content_assets.activity_id 必须允许 NULL。
+
+    原来是 NOT NULL + 外键指向 activities(id)，插 activity_id=0 直接撞外键（FOREIGN KEY constraint failed）。
+    SQLite 不能直接改列，只能重建表；这张表存已生成的渠道/回顾内容，照搬现结构 + 放宽这一列即可，
+    数据全部带过去。重建前必须先 commit：PRAGMA foreign_keys 在事务里是空操作。
+    """
+    row = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='content_assets'").fetchone()
+    if not row:
+        return
+    sql = row[0] or ''
+    if 'activity_id INTEGER NOT NULL' not in sql:
+        return  # 已经是可空（或表还没建）
+    cols = [r[1] for r in c.execute('PRAGMA table_info(content_assets)')]
+    if not cols:
+        return
+    c.commit()
+    c.execute('PRAGMA foreign_keys=OFF')
+    try:
+        new_sql = sql.replace('activity_id INTEGER NOT NULL', 'activity_id INTEGER', 1)
+        new_sql = new_sql.replace('CREATE TABLE content_assets', 'CREATE TABLE content_assets_v031b', 1)
+        c.execute(new_sql)
+        c.execute('INSERT INTO content_assets_v031b(%s) SELECT %s FROM content_assets'
+                  % (','.join(cols), ','.join(cols)))
+        c.execute('DROP TABLE content_assets')
+        c.execute('ALTER TABLE content_assets_v031b RENAME TO content_assets')
+    finally:
+        c.execute('PRAGMA foreign_keys=ON')
+    c.commit()
+
+
 def init_db():
     with conn() as c:
         c.executescript(SCHEMA.read_text(encoding='utf-8'))
         _run_compat_migrations(c)
+        # 内容资产放宽 activity_id（独立回顾不绑定活动）—— 必须排在播种 / 写入之前
+        _migrate_content_assets_activity_nullable(c)
         # 券表放宽 display_club_id（平台直发的券没有归属俱乐部）—— 必须排在播种之前，
         # 否则任何一条发券动作都会撞外键。
         _migrate_v031_coupon_club_nullable(c)
@@ -903,6 +1092,9 @@ def init_db():
             ('美丽诺羊毛基础层','GEAR-WOOL-001',599,52,'服装',0.08),
         ]
         c.executemany('INSERT INTO products(name,sku,price,stock,category,commission_rate) VALUES(?,?,?,?,?,?)',products)
+        # 种子商品也必须补默认规格：库存真源在规格层，不回填的话
+        # 汇总重算会把商品库存抹成 0，双账本自检永远报不一致。
+        _backfill_v027_variants(c)
 
         media=_demo_media()
         # 演示团期必须始终落在未来：原先把日期写死成 2026-10-24，当天 08:00 之后

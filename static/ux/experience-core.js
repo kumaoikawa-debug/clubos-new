@@ -22,15 +22,20 @@
   // 该容器必然在 shell 之内，位置也仍是卡片标题与表格之间。
   const host=table.parentNode,shell=table.closest('.card')||host;
   const filter=document.createElement('div');filter.className='ux-table-tools';
-  filter.innerHTML='<label class="ux-table-search"><span aria-hidden="true">⌕</span><input type="search" placeholder="筛选当前列表" aria-label="筛选当前列表"></label><span class="ux-table-count" aria-live="polite"></span>';
+  filter.innerHTML='<label class="ux-table-search"><span aria-hidden="true">⌕</span><input type="search" placeholder="筛选当前列表" aria-label="筛选当前列表"><button type="button" class="ux-clear-filter" hidden>清除</button></label><span class="ux-table-count" aria-live="polite"></span>';
+  filter._table=table;
   shell.insertBefore(filter,shell===host?table:host);
   const input=filter.querySelector('input'),counter=filter.querySelector('.ux-table-count');
   let noResults=null;
   const update=()=>{const rows=[...body.rows].filter(x=>!x.classList.contains('ux-filter-empty'));let shown=0,actual=0;const q=input.value.trim().toLocaleLowerCase();for(const row of rows){if(row.querySelector('.empty')&&row.cells.length===1){row.hidden=!!q;continue}actual++;const visible=row.textContent.toLocaleLowerCase().includes(q);row.hidden=!visible;if(visible)shown++}if(noResults&&(!q||shown)){noResults.remove();noResults=null}if(actual&&q&&!shown&&!noResults){noResults=document.createElement('tr');noResults.className='ux-filter-empty';const cell=document.createElement('td');cell.colSpan=Math.max(1,table.tHead?.rows?.[0]?.cells?.length||1);cell.appendChild(empty('未找到匹配结果'));noResults.appendChild(cell);body.appendChild(noResults)}counter.textContent=q?`显示 ${shown} / ${actual} 条`:`共 ${actual} 条`};
   input.addEventListener('input',update);
+  const clear=filter.querySelector('.ux-clear-filter');
+  input.addEventListener('input',()=>{clear.hidden=!input.value});
+  clear.onclick=()=>{input.value='';clear.hidden=true;update();input.focus()};
+  input.addEventListener('keydown',e=>{if(e.key==='Escape'&&input.value){e.stopPropagation();clear.click()}});
   const obs=new MutationObserver(()=>update());obs.observe(body,{childList:true});update();
  }
- function enrichTables(){if(!isAdmin)return;document.querySelectorAll('.view table.table').forEach(enrichTable)}
+ function enrichTables(){if(!isAdmin)return;document.querySelectorAll('.ux-table-tools').forEach(f=>{if(f._table&&!f._table.isConnected)f.remove()});document.querySelectorAll('.view table.table').forEach(enrichTable)}
  let queued=false;
  function scheduleTables(){if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;enrichTables()})}
  function initViewFeedback(){
@@ -84,7 +89,7 @@
   const field=form.elements.namedItem('files'),textarea=form.elements.namedItem('prompt');
   if(!field||!textarea)return;
   const drop=field.closest('.drop');drop.classList.add('ux-file-drop');drop.setAttribute('role','group');drop.setAttribute('aria-label','活动素材');
-  const help=document.createElement('div');help.className='ux-upload-help';help.innerHTML='<strong>支持的资料</strong><p>PPT / Word / PDF / 图片（含 iPhone HEIC 照片）；也可以只在这里输入文案、再添加照片，一样能生成活动详情。可以上传多份资料，AI 会结合原始事实与图片组织动态内容。手机拍摄的大图会自动压缩后再上传，不必手动缩小。</p><div class="ux-upload-list" aria-live="polite">尚未选择文件</div>';
+  const help=document.createElement('div');help.className='ux-upload-help';help.innerHTML='<strong>支持的资料</strong><p>PPT / Word / PDF / 图片（含 iPhone HEIC 照片），也可以直接贴一条链接（公众号推文、自家或别家的活动页）；还可以只在这里输入文案、再添加照片，一样能生成活动详情。可以上传多份资料，AI 会结合原始事实与图片组织动态内容。手机拍摄的大图会自动压缩后再上传，不必手动缩小。</p><div class="ux-upload-list" aria-live="polite">尚未选择文件</div>';
   drop.appendChild(help);
   /* ★ 累加，不替换。<input type=file> 的原生行为是「每次选择整体顶掉上一次」，
      拖放旧代码也是 field.files=e.dataTransfer.files 直接整体覆盖 —— 用户先选几张现场照片、
@@ -142,8 +147,18 @@
   field.addEventListener('change',()=>addFiles(field.files));
   drop.addEventListener('dragover',e=>{e.preventDefault();drop.classList.add('dragover')});drop.addEventListener('dragleave',()=>drop.classList.remove('dragover'));drop.addEventListener('drop',e=>{e.preventDefault();drop.classList.remove('dragover');if(e.dataTransfer?.files?.length)addFiles(e.dataTransfer.files)});
   const notice=document.createElement('div');notice.className='ux-create-status';notice.setAttribute('aria-live','polite');textarea.parentElement.after(notice);
-  const submit=document.getElementById('genBtn');const refresh=()=>{const files=[...field.files];const ready=!!textarea.value.trim()||files.length>0;const total=files.reduce((s,f)=>s+f.size,0);notice.textContent=ready?(`资料已就绪：${textarea.value.trim()?'':'仅上传资料'}${files.length?`${files.length} 份文件 · 共 ${mb(total)} MB`:''}。生成后可检查事实、编辑团期及发布。`):'填写一句目标或上传一份资料，即可开始。';if(submit.disabled===ready)submit.disabled=!ready};textarea.addEventListener('input',refresh);field.addEventListener('change',refresh);refresh();
-  form.addEventListener('submit',()=>{const files=[...field.files];const total=files.reduce((s,f)=>s+f.size,0);notice.innerHTML=`<span class="ux-spinner" aria-hidden="true"></span>正在上传 ${files.length} 份资料（共 ${mb(total)} MB）并生成活动内容，${total>4*1048576?'资料较大，可能需要一两分钟，':'请稍候，'}完成前请勿重复提交。`;submit.disabled=true}, {capture:true});
+  /* 就绪校验（2026-10-28 加链接）：过去只认文案或文件，只贴链接时按钮一直是灰的 ——
+     功能做了却点不动。三条入口任选其一即就绪，文案里也要能看出是哪一条。 */
+  const linkField=form.elements.namedItem('link');
+  const submit=document.getElementById('genBtn');const refresh=()=>{const files=[...field.files];const hasText=!!textarea.value.trim();const hasLink=!!(linkField&&linkField.value.trim());const ready=hasText||files.length>0||hasLink;const total=files.reduce((s,f)=>s+f.size,0);
+    notice.textContent=ready?(hasLink&&!files.length&&!hasText?'链接已就绪：AI 会打开这条链接读正文和配图。生成后可检查事实、编辑团期及发布。':`资料已就绪：${hasText?'':'仅上传资料'}${hasLink?'（含链接）':''}${files.length?`${files.length} 份文件 · 共 ${mb(total)} MB`:''}。生成后可检查事实、编辑团期及发布。`):'填写一句目标、贴一条活动链接或上传一份资料，即可开始。';
+    if(submit.disabled===ready)submit.disabled=!ready};
+  textarea.addEventListener('input',refresh);if(linkField)linkField.addEventListener('input',refresh);field.addEventListener('change',refresh);refresh();
+  form.addEventListener('submit',()=>{const files=[...field.files];const total=files.reduce((s,f)=>s+f.size,0);const _lk=linkField&&linkField.value.trim();
+    notice.innerHTML=_lk
+      ? `<span class="ux-spinner" aria-hidden="true"></span>正在打开链接、读取正文与配图${files.length?`，并上传 ${files.length} 份资料`:''}，然后生成活动内容。链接一般十几秒读完，完成前请勿重复提交。`
+      : `<span class="ux-spinner" aria-hidden="true"></span>正在上传 ${files.length} 份资料（共 ${mb(total)} MB）并生成活动内容，${total>4*1048576?'资料较大，可能需要一两分钟，':'请稍候，'}完成前请勿重复提交。`;
+    submit.disabled=true}, {capture:true});
   const obs=new MutationObserver(()=>{if(!submit.disabled)refresh()});obs.observe(submit,{attributes:true,attributeFilter:['disabled']});
   modal.setAttribute('role','dialog');modal.setAttribute('aria-modal','true');modal.setAttribute('aria-label','AI 创建活动');
  }

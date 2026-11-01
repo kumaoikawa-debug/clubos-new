@@ -200,7 +200,7 @@ class MedusaClient:
                 if iid: return str(iid)
         return None
 
-    def create_platform_product(self,*,name:str,sku:str,price:float,stock:int,status:str='active',image_url:str|None=None,category:str|None=None):
+    def create_platform_product(self,*,name:str,sku:str,price:float,stock:int,status:str='active',image_url:str|None=None,category:str|None=None,variants:list|None=None):
         if not self.shipping_profile_id:
             raise RuntimeError('MEDUSA_SHIPPING_PROFILE_ID is required for catalog sync')
         payload={
@@ -211,6 +211,9 @@ class MedusaClient:
             'shipping_profile_id':self.shipping_profile_id,
             'metadata':{'clubos_catalog':'gear','clubos_sku':sku},
         }
+        if variants:
+            payload['options']=[{'title':'SKU','values':[v['sku'] for v in variants]}]
+            payload['variants']=[{'title':v['name'],'sku':v['sku'],'manage_inventory':True,'options':{'SKU':v['sku']},'prices':[{'amount':float(v['price'] if v.get('price') is not None else price),'currency_code':self.currency_code}]} for v in variants]
         if image_url: payload['thumbnail']=image_url
         if category: payload['metadata']['clubos_category']=category
         if self.sales_channel_id: payload['sales_channels']=[{'id':self.sales_channel_id}]

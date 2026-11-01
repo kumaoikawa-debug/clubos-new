@@ -126,11 +126,11 @@ class BaseProvider:
         只生成一条「已揽收」轨迹；真正需要电子面单的服务商在这里调它的下单接口。
         """
         return {
-            'status': 'in_transit',
+            'status': 'created',
             'events': [{
                 'event_time': now_utc(),
-                'status': 'in_transit',
-                'description': f'包裹已由{carrier or "承运商"}揽收',
+                'status': 'created',
+                'description': '运单已登记，等待承运商揽收',
                 'location': '',
             }],
         }
@@ -294,7 +294,9 @@ def get_provider(config: dict | None = None) -> BaseProvider:
     避免「填错服务商 → 整条发货链路 500」这种低级故障。"""
     cfg = config or {}
     code = str(cfg.get('provider') or 'mock').strip().lower()
-    cls = PROVIDERS.get(code) or MockProvider
+    if code not in PROVIDERS:raise LogisticsError('物流服务商配置无效')
+    if os.getenv('CLUBOS_SECURITY_MODE')=='production' and code=='mock':raise LogisticsError('生产环境不能使用模拟物流')
+    cls = PROVIDERS[code]
     return cls(cfg)
 
 

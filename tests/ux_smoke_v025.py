@@ -9,7 +9,11 @@ for role,n in [('platform',13),('club',12),('web',4)]:
  if role=='web': assert '/static/ux/workflows-web.js' in s and '<nav class="web-nav"' in s
  else:
   assert '/static/ux/workflows-'+role+'.js' in s
-  assert len(re.findall(r'data-view=',s))==n,(role,'nav lost')
+  required={'platform':{'pdash','clubs','pcredits','ppoints','pbenefits','products','supply','warehouse','finance','analytics','orders','aftersales','commissions'},
+            'club':{'dash','activities','content','regs','execution','points','members','mall','analytics','settings'}}[role]
+  views=re.findall(r'data-view="([^"]+)"',s)
+  assert set(views)==required and len(views)==len(required),(role,'required navigation changed')
+  assert all(f'id="{view}"' in s for view in required),(role,'view missing')
 assert 'purchaseReturnList' in (ROOT/'static/platform/index.html').read_text()
 assert 'OPEN SOURCE' not in (ROOT/'static/ux/clubos-ux.css').read_text()
 for p in (ROOT/'static/ux').glob('*.js'):

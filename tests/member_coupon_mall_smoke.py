@@ -205,7 +205,7 @@ def main():
     ok('verifyMallCode' in wf and 'discountPercent' in wf, 'workflows-club 带核销与折扣券表单')
     web_html = (ROOT / 'static/web/index.html').read_text(encoding='utf-8')
     ok("pushMe('pointsmall')" in web_html, 'C 端「可用积分」点击进积分商城')
-    _m2 = re.search(r'src="/static/web/me\.js\?v=([0-9A-Za-z]+)"', web_html)
+    _m2 = re.search(r'src="/static/web/me\.js\?v=([0-9A-Za-z]+)(?:&[^" ]*)?"', web_html)
     ok(bool(_m2), 'me.js 带缓存版本号 %s' % (_m2.group(1) if _m2 else '缺失'))
     me_js = (ROOT / 'static/web/me.js').read_text(encoding='utf-8')
     ok('SUB_ME.pointsmall' in me_js and 'meMallPaint' in me_js, '积分商城二级页实现')

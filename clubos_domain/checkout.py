@@ -3,6 +3,7 @@ import json, uuid, logging
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
+from clubos_domain import stock_control as sc
 from clubos_domain.product_stock import variant_of, write_variant_stock
 
 logger = logging.getLogger("checkout")
@@ -193,6 +194,12 @@ class CheckoutEngine:
 
     def create_gear_intent(self,c,*,club_id:int,user_id:int,items:list[dict],resolved_products:list[tuple[dict,int]],
                            requested_gear_points:int=0,voucher_codes:list[str]|None=None,address:dict|None=None):
+        combined={}
+        for p,q in resolved_products:
+            sc.owned(c,p['id']);key=p.get('_variantId')
+            if key in combined:combined[key]=(p,combined[key][1]+q)
+            else:combined[key]=(p,q)
+        resolved_products=list(combined.values())
         original=sum(float(p['price'])*q for p,q in resolved_products)
         # 会员装备折扣：由俱乐部订阅的套餐决定（平台控制，会员等级不参与）。
         # 之前这里根本没读它 —— C 端会员中心白纸黑字写着「装备商城 9.5 折」、
@@ -223,7 +230,9 @@ class CheckoutEngine:
         cash_amount=max(0.0,float(quote.payable)-float(benefit_quote['platformSubsidy']))
         payload={'items':[{'productId':int(p['id']),'quantity':int(q),'unitPrice':float(p['price']),
                            'variantId':p.get('_variantId'),'variantName':p.get('_variantName'),
-                           'commerceVariantId':p.get('commerce_variant_id')} for p,q in resolved_products]}
+                           'commerceVariantId':p.get('commerce_variant_id'),
+                           'commissionRate':self.commission_rate.rate_for_product(c,club_id,float(p['commission_rate'])) if self.commission_rate else float(p['commission_rate']),
+                           'unitCost':float((variant_of(c,product_id=p['id'],variant_id=p.get('_variantId')) or {}).get('purchase_cost') or p.get('average_cost') or 0)} for p,q in resolved_products]}
         # 收货信息快照进结算单 payload：装备是实物，付款后平台仓库要按它发货。
         # 存快照而不是只存 addressId —— 用户之后改地址簿，历史订单的收件信息不能跟着变。
         if address: payload['address']={'consignee':str(address.get('consignee') or ''),'phone':str(address.get('phone') or ''),
@@ -238,10 +247,16 @@ class CheckoutEngine:
             intent_id,'gear',user_id,club_id,'pending_payment',original,cash_amount,0,quote.gear_points_used,
             0,quote.platform_point_subsidy,0,benefit_quote['platformSubsidy'],json.dumps(redemption_ids),
             json.dumps(payload,ensure_ascii=False)))
+        for p,q in resolved_products:
+            v=sc.sku(c,p['id'],p.get('_variantId'));sc.reserve(c,p['id'],v['id'],q,checkout_id=intent_id)
         self.points.hold_points(c,intent_id=intent_id,user_id=user_id,club_id=None,club_points=0,gear_points=quote.gear_points_used)
         quote.payable=cash_amount
         quote.platform_funding_cost=float(quote.platform_funding_cost)+float(benefit_quote['platformSubsidy'])
         return intent_id,quote,payload,benefit_quote
+
+    def expire_gear(self,c):
+        for r in c.execute("SELECT id FROM checkout_intents WHERE kind='gear' AND status='pending_payment' AND created_at<datetime('now','-30 minutes') AND payment_status NOT IN ('succeeded','processing')").fetchall():
+            self.cancel_intent(c,intent_id=r['id'],reason='expired')
 
     def attach_commerce(self,c,*,intent_id:str,cart_id:str|None=None,order_id:str|None=None):
         c.execute('UPDATE checkout_intents SET commerce_cart_id=COALESCE(?,commerce_cart_id), commerce_order_id=COALESCE(?,commerce_order_id), updated_at=CURRENT_TIMESTAMP WHERE id=?',
@@ -255,6 +270,8 @@ class CheckoutEngine:
             return {'ok':True,'alreadyCancelled':True}
         if intent['status']=='paid':
             raise ValueError('已支付结算单应走退款流程')
+        for r in c.execute("SELECT * FROM warehouse_sku_reservations WHERE checkout_id=? AND order_id IS NULL AND status='reserved'",(intent_id,)).fetchall():
+            sc.release(c,dict(r))
         self.points.release_holds(c,intent_id=intent_id)
         if self.benefits:
             self.benefits.release_vouchers(c,intent_id=intent_id)
@@ -367,7 +384,7 @@ class CheckoutEngine:
     def _finalize_gear(self,c,intent,payload,commerce_order_id):
         resolved=[]; commission=0.0
         for item in payload.get('items',[]):
-            p=c.execute('SELECT * FROM products WHERE id=? AND status="active"',(int(item['productId']),)).fetchone()
+            p=c.execute('SELECT * FROM products WHERE id=?',(int(item['productId']),)).fetchone()
             if not p: raise ValueError('商品已不可售')
             p=dict(p); q=max(1,int(item['quantity']))
             # 下单时选定的规格要一路跟到落库：价格按规格价记，库存按规格扣。
@@ -381,6 +398,11 @@ class CheckoutEngine:
                 stock=int(v['stock'] or 0)
             else:
                 stock=int(p['stock'] or 0)
+            hold=c.execute("SELECT quantity FROM warehouse_sku_reservations WHERE checkout_id=? AND variant_id=? AND status='reserved'",(intent['id'],vid)).fetchone()
+            if hold:stock+=hold['quantity']
+            p['price']=float(item.get('unitPrice',p['price']))
+            p['_cost']=float(item.get('unitCost',p.get('average_cost') or 0))
+            sc.owned(c,p['id'])
             if stock<q: raise OverflowError(f"{p['name']}{(' · '+p['_variantName']) if p.get('_variantName') else ''} 库存不足")
             # 佣金率是「总平台按俱乐部设定」的（2026-10-24）：俱乐部专属费率优先，
             # 没有单独设定才沿用商品默认费率。费率按件记进快照，
@@ -388,6 +410,7 @@ class CheckoutEngine:
             prate=float(p['commission_rate'])
             if self.commission_rate is not None:
                 prate=self.commission_rate.rate_for_product(c,int(intent['club_id']),prate)
+            prate=float(item.get('commissionRate',prate))
             p['_commissionRate']=prate
             commission += float(p['price'])*q*prate
             resolved.append((p,q))
@@ -402,8 +425,9 @@ class CheckoutEngine:
                    addr.get('consignee') or None,addr.get('phone') or None,
                    ' '.join([str(addr.get(k) or '') for k in ('province','city','district','detail') if addr.get(k)]) or None))
         oid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        c.execute("UPDATE warehouse_sku_reservations SET order_id=? WHERE checkout_id=? AND order_id IS NULL AND status='reserved'",(oid,intent['id']))
         for p,q in resolved:
-            c.execute('INSERT INTO gear_order_items(order_id,product_id,variant_id,variant_name,quantity,unit_price,unit_cost_snapshot,commission_rate_snapshot) VALUES(?,?,?,?,?,?,?,?)',(oid,p['id'],p.get('_variantId'),p.get('_variantName'),q,p['price'],float(p.get('average_cost') or 0),float(p.get('_commissionRate') or 0)))
+            c.execute('INSERT INTO gear_order_items(order_id,product_id,variant_id,variant_name,quantity,unit_price,unit_cost_snapshot,commission_rate_snapshot) VALUES(?,?,?,?,?,?,?,?)',(oid,p['id'],p.get('_variantId'),p.get('_variantName'),q,p['price'],float(p.get('_cost') or 0),float(p.get('_commissionRate') or 0)))
             if self.inventory:
                 self.inventory.sale_outbound(c,product_id=int(p['id']),quantity=q,order_id=oid,actor_type='checkout',variant_id=p.get('_variantId'))
             else:

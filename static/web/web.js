@@ -1639,6 +1639,31 @@ function wv(id,b){
   }
   if(id==='wme'){loadMemberCenter();loadOrders()}
   if(id==='wability')loadWability();
+  if(id==='wleaders')loadLeaders();
+}
+/* C 端「领队团队专区」：列出资源库全部激活领队（录入即显示，无需逐个排班）。
+   数据来自 /api/public/clubs/{CLUB}/leaders，卡片复用活动详情页的 leaderCard，
+   点卡同样进领队主页抽屉（openLeaderSheet）。LEADERS_ALL 缓存一份，评分后只改数字不整页重绘。 */
+let LEADERS_ALL=[];
+function loadLeaders(){
+  const el=document.getElementById('wLeadersGrid');
+  if(!el)return;
+  if(LEADERS_ALL.length){renderLeaderGrid();return;}
+  el.innerHTML='<div class="w-sh__loading">正在加载领队团队…</div>';
+  api(`/api/public/clubs/${CLUB}/leaders`,{cache:'no-store'}).then(d=>{
+    LEADERS_ALL=Array.isArray(d)?d:[];
+    renderLeaderGrid();
+  }).catch(e=>{
+    el.innerHTML=`<div class="w-sh__empty"><b>领队团队暂时打不开</b><span>${esc(e.message||'请稍后重试')}</span></div>`;
+  });
+}
+function renderLeaderGrid(){
+  const el=document.getElementById('wLeadersGrid');if(!el)return;
+  if(!LEADERS_ALL.length){
+    el.innerHTML='<div class="w-sh__empty"><b>暂未收录领队</b><span>俱乐部正在组建带队团队，稍后再来看看。</span></div>';
+    return;
+  }
+  el.innerHTML=`<div class="w-lead__grid">${LEADERS_ALL.map(leaderCard).join('')}</div>`;
 }
 async function openAct(id){/* 不先切视图的话，详情会被渲染进一个 display:none 的 section ——
    从首页 hero / 本月精选点进来时，页面看起来毫无反应。 */wviewShow('wactivities');
@@ -1653,7 +1678,7 @@ currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0&&!occExpired(o))
 /* 参加人默认带一位：付款人自己（relationToPayer=本人）。
    证件类型默认「身份证」—— 绝大多数参加人是大陆居民；不是的话号码格式校验会
    逼着顾客把类型换成护照/台胞证等（号码按类型校验，选错类型过不去）。 */
-bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'身份证',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
+bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'身份证',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${tripGuideHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
 /* 回到活动列表。两个入口共用：详情页的「返回活动」、底部「活动」tab。 */
 function showActivityList(){
   const l=$('#activityList');if(l)l.style.display='block';
@@ -1697,38 +1722,268 @@ async function _actRevCheck(){
   return false;
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)_actRevCheck()});
-/* 带队领队：后端已算好「这场活动由哪些领队带队」（public_activity.leaders，活动级扁平数组、
-   已去重、只含已指派的人，见 app.py::_public_leaders）。前端只负责展示，不按团期再分组 ——
-   顾客在报名页挑的是「这场活动谁带」，团期只是同一场的不同日期，按团期拆开会变成名字堆。
-   只展示 姓名 / 角色 / 资质 / 擅长 / 常驻城市 / 头像 六样，手机号属内部联络信息后端压根不下发。
-   没有任何领队被指派时整块不显示：空壳卡片只会让顾客以为页面缺了东西。 */
+/* 带队领队（2026-10-27 重做）：用户要求「领队介绍得更丰富一点」，并参考同行版式 ——
+   大头像（在岗小绿点）/ 头衔 / 姓名 + 资质已核验徽标 / 擅长关键词 / 常驻城市 · N 年经验 / ★评分。
+   点开一张卡进「领队主页」：简介、TA 带的近期活动、顾客评价，并可直接咨询领队、给领队打分。
+
+   数据纪律（和原来一样，只是更严格）：卡片上每一项都来自俱乐部自己填的资料或真实记录 ——
+   评分来自真实评价、带队场次来自排班表、年限来自名册。没填就整项不印，绝不为「看起来更满」
+   编一个 9 年经验或 4.98 分：领队资历是顾客拿来做安全判断的，编出来是要出事的。 */
+function leaderScoreHtml(x,cls){
+  const n=Number(x.ratingCount||0),v=Number(x.ratingAvg||0);
+  if(!n)return `<b class="${cls} is-empty"><i>★</i>暂无评分</b>`;
+  return `<b class="${cls}"><i>★</i>${v.toFixed(2)}<em>${n}</em></b>`;
+}
+function leaderAvatarHtml(name,url){
+  const initial=esc(String(name||'领').trim().slice(0,1)||'领');
+  /* 首字占位垫在图片下面：图挂了（或没设头像）就是一块稳稳的绿色首字，不是空白圆。
+     onerror 带 parentNode 守卫 —— 重绘后图片可能已经不在文档里，直接改会抛错。 */
+  const img=url?`<img src="${esc(url)}" alt="" loading="lazy" onerror="this.style.display='none';if(this.parentNode)this.parentNode.classList.add('is-ph')">`:'';
+  return img+`<span class="w-lc__ph" aria-hidden="true">${initial}</span>`;
+}
+function leaderFootText(x){
+  return [String(x.baseCity||'').trim(),Number(x.yearsExp||0)?`${Number(x.yearsExp)} 年经验`:''].filter(Boolean).join(' · ');
+}
 function leaderCard(x){
-  const initial=esc(String(x.name||'领').trim().slice(0,1)||'领');
-  const av=x.avatarUrl
-    ? `<img src="${esc(x.avatarUrl)}" alt="" loading="lazy">`
-    : `<span class="w-lead__ph" aria-hidden="true">${initial}</span>`;
-  /* 资质与角色相同时不重复印：名册里 role='领队' 而指派角色也常是'领队'，
-     两个都印会变成「领队 chip + 领队 · 常驻 X」的复读。真实数据里资质是头衔/证书，
-     与指派角色不同时才有信息量。 */
-  const cred=String(x.credential||'').trim();
-  const meta=[];
-  if(cred&&cred!==String(x.role||'').trim())meta.push(esc(cred));
-  if(x.baseCity)meta.push('常驻 '+esc(x.baseCity));
-  const metaHtml=meta.length?`<div class="w-lead__meta">${meta.join(' · ')}</div>`:'';
-  const tags=(x.specialties||[]).slice(0,4).map(s=>`<span class="w-lead__tag">${esc(s)}</span>`).join('');
-  const tagsHtml=tags?`<div class="w-lead__tags">${tags}</div>`:'';
-  return `<div class="w-lead__card"><span class="w-lead__av">${av}</span>`
-    +`<div class="w-lead__body"><div class="w-lead__who"><b>${esc(x.name||'领队')}</b>`
-    +`<i>${esc(x.role||'领队')}</i></div>${metaHtml}${tagsHtml}</div></div>`;
+  const lid=Number(x.leaderId||0);
+  const cred=String(x.credential||x.role||'').trim();
+  /* 擅长关键词全部印出来（2026-10-29 用户反馈「后台领队信息前端没有显示完」）：
+     原先这里 .slice(0,4) 只取 4 个、CSS 又用 -webkit-line-clamp:2 截成两行 ——
+     两处截断叠起来，后台填的东西有一半根本到不了顾客眼前。现在两处都放开：
+     卡片换行交给 CSS，网格会让同行卡片等高，不需要在这里替顾客决定「看几个」。 */
+  const specs=(x.specialties||[]).map(String).filter(Boolean);
+  const foot=leaderFootText(x);
+  const dot=lid?'<i class="w-lc__dot" aria-hidden="true" title="在岗领队"></i>':'';
+  const inner=`<span class="w-lc__av">${leaderAvatarHtml(x.name,x.avatarUrl)}${dot}</span>`
+    +(cred?`<span class="w-lc__cred">${esc(cred)}</span>`:'')
+    +`<span class="w-lc__name">${esc(x.name||'领队')}${x.certVerified?'<em>资质已核验</em>':''}</span>`
+    +(specs.length?`<span class="w-lc__spec">${specs.map(s=>esc(s)).join(' · ')}</span>`:'')
+    +`<span class="w-lc__foot">${foot?`<span>${esc(foot)}</span>`:'<span></span>'}${leaderScoreHtml(x,'w-lc__score')}</span>`;
+  /* 有档案的卡是 <button>（键盘可达、有焦点环）；执行端手打的临时增援没有 leaderId，
+     渲染成静态块 —— 点了弹「资料不存在」比不许点更糟。 */
+  return lid
+    ? `<button type="button" class="w-lc" data-lid="${lid}" onclick="openLeaderSheet(${lid})">${inner}</button>`
+    : `<div class="w-lc is-static">${inner}</div>`;
 }
 function leadersHtml(a){
   const list=a.leaders||[];
   if(!list.length)return '';
-  const cards=list.map(leaderCard).join('');
   return `<section class="w-block w-lead"><div class="w-block__head"><div><b>带队领队</b>`
-    +`<div class="w-block__hint">由本俱乐部领队带队，出发前会在订单里给出集合与联络方式。</div></div></div>`
-    +`<div class="w-lead__grid">${cards}</div></section>`;
+    +`<div class="w-block__hint">这场活动由本俱乐部领队带队，出发前会在订单里给出集合与联络方式。点开领队可看简介和 TA 带的近期活动，也能直接咨询或打分。</div></div></div>`
+    +`<div class="w-lead__grid">${list.map(leaderCard).join('')}</div></section>`;
 }
+
+/* ===== 领队主页（底部抽屉）=====
+   z-index 刻意低于 .ux-overlay(1100)：抽屉里再开「咨询 / 评分」弹窗时，
+   弹窗必须压在抽屉之上，否则按钮点不动（这个坑在平台端踩过一次）。 */
+let _leadCur=null;
+function closeLeaderSheet(){
+  const el=document.getElementById('wLeaderSheet');
+  if(el)el.remove();
+  document.documentElement.classList.remove('w-sheet-open');
+}
+function _leadSheetShell(){
+  let el=document.getElementById('wLeaderSheet');
+  if(el)return el;
+  el=document.createElement('div');el.id='wLeaderSheet';el.className='w-sheet';
+  el.innerHTML=`<div class="w-sheet__mask" data-close></div><div class="w-sheet__panel" role="dialog" aria-modal="true" aria-label="领队资料">`
+    +`<button type="button" class="w-sheet__x" data-close aria-label="关闭">×</button>`
+    +`<div class="w-sheet__body" id="wLeaderBody"><div class="w-sh__loading">正在加载领队资料…</div></div></div>`;
+  document.body.appendChild(el);
+  document.documentElement.classList.add('w-sheet-open');
+  /* 关闭走事件委托、且挂在壳上（壳只建一次）：别用 {once:true} —— 抽屉里点任何东西
+     都会把那个一次性监听吃掉，之后错误态里的「关闭」就点不动了。 */
+  el.addEventListener('click',e=>{
+    const t=e.target.closest('[data-close]');
+    if(t&&el.contains(t))closeLeaderSheet();
+  });
+  return el;
+}
+async function openLeaderSheet(lid){
+  if(!Number(lid))return;
+  _leadCur=null;
+  const el=_leadSheetShell();
+  const body=el.querySelector('#wLeaderBody');
+  body.innerHTML='<div class="w-sh__loading">正在加载领队资料…</div>';
+  try{
+    const d=await api(`/api/public/leaders/${Number(lid)}`,{cache:'no-store'});
+    _leadCur=d;renderLeaderSheet(d);
+  }catch(e){
+    body.innerHTML=`<div class="w-sh__empty"><b>领队资料暂时打不开</b><span>${esc(e.message||'请稍后重试')}</span>`
+      +`<button type="button" class="w-sh__btn" data-close>关闭</button></div>`;
+  }
+}
+function leaderStars(n){
+  const k=Math.max(0,Math.min(5,Number(n)||0));
+  return `<span class="w-rv__stars">${'★'.repeat(k)}<i>${'★'.repeat(5-k)}</i></span>`;
+}
+function leaderReviewHtml(r){
+  return `<div class="w-rv"><div class="w-rv__top"><b>${esc(r.author||'匿名山友')}</b>${leaderStars(r.rating)}`
+    +`<em>${esc(String(r.createdAt||'').slice(0,10))}</em></div>`
+    +(r.comment?`<p>${esc(r.comment)}</p>`:'')+`</div>`;
+}
+function leadJump(id){closeLeaderSheet();openAct(Number(id))}
+function renderLeaderSheet(d){
+  const body=document.getElementById('wLeaderBody');if(!body)return;
+  const specs=(d.specialties||[]).map(String).filter(Boolean);
+  const acts=d.activities||[];
+  const reviews=d.reviews||[];
+  const foot=leaderFootText(d);
+  const statCells=[
+    Number(d.ratingCount||0)?['★ '+Number(d.ratingAvg||0).toFixed(2),'综合评分']:['—','暂无评分'],
+    [`${Number(d.ratingCount||0)}`,'条评价'],
+    [`${Number(d.leadCount||0)}`,'带队场次']
+  ].map(([v,l])=>`<div><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('');
+  const actHtml=acts.length?acts.map(a=>`<button type="button" class="w-sh__act" onclick="leadJump(${Number(a.id)})">`
+      +`<span class="w-sh__actimg">${a.cover?`<img src="${esc(a.cover)}" alt="" loading="lazy" onerror="this.style.display='none'">`:''}</span>`
+      +`<span class="w-sh__actcopy"><b>${esc(a.title||'活动')}</b>`
+      +`<em>${esc([a.location,String(a.nextStart||'').slice(0,10)].filter(Boolean).join(' · '))}</em></span>`
+      +`<span class="w-sh__actgo">查看</span></button>`).join('')
+    :'<div class="w-sh__none">这位领队近期还没有可报名的团期。</div>';
+  const rvHtml=reviews.length?reviews.map(leaderReviewHtml).join('')
+    :'<div class="w-sh__none">还没有人评价过 TA。走完这一趟，你可以是第一个。</div>';
+  body.innerHTML=`
+    <div class="w-sh__hero">
+      <span class="w-sh__av">${leaderAvatarHtml(d.name,d.avatarUrl)}<i class="w-lc__dot" aria-hidden="true"></i></span>
+      <div class="w-sh__who">
+        ${d.credential?`<span class="w-sh__cred">${esc(d.credential)}</span>`:''}
+        <h3>${esc(d.name||'领队')}${d.certVerified?'<em>资质已核验</em>':''}</h3>
+        <span class="w-sh__meta">${esc(foot||'本俱乐部领队')}</span>
+      </div>
+    </div>
+    <div class="w-sh__stats">${statCells}</div>
+    ${d.bio?`<p class="w-sh__bio">${esc(d.bio)}</p>`:''}
+    ${specs.length?`<div class="w-sh__tags"><span>擅长</span>${specs.map(t=>`<i>${esc(t)}</i>`).join('')}</div>`:''}
+    <div class="w-sh__acts">
+      <button type="button" class="w-sh__btn is-primary" onclick="leaderAsk()">咨询领队</button>
+      <button type="button" class="w-sh__btn" onclick="leaderRate()">给 TA 评分</button>
+    </div>
+    <div class="w-sh__sec">TA 带的近期活动</div>
+    <div class="w-sh__actlist">${actHtml}</div>
+    <div class="w-sh__sec">山友评价${reviews.length?`<em>${reviews.length}</em>`:''}</div>
+    <div class="w-sh__reviews">${rvHtml}</div>
+    <div class="w-sh__note">咨询由俱乐部真人回复；评分一人一条，再评会覆盖你原来那条。</div>`;
+}
+/* 咨询领队：问题直接进俱乐部端的「领队咨询箱」（leader_inquiries），
+   不做「已自动回复」的花招 —— 没有真人回答的假客服比不回更伤客。 */
+async function leaderAsk(){
+  const d=_leadCur;if(!d)return;
+  const v=await showForm({title:`咨询 ${d.name||'领队'}`,
+    desc:'问题会直接送到俱乐部，由领队本人或工作人员回复（一般当天内）。',
+    fields:[
+      {name:'message',label:'想咨询什么',type:'textarea',required:true,
+       placeholder:'例：11 月这条线强度大吗？我没走过高原，能跟得上吗？'},
+      {name:'name',label:'怎么称呼你',value:PAYER_NAME||''},
+      {name:'phone',label:'手机号',required:true,value:PAYER_PHONE||'',help:'只用于回复你，不会公开。'}],
+    submitText:'发给领队',
+    validate:vals=>{
+      const phone=String(vals.phone||'').replace(/[^0-9+]/g,'');
+      if(phone.length<6){showAlert({title:'手机号好像不对',message:'留一个能联系到你的手机号，领队才回得了你。'});return false}
+      return true;
+    }});
+  if(!v)return;
+  try{
+    await api(`/api/public/leaders/${Number(d.leaderId)}/inquiries`,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:String(v.message||'').trim(),name:String(v.name||'').trim(),
+        phone:String(v.phone||'').trim(),activityId:currentAct?currentAct.id:null})});
+    await showAlert({title:'已经发给领队了',message:`${d.name||'领队'}或俱乐部工作人员会通过 ${String(v.phone||'').trim()} 联系你。`});
+  }catch(e){showAlert({title:'没发出去',message:e.message})}
+}
+/* 咨询线路：问题直接进俱乐部端「信息」统一收件箱（route_inquiries），
+   与咨询领队走同一个收件箱、同一套待办标记。同样不做假客服。 */
+async function routeAsk(){
+  if(!currentAct)return;
+  const v=await showForm({title:'咨询这条线路',
+    desc:'问题会直接送到俱乐部，由工作人员或领队回复（一般当天内）。',
+    fields:[
+      {name:'message',label:'想咨询什么',type:'textarea',required:true,
+       placeholder:'例：这条线几月去最漂亮？装备要自己准备哪些？小孩能去吗？'},
+      {name:'name',label:'怎么称呼你',value:PAYER_NAME||''},
+      {name:'phone',label:'手机号',required:true,value:PAYER_PHONE||'',help:'只用于回复你，不会公开。'}],
+    submitText:'发送咨询',
+    validate:vals=>{
+      const phone=String(vals.phone||'').replace(/[^0-9+]/g,'');
+      if(phone.length<6){showAlert({title:'手机号好像不对',message:'留一个能联系到你的手机号，工作人员才回得了你。'});return false}
+      return true;
+    }});
+  if(!v)return;
+  try{
+    await api(`/api/public/activities/${Number(currentAct.id)}/inquiries`,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({message:String(v.message||'').trim(),name:String(v.name||'').trim(),
+        phone:String(v.phone||'').trim()})});
+    await showAlert({title:'已经发出去了',message:`俱乐部工作人员会通过 ${String(v.phone||'').trim()} 联系你。`});
+  }catch(e){showAlert({title:'没发出去',message:e.message})}
+}
+/* 评分去重键：本机随机生成、长期复用。会员登录后换成 u:<userId>，
+   这样同一个人换浏览器也不算两个人 —— 后端按 (领队, 键) 唯一，重复提交=改自己那条。 */
+function leaderRaterKey(){
+  let k='';
+  try{k=localStorage.getItem('clubos_rater_key')||''}catch(_e){}
+  if(!k){
+    k='g'+Date.now().toString(36)+Math.random().toString(36).slice(2,10);
+    try{localStorage.setItem('clubos_rater_key',k)}catch(_e){}
+  }
+  return k;
+}
+async function leaderRate(){
+  const d=_leadCur;if(!d)return;
+  const ov=uxDialog({title:`给 ${d.name||'领队'} 评分`,
+    desc:'评分会显示在领队卡上，帮后面的山友做判断。一人一条，再评会覆盖。',
+    body:`<div class="w-rate" id="wRateBox">${[1,2,3,4,5].map(i=>`<button type="button" data-star="${i}" aria-label="${i} 星">★</button>`).join('')}</div>`
+      +`<div class="w-rate__hint" id="wRateHint">点星星打分（1-5 星）</div>`
+      +`<div class="ux-field" style="margin-top:16px"><label for="wRateWho">怎么称呼你（可选）</label>`
+      +`<input id="wRateWho" maxlength="20" value="${esc(PAYER_NAME||'')}" placeholder="显示为「小野」"></div>`
+      +`<div class="ux-field"><label for="wRateText">一句话评价（可选）</label>`
+      +`<textarea id="wRateText" maxlength="200" placeholder="例：节奏带得很稳，全程照顾到最慢的那位"></textarea></div>`,
+    foot:`<button class="btn ghost" type="button" data-cancel>取消</button>`
+      +`<button class="btn" type="button" data-submit>提交评分</button>`});
+  let star=0;
+  const box=ov.querySelector('#wRateBox'),hint=ov.querySelector('#wRateHint');
+  const hintText=['','不太满意','一般','还不错','很满意','非常推荐'];
+  box.addEventListener('click',e=>{
+    const b=e.target.closest('[data-star]');if(!b)return;
+    star=Number(b.dataset.star);
+    box.querySelectorAll('[data-star]').forEach(x=>x.classList.toggle('is-on',Number(x.dataset.star)<=star));
+    hint.textContent=`${star} 星 · ${hintText[star]}`;
+  });
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+  ov.querySelector('[data-submit]').onclick=async()=>{
+    if(!star){hint.textContent='先点星星选个分数';hint.classList.add('is-warn');return}
+    const btn=ov.querySelector('[data-submit]');
+    btn.disabled=true;btn.textContent='提交中…';
+    try{
+      const r=await api(`/api/public/leaders/${Number(d.leaderId)}/reviews`,{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({rating:star,comment:String(ov.querySelector('#wRateText').value||'').trim(),
+          author:String(ov.querySelector('#wRateWho').value||'').trim(),raterKey:leaderRaterKey(),
+          activityId:currentAct?currentAct.id:null})});
+      ov.uxClose();
+      /* 只更新这一张卡的那几个数字，不整页重绘 —— 重绘会把顾客填到一半的报名表单抹掉。 */
+      d.ratingAvg=r.ratingAvg;d.ratingCount=r.ratingCount;
+      const fresh=await api(`/api/public/leaders/${Number(d.leaderId)}`,{cache:'no-store'});
+      _leadCur=fresh;renderLeaderSheet(fresh);
+      if(currentAct&&Array.isArray(currentAct.leaders)){
+        const p=currentAct.leaders.find(x=>Number(x.leaderId)===Number(d.leaderId));
+        if(p){p.ratingAvg=r.ratingAvg;p.ratingCount=r.ratingCount;
+          const card=document.querySelector(`.w-lc[data-lid="${Number(d.leaderId)}"]`);
+          if(card){const tmp=document.createElement('div');tmp.innerHTML=leaderCard(p);
+            const nc=tmp.firstElementChild;if(nc)card.replaceWith(nc)}}
+      }
+      /* 领队团队专区（#wLeadersGrid）里同一张卡也要同步分数，否则评分完回到专区看到的是旧数字。 */
+      if(LEADERS_ALL.length){
+        const q=LEADERS_ALL.find(x=>Number(x.leaderId)===Number(d.leaderId));
+        if(q){q.ratingAvg=r.ratingAvg;q.ratingCount=r.ratingCount;renderLeaderGrid();}
+      }
+      toast(r.updated?'评价已更新':'谢谢你的评价');
+    }catch(e){
+      btn.disabled=false;btn.textContent='提交评分';
+      showAlert({title:'评分没提交成功',message:e.message});
+    }
+  };
+}
+
 /* ===== 活动详情固定版块（2026-10-08）：把政策数据渲染成面向顾客的版块 =====
    这些版块的数据来自接口下发的 pointsPolicy / refundPolicy / participantPolicy，
    此前只在 booking 卡里露出半个（退款简述、积分开关），报名人规则根本没有成块。
@@ -1789,6 +2044,64 @@ function disclaimerHtml(a){
     <p>⑤ 本声明未尽事宜，依据《中华人民共和国民法典》及相关法律法规处理；发生争议协商不成的，提交活动组织方所在地有管辖权的人民法院诉讼解决。</p>
   </div></section>`;
 }
+/* ══ 出行指引 & 俱乐部通知（2026-10-29 用户反馈「后台通知 C 端没提示 / 执行信息看不到」）══
+   数据来自 public_activity 按团期下发的 occurrence.execution = {meeting,emergencyPhone,notices,groups}，
+   与订单中心「出行指引」(_public_trip_info) 同源。两条纪律：
+   1. 后端只下发 status='sent' 的通知；草稿、领队手机号、内部领队备注根本到不了前端，
+      所以这里不需要（也不应该）再做一次过滤 —— 拿不到就是拿不到；
+   2. 出行指引按「当前选中团期」渲染，换团期时**局部重绘**，不整页刷新
+      （整页重渲染会抹掉顾客填了一半的参加人证件表单）。 */
+function noticeBannerHtml(a){
+  const items=[];
+  ((a&&a.occurrences)||[]).forEach(o=>{
+    const label=String(o.label||o.start_at||'').trim();
+    ((o.execution&&o.execution.notices)||[]).forEach(n=>{
+      items.push({label:label,title:String(n.title||'出行通知'),content:String(n.content||''),sentAt:n.sentAt});
+    });
+  });
+  if(!items.length)return '';
+  /* 一条通知标出它属于哪个团期：同一活动多个团期时，顾客才知道哪条跟自己有关。 */
+  const lis=items.map(n=>`<div class="w-nbar__item">
+      <div class="w-nbar__itop"><b>${esc(n.title)}</b>${n.label?`<span class="w-nbar__occ">${esc(n.label)}</span>`:''}${n.sentAt?`<i>${esc(String(n.sentAt).slice(5,16))}</i>`:''}</div>
+      ${n.content?`<p>${esc(n.content)}</p>`:''}
+    </div>`).join('');
+  return `<div class="w-nbar"><div class="w-nbar__hd"><span class="w-nbar__ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 16V10a8 8 0 0 1 16 0v6l2 2H2z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></span><b>俱乐部通知</b><span class="w-nbar__cnt">${items.length} 条</span></div><div class="w-nbar__list">${lis}</div></div>`;
+}
+function tripGuideHtml(a){
+  const occs=(a&&a.occurrences)||[];
+  /* 跟随当前选中团期（currentOcc），与报名卡选的是同一个；没选中时退回第一个还有余位的。 */
+  const o=currentOcc||occs.find(x=>Number(x.remaining||0)>0)||occs[0];
+  const ex=(o&&o.execution)||{};
+  const mt=ex.meeting||{};
+  const groups=ex.groups||[];
+  const rows=[];
+  if(mt.time)rows.push(`<div class="w-trip__row"><span>集合时间</span><b>${esc(mt.time)}</b></div>`);
+  if(mt.location)rows.push(`<div class="w-trip__row"><span>集合地点</span><b>${esc(mt.location)}</b></div>`);
+  if(ex.emergencyPhone)rows.push(`<div class="w-trip__row"><span>应急电话</span><b><a href="tel:${esc(String(ex.emergencyPhone).replace(/[^0-9+]/g,''))}">${esc(ex.emergencyPhone)}</a></b></div>`);
+  /* 车辆 / 分组：后台「车辆·分组」填了什么就印什么。分组内部备注（execution note）不下发，
+     所以这里只有车名、座位数、带队人 —— 都是顾客需要知道自己坐哪台的信息。 */
+  const chip=g=>`<span class="w-trip__chip">${esc(g.name||'分组')}${g.capacity?` · ${Number(g.capacity)} 座`:''}${g.leaderName?` · ${esc(g.leaderName)}`:''}</span>`;
+  const veh=groups.filter(g=>g.groupType==='vehicle');
+  const oth=groups.filter(g=>g.groupType!=='vehicle');
+  const grid=groups.length?`<div class="w-trip__groups">`
+    +(veh.length?`<div class="w-trip__glabel">车辆</div><div class="w-trip__chips">${veh.map(chip).join('')}</div>`:'')
+    +(oth.length?`<div class="w-trip__glabel">分组</div><div class="w-trip__chips">${oth.map(chip).join('')}</div>`:'')
+    +`</div>`:'';
+  /* 俱乐部没填执行数据时整块不出现 —— 空壳卡片只会让顾客以为页面缺了东西。
+     但保留一个 id 占位（display:none），换团期时才能就地替换回来。 */
+  if(!rows.length&&!grid)return '<section class="w-block w-trip" id="wTripGuide" style="display:none"></section>';
+  const occLabel=o?String(o.label||o.start_at||'').trim():'';
+  const hint=(occLabel?esc(occLabel)+' · ':'')+'具体集合与联络以出发前的俱乐部通知为准。';
+  return `<section class="w-block w-trip" id="wTripGuide"><div class="w-block__head"><div><b>出行指引</b><div class="w-block__hint">${hint}</div></div></div><div class="w-trip__list">${rows.join('')}</div>${grid}</section>`;
+}
+function refreshTripGuide(){
+  const cur=document.getElementById('wTripGuide');
+  if(!cur||!currentAct)return;
+  const tmp=document.createElement('div');tmp.innerHTML=tripGuideHtml(currentAct);
+  const next=tmp.firstElementChild;
+  if(next)cur.replaceWith(next);
+}
+
 /* 报名卡底部那行提示文案：初始渲染（bookingHtml）与改人数（setParticipantCount）
    各写了一份，措辞早就对不上了。收拢成一处，改文案只改这里。 */
 function paxFootText(pp,maxPax,cur){
@@ -1830,7 +2143,7 @@ function bookingHtml(a){
     <div id="paxForms"></div>
     <div class="w-block__foot">${paxFootText(pp,maxPax,cur)}</div>
     <input type="hidden" id="participantCount" value="${cur}"></div>`;
-  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${earnNote}${pointArea}<div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
+  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${earnNote}${pointArea}<button type="button" onclick="routeAsk()" style="width:100%;margin:4px 0 12px;padding:12px;border:1px solid var(--line,#e3e8e6);background:#fff;border-radius:12px;color:#1f2a28;font-weight:600;cursor:pointer">有疑问？先咨询这条线路</button><div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
 }
 /* 团期卡：横向滑动的竖版卡片。竖排长列表在团期一多时把报名页拉得很长，
    而且「哪天 / 多少钱」要上下扫着比；卡片固定宽、一次并排露出两张左右，
@@ -1965,6 +2278,7 @@ function selectOcc(id,el){
   if(Number(currentOcc.remaining||0)<=0){toast('该团期已满，请选择其他团期');return}
   $$('.occ').forEach(x=>{x.classList.remove('active');x.setAttribute('aria-checked','false')});
   el.classList.add('active');el.setAttribute('aria-checked','true');
+  refreshTripGuide();
   /* 横向卡片：点到的卡可能只露出一半，选中后把它滚到可视区中央
      （block:'nearest' 保证不带动页面竖向滚动）。 */
   if(el.scrollIntoView)try{el.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'})}catch(e){}

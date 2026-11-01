@@ -1,0 +1,99 @@
+/* ─────────────────────────────────────────────────────────────────────────
+   ClubOS 总平台端 · 仓储 WMS「仓库 / 库位」模块样式（2026-11-01）
+   把每个仓库渲染成一张可独立显示的毛玻璃卡片；点击「独立查看」打开该仓库
+   独立弹层模块。与总平台全局皮肤 platform-glass.css 同源设计语言。
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* 仓库卡片网格：每个仓库独立成块，后台更直观 */
+#warehouseList .wh-grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
+  gap:14px;
+  margin-top:2px;
+}
+
+.wh-card{
+  background:rgba(255,255,255,.74);
+  -webkit-backdrop-filter:blur(14px) saturate(1.4);
+  backdrop-filter:blur(14px) saturate(1.4);
+  border:1px solid rgba(255,255,255,.92);
+  border-radius:14px;
+  padding:14px 16px;
+  box-shadow:0 14px 36px rgba(20,55,40,.12);
+}
+
+.wh-card__head{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:10px;
+}
+.wh-card__id{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.wh-card__name{font-size:15px;font-weight:600;color:#16302a}
+.wh-card__code{
+  font-size:12px;color:#66776e;
+  background:rgba(36,87,67,.08);
+  padding:1px 8px;border-radius:999px;
+}
+.tag.wh-default{background:var(--brand,#245743);color:#fff;font-size:11px;padding:1px 8px;border-radius:999px}
+
+.wh-card__sum{
+  display:flex;gap:16px;
+  margin:12px 0 10px;
+  font-size:13px;color:#3f5249;
+}
+.wh-card__sum b{color:#16302a;font-size:15px;margin-right:3px}
+
+.wh-card__locs{display:flex;flex-direction:column;gap:6px}
+.wh-loc{
+  display:grid;
+  grid-template-columns:84px 1fr auto auto;
+  gap:8px;align-items:center;
+  font-size:13px;
+  padding:7px 10px;
+  border-radius:8px;
+  background:rgba(255,255,255,.55);
+  border:1px solid rgba(255,255,255,.7);
+}
+.wh-loc__code{color:#2a3d35;font-weight:600}
+.wh-loc__name{color:#3f5249;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wh-loc__on{color:#2e6b4e;font-weight:600}
+.wh-loc__rs{color:#ad6638;font-weight:600}
+.wh-loc--empty{
+  display:block;text-align:center;
+  color:#66776e;background:transparent;border:0;
+}
+
+/* 独立弹层：单个仓库详情模块 */
+.wh-detail__meta{
+  display:grid;
+  grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+  gap:10px;margin-bottom:16px;
+}
+.wh-detail__meta-row{
+  display:flex;justify-content:space-between;
+  padding:9px 12px;border-radius:10px;
+  background:rgba(255,255,255,.6);
+  border:1px solid rgba(255,255,255,.7);
+  font-size:13px;color:#3f5249;
+}
+.wh-detail__meta-row b{color:#16302a}
+.wh-detail__th,.wh-detail__tr{
+  display:grid;
+  grid-template-columns:110px 1fr 80px 80px;
+  gap:8px;padding:9px 12px;font-size:13px;
+}
+.wh-detail__th{
+  color:#66776e;border-bottom:1px solid rgba(20,55,40,.12);font-weight:600;
+}
+.wh-detail__tr{border-bottom:1px solid rgba(20,55,40,.06);color:#2a3d35}
+.wh-detail__tr span:nth-child(3){color:#2e6b4e;font-weight:600}
+.wh-detail__tr span:nth-child(4){color:#ad6638;font-weight:600}
+.wh-detail__empty{padding:20px;text-align:center;color:#66776e}
+
+@media (max-width:560px){
+  #warehouseList .wh-grid{grid-template-columns:1fr}
+  .wh-loc{grid-template-columns:72px 1fr auto}
+  .wh-loc__rs{display:none}
+  .wh-detail__th,.wh-detail__tr{grid-template-columns:90px 1fr 64px 64px}
+}
