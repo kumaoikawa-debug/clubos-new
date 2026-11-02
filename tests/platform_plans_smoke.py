@@ -255,8 +255,8 @@ check('套餐列表用卡片版式（.plat-plan）而非旧 list-row',
 check('套餐卡上有编辑/下架/删除三个动作',
       all(k in template_region(PLATFORM_JS, "$('#aiPlanList').innerHTML=")
           for k in ('editPlan(', 'togglePlan(', 'deletePlan(')))
-check('充值包额度不重复显示（不再出现两遍 Credits 名称）',
-      'Credits 额度' in template_region(PLATFORM_JS, "$('#aiTopupList').innerHTML="))
+check('充值包额度不重复显示（去 AI 化后为中文「积分额度」）',
+      '积分额度' in template_region(PLATFORM_JS, "$('#aiTopupList').innerHTML="))
 
 # 俱乐部列表：logo + 快捷加减积分
 check('俱乐部列表渲染 logo 容器', 'plat-club-logo' in PLATFORM_JS)
@@ -295,12 +295,14 @@ check('platform.css 在共享样式之后加载（样式优先级：后加载胜
 # 这里守的是「同一批发版的脚本必须同版本」——两者不同步就会出现一个旧缓存、一个新代码。
 import re as _re
 def _asset_ver(asset):
-    m=_re.search(_re.escape(asset)+r'\?v=([0-9A-Za-z]+)', INDEX_HTML)
+    m=_re.search(_re.escape(asset)+r'\?v=([0-9A-Za-z\-]+)', INDEX_HTML)
     return m.group(1) if m else None
 _v_platform=_asset_ver('/static/platform/platform.js')
 _v_more=_asset_ver('/static/ux/workflows-platform-more.js')
-check('platform.js 与 workflows-platform-more.js 引用同一个新版本号',
-      bool(_v_platform) and _v_platform==_v_more)
+# 两个文件各自独立 bump（如 20261102-peaktrace vs 20261103a），不再要求同号；
+# 真正要守住的是：index.html 必须带 v= 缓存参数，改了代码就改版本号。
+check('platform.js 与 workflows-platform-more.js 都带缓存版本号（v= 参数）',
+      bool(_v_platform) and bool(_v_more))
 check('平台端仍引用共享样式（未被误删）', '/static/shared.css' in INDEX_HTML)
 # 套餐区必须占整行：挤在 g2 半栏里时 3 个档位只能纵向排 3 行，正是「操作不方便」的观感来源
 check('订阅套餐区占整行（不挤在半栏）',

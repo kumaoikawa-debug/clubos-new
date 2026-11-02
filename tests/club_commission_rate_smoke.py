@@ -51,6 +51,7 @@ os.environ.setdefault('CLUBOS_TEST_OPEN', '1')
 
 import db  # noqa: E402
 import app as appmod  # noqa: E402
+from clubos_domain import stock_control  # noqa: E402
 from clubos_domain.commission_rate import ClubCommissionRateService  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -86,6 +87,14 @@ with db.conn() as c:
     c.execute("INSERT INTO warehouse_locations(warehouse_id,code,name,zone_type,status,is_default) VALUES(?,'L-1','测试库位','sellable','active',1)", (WH,))
     LOC = int(c.execute("SELECT id FROM warehouse_locations WHERE code='L-1'").fetchone()['id'])
     c.execute("INSERT INTO warehouse_inventory(product_id,location_id,on_hand,reserved) VALUES(?,?,50,0)", (PID, LOC))
+    # 库存真源在规格层（进销存 V1）：结算按「唯一启用规格」解析 SKU，没有规格会被拦
+    # 「请明确选择颜色/尺码 SKU」。夹具商品必须补默认规格 + SKU 实物账（可售库位）。
+    c.execute("INSERT INTO product_variants(product_id,name,sku,price,stock,status,sort,is_default) "
+              "VALUES(?,'默认规格','TEST-TENT-1-DEF',200,50,'active',0,1)", (PID,))
+    VID = int(c.execute("SELECT id FROM product_variants WHERE sku='TEST-TENT-1-DEF'").fetchone()[0])
+    _bal = stock_control.balance(c, PID, VID, LOC)
+    stock_control.update(c, _bal, 50, 0)
+    stock_control.sync(c, PID)
 
 
 def resolve(club_id, product_rate=0.08):

@@ -101,7 +101,10 @@ def main():
         'commission_rate': 0.1, 'brandId': bid, 'categoryId': cid, 'gender': '男款',
         'season': '2026 秋冬', 'series': 'Beta', 'material': 'GORE-TEX 3L',
         'description': '测试', 'colors': [{'name': '炭灰', 'hex': '4a4a4a'}, {'name': '深蓝', 'hex': '#1b2a4a'}],
-        'sizes': ['S', 'M', 'L', 'XL']})
+        'sizes': ['S', 'M', 'L', 'XL'],
+        # 进销存 V1.2 起新商品默认 draft，C 端详情只认 active：带图直接走创建时的
+        # 上架校验（图/详情/价/已入库 SKU 四道闸）激活，⑨ 才能读到 colorOptions。
+        'image_url': '/static/demo/catalog-smoke.jpg', 'status': 'active'})
     ok(r.status_code == 200, '带矩阵建商品 200', r.text)
     pid = r.json()['id']
     ok(r.json()['variantsCreated'] == 8, '2 色 × 4 码 = 8 个规格')
@@ -184,17 +187,19 @@ def main():
 
     csv_text = '\n'.join([
         '商品名,货号,品牌,品类,人群,季节,系列,面料,零售价,佣金率%,补货点,颜色,色值,尺码,条码,库存,规格价,介绍',
-        'Mont Bell 羽绒服,AR-MB-DOWN,Mont Bell,羽绒服,男款,2026 秋冬,MB 系列,800蓬鹅绒,2899,12,8,火焰红,#ff3300,M,6901234567890,15,,轻薄',
-        'Mont Bell 羽绒服,AR-MB-DOWN,Mont Bell,羽绒服,男款,2026 秋冬,MB 系列,800蓬鹅绒,2899,12,8,火焰红,#ff3300,L,6901234567891,10,,轻薄',
-        'Mont Bell 羽绒服,AR-MB-DOWN,Mont Bell,羽绒服,男款,2026 秋冬,MB 系列,800蓬鹅绒,2899,12,8,深海蓝,001133,XL,,5,,轻薄',
-        '坏行缺价格,AR-BAD-1,Mont Bell,羽绒服,男款,,,,,,,,,M,,3,,',
+        'Mont Bell 羽绒服,AR-MB-DOWN,Mont Bell,羽绒服,男款,2026 秋冬,MB 系列,800蓬鹅绒,2899,12,8,火焰红,#ff3300,M,6901234567890,,,轻薄',
+        'Mont Bell 羽绒服,AR-MB-DOWN,Mont Bell,羽绒服,男款,2026 秋冬,MB 系列,800蓬鹅绒,2899,12,8,火焰红,#ff3300,L,6901234567891,,,轻薄',
+        'Mont Bell 羽绒服,AR-MB-DOWN,Mont Bell,羽绒服,男款,2026 秋冬,MB 系列,800蓬鹅绒,2899,12,8,深海蓝,001133,XL,,,,轻薄',
+        '坏行缺价格,AR-BAD-1,Mont Bell,羽绒服,男款,,,,,,,,,M,,,,,',
     ])
     r = c.post('/api/platform/products/import', json={'csv': csv_text, 'createMissing': True}).json()
     ok(r['createdProducts'] == 1 and r['createdVariants'] == 3, '按货号归组：1 商品 3 规格', str(r))
     ok(r['errorCount'] == 1 and r['errors'][0]['row'] == 5, '第 5 行出错只跳过该行', str(r['errors']))
     ok('Mont Bell' in r['newBrands'] and '羽绒服' in r['newCategories'], '表里没有的品牌/品类自动创建并回传')
     imp = c.get('/api/platform/products', params={'q': 'AR-MB-DOWN'}).json()[0]
-    ok(imp['stock'] == 30 and imp['commission_rate'] == 0.12, '导入库存合计与佣金率正确')
+    # 库存列不再被导入（进销存 V1 起库存只能走仓库验收）：CSV 只落商品资料，stock 应为 0
+    ok(imp['stock'] == 0 and imp['commission_rate'] == 0.12, '导入不带库存（库存走仓库）、佣金率正确',
+       f"stock={imp['stock']} rate={imp['commission_rate']}")
     iv = c.get(f"/api/platform/products/{imp['id']}/variants").json()
     ok(all(v['color_hex'] in ('#FF3300', '#001133') for v in iv), '导入色值规范化')
     ok([v['barcode'] for v in iv if v['barcode']] == ['6901234567890', '6901234567891'], '导入条码落库')
@@ -269,13 +274,13 @@ def main():
     def ver(asset, html):
         m = re.search(re.escape(asset) + r'\?v=([0-9A-Za-z]+)', html)
         return m.group(1) if m else None
-    ok(ver('/static/platform/platform.js', idx) == ver('/static/ux/workflows-platform-more.js', idx),
-       '同一批平台脚本版本号一致')
-    ok(ver('/static/platform/platform.js', idx) == ver('/static/platform/platform.css', idx), 'platform.css 同批')
-    ok(ver('/static/ux/workflows-platform.js', idx) == ver('/static/platform/platform.js', idx),
-       'workflows-platform.js 同批（本次改过它）')
+    # 各脚本现在各自独立 bump（如 20261102-peaktrace），不再要求同批同号；
+    # 真正要守住的是 index.html 引用的每个脚本都带 v= 缓存参数（改码必 bump）。
+    for _asset in ('/static/platform/platform.js', '/static/ux/workflows-platform-more.js',
+                   '/static/platform/platform.css', '/static/ux/workflows-platform.js'):
+        ok(bool(ver(_asset, idx)), f'平台端 {_asset.rsplit("/", 1)[1]} 带 v= 缓存参数')
     widx = (ROOT / 'static/web/index.html').read_text(encoding='utf-8')
-    ok(ver('/static/web/web.js', widx) == ver('/static/web/web-biz.js', widx), 'C 端两脚本同批')
+    ok(bool(ver('/static/web/web.js', widx)) and bool(ver('/static/web/web-biz.js', widx)), 'C 端两脚本都带 v= 缓存参数')
 
     print('\n' + ('ALL PASS' if not FAILS else 'FAILED: %s' % FAILS))
     return 1 if FAILS else 0

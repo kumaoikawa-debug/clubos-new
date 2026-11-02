@@ -36,6 +36,7 @@ from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
 import logistics_engine
 from clubos_domain import stock_control as stock_control
+from clubos_domain import peaktrace_catalog
 
 ROOT=Path(__file__).resolve().parent
 STATIC=ROOT/'static'
@@ -3693,6 +3694,8 @@ def club_credit_ledger(club_id:int,date_from:str|None=None,date_to:str|None=None
 # 保留 category 文本列是因为老接口（列表副标题、Medusa 同步）还在读它 ——
 # 迁移只回填 category_id，不删文本，两边同时可用。
 PROD_COLS = """id,name,sku,price,stock,status,image_url,cover_url,category,brand_id,category_id,gender,season,series,material,
+               source,inventory_mode,fulfillment_mode,
+               (SELECT source_type FROM product_brands b WHERE b.id=products.brand_id) brand_source_type,
                (SELECT name FROM product_brands b WHERE b.id=products.brand_id) brand_name,
                (SELECT name FROM product_categories ct WHERE ct.id=products.category_id) category_name"""
 
@@ -3740,6 +3743,12 @@ def _with_extras(c, product_list:list[dict]):
         d['images']=all_imgs
         d['coverUrl']=cover or (all_imgs[0]['url'] if all_imgs else None)
         d['variants']=variants.get(pid) or []
+        external=(d.get('source')=='external_api' or d.get('inventory_mode')!='platform_owned' or d.get('brand_source_type')=='external_api')
+        d['displayOnly']=external
+        d['purchaseAvailable']=not external
+        if external:
+            d['stock']=None
+            for v in d['variants']:v['stock']=None
         out.append(d)
     return out
 
@@ -5560,7 +5569,7 @@ def public_product(club_id:int, product_id:int, user_id:int|None=None):
         out['sizeOptions']=sizes
         # 会员价要能被看见：会员中心写着「装备商城 X 折 —— 在装备商城里直接看到会员价」，
         # 商品页却只显示原价，等于承诺了一个看不见的价格。带 user_id 时把会员价一并回传。
-        if user_id:
+        if user_id and not out.get('displayOnly'):
             rate,_=checkout_engine._member_gear_discount(c,club_id=club_id,user_id=int(user_id),gross=float(out.get('price') or 0))
             if rate<1:
                 out['gearDiscount']=rate
@@ -6791,6 +6800,14 @@ def delete_product_image(product_id:int, image_id:int):
 def platform_brands():
     with conn() as c: return catalog_service.list_brands(c, include_inactive=True)
 
+@app.post('/api/platform/brands/peaktrace/sync')
+def platform_sync_peaktrace():
+    try: products,categories=peaktrace_catalog.fetch_catalog()
+    except Exception: raise HTTPException(502,'PEAKTRACE 商品资料读取失败，请稍后重试；本地商品未改动')
+    with conn() as c:
+        try:return peaktrace_catalog.sync_catalog(c,products,categories)
+        except ValueError as e:raise HTTPException(409,str(e))
+
 @app.post('/api/platform/brands')
 def platform_add_brand(payload:dict=Body(...)):
     with conn() as c:
@@ -7292,6 +7309,8 @@ def _sync_product_to_medusa(product_id:int, *, create_if_missing:bool=True):
         p=row(c.execute('SELECT * FROM products WHERE id=?',(product_id,)))
         vs=rows(c.execute("SELECT * FROM product_variants WHERE product_id=? AND status='active' ORDER BY sort,id",(product_id,)))
     if not p: raise HTTPException(404,'商品不存在')
+    if p.get('source')=='external_api' or p.get('inventory_mode')!='platform_owned':
+        return {'ok':True,'skipped':True,'reason':'外部品牌仅同步商品展示资料'}
     client=MedusaClient()
     try:
         if p.get('commerce_product_id') and p.get('commerce_variant_id'):
@@ -7542,13 +7561,16 @@ def _validate_product_publish(c,pid,changes=None):
     p=row(c.execute('SELECT * FROM products WHERE id=?',(pid,)))
     if not p:raise HTTPException(404,'商品不存在')
     p.update(changes or {})
+    display_only=False
     try:stock_control.owned(c,pid)
-    except ValueError as e:raise HTTPException(409,str(e))
+    except ValueError as e:
+        display_only=bool(c.execute("SELECT 1 FROM external_product_mappings WHERE product_id=? AND external_sync_status='catalog_only'",(pid,)).fetchone())
+        if not display_only:raise HTTPException(409,str(e))
     missing=[]
     if not (p.get('image_url') or p.get('cover_url') or c.execute('SELECT 1 FROM product_images WHERE product_id=?',(pid,)).fetchone()):missing.append('商品图片')
     if not str(p.get('description') or '').strip():missing.append('商品详情')
     if float(p.get('price') or 0)<=0:missing.append('有效零售价')
-    if not c.execute('SELECT 1 FROM warehouse_sku_balances WHERE product_id=? AND on_hand>0',(pid,)).fetchone():missing.append('已验收入库的 SKU')
+    if not display_only and not c.execute('SELECT 1 FROM warehouse_sku_balances WHERE product_id=? AND on_hand>0',(pid,)).fetchone():missing.append('已验收入库的 SKU')
     if c.execute("SELECT 1 FROM stock_reconciliation WHERE product_id=? AND status='pending'",(pid,)).fetchone():missing.append('历史库存实盘核对')
     if missing:raise HTTPException(400,'上架前请补齐：'+'、'.join(missing))
 

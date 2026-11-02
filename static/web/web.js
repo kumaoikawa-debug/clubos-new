@@ -408,7 +408,7 @@ function renderMallHero(){
   if(sig===_mallHeroSig&&box.children.length)return;
   _mallHeroSig=sig;
   heroStop();
-  const badge=`<span class="w-shop__hbadge">在售 ${MALL_ALL.length} 件</span>`;
+  const badge=`<span class="w-shop__hbadge">商品 ${MALL_ALL.length} 件</span>`;
   const tag='<span class="w-shop__htag">本季新品</span>';
   if(!slides.length){
     box.innerHTML=`<div class="w-shop__hwrap"><div class="w-shop__htrack"><div class="w-shop__hslide is-fallback"></div></div>${badge}${tag}</div>`;
@@ -505,10 +505,10 @@ function renderMall(){
   if(en)en.textContent=MALL_EN[MALL_CAT]||(MALL_CAT==='全部'?'ALL':'');
   const filt=[MALL_BRAND,MALL_GENDER?MALL_GENDERS.find(g=>g.v===MALL_GENDER)?.label:''].filter(Boolean).join(' · ');
   if(sub)sub.textContent=(filt?`${filt} · `:'')+(q
-    ? `「${q}」匹配 ${list.length} 件 · 共 ${MALL_ALL.length} 件在售`
+    ? `「${q}」匹配 ${list.length} 件 · 共 ${MALL_ALL.length} 件商品`
     : (MALL_CAT==='全部'
-        ? `${window.__clubName||'俱乐部'} · 共 ${MALL_ALL.length} 件在售`
-        : `${MALL_CAT} · 共 ${list.length} 件在售`));
+        ? `${window.__clubName||'俱乐部'} · 共 ${MALL_ALL.length} 件商品`
+        : `${MALL_CAT} · 共 ${list.length} 件商品`));
 }
 /* 商品卡必须带 .web-card 类：experience-consumer.js 是按 `#publicProducts .web-card` 数商品张数的，
    卡片换类名它就会判定「0 件在售」并把整个容器换成空态文案。外观由 .w-product 覆盖。
@@ -516,18 +516,18 @@ function renderMall(){
    ★ 2026-10-18 起卡片**不再印库存数字**：顾客关心的是「能不能买」，不是仓库里剩几件；
      真的售罄时靠角标「缺货」+ 加购钮消失表达，不需要把数量写在卡上。 */
 function productCard(x){
-  const out=Number(x.stock||0)<=0,cat=x.category||'装备';
+  const displayOnly=x.displayOnly===true,out=displayOnly||Number(x.stock||0)<=0,cat=x.category||'装备',unavailable=displayOnly?'暂不可购买':'暂时缺货';
   /* 参考图的卡片没有按钮，整张卡就是入口。去掉按钮后必须补 aria-label ——
      读屏用户看不到图，只剩名字和价格能说明这是一件什么商品。
      键盘通路（Enter/空格）由 bindWebEvents 的 keydown 委托补齐（on 属性只绑 click）。 */
   return `<div class="web-card w-product${out?' is-out':''}" role="button" tabindex="0"
-    aria-label="${esc(x.name)}，${money(x.price)}${out?'，暂时缺货':''}" onclick="openProduct(${x.id})">
-    <div class="w-product__media">${(x.coverUrl||x.image_url)?`<img src="${esc(x.coverUrl||x.image_url)}" alt="${esc(x.name)}" loading="lazy">`:WI.bag}${out?'<span class="w-product__flag">缺货</span>':''}
+    aria-label="${esc(x.name)}，${money(x.price)}${out?'，'+unavailable:''}" onclick="openProduct(${x.id})">
+    <div class="w-product__media">${(x.coverUrl||x.image_url)?`<img src="${esc(x.coverUrl||x.image_url)}" alt="${esc(x.name)}" loading="lazy">`:WI.bag}${out?'<span class="w-product__flag">'+(displayOnly?'商品展示':'缺货')+'</span>':''}
       ${out?'':`<button class="w-product__add" type="button" aria-label="把${esc(x.name)}加入购物车" onclick="event.stopPropagation();quickAdd(${x.id})"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/><path d="M12 12.9v4.2M9.9 15h4.2"/></svg></button>`}
     </div>
     <div class="w-product__inner">
       <div class="w-product__name">${esc(x.name)}</div>
-      <div class="w-product__meta">${x.brand_name?esc(x.brand_name)+' · ':''}${esc(cat)}${out?' · 暂时缺货':''}</div>
+      <div class="w-product__meta">${x.brand_name?esc(x.brand_name)+' · ':''}${esc(cat)}${out?' · '+unavailable:''}</div>
       <div class="w-product__price">${money(x.price)}</div>
     </div>
   </div>`;
@@ -537,6 +537,7 @@ function productCard(x){
 function quickAdd(pid){
   const p=(MALL_ALL||[]).find(x=>String(x.id)===String(pid));
   if(!p){toast('这件装备暂时看不了');return}
+  if(p.displayOnly){toast('这件商品暂不可购买');return}
   if(Number(p.stock||0)<=0){toast('这件装备暂时缺货');return}
   const vs=(p.variants||[]).filter(v=>v&&v.id!=null&&Number(v.stock||0)>0);
   const v=vs.length>1?vs[0]:null;
@@ -827,7 +828,7 @@ function pdDescHtml(desc){
 function productDetailHtml(){
   const p=P_CUR;if(!p)return '';
   const imgs=productImages(p),v=curVariant();
-  const price=productPrice(p,v),stock=productStock(p,v),out=stock<=0;
+  const price=productPrice(p,v),stock=productStock(p,v),displayOnly=p.displayOnly===true,out=displayOnly||stock<=0;
   /* 会员价要明着写出来：只写「会员折扣自动生效」而不给数字，
      顾客在结算前根本不知道自己到底省了多少，那句承诺等于没说。 */
   const mp=memberPriceOf(p,v),isMem=mp<price-0.004;
@@ -869,7 +870,7 @@ function productDetailHtml(){
     <div class="w-pd__subtitle">${esc(pdClubName())}${sku?' · 款号 '+esc(sku):''}</div>
     <div class="w-pd__pricerow">
       <b class="w-pd__now">${money(mp)}</b>${isMem?`<s class="w-pd__was">${money(price)}</s><i class="w-pd__mem">会员价</i>`:''}
-      ${out?'<span class="w-pd__stock is-out">暂时缺货</span>':''}
+      ${out?'<span class="w-pd__stock is-out">'+(displayOnly?'暂不可购买':'暂时缺货')+'</span>':''}
       <button class="w-pd__pricerow__share" type="button" aria-label="复制商品链接" onclick="pdCopyLink()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 14.4l4.8-4.8"/><path d="M11.2 6.6 12.8 5a3.7 3.7 0 0 1 5.2 5.2l-1.6 1.6"/><path d="M12.8 17.4 11.2 19A3.7 3.7 0 0 1 6 13.8l1.6-1.6"/></svg></button>
     </div>
     <div class="w-pd__rows">
@@ -907,28 +908,28 @@ function productDetailHtml(){
       <table class="w-pd__sizetab">
         <thead><tr>${colors.length&&hasSize?'<th>颜色</th>':''}<th>${vs.length?(hasSize?'尺码':'颜色'):'规格'}</th><th>价格</th></tr></thead>
         <tbody>${sizes.map(s=>{
-          const so=Number(s.stock||0)<=0;
+          const so=!displayOnly&&Number(s.stock||0)<=0;
           const sp=s.price!=null?Number(s.price):price;
           const smp=(s.price!=null&&isMem)?mp:sp;
           return `<tr${so?' class="is-out"':''}>${colors.length&&hasSize?`<td>${s.color?esc(s.color):'<span class="sub">—</span>'}</td>`:''}<td>${esc(s.name)}${so?'<i class="w-pd__soldout">缺货</i>':''}</td><td>${money(smp)}</td></tr>`;
         }).join('')}</tbody>
       </table>
-      <p class="w-pd__tabnote">${vs.length?'价格为实时数据，以下单瞬间的结算结果为准。':'该商品当前只有一个规格；后台新增规格后，这里会出现尺码对照表。'}</p>
+      <p class="w-pd__tabnote">${displayOnly?'尺码与价格来自品牌方，当前仅供浏览。':vs.length?'价格为实时数据，以下单瞬间的结算结果为准。':'该商品当前只有一个规格；后台新增规格后，这里会出现尺码对照表。'}</p>
     </div>
   </section>
   ${pdRecCards(p)}
   <div class="w-pd__tips">
     <b>温馨提示</b>
     <ul>
-      <li>会员价按会员等级自动计算，最终金额以提交订单后的服务端结算为准。</li>
-      <li>实物商品由平台仓库统一发货，下单前需先填写收货地址。</li>
-      <li>售罄规格无法下单，价格实时变动。</li>
+      <li>${displayOnly?'页面展示品牌方提供的商品价格。':'会员价按会员等级自动计算，最终金额以提交订单后的服务端结算为准。'}</li>
+      <li>${displayOnly?esc(p.brand_name||'品牌方')+' 商品由品牌方独立管理，当前仅供浏览。':'实物商品由平台仓库统一发货，下单前需先填写收货地址。'}</li>
+      <li>${displayOnly?'商品资料来自品牌方，当前暂不开放购买。':'售罄规格无法下单，价格实时变动。'}</li>
     </ul>
   </div>
   <footer class="w-pd__foot">
     <button class="w-pd__fcart" type="button" aria-label="购物车" onclick="openCart()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/></svg><i class="w-pd__barbadge" id="pdFootBadge" hidden>0</i></button>
     <button class="w-pd__fadd" type="button"${out?' disabled':''} onclick="pdOpenSheet('cart')">加入购物车</button>
-    <button class="w-pd__fbuy" type="button"${out?' disabled':''} onclick="pdOpenSheet('buy')">${out?'暂时缺货':'立即购买'}</button>
+    <button class="w-pd__fbuy" type="button"${out?' disabled':''} onclick="pdOpenSheet('buy')">${displayOnly?'暂不可购买':out?'暂时缺货':'立即购买'}</button>
   </footer>
   </div>
   <div class="w-pd__mask" id="pdMask" hidden onclick="pdCloseSheet()"></div>
@@ -945,7 +946,7 @@ function productDetailHtml(){
     ${sizeRow.length?`<div class="w-pd__sheetsec">
       <div class="w-pd__sheetlabel">${vs.length?(hasSize?'尺码':'颜色'):'规格'}<em>最多购买 <b id="pdSheetMax">5</b> 件</em></div>
       <div class="w-pd__sizes" id="pdSheetSizes">${sizeRow.map(s=>{
-        const so=Number(s.stock||0)<=0;
+        const so=!displayOnly&&Number(s.stock||0)<=0;
         const hidden=PD_COLOR&&s.color&&s.color!==PD_COLOR;
         return `<button class="w-pd__size${so?' is-out':''}" type="button"${so?' disabled':''}${hidden?' hidden':''} data-size="${s.id==null?'':s.id}" data-color="${esc(s.color||'')}" onclick="pdPickSize(${s.id==null?'null':s.id})">${esc(s.name)}</button>`;
       }).join('')}</div>

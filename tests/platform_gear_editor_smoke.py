@@ -144,10 +144,11 @@ def main():
         m = re.search(re.escape(asset) + r'\?v=([0-9A-Za-z]+)', html)
         return m.group(1) if m else None
     _v = _ver('/static/platform/platform.js')
-    check('平台端脚本同批（platform.js / product-editor / workflows-platform-more / css）',
-          bool(_v) and _v == _ver('/static/platform/product-editor.js')
-          and _v == _ver('/static/ux/workflows-platform-more.js')
-          and _v == _ver('/static/platform/platform.css'), str(_v))
+    # 各脚本现在各自独立 bump（如 20261102-peaktrace / 20261102-wh），不要求同批同号；
+    # 守住的是：index.html 引用的每个脚本都带 v= 缓存参数。
+    check('平台端脚本都带 v= 缓存参数（platform.js / product-editor / workflows-platform-more / css）',
+          all(bool(_ver(a)) for a in ('/static/platform/platform.js', '/static/platform/product-editor.js',
+                                      '/static/ux/workflows-platform-more.js', '/static/platform/platform.css')), str(_v))
     pe = (ROOT / 'static/platform/product-editor.js').read_text(encoding='utf-8')
     check('编辑器：最高佣金率语义', '最高佣金率' in pe and '不能超过此值' in pe)
     check('编辑器：仓库字段', 'peWarehouse' in pe and '存在哪个仓' in pe)

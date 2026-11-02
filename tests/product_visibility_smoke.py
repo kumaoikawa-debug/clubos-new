@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import db  # noqa: E402
 db.init_db()
 import app  # noqa: E402
+from clubos_domain import stock_control  # noqa: E402
 
 CLUB = 1
 FAILS = []
@@ -35,6 +36,28 @@ def main():
     if not target:
         print('  跳过：临时库里没有 active 商品'); return
     pid, name = target['id'], target['name']
+
+    # 前置：上架闸门（进销存 V1.1）要求「商品图片 / 商品详情 / 有效零售价 / 已验收入库的 SKU」。
+    # 种子商品只有 products.stock 投影、没有 WMS 实物账，也没有图和详情 —— 重新上架批准会被
+    # 409 拦下，那是产品逻辑，不是 bug。这里按平台真实入库/编辑路径把四道闸补齐，
+    # 让这条链路测的是可见性而不是上架资料闸。
+    with app.conn() as dbc:
+        if not dbc.execute('SELECT 1 FROM product_images WHERE product_id=?', (pid,)).fetchone():
+            dbc.execute('INSERT INTO product_images(product_id,url,sort) VALUES(?,?,0)', (pid, '/static/demo/gear-wool-smoke.jpg'))
+        p = dbc.execute('SELECT description,price FROM products WHERE id=?', (pid,)).fetchone()
+        if not (p['description'] or '').strip():
+            dbc.execute('UPDATE products SET description=? WHERE id=?', ('回归测试前置：补齐商品详情。', pid))
+        if not (p['price'] or 0) > 0:
+            dbc.execute('UPDATE products SET price=1 WHERE id=?', (pid,))
+        if not dbc.execute('SELECT 1 FROM warehouse_sku_balances WHERE product_id=? AND on_hand>0', (pid,)).fetchone():
+            v = dbc.execute("SELECT id FROM product_variants WHERE product_id=? AND status='active' ORDER BY sort,id LIMIT 1", (pid,)).fetchone()
+            l = dbc.execute("""SELECT l.id FROM warehouse_locations l JOIN warehouses w ON w.id=l.warehouse_id
+                               WHERE l.zone_type='sellable' AND l.status='active' AND w.status='active'
+                               ORDER BY l.is_default DESC, l.id LIMIT 1""").fetchone()
+            assert v and l, '测试前置失败：种子商品缺默认规格或缺可售库位'
+            r = stock_control.balance(dbc, pid, v[0], l[0])
+            stock_control.update(dbc, r, r['on_hand'] + 5, r['reserved'])
+            stock_control.sync(dbc, pid)
 
     # 1) C 端商城里现在有它
     before = [p['name'] for p in c.get(f'/api/club/{CLUB}/mall/products').json()]

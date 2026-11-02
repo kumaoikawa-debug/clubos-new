@@ -230,7 +230,7 @@ function clearProductFilter(){['#prodFilterBrand','#prodFilterCat','#prodFilterG
 function prodRowHtml(x){
   const brand=x.brand_name?esc(x.brand_name):'<span class="sub">未设品牌</span>';
   const cat=x.category_name?esc(x.category_name)+(x.parent_category_name?`<div class="sub">${esc(x.parent_category_name)}</div>`:''):'<span class="sub">未分类</span>';
-  return `<tr><td><div class="plat-prod-cell">${productCoverHtml(x)}<div><strong>${esc(x.name)}</strong><div class="sub">${esc(x.gender?PROD_GENDERS.find(g=>g.value===x.gender)?.label||x.gender:'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0} · ${x.description?'有介绍':'无介绍'}</div></div></div></td><td>${brand}<div class="sub">${cat}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.stock}<div class="sub">${invStatusTag(x)}</div></td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="editProduct(${x.id})">编辑</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`;
+  return `<tr><td><div class="plat-prod-cell">${productCoverHtml(x)}<div><strong>${esc(x.name)}</strong><div class="sub">${esc(x.gender?PROD_GENDERS.find(g=>g.value===x.gender)?.label||x.gender:'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0} · ${x.description?'有介绍':'无介绍'}</div></div></div></td><td>${brand}<div class="sub">${cat}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.source==='external_api'?'—':x.stock}<div class="sub">${x.source==='external_api'?'仅展示 · 暂不可购买':invStatusTag(x)}</div></td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(x.source==='external_api'&&x.status==='active'?'展示中':enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="editProduct(${x.id})">编辑</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`;
 }
 /* 进销存 V1：库存状态标签（与商品上架状态分离，已上架商品仍可显示「售罄」）。 */
 function invStatusTag(x){
@@ -239,6 +239,15 @@ function invStatusTag(x){
   const map={out_of_stock:['售罄','orange'],low_stock:['库存偏低','orange'],restocking:['补货中','blue'],in_stock:['有货','green']};
   const m=map[s]||[enumCn(s),''];
   return `<span class="tag ${m[1]}">${m[0]}</span>`;
+}
+async function syncPeaktraceCatalog(button){
+  button.disabled=true;button.textContent='正在同步 PEAKTRACE…';
+  try{
+    const r=await api('/api/platform/brands/peaktrace/sync',{method:'POST'});
+    await loadProductDicts(true);await loadProducts();
+    showAlert({title:'PEAKTRACE 商品已同步',message:`新增 ${r.created} 件，更新 ${r.updated} 件，上游已移除 ${r.hidden} 件。新增商品在「待上架」中，上架后前端可展示。当前仅展示商品，暂不可购买。`});
+  }catch(e){showAlert({title:'同步失败',message:e.message})}
+  finally{button.disabled=false;button.textContent='同步 PEAKTRACE'}
 }
 async function loadProducts(){prodStatusChips();try{await loadProductDicts()}catch(e){/* 字典拉不到也要让列表自己报错，别静默 */}applyProductFilter()}
 async function addProduct(){return platformAddProduct()}
