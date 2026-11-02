@@ -224,6 +224,12 @@ def platform(): return FileResponse(STATIC/'platform'/'index.html')
 def web(): return FileResponse(STATIC/'web'/'index.html')
 @app.get('/leader')
 def leader(): return FileResponse(STATIC/'leader'/'index.html')
+@app.get('/home')
+def home():
+    # 产品官网（营销落地页，static/site/index.html 自包含单文件）。
+    # 表单同源直连 /api/public/club-applications（无需外部代理）。
+    # no-cache 协商缓存：官网改版后立刻生效，不必 bump 版本号。
+    return FileResponse(STATIC/'site'/'index.html', headers={'Cache-Control':'no-cache'})
 @app.get('/api/health')
 def health(): return {'ok':True,'product':'ClubOS NEW','version':'0.25-production-hardening'}
 
