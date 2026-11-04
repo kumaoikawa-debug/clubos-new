@@ -380,6 +380,9 @@
 }
 .w-product__media svg{width:44px;height:44px;stroke:#b5bfb7;fill:none;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
 .w-product__media img{width:100%;height:100%;object-fit:cover;display:block}
+/* PEAKTRACE 合成图头图裁切（shared.js prodImgHtml）的容器限定规则统一放文件末尾
+   （w-cropimg 段）—— 各容器散落的裸 svg 规则是占位袋图标的（44px/26px 描边），
+   等优先级下后来者居上，必须用更高优先级 + 靠后位置盖回「跟 img 一样铺满容器」。 */
 .web-card.w-product:active .w-product__media{transform:scale(.985)}
 .web-card.w-product.is-out .w-product__media{filter:grayscale(.55)}
 .w-product__flag{
@@ -2517,3 +2520,41 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 .web-shell .me-qr-zoom__name{font-size:15px;font-weight:700;color:var(--w-ink)}
 .web-shell .me-qr-zoom__box img{width:240px;height:240px;background:#fff;border-radius:10px;border:1px solid var(--w-line)}
 .web-shell .me-qr-zoom__tip{font-size:12px;color:var(--w-muted);text-align:center;line-height:1.5}
+
+/* ── PEAKTRACE 合成图头图裁切（2026-11-04，shared.js prodImgHtml）────────────
+   catalog_view → SVG viewBox 只露合成图里的头图那张。裁切 svg 挂 .w-cropimg；
+   这里用「容器限定 + 文件末尾」双重保险盖过各容器散落的裸 svg 占位图标规则
+   （如 .w-cart__img svg 的 26px 描边袋图标）—— 等优先级后来居上，更高级别必赢。 */
+.w-product__media svg.w-cropimg,.w-mini__media svg.w-cropimg,.w-cart__img svg.w-cropimg,
+.w-pd__slide svg.w-cropimg,.w-pd__recmedia svg.w-cropimg,.w-shop__hslide svg.w-cropimg{
+  display:block;width:100%;height:100%;stroke:none;stroke-width:0}
+/* 详情页顶部悬浮条的头图是 32px 小方图（img 规则如此），svg 等价复刻。 */
+.w-pd__barinfo svg.w-cropimg{width:32px;height:32px;border-radius:8px;flex:0 0 auto;background:#eceff0}
+
+
+/* ===== 2026-11-04 手机端适配（用户截图）+ 装备价格新格式 =====
+   .web-shell #publicDetail .info-stack details 带 id、特异性高于旧版 .itin-day 覆盖，
+   必须在同层级把它压回去，否则逐日卡还是 16px 20px 的双重内边距。 */
+@media(max-width:680px){
+  .web-shell #publicDetail .info-stack details{padding:12px 12px}
+  .web-shell #publicDetail .info-stack .itin-day{padding:0}
+  .web-shell .info-stack .itin-day>summary{flex-wrap:wrap;gap:6px 10px;padding:12px 12px}
+  .web-shell .info-stack .itin-day__main{flex:1 1 calc(100% - 60px);min-width:0}
+  .web-shell .info-stack .itin-day__meta{flex:1 1 100%;padding:0 0 2px 52px}
+  .web-shell .info-stack .itin-day__meta .tl-chip{white-space:normal;word-break:break-word}
+  .web-shell .info-stack .itin-day>.detail-list{padding:2px 12px 10px}
+  /* 时间左、正文右，元信息跨两列 —— 之前 display:block 让每行堆到 79px 且大片空白 */
+  .web-shell .info-stack .itin-day .detail-list>div{display:grid;grid-template-columns:72px minmax(0,1fr);
+    gap:3px 10px;align-items:start;padding:9px 0;border-bottom:1px dashed var(--w-line)}
+  .web-shell .info-stack .itin-day .detail-list>div:last-child{border-bottom:0}
+  .web-shell .info-stack .itin-day .detail-list>div>b{white-space:nowrap;font-size:12px;line-height:1.6}
+  .web-shell .info-stack .itin-day .detail-list p{margin:0;font-size:12.5px;line-height:1.6}
+  .web-shell .info-stack .itin-day .tl-meta{grid-column:1/-1;margin-top:2px}
+  .web-shell .info-stack .itin-day__digest{white-space:normal;overflow:visible;text-overflow:clip}
+}
+/* 装备价格：原价 / 会员价 双价，会员价强调色；入会引导弱化为灰字 */
+.gear-price{font-style:normal;font-weight:700;color:var(--w-accent,#b5552e);white-space:nowrap}
+.gear-price--member{color:var(--w-brand,#194b3d)}
+.gear-price__sep{color:var(--w-muted,#8d968f);margin:0 2px}
+.gear-price__tip{font-style:normal;color:var(--w-muted,#8d968f);font-size:11px}
+.web-shell .gear-meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:0}

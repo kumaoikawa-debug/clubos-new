@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any
 
 
@@ -22,6 +22,12 @@ class AICreditEngine:
         ("starter", "Starter", 299.0, 3000, "适合刚起步的俱乐部", 10, 1.0, 0.0),
         ("pro", "Pro", 699.0, 10000, "适合持续运营活动与内容的俱乐部", 20, 0.95, 20.0),
         ("enterprise", "Enterprise", 0.0, 30000, "组织级额度；价格由平台另行约定", 30, 0.90, 50.0),
+        # 2026-11-03 体验套餐：只随「入驻申请审核通过」自动开通，不在任何售卖/自助订阅
+        # 渠道出现（assign_plan 里对 trial 做了 allow_trial 门禁）。权益刻意最小化：
+        # 100 积分、装备折扣 1.0（无）、装备积分抵用 0（无）、仅基础功能；3 天期限由
+        # 开通时的 assign_plan(period_days=3) 写进订阅 current_period_end，
+        # plan_gear_rate / gear_points_policy 会对过期的 trial 停权益。
+        ("trial", "体验", 0.0, 100, "仅限审核通过的新俱乐部 · 3 天体验期 · 仅基础功能", 5, 1.0, 0.0),
     ]
     DEFAULT_TOPUPS = [
         ("T1000", "1,000 积分", 99.0, 1000, 10),
@@ -281,6 +287,9 @@ class AICreditEngine:
         code = str(code or "").strip().lower()
         if not code:
             raise ValueError("套餐 code 必填")
+        if code == "trial":
+            # 体验套餐是内置套餐：审核通过自动开通依赖它存在，删掉会断开通链路。
+            raise ValueError("体验套餐是内置套餐，不可删除")
         row_ = c.execute("SELECT * FROM ai_credit_plans WHERE code=?", (code,)).fetchone()
         if not row_:
             raise ValueError("套餐不存在")
@@ -350,12 +359,24 @@ class AICreditEngine:
         ).fetchone()
         return dict(r) if r else None
 
-    def assign_plan(self, c, *, club_id: int, plan_code: str, auto_renew: bool = True) -> dict[str, Any]:
+    def assign_plan(self, c, *, club_id: int, plan_code: str, auto_renew: bool = True,
+                    period_days: int | None = None, create_order: bool = True,
+                    allow_trial: bool = False) -> dict[str, Any]:
+        # 体验套餐（2026-11-03）只随「入驻申请审核通过」由平台开通：俱乐部自助订阅、
+        # 平台「套餐」弹窗改绑都进不来；仅审核接口带 allow_trial=True 的内部调用放行。
+        if str(plan_code) == "trial" and not allow_trial:
+            raise ValueError("体验套餐仅限新俱乐部审核通过后由平台开通，不能手动订阅")
         plan = c.execute("SELECT * FROM ai_credit_plans WHERE code=? AND status='active'", (plan_code,)).fetchone()
         if not plan:
             raise ValueError("积分套餐不存在或已停用")
-        period = self._month_key()
-        start, end = self._period_bounds(period)
+        if period_days:
+            # 体验套餐这类「N 天短周期」：按自然日算起止，不走自然月账期、不生成月度账单。
+            start = date.today()
+            end = start + timedelta(days=int(period_days))
+            start, end = start.isoformat(), end.isoformat()
+        else:
+            period = self._month_key()
+            start, end = self._period_bounds(period)
         c.execute(
             """INSERT INTO club_ai_subscriptions(club_id,plan_code,status,current_period_start,current_period_end,
                  auto_renew,monthly_fee_snapshot,monthly_credits_snapshot,updated_at)
@@ -374,7 +395,9 @@ class AICreditEngine:
                ON CONFLICT(club_id) DO UPDATE SET monthly_quota=excluded.monthly_quota""",
             (club_id, int(plan["monthly_credits"])),
         )
-        order = self.create_subscription_order(c, club_id=club_id, period_key=period)
+        # create_order=False（体验套餐）：不发月度账单 —— 3 天试用没有「待付款」概念，
+        # 赠送积分由调用方直接 grant（幂等），否则每月 0 元待付款账单会污染账单列表。
+        order = self.create_subscription_order(c, club_id=club_id, period_key=self._month_key()) if create_order else None
         return {"subscription": self.subscription(c, club_id), "billingOrder": order}
 
     def create_subscription_order(self, c, *, club_id: int, period_key: str | None = None) -> dict[str, Any]:

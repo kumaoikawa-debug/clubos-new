@@ -765,7 +765,7 @@ async function loadContent(){
   const a=acts.find(x=>x.id===keep)||acts[0];
   currentActivity=a;
   const cards=[
-    ['longpic','AI 宣传长图','★ 推荐：让大模型自己排版，直接出 750px 公众号长图，可下载 2 倍图。结构、配色、留白都由模型决定，不再走固定模板'],
+    ['longpic','AI 宣传长图','按活动主题与照片自由编排长图，每场版式不同，可预览、复制和下载高清图片'],
     ['wechat','微信公众号图文','AI 重排公众号阅读节奏；生成后可直接预览，并一键复制带格式图文到公众号编辑器'],
     ['xhs','小红书图文','文案为主：独立标题、Hook、正文与话题标签可直接复制走；另出一张 1080×1440 首页海报，并把其余现场照片裁成 3:4 九宫格配图'],
     ['poster','活动招募海报','用活动真实封面 + AI 文案在本地合成 1080×1440 海报，可直接下载']
@@ -864,11 +864,14 @@ function renderRecapPanel(){
     <textarea id="recapNote" rows="4" style="width:100%;max-width:680px;padding:8px 10px" placeholder="例如：12 个人全员登顶，山顶风大但出了太阳；下山路上有人扭了脚踝已处理；晚饭火锅全员到齐……"></textarea></div>
     <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn secondary" id="recapGo">AI 生成活动回顾</button>
+      <button class="btn secondary" id="recapRetypeset" style="display:none">换一版排版（用同一批照片）</button>
       <span class="sub" id="recapHint"></span>
     </div>`;
   const fi=$('#recapFiles');
   fi.onchange=()=>{$('#recapHint').textContent=fi.files.length?`已选 ${fi.files.length} 张照片`:''};
   $('#recapGo').onclick=genRecap;
+  $('#recapRetypeset').onclick=()=>window.clubRetypesetRecap&&window.clubRetypesetRecap({});
+  if(window.__lastRecapAssetId)$('#recapRetypeset').style.display='';
 }
 async function genRecap(){
   const title=($('#recapTitle')?.value||'').trim();
@@ -898,30 +901,7 @@ async function genRecap(){
     const d=await api(`/api/club/${CLUB}/recap`,{method:'POST',body:fd});
     // 生成异步化（与长图同理）：live 真模型带完整写作契约常超 55s 网关上限，
     // 立即返回轮询 status，完成后自动打开成品；期间页面可正常使用。
-    if(d&&d.pending){
-      toast('回顾已开始生成，约需 1-2 分钟，完成后自动打开，可先做别的');
-      const started=Date.now();
-      while(Date.now()-started<8*60*1000){
-        await new Promise(r=>setTimeout(r,6000));
-        let st;
-        try{st=await api(`/api/club/${CLUB}/recap/status`)}
-        catch(_e){continue}
-        if(st.status==='done'){
-          toast('活动回顾生成完成');
-          if(st.skipped&&st.skipped.length)toast(`有 ${st.skipped.length} 个文件不是可识别的图片，已跳过`);
-          const full=await api(`/api/club/${CLUB}/content/${st.assetId}`);
-          window.channelRenderResetCtx&&channelRenderResetCtx(0);
-          await openChannelOutput('recap',full.content||{},{activityId:0});
-          await loadContent();
-          if(window.loadCredits)await loadCredits();
-          return;
-        }
-        if(st.status==='error'){showAlert({title:'生成失败',message:st.error||'请重试'});return}
-      }
-      showAlert({title:'仍在生成中',message:'这次生成时间较长，后台不会中断；稍后到「已生成内容」里查看成品。'});
-      await loadContent();
-      return;
-    }
+    if(d&&d.pending){toast('回顾已开始生成，约需 1-2 分钟，完成后自动打开，可先做别的');await waitRecapAndOpen();return}
     // 兼容：mock/旧实现直接同步返回成品
     if(d&&d.skippedFiles&&d.skippedFiles.length)toast(`有 ${d.skippedFiles.length} 个文件不是可识别的图片，已跳过`);
     toast('活动回顾已生成');
@@ -931,6 +911,47 @@ async function genRecap(){
     if(window.loadCredits)await loadCredits();
   }catch(e){showAlert({title:'生成失败',message:e.message})}
 }
+/* 轮询独立回顾作业 → 自动打开成品。首次生成与「换一版排版」共用，避免两套轮询各自漂移。 */
+async function waitRecapAndOpen(){
+  const started=Date.now();
+  while(Date.now()-started<8*60*1000){
+    await new Promise(r=>setTimeout(r,6000));
+    let st;
+    try{st=await api(`/api/club/${CLUB}/recap/status`)}catch(_e){continue}
+    if(st.status==='done'){
+      toast('活动回顾生成完成');
+      if(st.skipped&&st.skipped.length)toast(`有 ${st.skipped.length} 个文件不是可识别的图片，已跳过`);
+      window.__lastRecapAssetId=st.assetId;
+      const rs=$('#recapRetypeset');if(rs)rs.style.display='';
+      const full=await api(`/api/club/${CLUB}/content/${st.assetId}`);
+      window.channelRenderResetCtx&&channelRenderResetCtx(0);
+      await openChannelOutput('recap',full.content||{},{activityId:0});
+      await loadContent();
+      if(window.loadCredits)await loadCredits();
+      return true;
+    }
+    if(st.status==='error'){showAlert({title:'生成失败',message:st.error||'请重试'});return false}
+  }
+  showAlert({title:'仍在生成中',message:'这次生成时间较长，后台不会中断；稍后到「已生成内容」里查看成品。'});
+  await loadContent();
+  return false;
+}
+/* 成品弹层 / 回顾面板里的「换一版排版」：用同一批素材重跑，只换版式、不要求重新上传照片。 */
+window.clubRetypesetRecap=async function(opts){
+  const assetId=window.__lastRecapAssetId||0;
+  if(!assetId){showAlert({title:'还不能换版',message:'请先生成一份活动回顾，再点「换一版排版」。'});return}
+  if(window.uxConfirm&&!await uxConfirm({title:'换一版排版',
+    message:'用同一批现场照片和记录重新生成，只换版式、不换素材，会产生一次 AI Credits 计费。',
+    confirmText:'重新排版'}))return;
+  try{
+    const fd=new FormData();fd.append('asset_id',String(assetId));
+    const d=await api(`/api/club/${CLUB}/recap/retypeset`,{method:'POST',body:fd});
+    if(!d||!d.pending){showAlert({title:'换版失败',message:'服务没有接受这次请求，请稍后重试。'});return}
+    if(opts&&typeof opts.close==='function')opts.close();   // 关掉旧成品，别叠两层弹窗
+    toast('正在重新排版，约 1-2 分钟，完成后自动打开新版本');
+    await waitRecapAndOpen();
+  }catch(e){showAlert({title:'换版失败',message:e.message})}
+};
 /* ===== 报名与执行：以单个活动为基础，再按档期（团期）拆开 =====
    老板的原话：把所有档期汇总到一起，后台就分不清哪些人是 9 号的、哪些人是 10 号的。
    所以第一层是活动，点进去后每个档期一块：这块只列它自己的报名人 + 它自己的执行准备。 */
@@ -1137,7 +1158,7 @@ async function renderMemberDetail(ov,userId){
     </div>`;
 }
 
-async function loadMall(){ try{skel('#clubOrders',4);let [p,cs,aftersales,gd]=await Promise.all([api(`/api/club/${CLUB}/mall/products`),api(`/api/club/${CLUB}/mall/commission-summary`),api(`/api/club/${CLUB}/mall/after-sales`),api(`/api/club/${CLUB}/gear-discount`)]);const md=(gd&&gd.rate<1)?{rate:gd.rate,tierName:gd.planName||'会员',discountZhe:gd.discountZhe}:null;$('#clubCommissionSummary').innerHTML=[['待签收',money(cs.pending)],['售后冻结',money(cs.frozen)],['可结算',money(cs.payableNow)],['已结算',money(cs.settled)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">${cs.carryDebt&&x[0]==='可结算'?`退款待冲抵 ${money(cs.carryDebt)}`:`售后期 ${cs.policy.afterSalesDays} 天`}</div></div>`).join('');$('#clubProducts').innerHTML=p.map(x=>`<div class="product" data-pid="${x.id}" role="button" tabindex="0" onclick="openClubProduct(${x.id})"><div class="ph">🎒</div><h4>${esc(x.name)}</h4><div class="sub">${esc(x.category||'户外装备')}</div>${memberPriceHtml(x.price,md)}<div class="sub">库存 ${x.stock} · 平台统一履约</div></div>`).join('');await loadMallOrders();await loadSettlementAccount();$('#clubAfterSales').innerHTML=aftersales.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.case_type)}</div> · 订单 #${x.order_id} <span class="tag">${esc(x.status)}</span><div class="list-row__sub">平台售后处理 · ${esc(x.reason||'')} · 申请退款 ${money(x.requested_refund_amount||0)}</div></div></div>`).join('')||'<div class="empty">暂无商城售后</div>';$('#clubSettlements').innerHTML=(()=>{window._cs=cs;const st=x=>x==='requested'?'待平台打款':x==='paid'?'已打款':esc(x);
+async function loadMall(){ try{skel('#clubOrders',4);let [p,cs,aftersales,gd]=await Promise.all([api(`/api/club/${CLUB}/mall/products`),api(`/api/club/${CLUB}/mall/commission-summary`),api(`/api/club/${CLUB}/mall/after-sales`),api(`/api/club/${CLUB}/gear-discount`)]);const md=(gd&&gd.rate<1)?{rate:gd.rate,tierName:gd.planName||'会员',discountZhe:gd.discountZhe}:null;$('#clubCommissionSummary').innerHTML=[['待签收',money(cs.pending)],['售后冻结',money(cs.frozen)],['可结算',money(cs.payableNow)],['已结算',money(cs.settled)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">${cs.carryDebt&&x[0]==='可结算'?`退款待冲抵 ${money(cs.carryDebt)}`:`售后期 ${cs.policy.afterSalesDays} 天`}</div></div>`).join('');$('#clubProducts').innerHTML=p.map(x=>{const cv=x.coverUrl||(x.images&&x.images[0]&&(x.images[0].url||x.images[0]))||x.image_url||'';const ph=cv?`<span class="ph" style="position:relative;display:block;height:96px;background:#eef2ef;overflow:hidden"><span style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:40px">🎒</span><img src="${esc(cv)}" alt="${esc(x.name)}" loading="lazy" style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover" onerror="this.remove()"></span>`:`<span class="ph" style="display:block;height:96px;background:#eef2ef;display:flex;align-items:center;justify-content:center;font-size:40px">🎒</span>`;const stockLine=(x.displayOnly||x.stock==null)?'平台统一履约':'库存 '+x.stock;return `<div class="product" data-pid="${x.id}" role="button" tabindex="0" onclick="openClubProduct(${x.id})">${ph}<h4>${esc(x.name)}</h4><div class="sub">${esc(x.category||'户外装备')}</div>${memberPriceHtml(x.price,md)}<div class="sub">${stockLine}</div></div>`}).join('');await loadMallOrders();await loadSettlementAccount();$('#clubAfterSales').innerHTML=aftersales.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.case_type)}</div> · 订单 #${x.order_id} <span class="tag">${esc(x.status)}</span><div class="list-row__sub">平台售后处理 · ${esc(x.reason||'')} · 申请退款 ${money(x.requested_refund_amount||0)}</div></div></div>`).join('')||'<div class="empty">暂无商城售后</div>';$('#clubSettlements').innerHTML=(()=>{window._cs=cs;const st=x=>x==='requested'?'待平台打款':x==='paid'?'已打款':esc(x);
   const can=cs.canRequest;
   const hero=`<div class="settle-hero"><div class="settle-hero__main"><div class="settle-hero__k">可申请佣金</div><div class="settle-hero__amt">${money(cs.payableNow)}</div><div class="settle-hero__hint ${can?'':'bad'}">${can?'已达到起结门槛，可发起申请':esc(cs.blockReason||'')}</div></div><div class="settle-hero__side"><div>佣金累计 <b>${money(cs.lifetimeEarned)}</b></div><div>退款冲抵 <b>${money(cs.lifetimeReversed)}</b></div><div>打款中 <b>${money(cs.reserved||0)}</b></div><button class="btn" ${can?'':'disabled'} onclick="requestClubSettlement()">${can?'申请结算':'未达门槛'}</button></div></div>`
   +`<div class="notice" style="margin:12px 0 2px">佣金结算规则：订单签收后 ${cs.policy.afterSalesDays} 天售后期内冻结，期满自动转入可申请；退款订单的佣金自动冲抵；累计可申请满 <b>${money(cs.threshold)}</b> 才能发起结算；发起后由总平台核对结算账户并打款（一般 1-3 个工作日）。打款前请先在上方「结算账户」登记法人卡或对公账户。</div>`

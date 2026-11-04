@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS clubs (
   plan TEXT NOT NULL DEFAULT 'pro',
   logo_url TEXT,
   slogan TEXT,
+  contact_email TEXT NOT NULL DEFAULT '', -- 2026-11-03 官网申请必填邮箱：接收账户密码与使用说明
   biz_section_json TEXT,
   home_banners_json TEXT,
   membership_purchase_enabled INTEGER NOT NULL DEFAULT 0, -- 2026-10-26 是否开通「购买会员」（0 关 / 1 开）
@@ -106,6 +107,8 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT NOT NULL,
   phone TEXT,
   city TEXT,
+  platform_member INTEGER NOT NULL DEFAULT 0,            -- 注册任一俱乐部会员后自动置 1（总平台会员）
+  platform_member_since TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -171,8 +174,10 @@ CREATE TABLE IF NOT EXISTS activities (
   club_points_max_discount_percent REAL NOT NULL DEFAULT 100,
   accept_gear_points INTEGER NOT NULL DEFAULT 1,
   gear_points_max_discount_amount REAL,
-  -- 2026-10-26 会员活动折扣：该活动是否参与「会员等级折扣」（前提条件，等级里还要配了折扣才生效）
-  member_discount_enabled INTEGER NOT NULL DEFAULT 0,
+  -- 2026-10-26 会员活动折扣：该活动是否参与「会员等级折扣」（前提条件，等级里还要配了折扣才生效）。
+  -- 2026-11-03 起默认开启：会员等级折扣是会员卡的核心权益，购买会员卡即应对全部活动生效；
+  -- 之前默认 0 且后台无开关，导致会员 9 折永远不生效。需要单独排除某场活动时再置 0（保留为可关闭的 opt-out）。
+  member_discount_enabled INTEGER NOT NULL DEFAULT 1,
   club_points_earn_rate_override REAL,
   refund_enabled INTEGER NOT NULL DEFAULT 1,
   refund_policy_json TEXT,
@@ -378,6 +383,7 @@ CREATE TABLE IF NOT EXISTS products (
   last_inbound_at TEXT,
   reorder_point INTEGER NOT NULL DEFAULT 5,
   cover_url TEXT,
+  catalog_view TEXT,                                     -- PEAKTRACE 头图裁切区 [srcW,srcH,cx,cy,cw,ch]（JSON 数组字符串，可空）
   brand_id INTEGER,
   category_id INTEGER,
   gender TEXT NOT NULL DEFAULT 'unisex',
@@ -389,6 +395,7 @@ CREATE TABLE IF NOT EXISTS products (
   inventory_mode TEXT NOT NULL DEFAULT 'platform_owned', -- platform_owned / external_api
   fulfillment_mode TEXT NOT NULL DEFAULT 'platform_warehouse', -- platform_warehouse / supplier_fulfillment
   owner_id INTEGER,                                      -- 商品负责人
+  is_featured INTEGER NOT NULL DEFAULT 0,                -- 主推款：仅这些商品进 C 端「本季新品」大图广告位
   commerce_product_id TEXT,
   commerce_variant_id TEXT,
   commerce_inventory_item_id TEXT,

@@ -328,6 +328,26 @@ function resolvedRefs(refs,map){return (refs||[]).filter(r=>r&&map[r]&&map[r].ur
 function isSectionArt(x){const u=String(x?.url||'');if(!u.includes('/link/'))return false;
   const w=+x?.width||0;return !w||w>=400}
 function mediaHtml(ref,map,cls=''){const x=map[ref];if(!x?.url)return `<div class="editorial-media missing ${cls}"><span>${esc(ref||'image')}</span></div>`;return `<figure class="editorial-media${isSectionArt(x)?' nat':''} ${cls}"><img src="${esc(x.url)}" alt="" loading="lazy"></figure>`}
+/* ★ PEAKTRACE 合成图头图裁切（2026-11-04 用户报「头图不对」实锤修法）。
+   官网商品图是「多视图合成图」（正面/背面/细节拼一张，还印着 FRONT/BACK 字样），
+   每件商品带 catalog_view=[srcW,srcH,cropX,cropY,cropW,cropH]，官网用 SVG viewBox
+   只露头图那一张；ClubOS 曾把整张合成图直接当头图，列表里就是一小块拼贴。
+   此 helper 完全复刻官网裁切：view 合法时出 <svg viewBox="cx cy cw ch"> + 全尺寸
+   <image>（preserveAspectRatio="xMidYMid slice" ≈ object-fit:cover），否则退回
+   普通 <img>。svg 必须带 w-cropimg 类 —— 各容器的裸 svg 选择器是占位图标的样式
+   （44px/26px 描边袋图标），不挂类会被它打回原形（见 web.css）。 */
+window.prodImgHtml=function(src,view,cls='',alt=''){
+  if(!src)return '';
+  let v=view;
+  if(typeof v==='string'){try{v=JSON.parse(v)}catch(e){v=null}}
+  if(Array.isArray(v)&&v.length===6&&v.every(n=>Number.isFinite(n))){
+    const sw=v[0],sh=v[1],cx=v[2],cy=v[3],cw=v[4],ch=v[5];
+    if(sw>0&&sh>0&&cw>0&&ch>0&&cx>=0&&cy>=0&&cx+cw<=sw+0.5&&cy+ch<=sh+0.5){
+      return `<svg class="w-cropimg ${cls}" viewBox="${cx} ${cy} ${cw} ${ch}" preserveAspectRatio="xMidYMid slice" role="img" aria-label="${esc(alt)}"><image href="${esc(src)}" width="${sw}" height="${sh}"/></svg>`;
+    }
+  }
+  return `<img class="${cls}" src="${esc(src)}" alt="${esc(alt)}" loading="lazy">`;
+};
 /* 把任意形状的值归一成**纯文本**，且任何形状都不许产出 "[object Object]"。
    真模型（通义千问等）输出的字段形状不稳定：同一处可能给字符串、字符串数组，
    也可能给对象数组（[{text:'…'},{para:'…'}]）。直接 String() 就会把
@@ -422,7 +442,13 @@ function promoHtmlDoc(html){
     +(bg?'html{background:'+bg.replace(/[<"\']/g,'')+'}':'')
     +'body{width:100%;overflow-x:hidden;font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}'
     +'img,figure,video,iframe,svg,table,pre{max-width:100%!important}'
-    +'img{max-width:100%;height:auto;display:block}section{display:block}a{color:inherit}</style></head><body>'
+    +'img{max-width:100%;height:auto;display:block}section{display:block}a{color:inherit}'
+    /* 2026-11-04 用户截图「边界留白太多」：模型常给顶层区块写 48~80px 横向内边距，
+       390px 屏上等于左右各砍掉一指宽。窄屏统一收到 18px，深色块/配色等设计不动。 */
+    +'@media(max-width:720px){body>section,body>div,body>article,body>header,body>footer{'
+    +'padding-left:18px!important;padding-right:18px!important}'
+    +'body>h1,body>h2,body>h3{overflow-wrap:break-word}}'
+    +'</style></head><body>'
     +body+'</body></html>';
 }
 function escAttr(s){return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;');}
@@ -444,6 +470,51 @@ function sizePromoIframe(ifr){
   try{var d=ifr.contentDocument;if(d&&d.body){ifr.style.height=(d.body.scrollHeight+16)+'px';
     setTimeout(function(){try{ifr.style.height=(d.body.scrollHeight+24)+'px';}catch(_){}},800);}}catch(_){}
 }
+/* ★ 2026-11-04 用户截图：AI 直出稿在手机里跑出「浅绿椭圆里两三个字一行」和
+   「大数字贴着边框」。iframe 是独立文档，主文档的 @media/@container 一概管不到，
+   自由 CSS 也没法用类名预判 —— 只能按**实测几何**归一：
+     ① 圆角半径是百分比 / ≥60px 且装了成段文字 → 摊成正常圆角卡片，文字横排；
+     ② 大号纯数字 → 补一层内边距、字号封顶，不再贴边。
+   只在 ≤720px 生效；幂等（改过之后 radii 不再命中）。 */
+function normalizePromoMobile(d,w){
+  var vw=w.innerWidth||0;
+  if(vw<=0||vw>720)return;
+  var all=Array.prototype.slice.call(d.querySelectorAll('body *'));
+  all.forEach(function(el){
+    var cs;try{cs=w.getComputedStyle(el)}catch(_e){return}
+    if(!cs||cs.display==='none')return;
+    var r;try{r=el.getBoundingClientRect()}catch(_e){return}
+    if(!r.width||!r.height)return;
+    var txt=(el.textContent||'').trim();
+    var br=String(cs.borderRadius||'');
+    var isRound=/%/.test(br)||(parseFloat(br)>=60);
+    if(isRound&&txt.length>=10&&r.width<vw*0.86&&(r.height>r.width*1.15||r.width<240)){
+      var fix={'border-radius':'16px','width':'auto','max-width':'100%','min-width':'0',
+               'height':'auto','min-height':'0','aspect-ratio':'auto','padding':'20px 18px',
+               'display':'block','white-space':'normal','text-align':'left',
+               'overflow-wrap':'break-word','box-sizing':'border-box'};
+      Object.keys(fix).forEach(function(k){try{el.style.setProperty(k,fix[k],'important')}catch(_e){}});
+      Array.prototype.slice.call(el.querySelectorAll('*')).forEach(function(t){
+        if(t.children.length)return;
+        var tc;try{tc=w.getComputedStyle(t)}catch(_e){return}
+        if(parseFloat(tc.fontSize)<13)try{t.style.fontSize='14px'}catch(_e){}
+      });
+      return;
+    }
+    if(el.children.length===0&&/^[0-9][0-9.,]*$/.test(txt)&&parseFloat(cs.fontSize)>=28){
+      if(parseFloat(cs.fontSize)>42)el.style.fontSize='40px';
+      var box=el.parentElement;
+      if(box){
+        var bcs;try{bcs=w.getComputedStyle(box)}catch(_e){return}
+        if(parseFloat(bcs.paddingLeft||'0')<8){
+          box.style.paddingLeft='14px';box.style.paddingRight='14px';
+          box.style.paddingTop=Math.max(10,parseFloat(bcs.paddingTop||'0'))+'px';
+          box.style.paddingBottom='12px';
+        }
+      }
+    }
+  });
+}
 /* ★ 2026-10-26 「装不下」的弹性行自己换行 + 统一缩字号（只处理真正溢出的行）。
    模型写 .stat-row{display:flex} + .num{font-size:72px}，4 个数字在 ~316px 的窄容器里必然溢出。
    做法：把该行 flex-wrap 打开、每个子项给 42% 的 basis 让它两两换行；再把「同一行里的大字号
@@ -453,6 +524,7 @@ function sizePromoIframe(ifr){
 function fitPromoDoc(ifr){
   var d,w;try{d=ifr.contentDocument;w=ifr.contentWindow;}catch(_e){return}
   if(!d||!d.body||!w||!(w.innerWidth>0))return;
+  try{normalizePromoMobile(d,w);}catch(_e){}
   var all=Array.prototype.slice.call(d.querySelectorAll('body *'));
   all.forEach(function(el){
     var cs;try{cs=w.getComputedStyle(el)}catch(_e){return}
@@ -536,11 +608,45 @@ if(typeof document!=='undefined'){
     },60);
   },true);
 }
+/* ★ 费用复述闸门 · promoHtml 版（2026-11-03 用户截图：AI 直出的宣传区里又开一个
+   「费用与服务」章节，与下方「费用说明 PRICE」结构化区重复出现）。facts 块的同类闸门
+   （_feeRestatedBy）只管 blocks 回退路径；promoHtml 是模型直出的自由 HTML，要单独剥：
+   顶层每个 section/div 逐块判——标题就是费用类，或文本与 fees 清单 gram 重合 ≥0.7，
+   且结构化费用区确实有内容 → 整块剥掉；全剥光返回空串，调用方退回 blocks 渲染。 */
+function stripFeeRetell(html, master){
+  try{
+    if(!html||typeof html!=='string'||!master||!master.fees)return html;
+    const feeText=String(feeListHtml(master.fees)||'').replace(/<[^>]*>/g,'').trim();
+    if(!feeText)return html;
+    const gramsOf=s=>{const t=String(s||'').replace(/[^\u4e00-\u9fa5a-zA-Z0-9]+/g,'');const g=new Set();for(let i=0;i<t.length-1;i++)g.add(t.slice(i,i+2));if(t.length===1)g.add(t);return g;};
+    const feeG=gramsOf(feeText);
+    const cover=text=>{const g=gramsOf(text);if(!g.size||!feeG.size)return 0;let hit=0;feeG.forEach(x=>{if(g.has(x))hit++});return hit/feeG.size;};
+    /* 标题判定与 facts 闸门同一口径（不含「服务」——「服务保障」是正当内容）：
+       标题里带上「费用」不等于在讲费用，「费用以外的注意事项」必须放行。 */
+    const feeTitle=t=>{const raw=String(t||'').replace(/[\s:：,，.。、!！?？\-—/｜|]+/g,'');const core=raw.replace(/费用|包含|不含|自理|自费|报价|价格/g,'');return core.length<=4&&core.length<raw.length;};
+    const doc=new DOMParser().parseFromString('<div id="sfw">'+html+'</div>','text/html');
+    const wrap=doc.getElementById('sfw');
+    if(!wrap)return html;
+    let removed=0;
+    Array.prototype.slice.call(wrap.children).forEach(function(el){
+      const txt=el.textContent||'';
+      if(txt.replace(/\s/g,'').length<8)return;               // 纯图 / 分隔块不碰
+      const hd=el.querySelector('h1,h2,h3,h4,strong,b');
+      if(feeTitle(hd?hd.textContent:'')||cover(txt)>=0.7){el.remove();removed++;}
+    });
+    if(!removed)return html;
+    const out=wrap.innerHTML;
+    if(!String(out).replace(/<[^>]*>/g,'').replace(/\s/g,''))return '';   // 全剥光 → 退回 blocks
+    return out;
+  }catch(_e){return html;}
+}
 function renderPromo(detail,master={},opts={}){
   const mm=mediaMap(master);
   /* 阶段二（2026-10-14）：模型直出 HTML 优先；缺失 / 不达标时回退下方 blocks */
   if(detail&&detail.promoHtml&&typeof detail.promoHtml==='string'&&detail.promoHtml.trim()){
-    return mountPromoHtml(detail.promoHtml,mm);
+    const _stripped=stripFeeRetell(detail.promoHtml,master);
+    if(_stripped&&String(_stripped).replace(/<[^>]*>/g,'').trim())return mountPromoHtml(_stripped,mm);
+    /* 费用复述块剥光 → 掉到下方 blocks 渲染（费用一定有结构化区兜底，宣传区空着没关系） */
   }
   let h='<article class="editorial">';
   /* 章节编号（2026-10-14）：杂志感的一半来自「整篇一致的眉标口径」——眉标前面那个
@@ -842,17 +948,28 @@ function renderPromo(detail,master={},opts={}){
   }
   return h+'</article>';
 }
+/* 商品介绍里可能内嵌 Markdown 图片 `![](url)`：装备卡上的商品图已由 imageUrl 单独渲染，
+   这种行要从文字里剥掉，否则会被 escape 成一串图片地址显示出来
+   （2026-11-03 用户反馈「详情页商品推荐露出图片地址」）。整行是 Markdown 图才剥，
+   行内混排的 `![](...)` 极少见，这里一并清掉更安全。 */
+function stripMdImages(s){
+  return String(s||'').split('\n')
+    .filter(l=>!l.trim().match(/^!\[\s*\]\([^)]*\)$/))
+    .join('\n').trim();
+}
 function gearRow(p,opts,sub){
   // 价格走第二行：窄栏（C 端 560px 容器）下右挂价格会把商品名挤成两三行
   const base=Number(p.price||0),mp=Number(p.memberPrice||0);
   const hasMember=mp>0&&mp<base;
-  const fmt=n=>'¥'+Number(n||0).toFixed(2).replace(/\.00$/,'');
-  // 会员价直接替代原价显示、原价划线保留：让"加入会员更便宜"一眼可见
-  const priceHtml=hasMember
-    ? '<i class="gear-price">'+esc(fmt(mp))+'</i><span class="gear-was">'+esc(fmt(base))+'</span>'
-    : '<i class="gear-price">'+esc(fmt(base))+'</i>';
-  const memberNote=hasMember
-    ? ' · '+esc(p.memberTierName||'会员')+'价 省 '+esc(fmt(p.memberSavings||0))
+  /* 2026-11-04 用户明确要求：只写「原价:1000元；会员价:800元」，
+     不出现 Pro / Enterprise / 套餐 / 省 ¥X —— 顾客不需要知道后台套餐层级。
+     能否真正享受会员价由结算层按 club_members 判定；这里只按后端下发的
+     memberEligible 给一句入会引导，前端不自己造资格。 */
+  const yuan=n=>Number(n||0).toFixed(2).replace(/\.00$/,'');
+  const priceHtml='<span class="gear-price">原价:'+esc(yuan(base))+'元</span>'
+    +(hasMember?'<span class="gear-price__sep">；</span><span class="gear-price gear-price--member">会员价:'+esc(yuan(mp))+'元</span>':'');
+  const memberNote=(hasMember&&p.memberEligible===false)
+    ? ' · <span class="gear-price__tip">注册成为本俱乐部会员后可享</span>'
     : '';
   /* 产品图以商城为准（2026-10-23 用户反馈「商城有的产品图处这些都要是以商城为准的
      实际产品图片及介绍」）：有图先上真实商品图；裂图/无图退到品类 emoji 方块，
@@ -862,8 +979,11 @@ function gearRow(p,opts,sub){
     ? '<span class="gear-img"><img src="'+esc(p.imageUrl)+'" alt="" loading="lazy" data-emoji="'+emo+'" onerror="gearImgFallback(this)"></span>'
     : '<span class="gear-img gear-img--none"><span class="gear-emoji">'+emo+'</span></span>';
   /* 介绍同样以商城为准：description 是平台上架时写的真实商品介绍；
-     老商品没填介绍时退到引擎写的「契合某品类」理由，不留空行也不编话。 */
-  const desc=String(p.description||'').trim()||String(p.reason||'').trim();
+     老商品没填介绍时退到引擎写的「契合某品类」理由，不留空行也不编话。
+     注意：description 里可能内嵌 Markdown 图片 `![](url)`——装备卡上的商品图已经由
+     imageUrl 单独渲染，这种行如果从文字里原样 escape 出去，就会在「商品推荐 / 出行清单」
+     里露出一串图片地址（2026-11-03 用户反馈）。先剥掉再显示。 */
+  const desc=stripMdImages(String(p.description||'').trim()||String(p.reason||'').trim());
   // 平替徽标放在最前面：顾客第一眼就要知道「这不是清单里那件东西」
   const badge=sub?'<span class="gear-badge">平替</span>':'';
   const inner=badge+imgHtml
@@ -988,7 +1108,7 @@ function renderPacking(master,opts){
   const head='<div class="gear-head"><span class="eyebrow">按清单搭配</span><span class="gear-summary">清单 '
     +Number(cov.needs||0)+' 项 · 商城可配 '+cover+' 项'
     +(subCount?' · 平替 '+subCount+' 项':'')
-    +(md?' · <b>'+esc(md.tierName)+' '+esc(String(md.discountZhe))+' 折</b>':'')
+    +(md?' · <b>会员价</b>':'')
     +'</span></div>';
   /* 运营视角额外给一句「哪些品类商城没有」——这是给老板补货看的；
      顾客分区里只有「请自己准备」，不需要出现「缺货」这种字眼。 */

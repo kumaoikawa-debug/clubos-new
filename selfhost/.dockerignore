@@ -1,0 +1,18 @@
+# 自托管 Docker 构建时排除的体积/无关内容
+venv/
+.venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+static/demo/
+static/uploads/
+versions/
+outputs/
+*.db
+*_test.db
+deploy/
+.workbuddy/
+selfhost/
+node_modules/
+.DS_Store

@@ -1,5 +1,6 @@
 """PEAKTRACE public catalog import. This supplies product information, not inventory."""
 import hashlib
+import json
 import math
 from urllib.parse import urljoin, urlsplit
 
@@ -22,6 +23,30 @@ def _image(value):
         return None
     url = urljoin(ORIGIN + '/', value.strip())
     return url if urlsplit(url).scheme == 'https' and urlsplit(url).netloc else None
+
+
+def _catalog_view(value):
+    """头图裁切区 [srcW,srcH,cropX,cropY,cropW,cropH]，原样存成 JSON 数组字符串。
+
+    官网商品图是「多视图合成图」，前端按这组坐标用 SVG viewBox 只露头图那一张
+    （复刻官网渲染，见 shared.js prodImgHtml）。字段是展示增强：格式不合法就返回
+    None（前端退回整图渲染），**不因它打断整次同步** —— 商品名/价/图才是主数据。
+    """
+    if not isinstance(value, (list, tuple)) or len(value) != 6:
+        return None
+    try:
+        nums = [float(v) for v in value]
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in nums):
+        return None
+    src_w, src_h, cx, cy, cw, ch = nums
+    if min(src_w, src_h, cw, ch) <= 0 or cx < 0 or cy < 0:
+        return None
+    # 裁切区允许半像素舍入误差，但不能明显越出源图（越出就放弃裁切）。
+    if cx + cw > src_w + 0.5 or cy + ch > src_h + 0.5:
+        return None
+    return json.dumps(nums)
 
 
 def sync_catalog(c, products, categories):
@@ -55,7 +80,8 @@ def sync_catalog(c, products, categories):
         description = '\n'.join(str(x[k]).strip() for k in ('sub', 'desc', 'spec') if x.get(k))
         prepared.append((external_id, name, price, images, sizes, description,
                          category_names.get(str(x.get('category')), str(x.get('category') or '装备')),
-                         str(x.get('fabric') or ''), str(x.get('mountain') or '')))
+                         str(x.get('fabric') or ''), str(x.get('mountain') or ''),
+                         _catalog_view(x.get('catalog_view'))))
 
     c.execute('BEGIN IMMEDIATE')
     brand = c.execute("SELECT * FROM product_brands WHERE lower(name)='peaktrace'").fetchone()
@@ -69,7 +95,7 @@ def sync_catalog(c, products, categories):
         brand_id = brand['id']
     created = updated = hidden = 0
     ids = []
-    for eid, name, price, images, sizes, description, category, material, series in prepared:
+    for eid, name, price, images, sizes, description, category, material, series, catalog_view in prepared:
         mapping = c.execute("""SELECT * FROM external_product_mappings WHERE brand_id=?
                                AND external_product_id=? AND external_sku_id=''""", (brand_id, eid)).fetchone()
         p = c.execute('SELECT * FROM products WHERE id=?', (mapping['product_id'],)).fetchone() if mapping else None
@@ -93,8 +119,8 @@ def sync_catalog(c, products, categories):
             updated += 1
         cover = images[0] if images else None
         c.execute("""UPDATE products SET name=?,price=?,description=?,category=?,category_id=?,
-                     image_url=?,cover_url=?,material=?,series=? WHERE id=?""",
-                  (name, price, description, category, category_id, cover, cover, material, series, pid))
+                     image_url=?,cover_url=?,material=?,series=?,catalog_view=? WHERE id=?""",
+                  (name, price, description, category, category_id, cover, cover, material, series, catalog_view, pid))
         c.execute('DELETE FROM product_images WHERE product_id=?', (pid,))
         c.executemany('INSERT INTO product_images(product_id,url,sort) VALUES(?,?,?)',
                       [(pid, url, i) for i, url in enumerate(images)])

@@ -474,6 +474,41 @@
 
   var LONG_WIDTH = 750;
 
+  function fitLongpicFrame(frame, holder, height) {
+    if (!holder) return;
+    var fit = function () {
+      var scale = Math.min(1, holder.clientWidth / LONG_WIDTH);
+      frame.style.width = LONG_WIDTH + 'px'; frame.style.maxWidth = 'none';
+      frame.style.transformOrigin = 'top left'; frame.style.transform = 'scale(' + scale + ')';
+      holder.style.height = Math.ceil(height * scale) + 'px';
+    };
+    fit();
+    if (window.ResizeObserver) {
+      var observer = new ResizeObserver(function () {
+        if (!frame.isConnected) { observer.disconnect(); return; }
+        fit();
+      });
+      observer.observe(holder);
+    }
+  }
+
+  function longpicRichHtml(paint) {
+    var doc = paint.frame.contentDocument;
+    if (!doc || !doc.body) return paint.html;
+    var clone = doc.body.cloneNode(true), source = doc.body.querySelectorAll('*'), target = clone.querySelectorAll('*');
+    var properties = ['display', 'color', 'background-color', 'font-family', 'font-size', 'font-weight',
+      'font-style', 'line-height', 'letter-spacing', 'text-align', 'width', 'max-width', 'height',
+      'margin', 'padding', 'border', 'border-radius', 'vertical-align', 'object-fit', 'object-position',
+      'background-image', 'background-size', 'background-position', 'position', 'left', 'right', 'top', 'bottom', 'flex', 'gap'];
+    Array.prototype.forEach.call(source, function (el, i) {
+      if (!target[i].style) return;
+      var computed = doc.defaultView.getComputedStyle(el);
+      properties.forEach(function (key) { target[i].style.setProperty(key, computed.getPropertyValue(key)); });
+    });
+    Array.prototype.slice.call(clone.querySelectorAll('style,script')).forEach(function (el) { el.remove(); });
+    return '<section style="max-width:100%">' + clone.innerHTML + '</section>';
+  }
+
   // 模型可能把占位符写成裸文本而不是 <img src="...">，两种都要能救回来
   function resolveLongpic(html, mm) {
     var t = String(html || '');
@@ -530,11 +565,14 @@
       '</style></head><body>' + hardenLongpic(html) + '</body></html>';
   }
 
-  async function paintLongpic(data, ctx, stage) {
+  async function paintLongpic(data, ctx, stage, resolver) {
     // 图片要改写成公开代理地址，先记住是哪场活动（toUrl 靠它拼）
     setMediaActivityId(ctx.activityId);
     var mm = ctx.mm;
-    var html = resolveLongpic(data.html || data.body || '', mm);
+    /* resolver：占位符 → 真实图片地址的替换函数。宣传长图用 resolveLongpic（活动媒体池）；
+       活动回顾的图片来自回顾自己的照片池（rcap_*，走 /api/club/.../recap-media 白名单），
+       复用同一套 iframe + 导出管线，只换解析器。 */
+    var html = (resolver || resolveLongpic)(data.html || data.body || '', mm);
     var usedImgs = (html.match(/<img\b/gi) || []).length;
     var dropped = (data.droppedRefs || []).length || (data.usedRefs || []).length - usedImgs;
 
@@ -573,9 +611,8 @@
     try { h = frame.contentDocument ? frame.contentDocument.body.scrollHeight : 0; } catch (e2) { h = 0; }
     frame.style.height = (h || 1200) + 'px';
     // 窄屏 CSS 把 iframe 按 .52 缩放，父容器要跟着缩高，否则下方留一大片空白
-    var scaled = window.matchMedia && window.matchMedia('(max-width:800px)').matches ? 0.52 : 1;
     var holder = stage.querySelector('.ch-long-frame');
-    if (holder && scaled !== 1) holder.style.height = Math.ceil((h || 1200) * scaled) + 'px';
+    fitLongpicFrame(frame, holder, h || 1200);
     var meta = stage.querySelector('.ch-long-meta span');
     if (meta && h) meta.textContent = '宽度 ' + LONG_WIDTH + 'px（公众号标准宽度）· 实际高度约 ' + h + 'px';
     return { html: html, usedImgs: usedImgs, dropped: dropped, frame: frame };
@@ -600,10 +637,30 @@
        而 foreignObject 光栅化时外链图片不加载 → 那个位置就是一块背景色。
        两条路都走不通才算失败。 */
   function _canvasDataUri(im) {
+    /* ★ 2026-11-04：手机直出原图动辄 4000×3000，按 naturalWidth 全尺寸 toDataURL
+       会把单张撑到 3~6MB base64；十几张一起进 SVG 时 data URL 长达几十 MB，
+       foreignObject 光栅化直接静默失败（用户实测「下载下来只有文字、照片全空」）。
+       统一缩到最长边 1800px 再编码，750px 宽成品里肉眼无损。 */
     var cv2 = document.createElement('canvas');
-    cv2.width = im.naturalWidth; cv2.height = im.naturalHeight;
-    cv2.getContext('2d').drawImage(im, 0, 0);
+    var nw = im.naturalWidth, nh = im.naturalHeight;
+    var k = Math.min(1, 1800 / Math.max(nw, nh));
+    cv2.width = Math.max(1, Math.round(nw * k));
+    cv2.height = Math.max(1, Math.round(nh * k));
+    cv2.getContext('2d').drawImage(im, 0, 0, cv2.width, cv2.height);
     return cv2.toDataURL(_INLINE_MIME, _INLINE_Q);
+  }
+  /* ★ 换过 src 之后必须等图片真正解码完，再去做「有没有内容」的自检。
+     inlineImages 以前 setAttribute('src', dataUri) 之后**立刻**算 shots，
+     此时 im 还在重新解码、naturalWidth=0 → _hasContent 全判 false →
+     _paintShots 一张都不画（这正是「下载后没有图片」的直接原因）。 */
+  function _waitDecoded(im) {
+    return new Promise(function (res) {
+      if (im.decode) { im.decode().then(function () { res(1); }, function () { res(1); }); return; }
+      if (im.complete && im.naturalWidth > 0) return res(1);
+      var t = setTimeout(function () { res(1); }, 1500);
+      im.addEventListener('load', function () { clearTimeout(t); res(1); }, { once: true });
+      im.addEventListener('error', function () { clearTimeout(t); res(1); }, { once: true });
+    });
   }
   function _fetchDataUri(url) {
     return fetch(url, { credentials: 'same-origin' }).then(function (r) {
@@ -622,7 +679,10 @@
 
   /* 「这张图本身有没有内容」：纯色底图（白底 logo、纯色分割条）不该参与
      「到底画上去了没有」的自检，否则会把正常成品判成失败、白白重画一次。
-     缩到 24×24 看灰度方差，有明暗变化的才算照片。 */
+     缩到 24×24 看灰度方差，有明暗变化的才算照片。
+     ★ 2026-11-03：判定从「只看 R 通道」改为「亮度 + 饱和度双指标」——
+       天空占大部的照片 R 通道几乎恒定（方差 <24），会被误判成纯色底图，
+       于是不参与空白自检、也不参与导出后的盖回（Safari 下这张图丢了没人管）。 */
   function _hasContent(im) {
     try {
       if (!(im.naturalWidth > 0)) return false;
@@ -631,11 +691,21 @@
       var ctx2 = cv.getContext('2d');
       ctx2.drawImage(im, 0, 0, s, s);
       var d = ctx2.getImageData(0, 0, s, s).data;
-      var n = 0, mean = 0, i, v = 0;
-      for (i = 0; i < d.length; i += 4) { mean += d[i]; n++; }
-      mean /= (n || 1);
-      for (i = 0; i < d.length; i += 4) { v += (d[i] - mean) * (d[i] - mean); }
-      return (v / (n || 1)) > 24;
+      var n = 0, mean = 0, i, v = 0, smean = 0, sv = 0;
+      for (i = 0; i < d.length; i += 4) {
+        var r = d[i], g = d[i + 1], b = d[i + 2];
+        mean += (r + g + b) / 3;
+        smean += Math.max(r, g, b) - Math.min(r, g, b);
+        n++;
+      }
+      mean /= (n || 1); smean /= (n || 1);
+      for (i = 0; i < d.length; i += 4) {
+        var r2 = d[i], g2 = d[i + 1], b2 = d[i + 2];
+        var l2 = (r2 + g2 + b2) / 3, sat2 = Math.max(r2, g2, b2) - Math.min(r2, g2, b2);
+        v += (l2 - mean) * (l2 - mean);
+        sv += (sat2 - smean) * (sat2 - smean);
+      }
+      return (v / (n || 1)) > 24 || (sv / (n || 1)) > 24;
     } catch (e) { return false; }
   }
 
@@ -653,10 +723,26 @@
             var raw = im.getAttribute('src'), uri = '';
             try { uri = _canvasDataUri(im); } catch (e) { uri = ''; }
             if (!uri) { try { uri = await _fetchDataUri(raw); } catch (e2) { uri = ''; } }
-            if (uri) im.setAttribute('src', uri); else failed++;
+            if (uri) {
+              /* ★ 2026-11-03（用户实测「Chrome 下载图里照片压扁变形」）：预览里
+                 object-fit:cover 的裁切在 foreignObject 光栅化时会被 Chrome 忽略。
+                 治本：序列化前就把每张图按「显示框尺寸」cover 裁好再换给 <img>，
+                 让成品不再依赖 object-fit。 */
+              try {
+                var rect = im.getBoundingClientRect();
+                if (rect.width > 20 && rect.height > 20) {
+                  var cropped = _coverCropDataUri(im, rect.width, rect.height);
+                  if (cropped) uri = cropped;
+                }
+              } catch (eR) { /* 量不到显示框就保留原图，退回旧行为 */ }
+              im.setAttribute('src', uri);
+            } else failed++;
           } else {
             failed++;                    // 压根没加载出来的图，也要如实计数，不许静默留白
           }
+          /* ★ src 刚换成 data URI 时图片还在重新解码，必须等它真正可绘制，
+             否则下面 shots 里的 _hasContent 会把每张照片都误判成「没内容」。 */
+          await _waitDecoded(im);
           res(1);
         };
         im.addEventListener('load', finish, { once: true });
@@ -667,22 +753,29 @@
         if (im.complete) finish();          // 已加载完的不会触发 load，得主动处理
       });
     }));
-    /* 记下每张图在长图里的位置 + 「本身有没有内容」，导出后要用它检查
-       「这张图到底画上去了没有」—— 模型放的照片整块纯色是不可能的。 */
+    /* 记下每张图在长图里的位置 + 「本身有没有内容」+ 内联后的干净 data URI，
+       导出后要用它检查「这张图到底画上去了没有」，并把没画上的直接盖回去
+       （2026-11-03：Safari foreignObject 光栅化会整批丢图，见 exportLongpicPng）。 */
     var shots = Array.prototype.slice.call(doc.images || []).map(function (im) {
       var r = im.getBoundingClientRect();
       var sx = doc.documentElement.scrollLeft || 0, sy = doc.documentElement.scrollTop || 0;
       return { x: Math.max(0, r.left + sx), y: Math.max(0, r.top + sy),
-               w: Math.round(r.width), h: Math.round(r.height), hasContent: _hasContent(im) };
+               w: Math.round(r.width), h: Math.round(r.height), hasContent: _hasContent(im),
+               uri: (im.getAttribute('src') || '') };
     });
     return { total: imgs.length, failed: failed, shots: shots };
   }
 
   async function exportLongpicPng(paint, ctx, fileBase) {
-    var frame = paint.frame;
+    /* ★ 2026-11-04：原来直接 `paint.frame`，paint 为 undefined 时 WebKit 抛
+       "undefined is not an object (evaluating 'paint.frame')"，而外层 catch 把它
+       一律说成「浏览器不允许把预览转成图片」——把真 bug 伪装成环境问题，误导排查。
+       现在先判空并抛出**可读的真实原因**，外层也照实显示。 */
+    var frame = (paint && paint.frame) || null;
+    if (!frame) throw new Error('预览还没准备好（没有可导出的预览文档），请重新生成一次再下载');
     var doc = null;
     try { doc = frame.contentDocument; } catch (e) { doc = null; }
-    if (!doc) throw new Error('预览尚未就绪');
+    if (!doc) throw new Error('预览文档还没就绪，请等预览加载完再下载');
     var W = LONG_WIDTH;
     // 高度只能在**活的预览文档**里量：离屏副本 scrollHeight 恒为 0
     var H = Math.max(doc.body.scrollHeight, doc.documentElement.scrollHeight, 1);
@@ -695,8 +788,10 @@
          左右两侧的轮播箭头）一起烤进成品 —— 长图右上角凭空多一个东西。
          离屏文档里只有长图自己的节点，SVG 不可能画到别的东西。 */
     var clean = document.implementation.createHTMLDocument('longpic-export');
-    var style = doc.querySelector('style');          // 地板样式带上，字距才不会变
-    if (style) clean.head.appendChild(style.cloneNode(true));
+    // 序列化的是 body；head 中的全部基础样式也必须进入导出内容。
+    Array.prototype.slice.call(doc.head.querySelectorAll('style')).forEach(function (style) {
+      clean.body.appendChild(style.cloneNode(true));
+    });
     clean.body.setAttribute('style', 'margin:0;padding:0;background:#fff;width:' + W + 'px');
     /* ★★ 2026-10-07 实测修掉的**第二个**真 bug（用户截图实证：「下载下来下面全是空白」）。
        原实现只克隆 `body.firstElementChild` —— 只取第一个顶层节点。
@@ -708,6 +803,20 @@
     Array.prototype.slice.call(doc.body.childNodes).forEach(function (n) {
       clean.body.appendChild(n.cloneNode(true));
     });
+    /* 回顾杂志长图：foreignObject 光栅化对内嵌 <img> 的排版不可靠（实测会把多张
+       照片错误地叠到封面区域、连白色大标题都被盖掉），十几张原图内联后 SVG 更会
+       膨胀到几十 MB、光栅化静默失败（用户实测「下载下来只有文字、照片全空」）。
+       照片本来就由 _paintShots 按 shots 的精确坐标逐张画回，SVG 层只负责文字与色块
+       —— 让 foreignObject 里的 img 不可见，避免两套渲染互相覆盖。**回顾一律生效**：
+       模型自由排版（photoOverlayOnly）与固定模板（rc-doc）两条路线都走。 */
+    if ((paint && paint.photoOverlayOnly) || /\brc-doc\b/.test(String(doc.body.className || ''))) {
+      Array.prototype.slice.call(clean.body.querySelectorAll('img')).forEach(function (im, index) {
+        var rect = doc.images[index].getBoundingClientRect();
+        im.style.setProperty('width', rect.width + 'px', 'important');
+        im.style.setProperty('height', rect.height + 'px', 'important');
+        im.setAttribute('src', _BLANK_PX);   // 保留 CSS 宽高占位，只把照片源换成透明像素
+      });
+    }
 
     /*★ 必须用 XMLSerializer，不能用 innerHTML（2026-10-07 实测踩死在这）。
        foreignObject 里由 **XML 解析器**处理，而 innerHTML 是 **HTML 序列化**：
@@ -717,8 +826,21 @@
     // HTML 里定义过的实体在 XML 里未定义，序列化后仍会以实体名出现
     inner = inner.replace(/&nbsp;/gi, ' ');
 
+    /* ★ 2026-11-04 修的导出黑底（用户实测「排版太差」附带发现）：
+       SVG 作为 <img> 加载时，foreignObject 里**没有背景**的区域会被渲染成**黑色**。
+       宣传长图一直是近黑底（--bg:#111312），所以这个毛病藏了很多年没人发现；
+       活动回顾是米白底 → 导出成品整片黑底，深色正文几乎看不见。
+       修法：SVG 里先铺一层底色矩形，底色取活文档 body 的 computed 背景（取不到就白）。 */
+    var bgColor = '#ffffff';
+    try {
+      var cs = doc.defaultView && doc.defaultView.getComputedStyle
+        ? doc.defaultView.getComputedStyle(doc.body) : null;
+      var bc = cs && cs.backgroundColor;
+      if (bc && bc !== 'transparent' && bc !== 'rgba(0, 0, 0, 0)') bgColor = bc;
+    } catch (e3) { /* 取不到就用白底 */ }
     var svg = '<?xml version="1.0" encoding="UTF-8"?>' +
       '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '">' +
+      '<rect x="0" y="0" width="' + W + '" height="' + H + '" fill="' + esc(bgColor) + '"/>' +
       '<foreignObject x="0" y="0" width="' + W + '" height="' + H + '">' + inner +
       '</foreignObject></svg>';
 
@@ -733,6 +855,24 @@
     var c = cv.getContext('2d');
     var shots = (inlineStat && inlineStat.shots) || [];
     var blanks = 0;
+    /* ★★ 2026-11-03 双浏览器病灶根治（用户实测：Safari 下载图里照片全丢只剩文字 /
+       Chrome 里照片压扁变形）：foreignObject 光栅化对内嵌图片不可靠 —— WebKit 整批丢图、
+       Chrome 忽略 object-fit。压轴保险：光栅化完成后，按 shots 记录的位置用干净 data URI
+       直接 drawImage 盖回去 —— 就算 SVG 那一层整张照片都没画出来，成品上也一定有图。
+       变形的图在 inlineImages 里已按显示框裁好，这里盖回去的就是裁好的版本。 */
+    var shotImgs = await Promise.all((shots || []).map(function (s) {
+      /* hasContent 只用于「画完自检」，不再一票否决「要不要画」：
+         手里有干净的 data URI 且尺寸够，就该画上去——画上总比整块空白强。 */
+      if (!s.uri || s.w < 30 || s.h < 30 || !/^data:/i.test(s.uri)) return null;
+      return new Promise(function (res) {
+        var im = new Image();
+        im.onload = function () { res(im); };
+        im.onerror = function () { res(null); };
+        im.src = s.uri;
+      });
+    }));
+    var textLayer = photoTextLayer(doc, W, H, shots);
+    var textImg = textLayer ? await _svgToImage(textLayer) : null;
     /* ★★ 画完自检 + 自动重画一次（2026-10-16 用户实测「下载后图片全白」）：
        drawImage 对「还没解码完的图片」不报错、也不画 —— 于是成品里那几张照片位置
        就是一块背景色，而 failed 计数是 0，用户拿不到任何提示。
@@ -741,6 +881,8 @@
       var img = await _svgToImage(svg);
       c.fillStyle = '#fff'; c.fillRect(0, 0, cv.width, cv.height);
       c.drawImage(img, 0, 0, W * 2, H * 2);
+      _paintShots(c, shots, shotImgs);            // 先盖回真图，再做空白自检
+      if (textImg) c.drawImage(textImg, 0, 0, W * 2, H * 2);
       blanks = _blankShots(c, cv, shots);
       if (!blanks) break;
       await new Promise(function (r) { setTimeout(r, 600); });   // 给内嵌图片解码留时间，再来一次
@@ -788,6 +930,96 @@
              failed: ((inlineStat && inlineStat.failed) || 0) + blanks };
   }
 
+  // 照片补画后恢复与照片相交的文字，保留封面叠字的真实层级。
+  function photoTextLayer(doc, width, height, shots) {
+    var body = doc.body.cloneNode(true), count = 0;
+    var original = Array.prototype.slice.call(doc.body.querySelectorAll('*'));
+    var cloned = Array.prototype.slice.call(body.querySelectorAll('*'));
+    original.forEach(function (el, index) {
+      var target = cloned[index];
+      if (!target || !target.style || /^(STYLE|SCRIPT)$/.test(el.tagName)) return;
+      if (!el.hasAttribute('data-photo-overlay')) target.style.setProperty('background', 'transparent', 'important');
+      target.style.setProperty('box-shadow', 'none', 'important');
+      target.style.setProperty('border-color', 'transparent', 'important');
+      target.style.setProperty('visibility', 'hidden', 'important');
+      if (el.hasAttribute('data-photo-overlay')) {
+        target.style.setProperty('visibility', 'visible', 'important'); count++;
+      }
+      if (el.tagName === 'IMG') {
+        var rect = el.getBoundingClientRect();
+        target.style.setProperty('width', rect.width + 'px', 'important');
+        target.style.setProperty('height', rect.height + 'px', 'important');
+        return;
+      }
+      var overlaps = Array.prototype.some.call(el.childNodes, function (node) {
+        if (node.nodeType !== 3 || !node.textContent.trim()) return false;
+        var range = doc.createRange(); range.selectNodeContents(node);
+        return Array.prototype.some.call(range.getClientRects(), function (r) {
+          return shots.some(function (s) {
+            return r.right > s.x && r.left < s.x + s.w && r.bottom > s.y && r.top < s.y + s.h;
+          });
+        });
+      });
+      if (overlaps) { target.style.setProperty('visibility', 'visible', 'important'); count++; }
+    });
+    if (!count) return '';
+    Array.prototype.slice.call(doc.head.querySelectorAll('style')).reverse().forEach(function (style) {
+      body.insertBefore(style.cloneNode(true), body.firstChild);
+    });
+    body.style.setProperty('background', 'transparent', 'important');
+    body.style.width = width + 'px';
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '">' +
+      '<foreignObject width="100%" height="100%">' + new XMLSerializer().serializeToString(body) +
+      '</foreignObject></svg>';
+  }
+
+  /* ---------- 导出兜底三件套（2026-11-03）----------
+     _coverCropDataUri：把已加载的 <img> 按「显示框尺寸」cover 裁剪成 data URI
+       （修 Chrome 光栅化忽略 object-fit 导致的压扁变形；比例基本一致时返回空串不裁）。
+     _drawCover：cover 数学直接把图画进成品画布的指定矩形。
+     _paintShots：把 shots 记录的照片位置全部用干净 data URI 重画一遍
+       （修 Safari/WebKit foreignObject 光栅化整批丢图 —— 只把光栅化当文字底版，
+        照片一律以画布 drawImage 为准）。 */
+  function _coverCropDataUri(im, boxW, boxH) {
+    try {
+      var nw = im.naturalWidth, nh = im.naturalHeight;
+      if (!nw || !nh || !boxW || !boxH) return '';
+      var boxA = boxW / boxH, natA = nw / nh;
+      if (Math.abs(boxA - natA) / natA < 0.02) return '';     // 比例基本一致，不裁
+      var sw = nw, sh = nh, sx = 0, sy = 0;
+      if (natA > boxA) { sw = nh * boxA; sx = (nw - sw) / 2; }
+      else { sh = nw / boxA; sy = (nh - sh) / 2; }
+      var cv = document.createElement('canvas');
+      var ow = Math.min(Math.max(Math.round(boxW * 2), 200), 2000);
+      var oh = Math.max(Math.round(ow / boxA), 200);
+      cv.width = ow; cv.height = oh;
+      var cx = cv.getContext('2d');
+      cx.drawImage(im, sx, sy, sw, sh, 0, 0, ow, oh);
+      return cv.toDataURL('image/jpeg', 0.9);
+    } catch (e) { return ''; }
+  }
+
+  function _drawCover(c, image, x, y, w, h) {
+    var iw = image.naturalWidth || image.width, ih = image.naturalHeight || image.height;
+    if (!iw || !ih || !w || !h) return false;
+    var boxA = w / h, natA = iw / ih;
+    var sw = iw, sh = ih, sx = 0, sy = 0;
+    if (natA > boxA) { sw = ih * boxA; sx = (iw - sw) / 2; }
+    else { sh = iw / boxA; sy = (ih - sh) / 2; }
+    c.drawImage(image, sx, sy, sw, sh, x, y, w, h);
+    return true;
+  }
+
+  function _paintShots(c, shots, shotImgs) {
+    (shots || []).forEach(function (s, i) {
+      var im = shotImgs && shotImgs[i];
+      /* 不再被 hasContent 一票否决：照片本来就由这里按坐标画回，
+         hasContent 交由 _blankShots 做画完自检即可。 */
+      if (!im || s.w < 30 || s.h < 30) return;
+      try { _drawCover(c, im, s.x * 2, s.y * 2, s.w * 2, s.h * 2); } catch (e) { /* 单张失败不连坐 */ }
+    });
+  }
+
   /* SVG → 可绘制的 Image。
      ★ 关键：onload 只代表 SVG 文档本身加载完，foreignObject 里那些内联图片
        **可能还在解码**；页面不可见（用户切走标签页等下载）时这个窗口会明显拉长。
@@ -813,28 +1045,41 @@
     });
   }
 
-  /* 在成品画布上按「照片原本的位置」取 5 个小块，灰度极差 ≤4 就是整块纯色 = 那张图没画上。 */
+  /* 在成品画布上按「照片原本的位置」判定是否整块没画上。
+     ★ 2026-11-03 两代误报的血泪与终版方案：
+       ① 原判据「5 个 8×8 小块的 R 通道极差 ≤4」——大片天空的照片 R 通道恒定，误报；
+       ② 改「亮度+饱和度极差」后依旧误报——8×8 太小，雾面/纯色天空的**局部**就是均匀的
+         （实测 img_04 雾山照 8×8 内极差 0~3，但整张照片灰度范围 136）；
+       ③ 终版：把成品画布上整个 shot 区域缩画到 24×24 再统计**方差**（与 _hasContent 同口径）
+         —— 真照片（哪怕低饱和雾面）缩略后亮度/饱和度方差必 >24；
+         没画上的位置 = 整块纯背景色，方差 ≈0。 */
   function _blankShots(c, cv, shots) {
-    var pts = [[0.25, 0.25], [0.75, 0.25], [0.5, 0.5], [0.25, 0.75], [0.75, 0.75]];
-    var out = 0;
+    var s2 = 24, out = 0;
     (shots || []).forEach(function (s) {
       if (!s.hasContent || s.w < 30 || s.h < 30) return;
-      var x0 = s.x + s.w * 0.18, x1 = s.x + s.w * 0.82;
-      var y0 = s.y + s.h * 0.18, y1 = s.y + s.h * 0.82;
-      var min = 255, max = 0, got = 0;
-      for (var p = 0; p < pts.length; p++) {
-        var px = Math.round((x0 + (x1 - x0) * pts[p][0]) * 2) - 4;   // ×2：成品是 2 倍图
-        var py = Math.round((y0 + (y1 - y0) * pts[p][1]) * 2) - 4;
-        if (px < 0 || py < 0 || px + 8 > cv.width || py + 8 > cv.height) continue;
-        var d = null;
-        try { d = c.getImageData(px, py, 8, 8).data; } catch (e) { return; }
-        for (var i = 0; i < d.length; i += 4) {
-          if (d[i] < min) min = d[i];
-          if (d[i] > max) max = d[i];
-          got++;
+      try {
+        var cv2 = document.createElement('canvas');
+        cv2.width = s2; cv2.height = s2;
+        var cx = cv2.getContext('2d', { willReadFrequently: true });
+        cx.drawImage(cv, s.x * 2, s.y * 2, s.w * 2, s.h * 2, 0, 0, s2, s2);
+        var d = cx.getImageData(0, 0, s2, s2).data;
+        var n = 0, mean = 0, smean = 0, i, v = 0, sv = 0;
+        for (i = 0; i < d.length; i += 4) {
+          var r = d[i], g = d[i + 1], b = d[i + 2];
+          mean += (r + g + b) / 3;
+          smean += Math.max(r, g, b) - Math.min(r, g, b);
+          n++;
         }
-      }
-      if (got && (max - min) <= 4) out++;
+        mean /= (n || 1); smean /= (n || 1);
+        for (i = 0; i < d.length; i += 4) {
+          var r2 = d[i], g2 = d[i + 1], b2 = d[i + 2];
+          var l2 = (r2 + g2 + b2) / 3, sat2 = Math.max(r2, g2, b2) - Math.min(r2, g2, b2);
+          v += (l2 - mean) * (l2 - mean);
+          sv += (sat2 - smean) * (sat2 - smean);
+        }
+        var has = (v / (n || 1)) > 24 || (sv / (n || 1)) > 24;
+        if (!has) out++;
+      } catch (e) { /* 读不到就当画上了，不误报 */ }
     });
     return out;
   }
@@ -856,21 +1101,42 @@
     // 真实活动图片：模型指定的顺序优先，再补媒体清单里其余的；去重
     var seen = {}, all = [];
     (data.imageSequence || []).forEach(function (x) {
+      var m = mm[x] || Object.keys(mm).map(function (k) { return mm[k]; }).find(function (m) { return m && m.url === x; });
+      if (x !== ctx.coverUrl && (!m || (m.kind || 'photo') !== 'photo' || m.usable === false || m.source === 'recap')) return;
       var u = toUrl(x, mm); if (u && !seen[u]) { seen[u] = 1; all.push(u); }
     });
     Object.keys(mm).forEach(function (k) {
-      var u = mm[k] && mm[k].url ? abs(mm[k].url) : '';
+      var m = mm[k];
+      if (!m || (m.kind || 'photo') !== 'photo' || m.usable === false || m.source === 'recap') return;
+      var u = m.url ? abs(mediaUrl(m.url)) : '';
       if (u && !seen[u]) { seen[u] = 1; all.push(u); }
     });
     var hero = all[0] || ctx.coverUrl || '';   // 首页海报所用的那张
     // 「其它图片」：自动裁成 3:4 当作九宫格配图；上限 11 张（首页海报 + 11 ≈ 小红书单篇 12 图）
     var photos = all.slice(1, 12);
+    /* ★ 2026-11-04 用户实锤「排得太差」：标签行里同一个话题出现两次（#icebreaker ×2）。
+       这里做三件事：① 去重（大小写无关，保留首次出现的顺序）；
+       ② 正文里已经写过的 # 话题不再进标签行（避免正文与标签行重复）；
+       ③ 标签最多 8 个 —— 小红书标签堆到 10 个以上反而像 spam。 */
+    var inBody = {};
+    String(body || '').replace(/#[^\s#，。！？、]{1,20}/g, function (m) {
+      inBody[m.slice(1).toLowerCase()] = 1; return m;
+    });
+    var seenTag = {}, tags = [];
+    (data.tags || []).forEach(function (t) {
+      var s = String(t || '').replace(/^#/, '').trim();
+      if (!s) return;
+      var k = s.toLowerCase();
+      if (seenTag[k] || inBody[k]) return;
+      seenTag[k] = 1; tags.push(s);
+    });
+    if (tags.length > 8) tags = tags.slice(0, 8);
     return {
       title: titles[0] || data.title || ctx.title,
       titleOptions: titles,
       hook: data.hook || '',
       body: body,
-      tags: (data.tags || []).map(function (t) { return String(t).replace(/^#/, ''); }),
+      tags: tags,
       heroSrc: hero,
       photos: photos
     };
@@ -1192,7 +1458,7 @@
     var img = bgUrl ? await loadImgSafe(bgUrl) : null;
     var logoImg = ctx.logoUrl ? await loadImgSafe(ctx.logoUrl) : null;
     var tone = toneFromImage(img);
-    var ACCENT = _rgb(tone.accent), INK = _rgb(tone.deep2);
+    var ACCENT = data.style === 'outdoor-minimal-v1' ? '#D8AD72' : _rgb(tone.accent), INK = _rgb(tone.deep2);
 
     /* ---- 文案：只用真实资料，缺就少画一块，不编 ---- */
     function factText(x) {
@@ -1257,15 +1523,15 @@
       size = size || 170;
       var quiet = Math.max(12, Math.round(size * 0.085));
       var side = size + quiet * 2;
-      var rad = Math.round(side * 0.22);
+      var rad = data.style === 'outdoor-minimal-v1' ? 2 : Math.round(side * 0.22);
       c.save();
-      c.shadowColor = 'rgba(0,0,0,.4)'; c.shadowBlur = 24; c.shadowOffsetY = 6;
+      c.shadowColor = 'rgba(0,0,0,.4)'; c.shadowBlur = data.style === 'outdoor-minimal-v1' ? 0 : 24; c.shadowOffsetY = 6;
       c.fillStyle = '#fff';
       rrPath(c, cx - side / 2, cy - side / 2, side, side, rad);
       c.fill();
       c.restore();
       /* 装饰点环：固定角度序列（不随机 —— 随机会一张一个样），大小/颜色疏密相间 */
-      var dotAng = [15, 55, 100, 150, 200, 235, 285, 330];
+      var dotAng = data.style === 'outdoor-minimal-v1' ? [] : [15, 55, 100, 150, 200, 235, 285, 330];
       var dotR = Math.round(side * 0.72);
       for (var di = 0; di < dotAng.length; di++) {
         var a = dotAng[di] * Math.PI / 180, dr2 = dotR + 12 + (di % 2) * 6;
@@ -1440,7 +1706,7 @@
          cosmic   极简宇宙（深空渐变 + 星点 + 极简居中白字）
          forest   暗色雾林（墨绿雾气 + 横向雾带 + 左下大标题）
          routemap 纪实路线图（牛皮纸网格 + 虚线路线 + 路点 + 纪实图版） */
-    var FAM = ['magazine', 'invite', 'cosmic', 'forest', 'routemap', 'noir', 'film'];
+    var FAM = data.style === 'outdoor-minimal-v1' ? ['film', 'routemap'] : ['magazine', 'invite', 'cosmic', 'forest', 'routemap', 'noir', 'film'];
     var ALIAS = { editor: 'magazine', pictorial: 'film', minimal: 'film', poster: 'magazine',
       invitation: 'invite', invite: 'invite', cinematic: 'invite', filmic: 'invite',
       cosmic: 'cosmic', space: 'cosmic', universe: 'cosmic', star: 'cosmic',
@@ -1448,7 +1714,7 @@
       route: 'routemap', routemap: 'routemap', map: 'routemap', documentary: 'routemap' };
     var forced = window.__posterFamily || data.posterFamily;
     if (ALIAS[forced]) forced = ALIAS[forced];
-    var family = FAM.indexOf(forced) >= 0 ? forced : FAM[_posterCycle++ % FAM.length];
+    var family = FAM.indexOf(forced) >= 0 ? forced : (data.style === 'outdoor-minimal-v1' ? 'film' : FAM[_posterCycle++ % FAM.length]);
 
     /* ═══ 版式一 magazine：画报（顶部色带 + 全幅主视觉 + 底部信息带，参考图 1/2）═══ */
     if (family === 'magazine') {
@@ -1658,40 +1924,40 @@
 
     /* ═══ 版式 routemap：纪实路线图（牛皮纸网格 + 虚线路线 + 路点）═══ */
     else if (family === 'routemap') {
-      c.fillStyle = '#efe9dc'; c.fillRect(0, 0, W, H);
-      c.strokeStyle = 'rgba(120,110,90,.16)'; c.lineWidth = 1;
-      for (var rmX = 0; rmX <= W; rmX += 60) { c.beginPath(); c.moveTo(rmX, 0); c.lineTo(rmX, H); c.stroke(); }
-      for (var rmY = 0; rmY <= H; rmY += 60) { c.beginPath(); c.moveTo(0, rmY); c.lineTo(W, rmY); c.stroke(); }
-      c.fillStyle = '#22262a'; c.fillRect(0, 0, W, 150);
-      c.textAlign = 'left';
-      c.fillStyle = 'rgba(255,255,255,.72)'; c.font = '500 22px ' + FONT;
-      c.fillText('R O U T E   D O C U M E N T A R Y   ·   路 线 纪 实', PAD, 66);
-      c.fillStyle = '#fff'; c.font = '700 46px ' + FONT;
-      c.fillText(wrap(c, headline, CW - 40)[0] || '', PAD, 118);
-      var rmPW = CW, rmPH = 520, rmPX = PAD, rmPY = 200;
-      if (img) { c.save(); drawCover.call(c, img, rmPX, rmPY, rmPW, rmPH); c.restore(); }
-      else { c.fillStyle = '#ded6c6'; c.fillRect(rmPX, rmPY, rmPW, rmPH); }
-      c.strokeStyle = 'rgba(40,44,48,.5)'; c.lineWidth = 2; c.strokeRect(rmPX, rmPY, rmPW, rmPH);
-      if (sub) {
-        c.fillStyle = '#5c574c'; c.font = '400 24px ' + FONT;
-        c.fillText(wrap(c, sub, rmPW)[0] || '', rmPX, rmPY + rmPH + 34);
-      }
-      var rmStops = points.length ? points.slice(0, 4) : ['集合出发', '路线途中', '抵达终点'];
-      var rmRY = rmPY + rmPH + 130;
-      c.strokeStyle = '#c0392b'; c.lineWidth = 3; c.setLineDash([12, 10]);
-      c.beginPath(); c.moveTo(rmPX + 30, rmRY); c.lineTo(rmPX + rmPW - 30, rmRY); c.stroke();
-      c.setLineDash([]);
-      var rmSeg = (rmPW - 60) / Math.max(rmStops.length - 1, 1);
-      c.textAlign = 'center';
-      rmStops.forEach(function (t, i) {
-        var rmDX = rmPX + 30 + rmSeg * i;
-        c.fillStyle = '#c0392b'; c.beginPath(); c.arc(rmDX, rmRY, 11, 0, Math.PI * 2); c.fill();
-        c.fillStyle = '#fff'; c.beginPath(); c.arc(rmDX, rmRY, 4.5, 0, Math.PI * 2); c.fill();
-        c.fillStyle = '#3a3630'; c.font = '600 24px ' + FONT;
-        c.fillText(String(t).length > 8 ? String(t).slice(0, 8) : String(t), rmDX, rmRY + 52);
+      drawPhotoFull();
+      c.fillStyle = 'rgba(17,30,24,.38)'; c.fillRect(0, 0, W, H);
+      var routeShade = c.createLinearGradient(0, H * .5, 0, H);
+      routeShade.addColorStop(0, 'rgba(17,30,24,0)'); routeShade.addColorStop(1, 'rgba(17,30,24,.92)');
+      c.fillStyle = routeShade; c.fillRect(0, H * .5, W, H * .5);
+      brandBlock('left', 58, 64, true);
+      c.textAlign = 'right'; c.fillStyle = '#FFFDF8'; c.font = '500 88px ' + SERIF;
+      wrap(c, headline, CW * .78).slice(0, 2).forEach(function (t, i) {
+        c.fillText(t, W - PAD, 300 + i * 108);
       });
-      c.textAlign = 'left';
-      if (logoImg) { try { c.drawImage(logoImg, PAD, H - 120, 64, 64); } catch (e2) {} }
+      if (sub) { c.font = '400 28px ' + FONT; c.fillText(lsFit(c, sub, CW * .78, 1), W - PAD, 540); }
+      var stops = (data.routeStops || []).slice(0, 4);
+      if (stops.length >= 2) {
+        c.strokeStyle = 'rgba(255,253,248,.8)'; c.lineWidth = 2; c.setLineDash([8, 12]); c.beginPath();
+        stops.forEach(function (_, i) {
+          var x = 110 + i * 720 / (stops.length - 1), y = 610 + i * 360 / (stops.length - 1);
+          if (i) c.lineTo(x, y); else c.moveTo(x, y);
+        });
+        c.stroke(); c.setLineDash([]);
+        stops.forEach(function (stop, i) {
+          var x = 110 + i * 720 / (stops.length - 1), y = 610 + i * 360 / (stops.length - 1);
+          c.fillStyle = '#FFFDF8'; c.beginPath(); c.arc(x, y, 8, 0, Math.PI * 2); c.fill();
+          c.strokeStyle = '#FFFDF8'; c.lineWidth = 1; c.beginPath(); c.arc(x, y, 16, 0, Math.PI * 2); c.stroke();
+          c.textAlign = i === stops.length - 1 ? 'right' : 'left';
+          c.font = '500 26px ' + FONT; c.fillText(lsFit(c, stop, 190, 0), x, y - 32);
+        });
+        c.textAlign = 'left'; c.font = '400 18px ' + FONT;
+        c.fillText('行程节点 · 顺序示意', PAD, 1040);
+      }
+      c.textAlign = 'left'; c.fillStyle = '#FFFDF8'; c.font = '500 54px ' + FONT;
+      c.fillText(lsFit(c, dlab, CW - 240, 1), PAD, H - 230);
+      c.font = '400 25px ' + FONT;
+      c.fillText(lsFit(c, [loc, price ? '¥' + price + ' / 人' : ''].filter(Boolean).join(' · '), CW - 240, 0), PAD, H - 162);
+      qrStamp(W - PAD - 90, H - 180, 140);
     }
 
     else if (family === 'noir') {
@@ -1934,29 +2200,73 @@
       return;
     }
 
-    // ── 活动回顾：重庆手帐风长图（不依赖活动，媒体从 data.media 解析）──
+    // ── 活动回顾：模型自由排版（主）/ 固定杂志模板（兜底）──
+    // ★ 2026-11-04 之后反转：用户不要"每次都长一个样的固定模板"，要稳定杂志风格 + 每场不同版式。
+    //   主路径 data.route==='model-html'：data.html 由模型在风格规范内自由排版，
+    //   复用宣传长图的 iframe + 导出管线（换 resolveRecapHtml 解析回顾照片池）。
+    //   回退路径：data.html 不存在（模型排版失败 / 离线）时，走固定杂志模板 paintRecap。
     if (channel === 'recap') {
-      var repaintRecap = async function () { canvases = await paintRecap(data, ctx, stage); };
+      var isModelHtml = !!(data && data.html);
+      var repaintRecap = async function () {
+        if (isModelHtml) {
+          // 回顾照片池来自 data.media（rcap_*，走俱乐部鉴权路由），不是活动媒体池
+          ctx.mm = recapMediaMap(data);
+          canvases = await paintLongpic(data, ctx, stage, resolveRecapHtml);
+        } else {
+          canvases = await paintRecap(data, ctx, stage);
+        }
+        return canvases;
+      };
       canvases = await repaintRecap();
-      btn('下载长图（750px 宽 · 2倍图）', '', async function () {
+      /* ★ 2026-11-04 导出根治：模型自由排版的回顾，照片一律交给 _paintShots 按坐标画回，
+         SVG 里只留文字与色块 —— 彻底绕开 foreignObject 内嵌大图光栅化不可靠这个老毛病。 */
+      if (isModelHtml && canvases) canvases.photoOverlayOnly = true;
+      /* 「换一版排版」入口：用同一批素材再跑一次 AI，版式重新自由组合。
+         club.js 注入 window.clubRetypesetRecap；其他端没有这个钩子就不显示。 */
+      if (window.clubRetypesetRecap) {
+        btn('换一版排版（重新生成）', 'secondary', function () {
+          window.clubRetypesetRecap({ close: close });
+        });
+      }
+      var recapDownload = btn('下载长图（750px 宽 · 2倍图）', '', async function () {
         try {
-          btn.disabled = true;
+          recapDownload.disabled = true;
           var st = await exportLongpicPng(canvases, ctx, safeName(data.title || '活动回顾'));
           if (st && st.failed > 0) {
             showAlert({ title: '长图已下载，但有照片没载进来', message: '共 ' + st.total + ' 张照片，其中 ' + st.failed + ' 张没能载入，这些位置在长图里是空白。请确认素材还在，然后再下载一次。' });
           } else { toast('长图已下载，可直接发公众号 / 朋友圈'); }
         } catch (e2) {
-          showAlert({ title: '下载失败', message: '这个浏览器不允许把预览转成图片。可在预览区按 Command+P 存成 PDF，或用系统截图。' + (e2 && e2.message ? '（' + e2.message + '）' : '') });
-        } finally { btn.disabled = false; }
+          showAlert({ title: '下载失败', message: (e2 && e2.message ? e2.message : '导出没成功。') +
+            ' 重试仍不行的话，可以先在预览区按 Command+P 存成 PDF，或用系统截图。' });
+        } finally { recapDownload.disabled = false; }
       });
-      btn('复制图文（粘贴进公众号编辑器）', 'secondary', async function () {
-        var html = recapRichHtml(data, ctx), txt = recapPlainText(data, ctx);
-        (await copyRich(html, txt)) ? toast('已复制带格式图文，去公众号编辑器粘贴即可') : showAlert({ title: '复制失败', message: '浏览器拒绝了剪贴板权限，可改用「复制纯文本」。' });
-      });
-      btn('复制纯文本', 'secondary', async function () {
-        (await copyText(recapPlainText(data, ctx))) ? toast('纯文本已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
-      });
-      note.textContent = '活动回顾：手写手帐风长图，可直接下载 PNG，或复制图文到公众号。';
+      if (isModelHtml) {
+        // 模型直出 HTML：直接拿渲染后的成品 DOM 复制（带行内样式），与宣传长图一致
+        btn('复制图文（粘贴进公众号编辑器）', 'secondary', async function () {
+          var docHtml = longpicRichHtml(canvases);
+          var txt = canvases.frame.contentDocument ? canvases.frame.contentDocument.body.innerText : '';
+          (await copyRich(docHtml, txt)) ? toast('已复制带格式图文，去公众号编辑器粘贴即可')
+            : showAlert({ title: '复制失败', message: '浏览器拒绝了剪贴板权限，可改用「复制纯文本」。' });
+        });
+        btn('复制纯文本', 'secondary', async function () {
+          var txt = canvases.frame.contentDocument ? canvases.frame.contentDocument.body.innerText : (data.title || '');
+          (await copyText(txt)) ? toast('纯文本已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
+        });
+      } else {
+        btn('复制图文（粘贴进公众号编辑器）', 'secondary', async function () {
+          (await copyRich(recapRichHtml(data, ctx), recapPlainText(data, ctx)))
+            ? toast('已复制带格式图文，去公众号编辑器粘贴即可')
+            : showAlert({ title: '复制失败', message: '浏览器拒绝了剪贴板权限，可改用「复制纯文本」。' });
+        });
+        btn('复制纯文本', 'secondary', async function () {
+          (await copyText(recapPlainText(data, ctx))) ? toast('纯文本已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
+        });
+      }
+      note.textContent = data.route === 'model-html'
+        ? '按这场活动的照片与故事自由编排，每场版式不同。'
+        : data.route === 'offline'
+          ? '演示模式：按提供的真实记录与照片整理，未调用模型。'
+          : '已用户外简约版式整理本次素材。';
       return;
     }
 
@@ -1972,9 +2282,9 @@
         return;
       }
       var paint = await paintLongpic(data, ctx, stage);
-      btn('下载长图（750px 宽 · 2倍图）', '', async function () {
+      var longpicDownload = btn('下载长图（750px 宽 · 2倍图）', '', async function () {
         try {
-          btn.disabled = true;
+          longpicDownload.disabled = true;
           var st = await exportLongpicPng(paint, ctx, safeName(ctx.title));
           /* 图片没载进来时**必须说**。原先裂图会被静默替换成透明像素，
              老板拿到一张"有些地方是白的"的成品，还以为是设计留白。 */
@@ -1986,13 +2296,14 @@
             toast('长图已下载，可直接发公众号');
           }
         } catch (e2) {
-          showAlert({ title: '下载失败', message: '这个浏览器不允许把预览转成图片。' +
-            '可以在预览区直接按 Command+P 存成 PDF，或用系统截图。' + (e2 && e2.message ? '（' + e2.message + '）' : '') });
-        } finally { btn.disabled = false; }
+          showAlert({ title: '下载失败', message: (e2 && e2.message ? e2.message : '导出没成功。') +
+            ' 重试仍不行的话，可以先在预览区按 Command+P 存成 PDF，或用系统截图。' });
+        } finally { longpicDownload.disabled = false; }
       });
       btn('复制图文（粘贴进公众号编辑器）', 'secondary', async function () {
-        var docHtml = '<div style="width:' + LONG_WIDTH + 'px;font-family:-apple-system,\'PingFang SC\',\'Microsoft YaHei\',sans-serif;">' + paint.html + '</div>';
-        var txt = doc.body ? doc.body.innerText : '';
+        var docHtml = longpicRichHtml(paint);
+        var doc = paint.frame.contentDocument;
+        var txt = doc && doc.body ? doc.body.innerText : '';
         (await copyRich(docHtml, txt)) ? toast('已复制带格式图文，去公众号编辑器粘贴即可')
           : showAlert({ title: '复制失败', message: '浏览器拒绝了剪贴板权限，可改用「复制纯文本」。' });
       });
@@ -2005,9 +2316,9 @@
       if (route === 'mock') {
         bits = '演示模式（未接入模型，仅展示版式骨架）。';
       } else if (route === 'model-html') {
-        bits = 'AI 按这场活动的气质自由排版（配色 / 版式 / 字体节奏每场不同），直接按它的成品导出。';
+        bits = '按这场活动的主题、照片与信息量自由编排，每场版式不同。';
       } else {
-        bits = '（自由排版未达标，已退回）ClubOS 固定杂志版式按本场资料渲染成 750px 长图。';
+        bits = '已用户外简约版式整理本次活动资料。';
       }
       if (paint.dropped > 0) bits += ' 有 ' + paint.dropped + ' 张配图被剔除（不是本活动的真实照片）。';
       note.textContent = bits;
@@ -2015,7 +2326,7 @@
     }
 
     if (channel === 'poster') {
-      var repaintPoster = async function () { canvases = await paintPoster(data, ctx, stage); };
+      var repaintPoster = async function () { canvases = await paintPoster(data, ctx, stage); return canvases; };
       canvases = await repaintPoster();
       btn('下载海报 PNG', '', async function () {
         await downloadCanvas(canvases[0], safeName(ctx.title) + '_海报_1080x1440.png');
@@ -2023,22 +2334,32 @@
       });
       var swapBtn = btn('换一套版式', 'secondary', async function () {
         swapBtn.disabled = true;
-        try { await repaintPoster(); toast('已换一套版式'); }
+        try {
+          if (data.style === 'outdoor-minimal-v1') data.posterFamily = canvases[0].__posterFamily === 'film' && (data.routeStops || []).length >= 2 ? 'routemap' : 'film';
+          await repaintPoster(); toast('已更新预览构图');
+        }
         finally { swapBtn.disabled = false; }
       });
       var ptxt = [data.headline || ctx.title, data.subheadline || '', (data.facts || []).join(' · '), (data.sellingPoints || []).join('\n'), data.cta || ''].filter(Boolean).join('\n');
       btn('复制海报文案', 'secondary', async function () {
         (await copyText(ptxt)) ? toast('文案已复制') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
       });
-      note.textContent = '海报用活动真实照片 + AI 文案在本地合成，三套版式随机套用（信息海报 / 画报标语 / 极简大字），' +
-        '不满意点「换一套版式」。二维码直达该活动报名页' + (ctx.status === 'published' ? '。' : '（活动发布后才能打开）。');
+      note.textContent = '真实活动照片、简约大标题与清晰日期层级；有多站线路时可切换路线构图。二维码直达活动报名页' + (ctx.status === 'published' ? '。' : '（活动发布后才能打开）。');
       return;
     }
 
     if (channel === 'xhs') {
       var xm = xhsModel(data, ctx);
       var painted = await paintXhs(xm, ctx, stage);
-      var caption = [xm.title, '', xm.hook, '', xm.body, '', xm.tags.map(function (t) { return '#' + t; }).join(' ')].filter(function (x) { return x !== undefined && x !== null; }).join('\n');
+      /* ★ 2026-11-04 排版修正（用户实锤「排得太差」）：
+         ① 段与段之间用**空行**分隔（原来单个换行 → 段落全挤在一起，截图里就是那效果）；
+         ② 模型若没按空行分段（body 里只有单个 \n），前端兜底把单个换行也升级成空行；
+         ③ 标签行只出现一次且已去重（见 xhsModel 的标签去重）。 */
+      var bodyText = String(xm.body || '').replace(/\r\n?/g, '\n');
+      if (bodyText.indexOf('\n\n') < 0) bodyText = bodyText.replace(/\n/g, '\n\n');
+      var caption = [xm.title, xm.hook, bodyText,
+        xm.tags.length ? xm.tags.map(function (t) { return '#' + t; }).join(' ') : '']
+        .filter(function (x) { return x !== undefined && x !== null && String(x).trim() !== ''; }).join('\n\n');
       btn('复制文案', '', async function () {
         (await copyText(caption)) ? toast('文案已复制，直接粘到小红书即可') : showAlert({ title: '复制失败', message: '请手动选中文字复制。' });
       });
@@ -2072,13 +2393,19 @@
     note.textContent = '复制后到公众号编辑器直接粘贴，标题/小标题/图片排版都会保留。';
   }
 
-  // ══ 活动回顾：重庆手帐风长图渲染（与长图同理走 iframe + exportLongpicPng）══
-  // 设计参考：暖米色纸感底 + 行楷大标题 + 壹/贰/叁 章节序号 + 深绿页脚（白 logo）。
-  var CN_NUM = ['零','壹','贰','叁','肆','伍','陆','柒','捌','玖','拾'];
-  var RK_CH = [
-    { c: '启程', e: 'Departure' }, { c: '途中', e: 'On the way' }, { c: '高处', e: 'Summit' },
-    { c: '花絮', e: 'Moments' }, { c: '归途', e: 'Return' }, { c: '拾遗', e: 'Leftovers' },
-    { c: '回响', e: 'Echo' }, { c: '余韵', e: 'Lingering' }, { c: '终章', e: 'Finale' }
+  // ══ 活动回顾：杂志式长图（2026-11-04 按用户提供的手工参考长图彻底重做）══
+  // 参考长图的节奏：封面满幅大图 → 极简序章 → 满幅过渡照 → 壹/贰/叁/肆 章节
+  //（巨大中文序号 + 一句短文案 + 1~3 张大图）→ 合影金句页 → 品牌绿收尾页 + 二维码。
+  // ★★ 排版由模板主导，绝不照抄模型返回的 blocks 形状。线上那份被用户批评的成品
+  //    只有「一个 lead 塞 487 字整篇小红书文案 + 一个 gallery 塞 17 张照片」，
+  //    旧模板照单全收 → 封面压长文、两屏纯文字、末尾一堵 2×2 图墙。现在无论 AI
+  //    返回什么形状，都先拆成「短句池 + 照片池」，再按固定杂志节奏重新组装。
+  var RC_NUM = ['壹','贰','叁','肆','伍','陆','柒','捌','玖','拾'];
+  var RC_CH = [
+    { c: '入山', e: 'Into the woods' }, { c: '林间', e: 'Among the trees' },
+    { c: '相见', e: 'Gathering' }, { c: '手作', e: 'By hand' },
+    { c: '静息', e: 'Stillness' }, { c: '同行', e: 'Side by side' },
+    { c: '余韵', e: 'Afterglow' }, { c: '归途', e: 'Homeward' }
   ];
   function recapMediaMap(data) {
     var m = {}; (data.media || []).forEach(function (x) { if (x && x.ref) m[x.ref] = x; }); return m;
@@ -2098,111 +2425,324 @@
     var cap = m.desc ? '<div class="rk-cap">' + esc(m.desc) + '</div>' : '';
     return '<figure class="rk-fig ' + (cls || '') + '"><img src="' + esc(u) + '" alt="' + esc(m.name || '') + '">' + cap + '</figure>';
   }
-  function recapHtml(data, mm, ctx) {
-    data = data || {};
-    var title = esc(data.title || (ctx && ctx.title) || '活动回顾');
-    var summary = esc(data.summary || '');
-    var blocks = data.blocks || [];
-    /* 变量名不能叫 head：IIFE 里已有 function head(b) 取块标题，本地同名字符串会遮蔽它，
-       blocks.forEach 里的 head(b) 会变成「把字符串当函数调用」→ TypeError: head is not a function。 */
-    var rkHead = '<div class="rk-head"><div class="rk-kicker">活动回顾 · CLUB REVIEW</div>' +
-      '<h1 class="rk-title">' + title + '</h1>' +
-      (summary ? '<p class="rk-summary">' + summary + '</p>' : '') +
-      '<div class="rk-rule"></div></div>';
-    var ci = 0;
-    var body = '<div class="rk-body">';
-    blocks.forEach(function (b) {
-      var type = (b.type || '').toLowerCase();
-      var h = esc(head(b));
-      var txt = paras(textOf(b)).map(function (p) { return '<p>' + esc(p) + '</p>'; }).join('');
-      var refs = (b.mediaRefs || []).filter(Boolean);
-      if (type === 'lead') {
-        body += '<div class="rk-lead">' + (refs.length ? recapImg(refs[0], mm, 'rk-lead-img') : '') +
-          (h ? '<h2 class="rk-h2">' + h + '</h2>' : '') + txt + '</div>';
-      } else if (type === 'media') {
-        body += '<div class="rk-media">' + (h ? '<h3 class="rk-h3">' + h + '</h3>' : '') +
-          refs.map(function (r) { return recapImg(r, mm); }).join('') + txt + '</div>';
-      } else if (type === 'gallery') {
-        body += '<div class="rk-gallery">' + (h ? '<h3 class="rk-h3">' + h + '</h3>' : '') +
-          refs.map(function (r) { return recapImg(r, mm, 'rk-grid'); }).join('') + '</div>';
-      } else if (type === 'quote') {
-        body += '<blockquote class="rk-quote">' + (h ? ('<strong>' + h + '</strong><br>') : '') + txt + '</blockquote>';
-      } else if (type === 'timeline') {
-        var items = (b.items || []).map(function (it) {
-          return '<li><span class="rk-tl-k">' + esc(it.label || '') + '</span><span class="rk-tl-v">' + esc(it.value || '') + '</span></li>';
-        }).join('');
-        body += '<div class="rk-timeline">' + (h ? '<h3 class="rk-h3">' + h + '</h3>' : '') + '<ul>' + items + '</ul>' + txt + '</div>';
-      } else if (type === 'facts') {
-        var fitems = (b.items || []).map(function (it) {
-          return '<div class="rk-fact"><div class="rk-fact-v">' + esc(it.value || '') + '</div><div class="rk-fact-l">' + esc(it.label || '') + '</div></div>';
-        }).join('');
-        body += '<div class="rk-facts">' + (h ? '<h3 class="rk-h3">' + h + '</h3>' : '') + fitems + '</div>';
-      } else if (type === 'cta') {
-        body += '<div class="rk-cta">' + (h ? '<div class="rk-cta-h">' + h + '</div>' : '') + txt + '</div>';
-      } else {
-        var ch = RK_CH[ci % RK_CH.length]; ci++;
-        var imgs = refs.map(function (r) { return recapImg(r, mm); }).join('');
-        body += '<section class="rk-chap"><div class="rk-chap-no">' + (CN_NUM[ci] || CN_NUM[CN_NUM.length - 1]) +
-          '<span class="rk-chap-en">' + ch.c + ' · ' + ch.e + '</span></div>' +
-          (h ? '<h2 class="rk-h2">' + h + '</h2>' : '') + txt + imgs + '</section>';
-      }
+  /* 回顾成品的照片池已经打进内容 JSON（data.media），不依赖活动资料。 */
+  function rcUrl(ref, mm) {
+    var m = (mm && mm[ref]) || {};
+    var raw = m.url || '';
+    if (!raw) return '';
+    return abs(recapMediaUrl(raw));
+  }
+  function rcImgTag(ref, mm) {
+    var m = (mm && mm[ref]) || {};
+    var u = rcUrl(ref, mm);
+    if (!u) return '';
+    /* alt 用 AI 图注（desc），**不要**用文件名 —— 文件名是一串哈希，
+       出现在图注位置就是用户截图里那行乱码。 */
+    return '<img src="' + esc(u) + '" alt="' + esc((m.desc || '').trim()) + '">';
+  }
+  /* 兼容旧数据：老回顾若还带模型直出的 data.html，复制图文时仍可用（长图已不走它）。 */
+  function resolveRecapHtml(html, mm) {
+    var t = String(html || '');
+    t = t.replace(/(<img\b[^>]*?src=(["']))\s*\{\{?\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}?\}\s*\2/gi,
+      function (_, pre, q, ref) {
+        var m = (mm && mm[ref]) || {};
+        var u = m.url ? abs(recapMediaUrl(m.url)) : '';
+        return u ? pre + esc(u) + q : '';
+      });
+    t = t.replace(/<img\b[^>]*>/gi, function (tag) {
+      if (/\{\{?\s*media\s*:/.test(tag)) return '';
+      return /\bsrc=("|')/i.test(tag) ? tag : '';
     });
-    body += '</div>';
-    var logo = (ctx && ctx.logoUrl) ? '<img class="rk-logo" src="' + esc(abs(ctx.logoUrl)) + '" alt="' + esc((ctx.brandName) || '') + '">' : '';
-    var foot = '<div class="rk-foot">' + logo +
-      '<div class="rk-foot-tx"><div class="rk-foot-name">' + esc((ctx && ctx.brandName) || '本俱乐部') + '</div>' +
-      ((ctx && ctx.brandSlogan) ? '<div class="rk-foot-sl">' + esc(ctx.brandSlogan) + '</div>' : '') +
-      '<div class="rk-foot-sub">活动回顾 · 由 ClubOS AI 生成</div></div></div>';
-    return rkHead + body + foot;
+    t = t.replace(/\{\{?\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}?\}/g, '');
+    t += '<style>img{max-width:100%;height:auto}[style*="display:flex"],[style*="display: flex"]{flex-wrap:wrap}</style>';
+    return t;
+  }
+
+  /* ── 短句池：把整篇渠道文案拆成「一句一页」的图上短语 ──
+     去掉话题标签、emoji、栏目标题、重复句；长句按逗号再切。
+     长图里每处最多放一句，绝不再出现整篇文案平铺两屏。 */
+  function rcCleanLine(s) {
+    var t = String(s || '');
+    t = t.replace(/[\uD83C-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF\u2B00-\u2BFF]/g, '');
+    t = t.replace(/#[^\s#]+/g, '');                 // #话题 整段去掉
+    t = t.replace(/@(?=[\u4e00-\u9fa5A-Za-z])/g, ''); // @ 保留人名，去掉符号
+    t = t.replace(/[「」"']/g, '').replace(/\s+/g, ' ').trim();
+    t = t.replace(/^[，,、：:\-—\s]+|[，,、：:\-—\s]+$/g, '');
+    return t;
+  }
+  function rcLinePool(data, mainTitle) {
+    var raw = [];
+    if (data.summary) raw.push(String(data.summary));
+    (data.blocks || []).forEach(function (b) {
+      if (head(b)) raw.push(String(head(b)));
+      if (textOf(b)) raw.push(String(textOf(b)));
+    });
+    var base = String(mainTitle || '').split(/[｜|]/)[0].replace(/活动回顾$/, '').trim();
+    var out = [], seen = {};
+    function push(s) {
+      var t = rcCleanLine(s);
+      if (!t || t.length < 6) return;
+      if (t.length > 54) {                 // 超过一行半就按逗号切开，只留前半
+        var seg = t.split(/[，,]/);
+        t = seg.slice(0, Math.max(2, Math.ceil(seg.length / 2))).join('，');
+        if (t.length > 54) t = t.slice(0, 52);
+      }
+      if (!t || t.length < 6) return;
+      if (/^(现场相册|活动回顾|精彩回顾|图文回顾|活动花絮|CLUB REVIEW)/i.test(t)) return;
+      if (base && (t === base || base.indexOf(t) >= 0 || t.indexOf(base) >= 0)) return;
+      if (/^(扫码|报名|咨询|关注|点击|长按|更多精彩)/.test(t)) return;
+      var k = t.replace(/[\s，,。.、]/g, '');
+      if (seen[k]) return;
+      seen[k] = 1; out.push(t);
+    }
+    raw.join('\n').split(/[\n\r]+|[。！？!?；;]+/).forEach(push);
+    return out;
+  }
+  /* 封面主标题断成两行（「以杉林为席，赴一场疗愈之约」→ 两行居中白字）。 */
+  function rcTitleLines(title) {
+    var t = String(title || '').split(/[｜|]/)[0].replace(/活动回顾$/, '').trim();
+    if (!t) return ['活动回顾'];
+    var parts = t.split(/[，,、\s]+/).filter(Boolean);
+    if (parts.length >= 2) {
+      var mid = Math.ceil(parts.length / 2);
+      return [parts.slice(0, mid).join('，'), parts.slice(mid).join('，')].slice(0, 2);
+    }
+    if (t.length > 11) return [t.slice(0, 10), t.slice(10)];
+    return [t];
+  }
+  /* ── 照片池：按上传顺序全部用上，绝不挤进一个「现场相册」 ──
+     ① 封面 ② 序章后的满幅过渡照 ③ 结尾合影，其余均分成 2~6 个章节。 */
+  function rcPhotoPlan(media, mm) {
+    var refs = [];
+    (media || []).forEach(function (m) {
+      if (m && m.ref && rcUrl(m.ref, mm) && refs.indexOf(m.ref) < 0) refs.push(m.ref);
+    });
+    var cover = refs.shift() || '';
+    var opener = refs.shift() || '';
+    var finale = refs.length ? refs.pop() : '';
+    var chapters = [];
+    var n = Math.max(1, Math.min(6, Math.ceil(refs.length / 2.6)));
+    for (var i = 0; i < n && refs.length; i++) {
+      var take = Math.min(3, Math.ceil(refs.length / (n - i)));
+      chapters.push(refs.splice(0, take));
+    }
+    while (refs.length) {                 // 照片特别多时，继续开新章而不是堆图墙
+      var last = chapters.length ? chapters[chapters.length - 1] : [];
+      if (last.length < 3) last.push(refs.shift());
+      else chapters.push([refs.shift()]);
+    }
+    return { cover: cover, opener: opener, finale: finale, chapters: chapters };
+  }
+  /* 图注只用 AI 写的画面描述（desc）；没有描述就完全不写图注，
+     绝不用文件名/哈希去凑（2026-11-04 用户截图里那行乱码就是这么来的）。 */
+  function rcCaption(ref, mm) {
+    var m = (mm && mm[ref]) || {};
+    var d = String(m.desc || '').trim();
+    return d ? '<figcaption class="rc-cap">' + esc(d) + '</figcaption>' : '';
+  }
+  function rcBleed(ref, mm) {
+    if (!ref || !rcUrl(ref, mm)) return '';
+    return '<figure class="rc-f-bleed">' + rcImgTag(ref, mm) + rcCaption(ref, mm) + '</figure>';
+  }
+  function rcBig(ref, mm) {
+    if (!ref || !rcUrl(ref, mm)) return '';
+    return '<figure class="rc-f-big">' + rcImgTag(ref, mm) + rcCaption(ref, mm) + '</figure>';
+  }
+  function rcDuo(refs, mm) {
+    var list = (refs || []).filter(function (r) { return r && rcUrl(r, mm); });
+    if (!list.length) return '';
+    if (list.length === 1) return rcBig(list[0], mm);
+    return '<div class="rc-duo">' + list.map(function (r) {
+      return '<figure class="rc-f-pair">' + rcImgTag(r, mm) + rcCaption(r, mm) + '</figure>';
+    }).join('') + '</div>';
+  }
+  /* 三种章节配图轮换：单张竖幅大图 / 双图并排 / 满幅出血 + 双图。 */
+  function rcPhotos(refs, mm, variant) {
+    var list = refs || [];
+    if (!list.length) return '';
+    if (variant === 2) return rcBleed(list[0], mm) + rcDuo(list.slice(1), mm);
+    if (variant === 1) return rcDuo(list.slice(0, 2), mm) + rcBig(list[2], mm);
+    return rcBig(list[0], mm) + rcDuo(list.slice(1), mm);
+  }
+  /* 收尾页二维码：父页面用本地 QR 库画好再内联成 data URI 塞进 srcdoc，
+     iframe 是 sandbox（无 allow-scripts），不能在里面现画。 */
+  async function rcQrDataUrl(ctx) {
+    try {
+      if (!window.ClubOSQR || !window.ClubOSQR.draw) return '';
+      var cv = document.createElement('canvas');
+      var link = location.origin + '/web?club_id=' + CLUB +
+        (ctx && ctx.activityId ? '&activity=' + ctx.activityId : '');
+      window.ClubOSQR.draw(cv, link);
+      return cv.width ? cv.toDataURL('image/png') : '';
+    } catch (e) { return ''; }
+  }
+  function recapHtml(data, mm, ctx, qr) {
+    data = data || {}; ctx = ctx || {}; mm = mm || {};
+    var mainTitle = String(data.title || ctx.title || '活动回顾');
+    var titleLines = rcTitleLines(mainTitle);
+    var lines = rcLinePool(data, mainTitle);
+    var plan = rcPhotoPlan(data.media || [], mm);
+    var brand = String(ctx.brandName || '').trim();
+    var metaBits = [];
+    if (ctx.date) metaBits.push(String(ctx.date));
+    if (ctx.location) metaBits.push(String(ctx.location));
+
+    // ① 封面：满幅照片 + 两行白色大标题，压暗只在上下两端，中间留给照片
+    /* ★ 封面与合影页只用文档流 + 负 margin 叠字：foreignObject 光栅化会把
+       position:absolute 的元素整批压到 (0,0)，实测导出成品封面变成三张照片叠在一起、
+       白色大标题整个消失（预览里却是好的）。绝对定位在这条导出链里不可用。 */
+    var coverTop = '<div class="rc-cover-top">' + esc(brand ? brand : 'CLUB REVIEW') + ' &nbsp;·&nbsp; ACTIVITY REVIEW</div>';
+    var coverTx = '<div class="rc-cover-tx"><div class="rc-cover-rule"></div><h1 class="rc-cover-h1">' +
+      titleLines.map(function (s) { return '<span>' + esc(s) + '</span>'; }).join('') +
+      '</h1><div class="rc-cover-sub">' + esc(metaBits.join(' · ') || '活动回顾') + '</div></div>';
+    var cover = plan.cover
+      ? '<section class="rc-cover">' + coverTop +
+        '<img class="rc-cover-img" src="' + esc(rcUrl(plan.cover, mm)) + '" alt="">' + coverTx + '</section>'
+      : '<section class="rc-cover">' + coverTop + '<div class="rc-cover-ph"></div>' + coverTx + '</section>';
+
+    // ② 序章：米白大留白，只放标题 + 最多两句短文案
+    var lead = '<section class="rc-lead"><div class="rc-rule"></div>' +
+      '<div class="rc-eyebrow">ACTIVITY REVIEW &nbsp;/&nbsp; 活动回顾</div>' +
+      '<h2 class="rc-lead-h">' + esc(String(mainTitle).split(/[｜|]/)[0]) + '</h2>' +
+      (lines[0] ? '<p class="rc-lead-p">' + esc(lines[0]) + '</p>' : '') +
+      (lines[1] ? '<p class="rc-lead-p">' + esc(lines[1]) + '</p>' : '') +
+      '</section>';
+
+    // ③ 满幅过渡照 + 细分隔条
+    var opener = plan.opener
+      ? '<figure class="rc-opener"><img src="' + esc(rcUrl(plan.opener, mm)) + '" alt=""></figure>' +
+        '<div class="rc-step">STEP 01 &nbsp;·&nbsp; ' + esc(RC_CH[0].e.toUpperCase()) + '</div>'
+      : '';
+
+    // ④ 章节页：巨大中文序号 + 章节名 + 一句短文案 + 1~3 张大图
+    var chapters = plan.chapters.map(function (refs, i) {
+      var ch = RC_CH[i % RC_CH.length];
+      var no = RC_NUM[i % RC_NUM.length];
+      var line = lines[2 + i] || '';
+      var headHtml = '<div class="rc-ch-head">' +
+        '<div class="rc-ch-no' + (i % 2 ? ' rc-ch-no--green' : '') + '">' + no + '</div>' +
+        '<div class="rc-ch-name">' + esc(ch.c) + '</div>' +
+        '<div class="rc-ch-en">' + esc(ch.e.toUpperCase()) + '</div>' +
+        (line ? '<p class="rc-ch-line">' + esc(line) + '</p>' : '') + '</div>';
+      var variant = i % 3;
+      var photos = variant === 2
+        ? rcBleed(refs[0], mm) + headHtml + rcDuo(refs.slice(1), mm)
+        : headHtml + rcPhotos(refs, mm, variant);
+      return '<section class="rc-chapter' + (i % 2 ? ' rc-chapter--alt' : '') + '">' + photos + '</section>';
+    }).join('');
+
+    // ⑤ 合影金句页
+    var shorts = lines.filter(function (s) { return s.length <= 24; });
+    var quote = shorts.length ? shorts[shorts.length - 1] : (lines.length ? lines[lines.length - 1] : '把这一天留在山野里');
+    var finale = plan.finale
+      ? '<section class="rc-finale"><img src="' + esc(rcUrl(plan.finale, mm)) + '" alt="">' +
+        '<div class="rc-finale-tx"><div class="rc-finale-rule"></div>' +
+        '<div class="rc-finale-q">' + esc(quote) + '</div>' +
+        '<div class="rc-finale-s">' + esc(brand || '活动回顾') + '</div></div></section>'
+      : '';
+
+    // ⑥ 品牌绿收尾页 + 二维码
+    var end = '<section class="rc-end">' +
+      '<div class="rc-end-mark">' + esc(brand ? brand.toUpperCase() : 'CLUB REVIEW') + '</div>' +
+      '<h2 class="rc-end-h"><span>山野不尽</span><span>我们一直在路上</span></h2>' +
+      '<div class="rc-end-rule"></div>' +
+      '<p class="rc-end-p">' + esc(brand ? '下一程，继续与 ' + brand + ' 同行' : '下一程山海，继续同行') + '</p>' +
+      (qr ? '<div class="rc-qr"><img src="' + qr + '" alt="活动二维码"></div>' +
+             '<div class="rc-qr-cap">扫码查看更多活动</div>' : '') +
+      '<div class="rc-end-foot">ACTIVITY REVIEW &nbsp;·&nbsp; ' + esc(brand || 'CLUBOS') + '</div>' +
+      '</section>';
+
+    return cover + lead + opener + chapters + finale + end;
   }
   function recapDoc(html, ctx) {
     var css = [
       '*{box-sizing:border-box}',
       'html,body{margin:0;padding:0}',
-      'body{width:' + LONG_WIDTH + 'px;color:#2e2a24;font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}',
-      '.rk-head{padding:56px 52px 0}',
-      '.rk-kicker{font-size:22px;letter-spacing:4px;color:#7a8a5e;font-family:Georgia,serif}',
-      '.rk-title{font-family:"STXingkai","Xingkai SC","KaiTi","STKaiti",cursive;font-size:66px;line-height:1.18;margin:14px 0 18px;color:#2e2a24;font-weight:400}',
-      '.rk-summary{font-size:27px;line-height:1.7;color:#5b554a;margin:0 0 22px;font-family:Georgia,"Songti SC",serif}',
-      '.rk-rule{height:2px;background:linear-gradient(90deg,#9aa872,#e7e0cc);margin:6px 0 8px}',
-      '.rk-body{padding:18px 52px 0}',
-      '.rk-lead{margin:0 0 30px}',
-      '.rk-lead-img{margin:0 0 22px}',
-      '.rk-h2{font-family:Georgia,"Songti SC",serif;font-size:38px;line-height:1.3;margin:0 0 14px;color:#33302a}',
-      '.rk-h3{font-family:Georgia,"Songti SC",serif;font-size:30px;margin:0 0 12px;color:#3a362e}',
-      '.rk-lead p,.rk-chap p,.rk-media p,.rk-timeline p{font-size:26px;line-height:1.85;color:#413d35;margin:0 0 16px}',
-      '.rk-fig{margin:0 0 20px;background:#fff;padding:12px 12px 14px;border:1px solid #ddd5c0;box-shadow:0 6px 16px rgba(80,70,40,.12);transform:rotate(-.6deg)}',
-      '.rk-fig img{width:100%;display:block}',
-      '.rk-cap{font-size:21px;color:#7a7264;font-style:italic;margin-top:8px;text-align:center;font-family:Georgia,"Songti SC",serif}',
-      '.rk-media{margin:0 0 30px}',
-      '.rk-gallery{margin:0 0 30px}',
-      '.rk-gallery .rk-grid{display:inline-block;width:46%;margin:1.5%;vertical-align:top;transform:rotate(.5deg)}',
-      '.rk-chap{margin:0 0 34px;padding-top:18px;border-top:1px dashed #c9bfa3}',
-      '.rk-chap-no{font-family:Georgia,serif;font-size:46px;color:#9aa872;line-height:1;margin-bottom:6px}',
-      '.rk-chap-en{font-size:20px;letter-spacing:2px;color:#9aa872;margin-left:14px;font-family:Georgia,serif}',
-      '.rk-quote{margin:0 0 30px;padding:22px 26px;background:#e9e2cd;border-left:6px solid #9aa872;font-size:27px;line-height:1.7;color:#4a463c;font-family:Georgia,"Songti SC",serif}',
-      '.rk-timeline{margin:0 0 30px}',
-      '.rk-timeline ul{list-style:none;margin:0;padding:0}',
-      '.rk-timeline li{display:flex;justify-content:space-between;padding:12px 4px;border-bottom:1px solid #ddd5c0;font-size:25px}',
-      '.rk-tl-k{color:#7a7264}.rk-tl-v{color:#2e2a24;font-weight:600}',
-      '.rk-facts{display:flex;flex-wrap:wrap;margin:0 0 30px}',
-      '.rk-fact{flex:1 1 40%;margin:8px;background:#e9e2cd;border:1px solid #ddd5c0;border-radius:8px;padding:18px;text-align:center}',
-      '.rk-fact-v{font-family:Georgia,serif;font-size:34px;color:#9aa872}',
-      '.rk-fact-l{font-size:21px;color:#6b6457;margin-top:4px}',
-      '.rk-cta{margin:0 0 20px;font-size:26px;color:#5b554a;text-align:center;font-family:Georgia,"Songti SC",serif}',
-      '.rk-foot{background:#274033;color:#f4efe2;padding:46px 52px;margin-top:46px;display:flex;align-items:center;gap:24px}',
-      '.rk-logo{max-height:84px;max-width:160px;background:#fff;border-radius:8px;padding:8px}',
-      '.rk-foot-name{font-size:32px;font-weight:600}',
-      '.rk-foot-sl{font-size:22px;opacity:.85;margin-top:4px}',
-      '.rk-foot-sub{font-size:19px;opacity:.7;margin-top:10px;letter-spacing:1px}'
+      'body{width:750px;background:#F7F5EF;color:#2B2A26;' +
+        'font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased}',
+      'img{display:block;max-width:100%}',
+      'figure{margin:0}',
+      'h1,h2,p{margin:0}',
+      /* —— ① 封面 —— */
+      '.rc-cover{background:#F7F5EF;overflow:hidden}',
+      '.rc-cover-top{height:76px;line-height:76px;text-align:center;background:#1E4A43;color:rgba(255,255,255,.94);' +
+        'font-size:17px;letter-spacing:7px;font-family:Georgia,serif}',
+      '.rc-cover-img{width:750px;height:640px;object-fit:cover;display:block;max-width:none}',
+      '.rc-cover-ph{width:750px;height:640px;background:linear-gradient(160deg,#22564C,#12332E)}',
+      '.rc-cover-rule,.rc-finale-rule{width:64px;height:3px;background:#C8A86A;margin:0 auto 26px}',
+      /* ★ 标题独立成深色块，不压在照片上：exportLongpicPng 最后会按显示框把照片
+         逐张盖回画布，任何叠在照片上的文字都会被照片盖掉（实测封面白字整段消失）。 */
+      '.rc-cover-tx{height:360px;padding-top:52px;text-align:center;color:#FFFDF7;background:#1E4A43}',
+      '.rc-cover-h1{font-family:Georgia,"Songti SC","STSong","Noto Serif SC",serif;font-size:70px;line-height:1.34;' +
+        'font-weight:600;letter-spacing:4px;text-shadow:0 4px 30px rgba(0,0,0,.5)}',
+      '.rc-cover-h1 span{display:block;white-space:nowrap}',
+      '.rc-cover-sub{margin-top:34px;font-size:19px;letter-spacing:5px;color:rgba(255,253,247,.86)}',
+      /* —— ② 序章 —— */
+      '.rc-lead{background:#F7F5EF;padding:96px 66px 104px}',
+      '.rc-rule{width:64px;height:4px;background:#B99052;margin-bottom:34px}',
+      '.rc-eyebrow{font-size:16px;letter-spacing:5px;color:#9A8B70;font-family:Georgia,serif;margin-bottom:26px}',
+      '.rc-lead-h{font-family:Georgia,"Songti SC","STSong",serif;font-size:47px;line-height:1.42;' +
+        'font-weight:600;color:#23221E;margin-bottom:46px}',
+      '.rc-lead-p{font-family:Georgia,"Songti SC","STSong",serif;font-size:25px;line-height:2.05;' +
+        'color:#4A463E;margin-bottom:22px}',
+      /* —— ③ 满幅过渡照 —— */
+      '.rc-opener{height:640px;overflow:hidden;background:#E5E1D6}',
+      '.rc-opener img{width:750px;height:640px;object-fit:cover;max-width:none}',
+      '.rc-step{height:104px;line-height:104px;text-align:center;background:#F7F5EF;color:#9A8B70;' +
+        'font-size:16px;letter-spacing:6px;font-family:Georgia,serif}',
+      /* —— ④ 章节页 —— */
+      '.rc-chapter{background:#F7F5EF;padding:76px 0 92px}',
+      '.rc-chapter--alt{background:#E9F0E9}',
+      '.rc-ch-head{padding:0 66px}',
+      '.rc-ch-no{font-family:Georgia,"Songti SC","STSong",serif;font-size:132px;line-height:.9;' +
+        'color:#C4654A;margin-bottom:22px;font-weight:600}',
+      '.rc-ch-no--green{color:#2E7D6B}',
+      '.rc-ch-name{font-family:Georgia,"Songti SC","STSong",serif;font-size:43px;line-height:1.35;' +
+        'font-weight:600;color:#23221E;letter-spacing:2px}',
+      '.rc-ch-en{font-size:16px;letter-spacing:5px;color:#9A8B70;font-family:Georgia,serif;margin-top:10px}',
+      '.rc-ch-line{font-family:Georgia,"Songti SC","STSong",serif;font-size:25px;line-height:2.0;' +
+        'color:#4A463E;margin-top:30px;max-width:560px}',
+      '.rc-f-big{margin:58px 56px 0;overflow:hidden;border-radius:10px;background:#E5E1D6}',
+      '.rc-f-big img{width:638px;height:790px;object-fit:cover;max-width:none}',
+      '.rc-f-bleed{margin:0 0 58px;overflow:hidden;background:#E5E1D6}',
+      '.rc-f-bleed img{width:750px;height:620px;object-fit:cover;max-width:none}',
+      '.rc-chapter .rc-f-bleed + .rc-ch-head{padding-top:0}',
+      '.rc-duo{display:flex;flex-wrap:wrap;gap:16px;margin:22px 56px 0;padding:0}',
+      '.rc-f-pair{flex:0 0 calc(50% - 8px);min-width:0;overflow:hidden;border-radius:10px;background:#E5E1D6}',
+      '.rc-f-pair img{width:100%;height:430px;object-fit:cover}',
+      '.rc-f-big + .rc-duo,.rc-f-bleed + .rc-duo{margin-top:16px}',
+      '.rc-cap{font-size:17px;line-height:1.6;color:#7D7669;padding:12px 4px 0;font-family:Georgia,"Songti SC",serif}',
+      /* —— ⑤ 合影金句页 —— */
+      '.rc-finale{overflow:hidden;background:#17332E}',
+      '.rc-finale>img{width:750px;height:620px;object-fit:cover;display:block;max-width:none}',
+      '.rc-finale-tx{height:280px;padding-top:52px;text-align:center;color:#FFFDF7;background:#17332E}',
+      '.rc-finale-q{font-family:Georgia,"Songti SC","STSong",serif;font-size:49px;line-height:1.5;' +
+        'font-weight:600;letter-spacing:3px;text-shadow:0 3px 22px rgba(0,0,0,.55)}',
+      '.rc-finale-s{margin-top:26px;font-size:18px;letter-spacing:6px;color:rgba(255,253,247,.8)}',
+      /* —— ⑥ 品牌绿收尾 —— */
+      '.rc-end{background:#2E8B7A;color:#FFFDF7;text-align:center;padding:116px 66px 92px}',
+      '.rc-end-mark{font-size:16px;letter-spacing:7px;font-family:Georgia,serif;color:rgba(255,255,255,.78)}',
+      '.rc-end-h{font-family:Georgia,"Songti SC","STSong",serif;font-size:52px;line-height:1.6;' +
+        'font-weight:600;letter-spacing:4px;margin:52px 0 0}',
+      '.rc-end-h span{display:block}',
+      '.rc-end-rule{width:56px;height:2px;background:rgba(255,255,255,.6);margin:44px auto 34px}',
+      '.rc-end-p{font-size:22px;line-height:1.9;color:rgba(255,255,255,.9);font-family:Georgia,"Songti SC",serif}',
+      '.rc-qr{width:264px;height:264px;background:#fff;border-radius:14px;margin:62px auto 0;padding:22px}',
+      '.rc-qr img{width:220px;height:220px}',
+      '.rc-qr-cap{font-size:18px;letter-spacing:3px;color:rgba(255,255,255,.86);margin-top:22px}',
+      '.rc-end-foot{font-size:15px;letter-spacing:5px;color:rgba(255,255,255,.66);margin-top:84px;font-family:Georgia,serif}'
     ].join('');
-    var bg = '#efe9d8';
-    var bgimg = 'radial-gradient(circle at 18% 12%,rgba(120,140,90,.10),transparent 42%),radial-gradient(circle at 86% 82%,rgba(150,120,70,.10),transparent 46%)';
-    return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"><style>body{background:' + bg + ';background-image:' + bgimg + '}' + css + '</style></head><body>' + hardenLongpic(html) + '</body></html>';
+    /* ★★ 2026-11-04 导出实锤：exportLongpicPng 用 XMLSerializer 只序列化 clean.body，
+       head 里的 <style> 根本进不了 foreignObject —— 模型直出 HTML 用行内样式所以一直没暴露，
+       而本模板是类名 CSS，导出成品就只剩一堆原尺寸照片、文字与色块全丢。
+       把 <style> 放进 body 的第一个子节点，序列化时才会跟着进 SVG 并生效。 */
+    return '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8"></head><body class="rc-doc">' +
+      '<style>body{background:#F7F5EF}' + css + '</style>' + hardenLongpic(html) + '</body></html>';
   }
   async function paintRecap(data, ctx, stage) {
     var mm = recapMediaMap(data);
-    var html = recapHtml(data, mm, ctx);
+    var qr = await rcQrDataUrl(ctx);
+    var html = recapHtml(data, mm, ctx, qr);
     stage.innerHTML = '<div class="ch-long-wrap"><div class="ch-long-frame"><iframe id="chRecapFrame" title="活动回顾预览" sandbox="allow-same-origin" referrerpolicy="no-referrer"></iframe></div><div class="ch-long-meta"><span>正在排版…</span></div></div>';
     var frame = stage.querySelector('#chRecapFrame');
     frame.srcdoc = recapDoc(html, ctx);
@@ -2228,11 +2768,10 @@
     var h = 0;
     try { h = frame.contentDocument ? frame.contentDocument.body.scrollHeight : 0; } catch (e2) { h = 0; }
     frame.style.height = (h || 1200) + 'px';
-    var scaled = window.matchMedia && window.matchMedia('(max-width:800px)').matches ? 0.52 : 1;
     var holder = stage.querySelector('.ch-long-frame');
-    if (holder && scaled !== 1) holder.style.height = Math.ceil((h || 1200) * scaled) + 'px';
+    fitLongpicFrame(frame, holder, h || 1200);
     var meta = stage.querySelector('.ch-long-meta span');
-    if (meta && h) meta.textContent = '宽度 ' + LONG_WIDTH + 'px（手帐风长图）· 实际高度约 ' + h + 'px';
+    if (meta && h) meta.textContent = '宽度 ' + LONG_WIDTH + 'px（杂志式长图）· 实际高度约 ' + h + 'px';
     return { html: html, frame: frame };
   }
   function recapRichHtml(data, ctx) {

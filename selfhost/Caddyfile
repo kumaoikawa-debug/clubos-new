@@ -1,0 +1,8 @@
+# Caddy 自动 HTTPS 反向代理
+# DOMAIN 从同目录 .env 注入（Caddy 读取 compose 挂载的 .env？不会自动读——需在运行时通过环境变量传入）
+# 这里直接用环境变量占位，compose 已把 .env 传给 caddy 服务（需补 environment 映射，或在此写死域名）。
+# 简单做法：把下面的 {$DOMAIN} 换成你的真实域名，例如 topoutdoor.cn
+{$DOMAIN:topoutdoor.cn} {
+    encode gzip
+    reverse_proxy clubos:8000
+}

@@ -1,9 +1,14 @@
 from __future__ import annotations
-import json,re,hashlib
+import json,re,hashlib,logging
 from pathlib import Path
 from typing import Any
+log = logging.getLogger(__name__)
 from ai_gateway import generate_json, record_mock_usage, GatewayResponse
 from image_caption import caption_media, caption_lines
+# ★ 2026-11-04：回顾的「模型直出 HTML」也要过一遍白名单清洗（脚本/事件属性/js: 全部剥掉）。
+#   longpic 与 longpic_template 都不 import ai_engine → 这里反向引用不会形成循环导入。
+from longpic import sanitize_html
+from outdoor_longpic import STYLE_PROMPT, apply_style, photos_valid, content_text, recap_fallback_html
 from cost_guard import (scrub_cost_text, scrub_cost_data, sanitize_for_frontend, is_cost_row,
                         is_cost_key, has_cost_context, master_has_cost_evidence)
 
@@ -1645,6 +1650,15 @@ _PROMOHTML_BASE = """
   可以有且只有一个 `<style>` 放最前面，用 CSS 变量声明配色（`--bg / --ink / --muted / --accent`）；
   字体只用系统字体栈；不要 @import、不要 CSS `url()` 引外图；图片一律写 `<img src="{media:ref}">`；
   底色必须写在 `--bg` 变量上（前端会把它提升为页面底色），不要只给 body 上色。
+- **节奏要像杂志不像模板（2026-11-03 用户反馈「要多学习一些排版方式，简约户外风」）**：
+  相邻区块的**形态**必须变化——满幅图章节头、大数字页（80~120px 宋体数字+留白）、
+  双图并排对照、发丝线参数行（label：value 逐行 1px 分隔）、引言块（竖线+大字引文），
+  全篇至少交替出现其中 **3 种**；禁止连续三节都是「标题+段落+单图」同一个模子。
+- **费用只说一遍（2026-11-03 用户实测：promoHtml 里又开一个「费用与服务」章节，
+  与页面下方「费用说明 PRICE」结构化区重复出现）**：promoHtml **禁止**出现
+  「费用包含 / 费用不含 / 费用与服务 / 费用说明」类章节、**禁止**罗列费用清单、
+  **禁止**出现 ¥ 金额或「xx 元 / 人」——费用与价格由页面下方结构化的「费用说明」区完整呈现，
+  promoHtml 只做体验与内容种草，最多用一句话带过「费用明细见下方费用说明」。
 - **事实保真铁律同样适用**：不编地名 / 数字 / 资质；时刻必须真实（资料有确切 HH:MM 才写，
   否则一个钟点都不写）；成本 / 毛利 / 内部信息一律不进。
 - 若资料太薄（可用照片 <3 且正文事实少），promoHtml 才允许留空字符串 ""。
@@ -2618,6 +2632,9 @@ def normalize_poster(data:dict[str,Any],fallback_title:str='')->dict[str,Any]:
     out['sellingPoints']=pts[:5]
     out['cta']=cta
     out['preferredMediaRefs']=refs[:3]
+    out['posterFamily']=data.get('posterFamily') if data.get('posterFamily') in ('film','routemap') else 'film'
+    out['routeStops']=[x.strip() for x in (data.get('routeStops') or []) if isinstance(x,str) and x.strip()][:4]
+    out['style']='outdoor-minimal-v1'
     return out
 
 
@@ -2661,11 +2678,21 @@ async def generate_channel(club_id:int,activity_master:dict[str,Any],detail:dict
   编造资料里没有的日期 / 价格 / 名额 / 资质 / 用户评价。
 - ★ 上面**没有给你任何句式范例**，这是故意的：实测任何例句都会被原样搬进成品。句子自己写。""",
       'xhs':"""xhs（小红书图文）：titleOptions[]（3 个，≤20 字，带钩子）、hook（首句抓人）、
-body（真实口语，可换行，带 emoji 但要克制）、tags[]（6~10 个）、imageSequence[]（真实照片 ref 或 url）。
+body（真实口语正文）、tags[]（6~8 个）、imageSequence[]（真实照片 ref 或 url）。
+排版硬要求（2026-11-04 用户实锤「排得太差了」）：
+- body 按段落写，**段落之间用一个空行分隔**（\\n\\n），每段 1~3 句；不要写成一整坨；
+- 第一段必须是**完整的一句**，不许以半句开头（"呼吸，身心缓缓入静；"这种没头没尾的写法不行）；
+- tags **不得重复**；正文里已经出现过的 # 话题，**不要再写进 tags**；
+- 只写资料里有的地名 / 日期 / 品牌 / 装备名，资料没有的一个字都不许补；
+- 不要写成公文或硬广；少用"疗愈""感恩相逢""身心缓缓入静"这类空话，要写具体的动作与场景。
 不要写成公文或硬广。""",
       'poster':"""poster（活动招募海报）：headline（≤14 字，一句就能立住）、subheadline、
 facts[]（时间 / 地点 / 价格 / 人数，只写真实值）、sellingPoints[]（3~5 条，每条带具体细节）、
-cta、preferredMediaRefs[]（真实照片 ref）。""",
+cta、preferredMediaRefs[]（真实照片 ref）。
+视觉固定为户外简约摄影海报：整幅真实自然影像、宋体主标题、白色文字、克制土金点缀、清楚的日期层级。
+posterFamily 由本场资料决定：film=影像留白与大标题；routemap=照片上的简明路线节点。
+多站线路可选 routemap，routeStops 给 2~4 个资料中真实出现、按行程顺序排列的短地名；
+其余选 film。不要虚构线路节点；不抄参考图的活动名、日期、赠品、品牌和口号。""",
       'recap':"""recap（活动回顾）：只有提供真实 actualActivityData / 现场素材时才能叙述实际发生事件；
 资料不足时明确返回 needsActualData=true，绝不编造。""",
     }
@@ -2683,7 +2710,7 @@ cta、preferredMediaRefs[]（真实照片 ref）。""",
         'wechat':'{"title":"","summary":"","blocks":[{"type":"lead|narrative|statement|media|gallery|facts|include|timeline|quote|cta","headline":"","body":"","mediaRefs":[],"items":[{"label":"","value":""}],"groups":[{"name":"","items":[""]}]}]}',
         'recap':'{"title":"","summary":"","blocks":[{"type":"lead|narrative|statement|media|gallery|facts|include|timeline|quote|cta","headline":"","body":"","mediaRefs":[],"items":[{"label":"","value":""}],"groups":[{"name":"","items":[""]}]}]}',
         'xhs':'{"titleOptions":["","",""],"hook":"","body":"","tags":[],"imageSequence":[]}',
-        'poster':'{"headline":"","subheadline":"","facts":[],"sellingPoints":[],"cta":"","preferredMediaRefs":[]}',
+        'poster':'{"headline":"","subheadline":"","facts":[],"sellingPoints":[],"cta":"","preferredMediaRefs":[],"posterFamily":"film|routemap","routeStops":[]}',
     }
     structure_notes={
         'wechat':'正文**必须全部放进 blocks 数组**。不要自作主张换成 lead / narrative / facts / closing 这类顶层键——前端只读 blocks，形状一变，整篇内容就会渲染成空白页。include 块必须带 groups 数组（每组 {"name":组名,"items":["短条目",...]}），绝不把费用包含写成一段 value 长文。',
@@ -2717,7 +2744,11 @@ Activity Master（事实锚点）：{json.dumps(activity_master,ensure_ascii=Fal
         data=gw.data or {}
         # 模型自创结构（lead/narrative/facts/closing）时把内容救回 blocks，别让前端渲染空白
         if channel in ('wechat','recap'): data=normalize_channel_blocks(data)
-        elif channel=='poster': data=normalize_poster(data,str(activity_master.get('title') or ''))
+        elif channel=='poster':
+            data=normalize_poster(data,str(activity_master.get('title') or ''))
+            facts_text=source_text+'\n'+json.dumps(activity_master,ensure_ascii=False)
+            data['routeStops']=[x for x in data['routeStops'] if x in facts_text]
+            if len(data['routeStops'])<2: data['posterFamily']='film'
         if cover_url: data['coverUrl']=cover_url
         if isinstance(data.get('blocks'),list):
             # ① 照抄闸门：与原文连续重合超限的段落交回模型定向重写一次（详见 source_echo_blocks 注释）
@@ -2773,6 +2804,7 @@ Activity Master（事实锚点）：{json.dumps(activity_master,ensure_ascii=Fal
               'facts':_facts[:4],'sellingPoints':_pts[:4],'cta':'扫码报名',
               'preferredMediaRefs':([cover_url] if cover_url else [])+gallery[:1],'coverUrl':cover_url}
     else:data={'needsActualData':True,'title':f'{title}｜活动回顾','message':'请上传现场照片或领队记录后再生成真实活动回顾。'}
+    if channel=='poster': data=normalize_poster(data,title)
     return data,record_mock_usage(club_id,channel,prompt,data)
 
 
@@ -2790,10 +2822,177 @@ _RECAP_BRIEF = """recap（活动回顾）：这场活动**已经结束**，写�
 - 结构：title（≤26 字，像回顾不像广告）→ summary → blocks[]
   （lead + 3~6 节 narrative/media + gallery 收照片 + 轻收尾）。
 - mediaRefs 只允许引用给定清单里的现场照片 ref（rcap_*），一节 1~3 张，
-  全文照片覆盖不低于 60%，别把所有图堆到文末。"""
+  全文照片覆盖不低于 60%，别把所有图堆到文末。
+- ★ 长图排版契约（2026-11-04）：照片为主、图文交替的杂志式版面；
+  每个 narrative/media 块的 body 写 **1~3 句**（合计 40~120 字）的现场叙述，
+  有细节就展开、没细节才收短，别通篇一句一段，也别整段压在一处；
+  话题标签（#…）和 @ 账号统一放最后一个块，别混进场景描写里。
+  宁可多分几节，也不要把整篇渠道文案塞进一个 lead 块 —— 那样长图会变成两屏纯文字。"""
 
 
-async def generate_recap(club_id:int,master:dict[str,Any],note:str,photos:list[dict[str,Any]]):
+_RECAP_HTML_SYSTEM = """你是户外俱乐部的活动回顾主编，也是一位做杂志跨页的版式设计师。
+写已发生的事，不写招募广告。你手里只有领队的现场记录与照片清单：
+要像带过这场活动的领队，把真实的人、动作、天气、瞬间写成有温度的现场记录，
+再按这一场的照片横竖比与故事重新组织版面——配色、深浅底、章节顺序都由你决定，
+不是套一套固定样式。只输出 JSON，不要解释。""" + STYLE_PROMPT
+
+_RECAP_HTML_PROMPT = """## 本次版式指令
+{layout_directive}
+
+## 产出
+JSON 两个字段：{"title":"成品标题","html":"750px 宽 HTML 片段"}。
+可带一个 style 块控制本次构图，不要 html/head/body、外部字体、@import 或 CSS url()。
+照片必须写成 img src="{{media:rcap_01}}" 这样的占位符，不写真实地址。
+照片只能引用清单中的 ref，每张恰好一次，全部照片都要编排进成品。
+照片多时选择三种以上构图，相邻章节不许同构；少图或无图时据实精简，禁止为凑章节增加情节。
+标题要**重新拟一句**贴合本场现场的短句，不许直接照抄活动名或「活动回顾（内部用）」。
+若封面有照片叠字，叠字容器标记 data-photo-overlay，其余正文放在文档流中。
+
+## 唯一事实来源
+活动信息：
+{facts}
+现场照片清单（描述只帮助选图，不抄成照片说明书）：
+{media_lines}
+老板/领队的现场记录：
+{note}
+
+## 内容边界
+- 有主语、有动作，像领队写给同行者的真实记录。根据记录选择短句或简短段落，不强迫每节同形。
+- 人数、日期、时刻、路线、对话、天气、感受，只能来自所提供的资料；缺少就不写。
+- 只有照片时做客观记录，不推断人物身份、地点、感受或未被记录的经历。
+- 不写价格、费用、供应商、内部流程；不写招募、报名、优惠和赠品话术。
+- 用轻收束结束，不编品牌口号，不加二维码与联系方式。
+- 专名和品牌保留原写法，不擅自翻译或改名；不搬用参考图中的文字。
+篇幅按「照片段落」自然长出来：把成品分成 6~10 个叙事段落，每段 2~4 句（合计 60~120 字），
+照片旁的现场记录单独成句、别只写图注；现场记录足够丰富时全篇合计 550~800 字。
+事实不足时据实精简，禁止凑字编造，也不要为凑字数把同一句话换个说法重复一遍。
+
+## 文案铁律（用户明确反馈过「文案很 low」，务必守）
+- 写人的活动回顾，不写照片说明书：不要罗列「谁穿什么、画面里有什么、可见什么」；
+  素材里的画面提示只是帮你安排版面，**绝不许抄进成品**；要写人做了什么、当时什么气氛。
+- 具体胜过空泛：优先用素材里真实的人名、地名、数字、动作、天气、瞬间；写不出就空着，
+  绝不靠形容词和感慨填空，也不写换个活动还能原样照搬的套话。
+- 每段都要有事发生，抒情最多一句收尾，不做主体；不要照搬素材原句（连续重合别超过 12 字）。
+- **纯中文写作**：素材里夹的英文单词翻成中文，标题与正文都不要出现半英半中。
+- 语气像领队或老朋友在朋友圈发的真实记录：有温度、有现场感，可以糙、可以幽默，别端着。
+- **禁止乱码与重复字**：不许出现「艺宁宁宁宁」这类连续重复 3 次以上的汉字或人名，
+  专名只写一次并照资料原样；写完后自己通读一遍再输出。
+- **画面提示只用于选图和排版**：清单里「这张拍了什么」是给你判断构图的，
+  「谁穿什么、画面里可见什么」一律不许写进正文、图注或小标题。
+严格 JSON，不要 Markdown 或解释。"""
+
+_RECAP_OPENERS = [
+    '一整幅满幅照片直接开篇，标题放在照片下方的独立米白块里',
+    '深墨绿整幅色块开篇，衬线大标题 + 一小段题记，第二屏才出现第一张照片',
+    '米白大留白题记页开篇，竖排小标题偏置，照片从第三屏才进场',
+    '双图 48% 并排开篇，一大一小错落，标题压在下方的米白独立块',
+]
+_RECAP_RHYTHMS = [
+    '以「通栏大图 + 成段叙事」交替推进，段落左右偏置方向逐节互换',
+    '以「错落多图页」为主节奏，每两页插一页深墨绿纯文字金句页',
+    '以「题记—长叙事—事实页—多图」的舒缓节奏推进，留白特别大',
+    '以「竖长图配横图」的咬合版式为主，文字块窄栏偏置到一侧',
+]
+_RECAP_ENDINGS = [
+    '深墨绿整幅一句话收束 + 俱乐部名',
+    '米白大留白只留一句短收尾，不再配图',
+    '最后一张满幅照片收尾，下面一小行轻收束',
+    '发丝线分隔的真实数字行收尾，配一张小图',
+]
+def _layout_directive(seed:str)->str:
+    """「换一版排版」时给出明确的开篇/节奏/收尾指令，避免重跑出同一套结构。"""
+    if not seed:
+        return ('按这场活动的照片与故事自由挑一套结构；开篇、节奏、收尾不要沿用上一次的套路，'
+                '严禁套「封面→题记→图文→图文→金句→结尾」这个固定顺序。')
+    n=int(hashlib.sha1(str(seed).encode()).hexdigest()[:8],16)
+    return ('本次是「换一版排版」，版式编号 '+str(seed)+'。请**换一套结构**，明确避开常见杂志模板：\n'
+            '- 开篇：'+_RECAP_OPENERS[n%4]+'；\n'
+            '- 主体节奏：'+_RECAP_RHYTHMS[(n//4)%4]+'；\n'
+            '- 收尾：'+_RECAP_ENDINGS[(n//16)%4]+'。\n'
+            '不要复用「封面→题记→图文→图文→金句→结尾」这个顺序，也不要出现巨大的壹贰叁序号。')
+
+def _ensure_all_photos(html:str,photos:list[dict[str,Any]])->str:
+    """模型常常用不满老板上传的照片（实测 15 张只用了 5 张）。
+    这里做确定性兜底：把没被任何占位符引用到的照片补成末尾现场图集，
+    保证成品里一张不少。模型自己用满时这段完全不触发，不干预自由排版。"""
+    refs=[str(p.get('ref')) for p in (photos or []) if p.get('ref')]
+    used=set(re.findall(r'\{+\s*media\s*:\s*([A-Za-z0-9_-]+)\s*\}+',html or ''))
+    missing=[r for r in refs if r not in used]
+    if not missing:return html
+    cells=''.join(
+        '<div style="width:48%;margin-bottom:18px">'
+        '<img src="{{media:'+r+'}}" style="width:100%;display:block" alt="">'
+        '</div>' for r in missing)
+    block=('<section style="background:#F4F1E8;padding:88px 48px 110px">'
+           '<div style="font-size:14px;letter-spacing:6px;color:#9C7A4D;margin-bottom:20px">现 场 · 续</div>'
+           '<div style="font-family:\'Songti SC\',\'STSong\',serif;font-size:40px;color:#1E4A43;'
+           'margin-bottom:44px;line-height:1.5">其余的现场</div>'
+           '<div style="display:flex;flex-wrap:wrap">'+cells+'</div>'
+           '</section>')
+    return (html or '')+block
+
+
+_RECAP_FORBIDDEN = re.compile(r'成本|供应商|毛利|扫码报名|立即报名|名额有限|报名即赠|[¥￥]\s*\d+')
+
+
+def _scrub_recap_text(fragment: str) -> str:
+    """把命中敏感词的**整句**从文本节点里摘掉，保留其余稿件。
+
+    旧逻辑只要正文出现一个「报名」「¥680」就把整份模型稿一票否决、掉进干瘪兜底
+    （2026-11-04 线上实测：内容差的直接来源）。成本口径仍必须清干净，所以清洗后
+    再验一次，仍命中才退回兜底 —— 既不泄成本，也不因为一句话毁掉一整张设计。
+    """
+    def clean(m):
+        text = m.group(1)
+        if not _RECAP_FORBIDDEN.search(text):
+            return m.group(0)
+        kept = [t for t in re.split(r'(?<=[。！？；])', text)
+                if t and not _RECAP_FORBIDDEN.search(t)]
+        return '>' + ''.join(kept) + '<'
+    return re.sub(r'>([^<]+)<', clean, fragment)
+
+
+async def generate_recap_html(club_id:int, master:dict[str,Any], note:str, photos:list[dict[str,Any]], layout_seed:str=''):
+    """活动回顾的「模型直出 HTML」路线：模型自己排版，产出 750px 宽的杂志式长图。
+
+    与结构化 blocks 路线的区别：blocks 路线套固定模板（每场长得一样，用户实测
+    "质量低下、不如豆包"）；这条路线让模型直接写 HTML 版式，才是"像作品"的来源。
+    返回 (html, title, gw)；模型翻车/校验不过时返回 (None, '', None)，由调用方回退 blocks 路线。
+    """
+    title=str((master or {}).get('title') or '')
+    facts={k:(master or {}).get(k) for k in ('title','date','location','capacity','duration') if (master or {}).get(k)}
+    media_lines='\n'.join(
+        f"- {p.get('ref')}：照片画面提示={str(p.get('name') or '')}" + (f"；这张拍了什么={p['desc']}" if p.get('desc') else '')
+        + "（只是告诉你这张照片拍了啥，严禁原样抄成图注或正文；你要自己用人的口吻写回顾）"
+        for p in photos if p.get('ref')) or '（本次没有现场照片：不要写任何图片，一个 <img> 都不许有）'
+    prompt=(_RECAP_HTML_PROMPT
+            .replace('{facts}',json.dumps(facts,ensure_ascii=False))
+            .replace('{media_lines}',media_lines)
+            .replace('{layout_directive}',_layout_directive(layout_seed))
+            .replace('{note}',(note or '').strip() or '（未填写——请只依据照片描述做客观回顾，不虚构任何细节）'))
+    gw=await generate_json(club_id=club_id,task_type='recap',system_prompt=_RECAP_HTML_SYSTEM,user_prompt=prompt)
+    if not gw: return None,'',None
+    data=gw.data if isinstance(gw.data,dict) else {}
+    html=str(data.get('html') or data.get('body') or data.get('content') or '')
+    html=sanitize_html(html)
+    if len(html)<400: return None,'',gw
+    # 照片占位符必须原样保留（占位符在渲染期才换成真实图片地址），这里只做基本体检
+    allowed = {str(p['ref']) for p in photos if p.get('ref')}
+    if not photos_valid(html, allowed, min(1,len(allowed))): return None,'',gw
+    # 照片张数已有 _ensure_all_photos 确定性补足，不再因为「没一次用满」否决整稿。
+    html = _ensure_all_photos(html,photos)
+    visible = content_text(html)
+    if _RECAP_FORBIDDEN.search(visible):
+        html = _scrub_recap_text(html)
+        visible = content_text(html)
+    if _RECAP_FORBIDDEN.search(visible):
+        return None,'',gw   # 清洗不干净才 fail-closed，成本口径绝不外泄
+    html = apply_style(html)
+    out_title=str(data.get('title') or '').strip() or f'{title}｜活动回顾'
+    return html,out_title,gw
+
+
+async def generate_recap(club_id:int,master:dict[str,Any],note:str,photos:list[dict[str,Any]],layout_seed:str=''):
     """活动回顾：素材 = 老板上传的现场照片 + 基础文案（区别于宣发渠道的「招募」语境）。
 
     photos 是后端落库后的真实照片条目（ref/url/name），模型只允许引用这些 ref；
@@ -2802,7 +3001,8 @@ async def generate_recap(club_id:int,master:dict[str,Any],note:str,photos:list[d
     title=str(master.get('title') or '')
     refs=[str(p.get('ref')) for p in photos if p.get('ref')]
     photo_lines='\n'.join(
-        f"- {p.get('ref')}：{str(p.get('name') or '')}" + (f"（{p['desc']}）" if p.get('desc') else '')
+        f"- {p.get('ref')}：照片画面提示={str(p.get('name') or '')}" + (f"；这张拍了什么={p['desc']}" if p.get('desc') else '')
+        + "（只是告诉你这张照片拍了啥，严禁原样抄成图注或正文；你要自己用人的口吻写回顾）"
         for p in photos if p.get('ref')) or '（本次未上传照片，请只依据现场记录写文字回顾，blocks 里不要放 mediaRefs）'
     facts={k:master.get(k) for k in ('title','date','location','capacity','duration') if master.get(k)}
     prompt=f"""为下面这场已经结束的活动写一篇活动回顾（recap）。
@@ -2811,8 +3011,6 @@ async def generate_recap(club_id:int,master:dict[str,Any],note:str,photos:list[d
 {photo_lines}
 领队/老板的现场记录（第一手素材，可能是零散短句；记录里的事实原样保留，禁止改写数字与人名）：
 {note.strip() or '（未填写——请只依据照片画面做客观回顾，不虚构任何细节）'}
-
-{_WRITING_CONTRACT}
 
 本渠道要求：
 {_RECAP_BRIEF}
@@ -2827,6 +3025,31 @@ async def generate_recap(club_id:int,master:dict[str,Any],note:str,photos:list[d
                        'desc':p.get('desc') or '',
                        'width':p.get('width'),'height':p.get('height')}
                       for p in photos if p.get('ref')]
+    # ★ 2026-11-04 之后反转：模型直出 HTML 重新成为**主路径**。
+    #   用户明确不要"每次都长一个样的固定模板"，要的是稳定杂志风格 + 每场不同版式。
+    #   主路径：generate_recap_html 让模型在风格规范内自由排版（每次不一样）；
+    #   失败（模型翻车 / 校验不过 / live 模式但 Provider 未配置或网络不通）再退回
+    #   下面的结构化 blocks 路线，由固定模板兜底 —— 任何异常都**失败收敛到模板**，
+    #   绝不把 500 抛给用户（与 ai_gateway 的 fail-closed 原则一致）。
+    html, html_title, html_gw = None, '', None
+    try:
+        html, html_title, html_gw = await generate_recap_html(club_id, master, note, photos, layout_seed)
+    except Exception as _ex:
+        log.warning('回顾模型直出 HTML 失败，回退固定模板: %s', _ex)
+        html, html_title, html_gw = None, '', None
+    if html and html_gw:
+        return {
+            'title': html_title,
+            'html': html,
+            'media': media_for_render,
+            'route': 'model-html',
+            'style': 'outdoor-minimal-v1',
+            # 换版要用同一批素材重跑：把现场记录与事实锚点一并留存，
+            # 否则「换一版排版」拿不回老板写过的第一手素材。
+            'note': note, 'facts': facts, 'seed': layout_seed or '',
+        }, html_gw
+
+    # ── 回退：结构化 blocks 路线（固定杂志模板兜底）──
     gw=await generate_json(club_id=club_id,task_type='recap',system_prompt=SYSTEM,user_prompt=prompt)
     if gw:
         data=gw.data or {}
@@ -2838,13 +3061,34 @@ async def generate_recap(club_id:int,master:dict[str,Any],note:str,photos:list[d
         data,_changed=scrub_cost_data(data)
         if not str(data.get('title') or '').strip():data['title']=f'{title}｜活动回顾'
         data['media']=media_for_render
+        data['route']='fallback'
+        data['html']=recap_fallback_html(data,master)
+        data['style']='outdoor-minimal-v1'
+        data['note']=note; data['facts']=facts; data['seed']=layout_seed or ''
         return data,gw
-    # 离线 / mock 兜底：用真实照片 + 记录拼一篇诚实的基础回顾（不编故事）
+    # 离线 / mock 兜底：用真实照片 + 记录拼一篇诚实的基础回顾（不编故事）。
+    # ★ 2026-11-04 实坑：旧兜底把老板粘的整篇 487 字文案原样塞进一个 lead 块、
+    #   17 张照片全塞进一个 gallery —— 用户实测「封面压长文 + 两屏纯文字 + 图墙」。
+    #   现在按句切成 3~6 节，一节一句、一节 2~3 张，前端模板再组织成杂志版面。
+    import re as _re
+    sentences=[x.strip() for x in _re.split(r'[\n\r。！？!?；;]+', (note or '').strip()) if len(x.strip())>=6]
+    sentences=[x for x in sentences if not x.lstrip().startswith('#')][:8]
+    if not sentences:
+        sentences=['现场记录待补充，以下是本次活动留下的现场照片。']
+    pool=list(refs[1:]) if len(refs)>1 else []
     blocks=[{'type':'lead','headline':f'{title}｜活动回顾',
-             'body':(note.strip() or '现场记录待补充，以下是本次活动留下的现场照片。'),
-             'mediaRefs':refs[:1]}]
-    if len(refs)>1:
-        blocks.append({'type':'gallery','headline':'现场相册','mediaRefs':refs[1:]})
-    data={'title':f'{title}｜活动回顾','summary':note.strip()[:80],'blocks':blocks,
-          'media':media_for_render}
+             'body':sentences[0],'mediaRefs':refs[:1]}]
+    rest=sentences[1:]
+    for i,sent in enumerate(rest):
+        take=min(3,max(1,-(-len(pool)//max(1,len(rest)-i)))) if pool else 0
+        blocks.append({'type':'narrative','headline':'','body':sent,
+                       'mediaRefs':pool[:take]})
+        del pool[:take]
+    if pool:
+        blocks.append({'type':'gallery','headline':'现场相册','mediaRefs':pool})
+    data={'title':f'{title}｜活动回顾','summary':(note or '').strip()[:80],
+          'blocks':blocks,'media':media_for_render,'route':'offline',
+          'note':note,'facts':facts,'seed':layout_seed or ''}
+    data['html']=recap_fallback_html(data,master)
+    data['style']='outdoor-minimal-v1'
     return data,record_mock_usage(club_id,'recap',prompt,data)

@@ -122,8 +122,8 @@ t('装备卡上商城真实产品图', has(row,'<img src="/static/uploads/produc
 t('产品图带裂图兜底 onerror', has(row,'onerror="gearImgFallback(this)"'));
 t('装备卡带商城介绍（description）', has(row,'gear-desc')&&has(row,'三节折叠后约一掌长度'));
 t('介绍两行截断（line-clamp）', true); // 由 CSS 守，node 不判样式
-t('会员价替代原价 + 原价划线', has(row,'¥269.10')&&has(row,'gear-was')&&has(row,'¥299'));
-t('会员节省说明', has(row,'Enterprise价 省 ¥29.9'));
+t('原价/会员价双价格式', has(row,'原价:299元')&&has(row,'会员价:269.10元'));
+t('不出现 Pro价/套餐/省¥ 等后台字样', !has(row,'Enterprise')&&!has(row,'Pro价')&&!has(row,'套餐')&&!has(row,'省 ¥'));
 t('平替卡：徽标 + 虚线类', has(gearRow(pick,{},true),'gear-badge')&&has(gearRow(pick,{},true),'gear-row--sub'));
 t('无图商品退 emoji 方块', has(gearRow(Object.assign({},pick,{imageUrl:''}),{},false),'gear-img--none')
   &&!has(gearRow(Object.assign({},pick,{imageUrl:''}),{},false),'<img'));
@@ -141,7 +141,7 @@ t('图片已移出 DOM 时不抛错', !threw);
 /* ③④ renderPacking 全量：口径对齐 + 平替徽标 + 自备 pills */
 let html=renderPacking(P.master,{gear:P.plan,canBuy:true,manage:false});
 t('总览：清单 13 项 · 商城可配 7 项（6 精确 + 1 平替）', has(html,'清单 13 项 · 商城可配 7 项'));
-t('总览带平替数与会员折扣', has(html,'平替 1 项')&&has(html,'Enterprise 9 折'));
+t('总览带平替数、不露套餐名', has(html,'平替 1 项')&&has(html,'<b>会员价</b>')&&!has(html,'Enterprise'));
 t('分区头：4 件装备', has(html,'商城可以配齐')&&has(html,'>4 件<'));
 t('分区头注明覆盖清单 7 项（两个数对上）', has(html,'覆盖清单 7 项'));
 t('四件商品全部上真实产品图', (html.match(/<img src="\/static\/uploads\/products\//g)||[]).length===4,

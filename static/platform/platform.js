@@ -32,11 +32,12 @@ async function loadPlatformAttention(){
   }catch(e){box.innerHTML=`<div class="notice warn">待处理事项加载失败：${esc(e.message)}</div>`}
 }
 async function loadClubs(){try{skel('#clubRows',4);loadApplications();let [a,cr]=await Promise.all([api('/api/platform/clubs'),api('/api/platform/commission-rates').catch(()=>null)]);
+  window.__platClubs=(Array.isArray(a)?a:(a&&a.items)||[]);
   const rateMap={};((cr&&cr.clubs)||[]).forEach(x=>rateMap[x.clubId]=x);
-  const defPct=Number((cr&&cr.productDefaultRatePercent)||8);$('#clubRows').innerHTML=a.map(x=>`<tr><td><div class="plat-club-cell"><span class="plat-club-logo">${clubLogoHtml(x)}</span><span><strong>${esc(x.name)}</strong>${x.source==='website'?' <span class="tag">官网申请</span>':''}<div class="sub">${esc(x.city||'')} ${esc(x.contact_name||'')} ${esc(x.contact_phone||'')}</div></span></div></td><td>${esc(x.subscription_plan||x.plan||'—')}<div class="sub">${esc(enumCn(x.subscription_status,'未开通'))}</div></td><td><span class="tag ${x.status==='pending'||x.status==='disabled'?'orange':''}">${esc(enumCn(x.status))}</span></td><td>${(()=>{const r=rateMap[x.id];if(!r)return '<span class="sub">—</span>';
+  const defPct=Number((cr&&cr.productDefaultRatePercent)||8);$('#clubRows').innerHTML=a.map(x=>`<tr><td><div class="plat-club-cell"><span class="plat-club-logo">${clubLogoHtml(x)}</span><span><strong>${esc(x.name)}</strong>${x.source==='website'?' <span class="tag">官网申请</span>':''}<div class="sub">${esc(x.city||'')} ${esc(x.contact_name||'')} ${esc(x.contact_phone||'')}</div></span></div></td><td>${esc(x.subscription_plan==='trial'?'体验':(x.subscription_plan||x.plan||'—'))}<div class="sub">${esc(enumCn(x.subscription_status,'未开通'))}</div></td><td><span class="tag ${x.status==='pending'||x.status==='disabled'?'orange':''}">${esc(enumCn(x.status))}</span></td><td>${(()=>{const r=rateMap[x.id];if(!r)return '<span class="sub">—</span>';
    const pct=Number(r.ratePercent||0);const own=!!r.hasClubOverride;
    const dis=!r.enabled;
-   return `<div class="plat-rate-cell"><strong>${dis?'0':pct}%</strong>${own?'<span class="tag">已单独设定</span>':'<span class="sub">商品上限</span>'}${dis?'<span class="tag orange">已停发</span>':''}${own?`<div class="sub">商品上限 ${Number(r.productRatePercent||defPct)}%</div>`:''}</div>`})()}</td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" onclick="setClubCommissionRate(${x.id})">佣金率</button></div></td><td><div class="plat-credits-cell"><strong>${x.ai_credits}</strong>${Number(x.ai_credit_debt||0)>0?`<div class="sub">欠账 ${x.ai_credit_debt}</div>`:''}<div class="plat-credits-ops"><button class="btn ghost sm" title="扣减 100 积分" onclick="quickCredits(${x.id},-100)">−100</button><button class="btn ghost sm" title="增加 100 积分" onclick="quickCredits(${x.id},100)">+100</button><button class="btn ghost sm" onclick="adjust(${x.id})">调整</button></div></div></td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn secondary" onclick="clubStatus(${x.id},'${x.status==='active'?'disabled':'active'}')">${x.status==='active'?'停用':'启用'}</button><button class="btn ghost" onclick="assignPlan(${x.id})">套餐</button>${x.status==='pending'?`<button class="btn ghost" onclick="clubStatus(${x.id},'rejected')">拒绝</button>`:''}</div></td></tr>`).join('')}catch(e){loaderError('#clubRows',e,'loadClubs 加载失败')}}
+   return `<div class="plat-rate-cell"><strong>${dis?'0':pct}%</strong>${own?'<span class="tag">已单独设定</span>':'<span class="sub">商品上限</span>'}${dis?'<span class="tag orange">已停发</span>':''}${own?`<div class="sub">商品上限 ${Number(r.productRatePercent||defPct)}%</div>`:''}</div>`})()}</td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" onclick="setClubCommissionRate(${x.id})">佣金率</button></div></td><td><div class="plat-credits-cell"><strong>${x.ai_credits}</strong>${Number(x.ai_credit_debt||0)>0?`<div class="sub">欠账 ${x.ai_credit_debt}</div>`:''}<div class="plat-credits-ops"><button class="btn ghost sm" title="扣减 100 积分" onclick="quickCredits(${x.id},-100)">−100</button><button class="btn ghost sm" title="增加 100 积分" onclick="quickCredits(${x.id},100)">+100</button><button class="btn ghost sm" onclick="adjust(${x.id})">调整</button></div></div></td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" onclick="openClubDetail(${x.id})">详情</button><button class="btn secondary" onclick="clubStatus(${x.id},'${x.status==='active'?'disabled':'active'}')">${x.status==='active'?'停用':'启用'}</button><button class="btn ghost" onclick="assignPlan(${x.id})">套餐</button>${x.status==='pending'?`<button class="btn ghost" onclick="clubStatus(${x.id},'rejected')">拒绝</button>`:''}</div></td></tr>`).join('')}catch(e){loaderError('#clubRows',e,'loadClubs 加载失败')}}
 
 /* ── 官网申请明细（2026-10-26）────────────────────────────────────
    官网「申请体验」表单经 server.js 代理写入 clubs 表（source='website'），
@@ -66,11 +67,97 @@ function renderApplications(){
     <td><span class="tag ${x.status==='pending'||x.status==='disabled'?'orange':''}">${esc(enumCn(x.status))}</span></td>
     <td class="sub">${esc(String(x.created_at||'').slice(0,16).replace('T',' '))}</td>
     <td><div style="display:flex;gap:6px;flex-wrap:wrap">
-      ${x.status==='pending'?`<button class="btn secondary sm" onclick="clubStatus(${x.id},'active')">启用</button><button class="btn ghost sm" onclick="clubStatus(${x.id},'rejected')">拒绝</button>`:''}
+      ${x.status==='pending'?`<button class="btn secondary sm" onclick="openApplicationReview(${x.id})">审核</button>`:''}
       ${x.status==='active'?`<button class="btn ghost sm" onclick="assignPlan(${x.id})">套餐</button><button class="btn ghost sm" onclick="clubStatus(${x.id},'disabled')">停用</button>`:''}
       ${x.status==='disabled'?`<button class="btn secondary sm" onclick="clubStatus(${x.id},'active')">启用</button>`:''}
     </div></td></tr>`).join('')||'<tr><td colspan="7" class="empty">暂无申请记录</td></tr>';
 }
+/* 入驻申请审核详情（2026-11-03）：此前待处理行一键「启用」，运营连申请人的
+   联系方式/申请说明都看不到就放行了。现在必须先点「审核」弹出完整资料，
+   确认无误再「通过并开通体验」或「拒绝」（拒绝沿用原流程，必填原因）。
+   通过时带 assignTrial:true —— 后端自动开通体验套餐（100 积分 · 3 天 ·
+   无装备折扣/无装备积分 · 仅基础功能），前端不再单独走套餐分配。 */
+function openApplicationReview(id){
+  const x=(applyCache||[]).find(v=>v.id===id);if(!x)return;
+  const row=(k,v)=>`<div style="display:flex;gap:12px;padding:7px 0;border-bottom:1px dashed #e3ebe6"><span style="width:80px;flex:none;color:#6b7f76;font-size:12px;padding-top:1px">${k}</span><span style="flex:1;min-width:0;word-break:break-all">${v||'—'}</span></div>`;
+  const ov=uxDialog({title:'入驻申请审核',desc:`申请编号 #${x.id} · ${x.source==='website'?'官网申请':'平台新增'}`,wide:true,
+    body:`<div style="font-size:13px">${row('俱乐部名称',esc(x.name))}${row('联系人',esc(x.contact_name))}${row('手机号',esc(x.contact_phone))}${row('邮箱',esc(x.contact_email))}${row('主营城市',esc(x.city))}${row('申请说明',esc(x.application_note))}${row('申请时间',esc(String(x.created_at||'').slice(0,16).replace('T',' ')))}</div>
+      <div class="notice" style="margin-top:12px">通过后自动开通<strong>体验套餐</strong>：100 积分 · 3 天体验期 · 无装备折扣 / 无装备积分抵用 · 仅基础功能。之后可在「套餐」里为它升级正式套餐；账户密码与使用说明将发送到上面填写的邮箱。</div>`,
+    foot:`<button class="btn ghost" type="button" data-act="reject">拒绝</button><button class="btn secondary" type="button" data-act="approve">通过并开通体验</button>`});
+  ov.querySelector('[data-act="reject"]').onclick=()=>{ov.uxClose();clubStatus(x.id,'rejected')};
+  ov.querySelector('[data-act="approve"]').onclick=async ev=>{
+    const btn=ev.currentTarget;btn.disabled=true;btn.textContent='开通中…';
+    try{
+      const r=await api(`/api/platform/clubs/${x.id}/status`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:'active',assignTrial:true})});
+      ov.uxClose();loadClubs();dash();
+      if(r&&r.account&&r.account.password){showClubCredentials(x.name,r.account)}else{toast('已通过审核，体验套餐已开通（3 天期 · 100 积分）')}
+    }catch(e){btn.disabled=false;btn.textContent='通过并开通体验';showAlert({title:'审核通过失败',message:e.message})}
+  };
+}
+
+/* 俱乐部明细查看（2026-11-03）：审核通过后在「俱乐部明细」列表点「详情」即可回看
+   全部资料与联系方式 —— 解决「审核后看不到联系方式和俱乐部信息」的问题。 */
+function openClubDetail(id){
+  const x=(window.__platClubs||[]).find(v=>v.id===id);if(!x)return;
+  const row=(k,v)=>`<div style="display:flex;gap:12px;padding:7px 0;border-bottom:1px dashed #e3ebe6"><span style="width:84px;flex:none;color:#6b7f76;font-size:12px;padding-top:1px">${k}</span><span style="flex:1;min-width:0;word-break:break-all">${v||'—'}</span></div>`;
+  const ov=uxDialog({title:'俱乐部明细',desc:`#${x.id} · ${x.source==='website'?'官网申请':'平台新增'}`,wide:true,
+    body:`<div style="font-size:13px">${row('俱乐部名称',esc(x.name))}${row('状态',esc(enumCn(x.status)))}${row('套餐',esc((x.subscription_plan==='trial'?'体验':(x.subscription_plan||x.plan||'—')))+' / '+enumCn(x.subscription_status,'未开通'))}${row('登录账户（账户号）',esc(x.account_username||'—'))}${row('公司名称',esc(x.company_name))}${row('法人',esc(x.legal_person))}${row('公司地址',esc(x.company_address))}${row('联系人',esc(x.contact_name))}${row('手机号',esc(x.contact_phone))}${row('邮箱',esc(x.contact_email))}${row('主营城市',esc(x.city))}${row('后台密码','••••••••（忘记密码时点「重置并发送密码」生成新密码）')}${row('申请说明',esc(x.application_note))}${row('申请时间',esc(String(x.created_at||'').slice(0,16).replace('T',' ')))}${row('审核时间',esc(String(x.reviewed_at||'').slice(0,16).replace('T',' ')||'—'))}${row('审核人',esc(x.reviewed_by||'—'))}${x.disabled_reason?row('停用/拒绝原因',esc(x.disabled_reason)):''}</div>`,
+    foot:`<button class="btn ghost" type="button" data-act="edit">编辑资料</button><button class="btn ghost" type="button" data-act="reset">重置并发送密码</button><button class="btn" type="button" data-act="close">关闭</button>`});
+  ov.querySelector('[data-act="close"]').onclick=()=>ov.uxClose();
+  ov.querySelector('[data-act="edit"]').onclick=()=>{ov.uxClose();editClubProfile(x.id);};
+  ov.querySelector('[data-act="reset"]').onclick=async ev=>{
+    const btn=ev.currentTarget;btn.disabled=true;btn.textContent='处理中…';
+    try{
+      const r=await api(`/api/platform/clubs/${x.id}/reset-password`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      btn.disabled=false;btn.textContent='重置并发送密码';
+      showClubCredentials(x.name,r.account);
+    }catch(e){btn.disabled=false;btn.textContent='重置并发送密码';showAlert({title:'重置失败',message:e.message})}
+  };
+}
+
+/* 编辑俱乐部企业资料与基础信息（2026-11-03）：平台运营补录公司名称/法人/地址等。
+   密码不在此编辑，忘记密码走 reset-password；保存后刷新列表并重开详情展示最新值。 */
+async function editClubProfile(id){
+  const x=(window.__platClubs||[]).find(v=>v.id===id);if(!x)return;
+  const v=await showForm({title:'编辑俱乐部资料',desc:`#${x.id} · ${esc(x.name)}`,submitText:'保存',fields:[
+    {name:'name',label:'俱乐部名称',value:x.name||'',required:true},
+    {name:'contact_name',label:'联系人',value:x.contact_name||''},
+    {name:'contact_phone',label:'联系电话',value:x.contact_phone||''},
+    {name:'contact_email',label:'联系邮箱',value:x.contact_email||''},
+    {name:'city',label:'所在城市',value:x.city||''},
+    {name:'company_name',label:'公司名称',value:x.company_name||''},
+    {name:'legal_person',label:'法人',value:x.legal_person||''},
+    {name:'company_address',label:'公司地址',value:x.company_address||''}
+  ]});
+  if(!v||!v.name)return;
+  try{
+    const r=await api(`/api/platform/clubs/${x.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});
+    loadClubs();toast('已保存俱乐部资料');
+    if(r&&r.updated)openClubDetail(x.id);
+  }catch(e){showAlert({title:'保存失败',message:e.message})}
+}
+
+/* 凭证展示（2026-11-03）：审核通过 / 重置密码后，把后台链接、账号、初始密码一次性
+   展示给平台运营，并提供「复制全部（含发送模板）」按钮 —— 由人工通过邮件/微信发给俱乐部。 */
+function showClubCredentials(name,account){
+  if(!account)return;
+  const link=location.origin+'/';
+  const tpl=`【ClubOS 后台账户开通通知】\n俱乐部：${name}\n后台地址：${link}\n登录账号：${account.username}\n初始密码：${account.password}\n（首次登录后请尽快修改密码）`;
+  const ov=uxDialog({title:'俱乐部后台账户凭证',desc:'请通过邮件 / 微信发送给俱乐部联系人',wide:true,
+    body:`<div style="background:#f1f6ee;border:1px solid #dcebdd;border-radius:12px;padding:16px;font-size:14px;line-height:2">
+        <div><b>后台地址：</b><a href="${link}" target="_blank" rel="noopener">${link}</a></div>
+        <div><b>登录账号：</b><span style="font-family:ui-monospace,monospace">${esc(account.username)}</span></div>
+        <div><b>初始密码：</b><span style="font-family:ui-monospace,monospace">${esc(account.password||'（已存在，本次未变更）')}</span></div>
+      </div>
+      <div class="notice" style="margin-top:12px">系统不存储明文密码，若忘记只能在此「重置并发送密码」重新生成。请尽快转发给俱乐部并提醒其首次登录后修改密码。</div>`,
+    foot:`<button class="btn ghost" type="button" data-act="copy">复制全部（含发送模板）</button><button class="btn" type="button" data-act="ok">我知道了</button>`});
+  ov.querySelector('[data-act="ok"]').onclick=()=>ov.uxClose();
+  ov.querySelector('[data-act="copy"]').onclick=async()=>{
+    try{await navigator.clipboard.writeText(tpl);toast('已复制，可粘贴到邮件 / 微信发送')}
+    catch(_){const ta=document.createElement('textarea');ta.value=tpl;document.body.appendChild(ta);ta.select();try{document.execCommand('copy')}catch(__){}ta.remove();toast('已复制，可粘贴到邮件 / 微信发送')}
+  };
+}
+
 /* 筛选按钮事件委托：面板 HTML 是静态的，但绑 document 最稳（与 platLogoFallback 同思路）。 */
 document.addEventListener('click',e=>{
   const b=e.target&&e.target.closest?e.target.closest('#applyFilters [data-af]'):null;
@@ -88,10 +175,12 @@ function clubLogoHtml(x){
   return `<img class="plat-club-logo__img" src="${esc(x.logoUrl)}" alt="${esc(x.name||'')}" data-ph="${esc(initial)}" loading="lazy">`;
 }
 /* 商品列表头图缩略：跟俱乐部 logo 同一套兜底逻辑（裂图 → platLogoFallback 换占位）。
-   平台列表接口给的是原始列 cover_url；没有就显示「无图」占位块。 */
+   平台列表接口给的是原始列 cover_url；没有就显示「无图」占位块。
+   PEAKTRACE 商品的图是合成图，catalog_view 有值时按 shared.js prodImgHtml 裁出
+   头图那张（2026-11-04 用户报「头图不对」：列表里全是正面/背面拼贴小图）。 */
 function productCoverHtml(x){
   if(!x.cover_url)return `<span class="plat-prod-cover plat-prod-cover--ph">无图</span>`;
-  return `<img class="plat-prod-cover" src="${esc(x.cover_url)}" alt="" loading="lazy">`;
+  return prodImgHtml(x.cover_url, x.catalog_view, 'plat-prod-cover', x.name||'');
 }
 /* 事件委托：一次绑定管全页所有头像/头图（表格是整块重渲染的，绑到 document 最稳）。
    商品头图裂图时同样换成「无图」占位块 —— 占位与真图同尺寸，行高不跳。 */
@@ -119,17 +208,17 @@ async function quickCredits(id,amount){
   }catch(e){showAlert({title:'调整失败',message:e.message})}
 }
 
-async function addClub(){const v=await showForm({title:'新增入驻俱乐部',submitText:'创建',fields:[{name:'name',label:'俱乐部名称',required:true},{name:'contactName',label:'联系人',value:''},{name:'contactPhone',label:'联系电话',value:''},{name:'city',label:'所在城市',value:''}]});if(!v||!v.name)return;await api('/api/platform/clubs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v.name,contactName:v.contactName||'',contactPhone:v.contactPhone||'',city:v.city||'',applicationNote:'平台新增入驻'})});loadClubs();toast('已创建待审核俱乐部')}
+async function addClub(){const v=await showForm({title:'新增入驻俱乐部',submitText:'创建',fields:[{name:'name',label:'俱乐部名称',required:true},{name:'contactName',label:'联系人',value:''},{name:'contactPhone',label:'联系电话',value:''},{name:'contactEmail',label:'联系邮箱（接收账户密码与使用说明）',value:''},{name:'city',label:'所在城市',value:''}]});if(!v||!v.name)return;await api('/api/platform/clubs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:v.name,contactName:v.contactName||'',contactPhone:v.contactPhone||'',contactEmail:v.contactEmail||'',city:v.city||'',applicationNote:'平台新增入驻'})});loadClubs();toast('已创建待审核俱乐部')}
 async function clubStatus(id,status){let reason='';if(['disabled','rejected'].includes(status)){const v=await showForm({title:status==='disabled'?'停用俱乐部':'拒绝入驻',desc:'操作会通知俱乐部，请填写原因。',submitText:'确认',danger:true,fields:[{name:'reason',label:status==='disabled'?'停用原因':'拒绝原因',type:'textarea',value:'',required:true}]});if(!v)return;reason=v.reason}await api(`/api/platform/clubs/${id}/status`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status,reason})});loadClubs();dash()}
 const TASK_CN={detail:'图文详情',wechat:'公众号推文',xhs:'小红书笔记',poster:'活动海报',recap:'活动回顾'};
-async function loadCredits(){try{skel('#creditRows',4);let [a,plans,packs,sum,orders,pricing]=await Promise.all([api('/api/platform/credits'),api('/api/platform/ai-credit/plans'),api('/api/platform/ai-credit/topup-packages'),api('/api/platform/ai-credit/summary'),api('/api/platform/ai-credit/orders?limit=100'),api('/api/platform/ai-credit/task-pricing')]);$('#aiBillingMetrics').innerHTML=[['本月积分收入',money(sum.cashRevenueCny)],['服务商成本',money(sum.providerCostCny)],['积分消耗',sum.creditsConsumed],['未偿欠账',sum.outstandingDebt]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');$('#creditRows').innerHTML=a.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.plan_code||'—')}</td><td><strong>${x.balance}</strong></td><td>${x.debt||0}</td><td>${x.monthly_quota}</td><td><button class="btn secondary" onclick="adjust(${x.club_id})">调整</button> <button class="btn ghost" onclick="assignPlan(${x.club_id})">套餐</button></td></tr>`).join('');$('#aiPlanList').innerHTML=plans.map(x=>`<div class="plat-plan${x.status==='active'?'':' is-off'}">
-      <div class="plat-plan__head"><b>${esc(x.name)}</b><span class="tag">${esc(x.code)}</span>${x.status==='active'?'':'<span class="tag orange">已下架</span>'}</div>
+async function loadCredits(){try{skel('#creditRows',4);let [a,plans,packs,sum,orders,pricing]=await Promise.all([api('/api/platform/credits'),api('/api/platform/ai-credit/plans'),api('/api/platform/ai-credit/topup-packages'),api('/api/platform/ai-credit/summary'),api('/api/platform/ai-credit/orders?limit=100'),api('/api/platform/ai-credit/task-pricing')]);$('#aiBillingMetrics').innerHTML=[['本月积分收入',money(sum.cashRevenueCny)],['服务商成本',money(sum.providerCostCny)],['积分消耗',sum.creditsConsumed],['未偿欠账',sum.outstandingDebt]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');$('#creditRows').innerHTML=a.map(x=>`<tr><td>${esc(x.name)}</td><td>${esc(x.plan_code||'—')}</td><td><strong>${x.balance}</strong></td><td>${x.debt||0}</td><td>${x.monthly_quota}</td><td><button class="btn secondary" onclick="adjust(${x.club_id})">调整</button> <button class="btn ghost" onclick="assignPlan(${x.club_id})">套餐</button></td></tr>`).join('');$('#aiPlanList').innerHTML=plans.map(x=>{const isTrial=x.code==='trial';return `<div class="plat-plan${x.status==='active'?'':' is-off'}">
+      <div class="plat-plan__head"><b>${esc(x.name)}</b><span class="tag">${esc(x.code)}</span>${isTrial?'<span class="tag">体验</span>':x.status==='active'?'':'<span class="tag orange">已下架</span>'}</div>
       <div class="plat-plan__credits"><b>${Number(x.monthly_credits||0).toLocaleString()}</b> 积分 / 月</div>
-      <div class="plat-plan__meta">${Number(x.monthly_fee)>0?money(x.monthly_fee):'定制报价'} · 装备折扣 ${(Number(x.gear_discount||1)*10).toFixed(Number(x.gear_discount||1)*10%1?1:0)} 折</div>
+      <div class="plat-plan__meta">${isTrial?'体验期免费':(Number(x.monthly_fee)>0?money(x.monthly_fee):'定制报价')} · 装备折扣 ${(Number(x.gear_discount||1)*10).toFixed(Number(x.gear_discount||1)*10%1?1:0)} 折</div>
       <div class="plat-plan__meta">${Number(x.gear_points_redeem_percent||0)>0?`装备积分抵用 上限 ${Number(x.gear_points_redeem_percent)}%`:'装备积分抵用 无权益'}</div>
       ${String(x.description||'').trim()?`<div class="plat-plan__desc">${esc(x.description)}</div>`:''}
-      <div class="plat-plan__ops"><button class="btn ghost sm" onclick="editPlan('${esc(x.code)}')">编辑</button><button class="btn ghost sm" onclick="togglePlan('${esc(x.code)}','${x.status==='active'?'inactive':'active'}')">${x.status==='active'?'下架':'上架'}</button><button class="btn ghost sm plat-plan__del" onclick="deletePlan('${esc(x.code)}')">删除</button></div>
-    </div>`).join('')||'<div class="empty">还没有套餐，点右上角「＋ 新增套餐」。</div>';$('#aiTopupList').innerHTML=packs.map(x=>`<div class="plat-plan plat-plan--pack${x.status==='active'?'':' is-off'}">
+      <div class="plat-plan__ops">${isTrial?'<span class="sub">内置套餐 · 审核通过时自动开通，不可编辑/删除</span>':`<button class="btn ghost sm" onclick="editPlan('${esc(x.code)}')">编辑</button><button class="btn ghost sm" onclick="togglePlan('${esc(x.code)}','${x.status==='active'?'inactive':'active'}')">${x.status==='active'?'下架':'上架'}</button><button class="btn ghost sm plat-plan__del" onclick="deletePlan('${esc(x.code)}')">删除</button>`}</div>
+    </div>`}).join('')||'<div class="empty">还没有套餐，点右上角「＋ 新增套餐」。</div>';$('#aiTopupList').innerHTML=packs.map(x=>`<div class="plat-plan plat-plan--pack${x.status==='active'?'':' is-off'}">
       <div class="plat-plan__head"><b>${esc(x.name)}</b>${x.status==='active'?'':'<span class="tag orange">已下架</span>'}</div>
       <div class="plat-plan__credits"><b>${Number(x.credits||0).toLocaleString()}</b> 积分额度</div>
       <div class="plat-plan__meta">${money(x.amount)}</div>
@@ -649,7 +738,7 @@ async function loadSupplyChain(){
     </div>
   </div>`}).join('')+`</div>`||'<div class="empty">暂无供应商</div>';
   const st={draft:'草稿',approved:'已审核',ordered:'已下单',partially_received:'部分到货',received:'已完成',cancelled:'已取消'};
-  $('#purchaseOrderList').innerHTML=pos.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.id)}</div> · ${esc(x.supplier_name)} <div class="list-row__sub">${money(x.total_amount)} · 到货 ${x.received_qty||0}/${x.ordered_qty||0}${Number(x.rejected_qty||0)>0?` · <span style="color:#b45309">异常/拒收 ${x.rejected_qty}</span>`:''}</div><div style="margin-top:7px">${x.status==='draft'?`<button class="btn ghost" onclick="approvePO('${x.id}')">审核</button> <button class="btn ghost" onclick="cancelPO('${x.id}')">取消</button>`:''}${x.status==='approved'?`<button class="btn ghost" onclick="orderPO('${x.id}')">确认下单</button>`:''}${['ordered','partially_received'].includes(x.status)?`<button class="btn secondary" onclick="receivePO('${x.id}')">到货入库</button> <button class="btn ghost" onclick="registerPOException('${x.id}')">异常登记</button>`:''}${Number(x.received_qty||0)>0?`<button class="btn ghost" onclick="createPurchaseReturn('${x.id}')">采购退货</button>`:''}</div><div class="list-row__end"><span class="tag ${['draft','approved','ordered','partially_received'].includes(x.status)?'orange':''}">${st[x.status]||esc(enumCn(x.status))}</span></div></div>`).join('')||'<div class="empty">暂无采购单</div>';
+  $('#purchaseOrderList').innerHTML=pos.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.id)}</div><div class="list-row__sub">${esc(x.supplier_name||'—')} · ${money(x.total_amount||0)} · 到货 ${x.received_qty||0}/${x.ordered_qty||0}${Number(x.rejected_qty||0)>0?` · <span style="color:#b45309">异常/拒收 ${x.rejected_qty}</span>`:''}</div><div class="po-actions">${x.status==='draft'?`<button class="btn ghost sm" onclick="approvePO('${x.id}')">审核</button> <button class="btn ghost sm" onclick="cancelPO('${x.id}')">取消</button>`:''}${x.status==='approved'?`<button class="btn ghost sm" onclick="orderPO('${x.id}')">确认下单</button>`:''}${['ordered','partially_received'].includes(x.status)?`<button class="btn secondary sm" onclick="receivePO('${x.id}')">到货入库</button> <button class="btn ghost sm" onclick="registerPOException('${x.id}')">异常登记</button>`:''}${Number(x.received_qty||0)>0?`<button class="btn ghost sm" onclick="createPurchaseReturn('${x.id}')">采购退货</button>`:''} <button class="btn ghost sm" onclick="downloadPODocument('${x.id}')">下载单据</button></div></div><div class="list-row__end"><span class="tag ${['draft','approved','ordered','partially_received'].includes(x.status)?'orange':''}">${st[x.status]||esc(enumCn(x.status))}</span></div></div>`).join('')||'<div class="empty">暂无采购单</div>';
   const mt={opening_balance:'期初库存',purchase_inbound:'采购入库',sale_outbound:'销售出库',refund_restock:'退款回库',after_sales_return:'售后退货',manual_in:'盘盈/调增',manual_out:'盘亏/调减'};
   $('#inventoryMovementList').innerHTML=moves.map(x=>`<div style="display:grid;grid-template-columns:1.3fr .8fr .6fr .8fr 1.5fr;gap:10px;padding:10px 0;border-bottom:1px solid var(--line);align-items:center"><div><strong>${esc(x.product_name)}</strong><div class="sub">${esc(x.product_sku)}</div></div><div>${mt[x.movement_type]||esc(x.movement_type)}</div><div><strong>${x.quantity_delta>0?'+':''}${x.quantity_delta}</strong></div><div>${x.stock_before} → ${x.stock_after}</div><div class="sub">${esc(x.note||'')} · ${esc(x.created_at||'')}</div></div>`).join('')||'<div class="empty">暂无库存流水</div>';
   try{const rets=await api('/api/platform/procurement/purchase-returns');const rst={draft:'草稿',approved:'已审核',shipped:'已出库',credited:'已贷项'};$('#purchaseReturnList').innerHTML=rets.length?rets.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">退货单 ${esc(x.id)} · ${esc(x.supplier_name)}</div> · ${money(x.total_amount||0)}<div class="list-row__sub">${rst[x.status]||esc(enumCn(x.status))}${x.note?` · ${esc(x.note)}`:''} · ${esc(x.created_at||'')}</div></div><div class="list-row__end"><span class="tag ${x.status==='draft'?'orange':''}">${rst[x.status]||esc(enumCn(x.status))}</span></div></div>`).join(''):'<div class="empty">暂无采购退货</div>'}catch(e){$('#purchaseReturnList').innerHTML=`<div class="notice warn">采购退货加载失败：${esc(e.message)}</div>`}
@@ -892,7 +981,7 @@ function prodDictDialog(kind){
     const list=await api(base);
     const rowHtml=x=>{
       const sub=isBrand?(x.logo_url?'<div class="list-row__sub" style="word-break:break-all">'+esc(x.logo_url)+'</div>':'')
-        :(x.parent_id?'<div class="list-row__sub">上级：'+esc((list.find(p=>Number(p.id)===Number(x.parent_id))||{}).name||'—')+'</div>':'<div class="list-row__sub">一级品类</div>');
+        :(x.parent_id?'<div class="list-row__sub">上级：'+esc((list.find(p=>Number(p.id)===Number(x.parent_id))||{}).name||'—')+' · 排序 '+Number(x.sort||0)+'</div>':'<div class="list-row__sub">一级品类 · 排序 '+Number(x.sort||0)+'</div>');
       return `<div class="list-row" data-id="${x.id}"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}${x.status!=='active'?' <span class="tag orange">已停用</span>':''}</div>${sub}</div>
         <div class="list-row__end"><button class="btn ghost" data-act="edit">编辑</button> <button class="btn ghost" data-act="del" style="color:#a44435">删除</button></div></div>`;
     };
@@ -923,11 +1012,11 @@ function prodDictDialog(kind){
       }catch(e){showAlert({title:'创建失败',message:e.message})}
       return;
     }
-    const fields=[{name:'name',label:'品类名',required:true,placeholder:'例如 冲锋衣 / 软壳'},{name:'parentId',label:'上级品类',type:'select',value:'',options:[{value:'',label:'无（一级品类）'},...(await api(base)).filter(x=>!x.parent_id).map(x=>({value:x.id,label:x.name}))]}];
+    const fields=[{name:'name',label:'品类名',required:true,placeholder:'例如 冲锋衣 / 软壳'},{name:'parentId',label:'上级品类',type:'select',value:'',options:[{value:'',label:'无（一级品类）'},...(await api(base)).filter(x=>!x.parent_id).map(x=>({value:x.id,label:x.name}))]},{name:'sort',label:'排序（数字越小越靠前）',type:'number',value:0,min:0}];
     const v=await uxForm({title:'新增'+label,submitText:'创建',fields});
     if(!v||!v.name)return;
     try{
-      const body={name:v.name,parentId:v.parentId?Number(v.parentId):null};
+      const body={name:v.name,parentId:v.parentId?Number(v.parentId):null,sort:Number(v.sort||0)};
       await api(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       await loadProductDicts(true);await paint(dlg);toast(label+'已创建');
     }catch(e){showAlert({title:'创建失败',message:e.message})}
@@ -951,11 +1040,11 @@ function prodDictDialog(kind){
         }catch(e){showAlert({title:'保存失败',message:e.message})}
         return;
       }
-      const fields=[{name:'name',label:'品类名',value:cur.name,required:true},{name:'parentId',label:'上级品类',type:'select',value:cur.parent_id||'',options:[{value:'',label:'无（一级品类）'},...list.filter(x=>!x.parent_id&&Number(x.id)!==id).map(x=>({value:x.id,label:x.name}))]}];
+      const fields=[{name:'name',label:'品类名',value:cur.name,required:true},{name:'parentId',label:'上级品类',type:'select',value:cur.parent_id||'',options:[{value:'',label:'无（一级品类）'},...list.filter(x=>!x.parent_id&&Number(x.id)!==id).map(x=>({value:x.id,label:x.name}))]},{name:'sort',label:'排序（数字越小越靠前）',type:'number',value:Number(cur.sort||0),min:0}];
       const v=await uxForm({title:'编辑'+label,submitText:'保存',fields});
       if(!v||!v.name)return;
       try{
-        const body={name:v.name,parentId:v.parentId?Number(v.parentId):null};
+        const body={name:v.name,parentId:v.parentId?Number(v.parentId):null,sort:Number(v.sort||0)};
         await api(base+'/'+id,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         await loadProductDicts(true);await paint(dlg);loadProducts();toast('已保存');
       }catch(e){showAlert({title:'保存失败',message:e.message})}

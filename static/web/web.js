@@ -149,7 +149,7 @@ function miniCard(x){
 }
 function miniGear(x){
   return `<button class="w-mini w-mini--gear" type="button" onclick="openProductFromPacking(${x.id})">
-    <div class="w-mini__media">${(x.coverUrl||x.image_url)?`<img src="${esc(x.coverUrl||x.image_url)}" alt="" loading="lazy">`:WI.bag}</div>
+    <div class="w-mini__media">${(x.coverUrl||x.image_url)?prodImgHtml(x.coverUrl||x.image_url,x.catalogView,'',x.name):WI.bag}</div>
     <div class="w-mini__title">${esc(x.name)}</div>
     <div class="w-mini__meta"><span class="w-mini__price">${priceHtml(x.price,{pending:x.priceFrom==='pending'})}</span></div>
   </button>`;
@@ -344,7 +344,19 @@ function renderMallFilters(){
   }
   box.innerHTML=chips.join('');
 }
-function mallCats(){return ['全部'].concat(Array.from(new Set(MALL_ALL.map(x=>x.category).filter(Boolean))))}
+/* 2026-11-04：左侧分类顺序改由后台「品类管理 → 排序」决定（product_categories.sort，
+   后端随商品下发 category_sort）。数字越小越靠前；没配的分类按首次出现顺序排后面。
+   「全部商品」永远第一 —— 它不是字典表里的品类。 */
+function mallCats(){
+  const m={};
+  (MALL_ALL||[]).forEach((x,i)=>{
+    const c=String(x.category||'').trim();if(!c)return;
+    const raw=x.category_sort,s=Number(raw);
+    const v=(raw!=null&&Number.isFinite(s))?s:9999;
+    if(!m[c]||v<m[c].s)m[c]={s:v,i:i};
+  });
+  return ['全部'].concat(Object.keys(m).sort((a,b)=>m[a].s-m[b].s||m[a].i-m[b].i));
+}
 function renderMallCats(){
   const box=$('#mallCats');if(!box)return;
   const cats=mallCats();
@@ -372,18 +384,14 @@ let MALL_HERO_ACTS=[],_heroActTried=false,_heroTimer=0,_heroHoldTimer=0,_mallHer
 
 function heroSlides(){
   const out=[];
+  /* 2026-11-04 用户要求：只有后台上架时勾了「设为主推款」的商品才进大图广告位。
+     一件都没设就返回空数组 → renderMallHero 整块隐藏，不再拿最新商品/活动封面凑数。 */
   (MALL_ALL||[]).forEach(x=>{
     if(out.length>=MALL_HERO_MAX)return;
+    if(!(Number(x.is_featured||0)===1||x.isFeatured===1||x.isFeatured===true))return;
     const u=productImages(x)[0];          /* 第一张就是商品卡上的主图，两处保持同一张 */
     if(!u)return;
-    out.push({pid:x.id,url:u,name:x.name||'',price:Number(x.price||0),stock:Number(x.stock||0)});
-  });
-  if(out.length)return out;
-  MALL_HERO_ACTS.forEach(a=>{
-    const u=a&&a.cover;
-    if(!u||out.length>=MALL_HERO_MAX)return;
-    if(out.some(x=>x.url===u))return;     /* 同一张封面被多场活动引用时只画一次 */
-    out.push({pid:null,url:u,name:'',price:null,stock:0});
+    out.push({pid:x.id,url:u,view:x.catalogView,name:x.name||'',price:Number(x.price||0),stock:Number(x.stock||0)});
   });
   return out;
 }
@@ -408,20 +416,20 @@ function renderMallHero(){
   if(sig===_mallHeroSig&&box.children.length)return;
   _mallHeroSig=sig;
   heroStop();
-  const badge=`<span class="w-shop__hbadge">商品 ${MALL_ALL.length} 件</span>`;
+  /* 2026-11-04 用户要求：去掉大图右上角「商品 12 件」角标（信息噪音、还挡图）。 */
+  const badge='';
   const tag='<span class="w-shop__htag">本季新品</span>';
   if(!slides.length){
-    box.innerHTML=`<div class="w-shop__hwrap"><div class="w-shop__htrack"><div class="w-shop__hslide is-fallback"></div></div>${badge}${tag}</div>`;
-    ensureHeroCovers();
-    return;
+    box.hidden=true;box.innerHTML='';heroStop();return;
   }
+  box.hidden=false;
   const dots=slides.map((_,i)=>`<button type="button" class="${i?'':'on'}" data-hd="${i}" aria-label="第 ${i+1} 张" onclick="heroGo(${i})"></button>`).join('');
   box.innerHTML=`<div class="w-shop__hwrap"><div class="w-shop__htrack" id="mallHeroTrack">`
     +slides.map((x,i)=>{
       const cap=x.name
         ? `<span class="w-shop__hcap"><b>${esc(x.name)}</b>${x.price!=null?`<i>${money(x.price)}</i>`:''}</span>`
         : '';
-      const img=`<img src="${esc(x.url)}" alt="${esc(x.name)}"${i?' loading="lazy"':''} draggable="false">`;
+      const img=x.view?prodImgHtml(x.url,x.view,'',x.name):`<img src="${esc(x.url)}" alt="${esc(x.name)}"${i?' loading="lazy"':''} draggable="false">`;
       /* 有商品 id 的片子渲染成 <button>：语义就是「点我进商品」，键盘/读屏都能用；
          没有商品的（活动封面兜底）渲染成 div，去掉可点暗示。 */
       return x.pid!=null
@@ -522,7 +530,7 @@ function productCard(x){
      键盘通路（Enter/空格）由 bindWebEvents 的 keydown 委托补齐（on 属性只绑 click）。 */
   return `<div class="web-card w-product${out?' is-out':''}" role="button" tabindex="0"
     aria-label="${esc(x.name)}，${money(x.price)}${out?'，'+unavailable:''}" onclick="openProduct(${x.id})">
-    <div class="w-product__media">${(x.coverUrl||x.image_url)?`<img src="${esc(x.coverUrl||x.image_url)}" alt="${esc(x.name)}" loading="lazy">`:WI.bag}${out?'<span class="w-product__flag">'+(displayOnly?'商品展示':'缺货')+'</span>':''}
+    <div class="w-product__media">${(x.coverUrl||x.image_url)?prodImgHtml(x.coverUrl||x.image_url,x.catalogView,'',x.name):WI.bag}${out?'<span class="w-product__flag">'+(displayOnly?'商品展示':'缺货')+'</span>':''}
       ${out?'':`<button class="w-product__add" type="button" aria-label="把${esc(x.name)}加入购物车" onclick="event.stopPropagation();quickAdd(${x.id})"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/><path d="M12 12.9v4.2M9.9 15h4.2"/></svg></button>`}
     </div>
     <div class="w-product__inner">
@@ -646,7 +654,7 @@ function paintCart(){
     const img=(p.coverUrl)||(p.images&&p.images[0]&&(p.images[0].url||p.images[0]))||p.image_url||'';
     const k=cartKeyOf(l);
     return `<div class="w-cart__row${dead?' is-out':''}">
-      <div class="w-cart__img">${img?`<img src="${esc(img)}" alt="${esc(p.name)}">`:WI.bag}</div>
+      <div class="w-cart__img">${img?prodImgHtml(img,p.catalogView,'',p.name):WI.bag}</div>
       <div class="w-cart__main">
         <div class="w-cart__name">${esc(p.name)}</div>
         <div class="w-cart__spec">${esc(p.category||'装备')}${v?' · '+esc(v.name):''}${dead?' · 暂时缺货':''}</div>
@@ -797,7 +805,7 @@ function pdRecCards(cur){
   if(!list.length)return '';
   return `<section class="w-pd__rec"><div class="w-pd__rechd">商品推荐</div><div class="w-pd__recgrid">`
     +list.map(x=>`<button class="w-pd__reccard" type="button" onclick="openProduct(${x.id})">
-        <span class="w-pd__recmedia"><img src="${esc(productImages(x)[0])}" alt="${esc(x.name)}" loading="lazy"></span>
+        <span class="w-pd__recmedia">${prodImgHtml(productImages(x)[0],x.catalogView,'',x.name)}</span>
         <span class="w-pd__recname">${esc(x.name)}</span>
         <span class="w-pd__recsub">${esc(x.category||'装备')}</span>
         <span class="w-pd__recprice">${money(x.price)}</span>
@@ -853,14 +861,14 @@ function productDetailHtml(){
   <header class="w-pd__bar" id="pdBar">
     <button class="w-pd__barback" type="button" aria-label="返回装备列表" onclick="showMallList()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 5-7 7 7 7"/></svg></button>
     <div class="w-pd__barinfo">
-      ${imgs[0]?`<img src="${esc(imgs[0])}" alt="" aria-hidden="true">`:''}
+      ${imgs[0]?prodImgHtml(imgs[0],p.catalogView,'',p.name):''}
       <div class="w-pd__barinfo__txt"><b>${esc(p.name)}</b><span>${money(mp)}</span></div>
     </div>
     <button class="w-pd__barbtn" type="button" aria-label="复制商品链接" onclick="pdCopyLink()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.6 14.4l4.8-4.8"/><path d="M11.2 6.6 12.8 5a3.7 3.7 0 0 1 5.2 5.2l-1.6 1.6"/><path d="M12.8 17.4 11.2 19A3.7 3.7 0 0 1 6 13.8l1.6-1.6"/></svg></button>
     <button class="w-pd__barbtn" type="button" aria-label="购物车" onclick="openCart()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/></svg><i class="w-pd__barbadge" id="pdBarBadge" hidden>0</i></button>
   </header>
   <div class="w-pd__gal" id="pdGal">
-    ${imgs.length?`<div class="w-pd__track" id="pdTrack">${imgs.map((u,i)=>'<div class="w-pd__slide"><img src="'+esc(u)+'" alt="'+esc(p.name)+'"'+(i?' loading="lazy"':'')+'></div>').join('')}</div>`
+    ${imgs.length?`<div class="w-pd__track" id="pdTrack">${imgs.map((u,i)=>'<div class="w-pd__slide">'+(i===0&&p.catalogView?prodImgHtml(u,p.catalogView,'',p.name):'<img src="'+esc(u)+'" alt="'+esc(p.name)+'"'+(i?' loading="lazy"':'')+'>')+'</div>').join('')}</div>`
       :'<div class="w-pd__noimg">'+WI.bag+'<span>暂无商品图片</span></div>'}
     ${imgs.length>1?`<div class="w-pd__dots" id="pdDots">${imgs.map((_,i)=>'<i'+(i===0?' class="on"':'')+'></i>').join('')}</div><div class="w-pd__count" id="pdCount">1/${imgs.length}</div>`:''}
   </div>
@@ -941,7 +949,7 @@ function productDetailHtml(){
     </div>
     ${colors.length?`<div class="w-pd__sheetsec">
       <div class="w-pd__sheetlabel" id="pdSheetColorLabel">颜色${PD_COLOR?`<em>已选 ${esc(PD_COLOR)}</em>`:''}</div>
-      <div class="w-pd__colors" id="pdSheetColors">${colors.map((c,i)=>`<button class="w-pd__color${String(c.name)===String(PD_COLOR||'')?' on':''}" type="button" data-color="${esc(c.name)}" aria-label="选择颜色 ${esc(c.name)}" onclick="pdPickColorByIdx(${i})"><span class="w-pd__swatch" style="background:${esc(c.hex||'#dfe5e0')}"></span><i>${esc(c.name)}</i></button>`).join('')}</div>
+      <div class="w-pd__colors" id="pdSheetColors">${colors.map((c,i)=>`<button class="w-pd__color${String(c.name)===String(PD_COLOR||'')?' on':''}" type="button" data-color="${esc(c.name)}" aria-label="选择颜色 ${esc(c.name)}" onclick="pdPickColorByIdx(${i})"><span class="w-pd__swatch" style="background:${esc(pdColorHex(c.hex,c.name))}"></span><i>${esc(c.name)}</i></button>`).join('')}</div>
     </div>`:''}
     ${sizeRow.length?`<div class="w-pd__sheetsec">
       <div class="w-pd__sheetlabel">${vs.length?(hasSize?'尺码':'颜色'):'规格'}<em>最多购买 <b id="pdSheetMax">5</b> 件</em></div>
@@ -967,6 +975,15 @@ function productDetailHtml(){
    弹层里改规格要同步刷新三处 —— 价格、数量上限、CTA 文案，所以走局部重绘。
    ★ 2026-10-24 起规格是两级：先颜色、后尺码（服饰电商标准模式）。
      没有颜色的商品只画尺码一行，跟改造前完全一样。 */
+/* 颜色名 → 色值：后端没下发 hex 时，按常用中英文颜色名映射，保证黑是黑、白是白，
+   不再统一回退成灰块（2026-11-02 修「选了黑色也是白色」）。 */
+const PD_COLOR_HEX={'黑色':'#1a1a1a','黑':'#1a1a1a','白色':'#ffffff','白':'#ffffff','红色':'#c0392b','红':'#c0392b','酒红':'#7b1f2b','粉红':'#e88aa6','粉色':'#e88aa6','蓝色':'#2c5fb3','蓝':'#2c5fb3','牛仔蓝':'#3b5a7a','藏青':'#1f2d4d','藏蓝':'#1f2d4d','深蓝':'#14315e','绿色':'#2e7d4f','绿':'#2e7d4f','军绿':'#4b5320','墨绿':'#1f3d2b','灰色':'#9aa3a0','灰':'#9aa3a0','银灰':'#b9c0bd','黄色':'#e0b400','黄':'#e0b400','橙色':'#e8743b','橙':'#e8743b','紫色':'#7b4ea3','紫':'#7b4ea3','棕色':'#7a4a2b','棕':'#7a4a2b','卡其':'#c2b280','米色':'#efe6d2','米':'#efe6d2','驼色':'#c19a6b','驼':'#c19a6b','杏色':'#e6c9a8','杏':'#e6c9a8'};
+function pdColorHex(hex,name){
+  if(hex&&String(hex).trim())return hex;
+  const n=String(name||'').trim();if(PD_COLOR_HEX[n])return PD_COLOR_HEX[n];
+  const en=n.toLowerCase();if(PD_COLOR_HEX[en])return PD_COLOR_HEX[en];
+  return '#dfe5e0';
+}
 let PD_MODE='cart',PD_SIZE=null,PD_QTY=1,PD_COLOR=null;
 /* 颜色清单优先用后端下发的 colorOptions（带色值）；老商品没有这个字段时从
    variants 里推一份，可能推空 —— 推空就不画颜色行，不画假色块。 */
@@ -1670,7 +1687,7 @@ async function openAct(id){/* 不先切视图的话，详情会被渲染进一�
    从首页 hero / 本月精选点进来时，页面看起来毫无反应。 */wviewShow('wactivities');
 /* cache:'no-store'（2026-10-10）：活动详情必须每次真回源。后台换一版之后 C 端仍显示旧版，
    最常见的原因就是这一层被浏览器/网关留了旧 JSON。后端也已给 /api/ 统一加 Cache-Control: no-store。 */
-let a=await api(`/api/public/activities/${id}`,{cache:'no-store'});currentAct=a;_actRevWatch(a);
+let a=await api(`/api/public/activities/${id}?user_id=${Number(USER||1)}`,{cache:'no-store'});currentAct=a;_actRevWatch(a);
 /* 默认团期必须是**第一个还有余位**的：早前固定取 occurrences[0]，售罄的第一个团期会被默认选中，
    顾客直接点报名就被后端拒，还看不出为什么。全满时留 null，由 signupNow 给出明确提示。 */
 /* 默认选中也要跳过已出发的团期：否则一进详情页按钮就是「立即报名 ¥xxx」，
@@ -2435,7 +2452,7 @@ async function loadMemberCenter(){
     const gd=d.gearDiscount||null,on=!!(gd&&gd.rate<1);
     const lines=[];
     lines.push(on
-      ? `会员权益：装备商城 <b>${esc(gd.discountZhe)} 折</b>（${esc(gd.planName||'订阅套餐')} 套餐）—— 在活动出行清单与装备商城里直接看到会员价。`
+      ? `会员权益：装备商城 <b>${esc(gd.discountZhe)} 折</b> —— 在活动出行清单与装备商城里直接看到会员价。`
       : '装备商城按原价结算；装备折扣由平台按俱乐部订阅的套餐提供。');
     $('#memberTierPerks').innerHTML=lines.join(' ');
   }

@@ -225,6 +225,12 @@
               <label class="plat-pe__f"><span>负责人 ID</span>
                 <input id="peOwner" type="number" min="0" step="1" placeholder="用户 ID（可空）" value="${prod && prod.owner_id ? prod.owner_id : ''}">
                 <em>商品负责人，对应 users.id</em></label>
+              <label class="plat-pe__f"><span>是否设为主推款</span>
+                <select id="peFeatured">
+                  <option value="0"${!prod || !Number(prod.is_featured || 0) ? ' selected' : ''}>否（普通商品）</option>
+                  <option value="1"${prod && Number(prod.is_featured || 0) === 1 ? ' selected' : ''}>是（进入「本季新品」大图广告位）</option>
+                </select>
+                <em>只有设为主推款的商品才会出现在 C 端商城顶部大图轮播；一件都没设时大图位自动隐藏</em></label>
             </div>
           </section>
 
@@ -805,7 +811,8 @@
         source: val('#peSource') || 'platform_self',
         inventoryMode: val('#peInventoryMode') || 'platform_owned',
         fulfillmentMode: val('#peFulfillmentMode') || 'platform_warehouse',
-        ownerId: val('#peOwner') ? Number(val('#peOwner')) : null
+        ownerId: val('#peOwner') ? Number(val('#peOwner')) : null,
+        is_featured: val('#peFeatured') === '1' ? 1 : 0
       };
 
       const skuPlan = skuList(st).length;

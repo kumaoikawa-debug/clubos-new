@@ -7,8 +7,30 @@
  const source=()=>Promise.all([api('/api/platform/warehouses'),api('/api/platform/products'),api('/api/platform/warehouse/inventory')]);
  const reloadWarehouse=()=>Promise.all([loadWarehouse(),loadSupplyChain(),loadProducts()]);
  window.toggleProduct=(id,status)=>uxTask(async()=>{const deactivate=status==='active';if(!await uxConfirm({title:deactivate?'下架装备商品':'重新上架装备商品',message:deactivate?'下架后 C 端不可继续购买，但现有订单、库存、售后与财务记录不会删除。':'请确认库存及供应关系仍然可用。',confirmText:deactivate?'确认下架':'确认上架',danger:deactivate}))return;await patch('/api/platform/products/'+id,{status:deactivate?'inactive':'active'});toast(deactivate?'商品已下架':'商品已上架');loadProducts()});
- window.approvePO=id=>uxTask(async()=>{if(!await uxConfirm({title:'审核采购单 · '+id,message:'审核采购预算与供货关系；审核不改变实物库存及应付账款。',confirmText:'确认审核'}))return;await post('/api/platform/procurement/purchase-orders/'+id+'/approve');toast('采购单已审核，待确认下单');loadSupplyChain()});
- window.orderPO=id=>uxTask(async()=>{if(!await uxConfirm({title:'确认向供应商下单 · '+id,message:'请先核实采购数量、采购价、MOQ 与交货承诺。确认下单只增加在途，不会入库。',confirmText:'确认采购下单'}))return;await post('/api/platform/procurement/purchase-orders/'+id+'/order');toast('采购单已确认下单');loadSupplyChain()});
+ // 审核 / 下单确认弹窗：先拉采购明细，核对采购数量、单价、金额后再确认（解决「审核/确认下单看不到具体采购数量」）。
+ async function poDetailTable(po){
+   const items=po.items||[];
+   const vmap={};
+   await Promise.all(items.map(async it=>{try{vmap[it.product_id]=await api('/api/platform/products/'+it.product_id+'/variants')}catch(e){vmap[it.product_id]=[]}}));
+   const vlabel=(pid,vid)=>{const v=(vmap[pid]||[]).find(x=>x.id===Number(vid));if(!v)return '规格 #'+vid;return [v.color,v.size,v.name].filter(Boolean).join(' ').trim()+' / '+(v.sku||'')};
+   let total=0;
+   const rowsHtml=items.map(it=>{
+     const q=Number(it.quantity_ordered||0),uc=Number(it.unit_cost||0),lt=Math.round(q*uc*100)/100;total+=lt;
+     let subs='';
+     if(it.skuItems&&it.skuItems.length){subs=it.skuItems.map(z=>{const sq=Number(z.quantity),suc=(z.unitCost!=null&&z.unitCost!=='')?Number(z.unitCost):uc,slt=Math.round(sq*suc*100)/100;return `<tr class="po-detail__sub"><td style="padding-left:26px;color:#4a5a50">${esc(vlabel(it.product_id,z.variantId))}</td><td>${sq}</td><td>${money(suc)}</td><td>${money(slt)}</td></tr>`}).join('')}
+     return `<tr><td><b>${esc(it.product_name)}</b><div class="sub">货号 ${esc(it.product_sku||'—')}</div></td><td>${q}</td><td>${money(uc)}</td><td>${money(lt)}</td></tr>${subs}`;
+   }).join('');
+   return `<table class="table po-detail__tbl"><thead><tr><th>商品 / 规格</th><th>采购数量</th><th>采购单价</th><th>小计</th></tr></thead><tbody>${rowsHtml}</tbody><tfoot><tr><td colspan="3" style="text-align:right;font-weight:700">合计</td><td style="font-weight:700">${money(total)}</td></tr></tfoot></table>`;
+ }
+ async function poReviewDialog(id,opts){
+   const po=await api('/api/platform/procurement/purchase-orders/'+id);
+   const detail=await poDetailTable(po);
+   const ov=uxDialog({title:opts.title+id,wide:true,desc:opts.desc,body:detail,foot:'<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-submit>'+opts.submitText+'</button>'});
+   ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+   ov.querySelector('[data-submit]').onclick=async()=>{try{await post(opts.endpoint);ov.uxClose();toast(opts.toastMsg);loadSupplyChain()}catch(e){showAlert({title:'操作失败',message:e.message})}};
+ }
+ window.approvePO=id=>uxTask(async()=>{await poReviewDialog(id,{title:'审核采购单 · ',desc:'审核采购预算与供货关系；审核不改变实物库存及应付账款。请先核对以下采购明细。',endpoint:'/api/platform/procurement/purchase-orders/'+id+'/approve',submitText:'确认审核',toastMsg:'采购单已审核，待确认下单'})});
+ window.orderPO=id=>uxTask(async()=>{await poReviewDialog(id,{title:'确认向供应商下单 · ',desc:'请先核实采购数量、采购价、MOQ 与交货承诺。确认下单只增加在途，不会入库。请先核对以下采购明细。',endpoint:'/api/platform/procurement/purchase-orders/'+id+'/order',submitText:'确认采购下单',toastMsg:'采购单已确认下单'})});
  window.receiveAS=id=>uxTask(async()=>{const d=await uxForm({title:'确认收到退货 · '+id,subtitle:'实物已经到达仓库后才执行。待检、不合格商品不可恢复为可售库存。',fields:[{name:'restock',label:'退回商品检验结果',type:'select',options:[{value:'no',label:'待检 / 不合格：不入可售库存'},{value:'yes',label:'已检合格：恢复可售库存'}],required:true,full:true},{name:'note',label:'检验/收货记录',type:'textarea',full:true,required:true,placeholder:'如：外包装完好、规格核对无误'}],submitText:'确认收货结果'});if(!d)return;const r=await post('/api/platform/after-sales/'+id+'/receive-return',{restock:d.restock==='yes',note:d.note});toast(d.restock==='yes'?'售后退货已确认，合格件入库':'退货已确认，未恢复可售库存');loadAfterSales();loadWarehouse();if(r.commerceSync?.some(x=>x.status==='error'))toast('真实入库已记录，Medusa 同步等待重试')});
  window.monthlyRoll=()=>uxTask(async()=>{if(!await uxConfirm({title:'生成本月 AI 套餐账单',message:'按当前订阅生成本月待付款账单；生成账单不会提前发放 Credits。重复月份账单由服务端幂等保护。',confirmText:'生成账单'}))return;const r=await post('/api/platform/ai-credit/monthly-roll',{});toast('本月已生成 / 确认 '+(r.orders?.length||0)+' 份账单');loadCredits()});
  window.releaseCommissions=()=>uxTask(async()=>{const r=await post('/api/platform/commissions/release',{});toast('已按售后冻结规则刷新佣金状态');loadCommissions();return r});
@@ -21,6 +43,49 @@
  window.markPicked=id=>uxTask(async()=>{if(!await uxConfirm({title:'完成拣货任务',message:'请核对实际拣出商品、数量和订单信息，确认后进入后续打包。',confirmText:'确认已拣货'}))return;await post('/api/platform/warehouse/tasks/'+id+'/picked');toast('拣货任务已完成');loadWarehouse()});
  window.createPick=orderId=>uxTask(async()=>{await post('/api/platform/orders/'+orderId+'/pick');toast('已创建拣货任务');loadWarehouse();loadOrders()});
  window.packOrder=orderId=>uxTask(async()=>{const d=await uxForm({title:'确认打包 · 订单 #'+orderId,subtitle:'先核对订单商品、数量、外包装及运单对应关系。',fields:[{name:'note',label:'打包记录',type:'textarea',required:true,full:true,value:'商品与数量核对无误，打包完成'}],submitText:'完成打包'});if(!d)return;await post('/api/platform/orders/'+orderId+'/pack',d);toast('订单已打包');loadWarehouse();loadOrders()});
+ // 采购单电子单据（可打印 / 另存 PDF）：在独立窗口渲染 A4 单据，并留存采购 / 审核 / 确认 / 入库各环节操作人。
+ // 沿用 payment-experience.js 的范式：开新窗口而非 window.print() 整页（后者会把后台导航一起打印）。
+ window.downloadPODocument=async function(poId){
+  let po;
+  try{ po=await api('/api/platform/procurement/purchase-orders/'+poId); }
+  catch(e){ showAlert({title:'读取采购单失败',message:e.message}); return; }
+  const st={draft:'草稿',approved:'已审核',ordered:'已下单',partially_received:'部分到货',received:'已完成',cancelled:'已取消'};
+  const opLabel=v=>{ if(!v||v==='platform') return '平台系统'; if(v==='replenishment') return '智能补货'; return v; };
+  const dt=v=> v? String(v).replace('T',' ').slice(0,19) : '—';
+  let total=0;
+  const rowsHtml=(po.items||[]).map(it=>{
+    const q=Number(it.quantity_ordered||0), uc=Number(it.unit_cost||0), lt=Math.round(q*uc*100)/100; total+=lt;
+    let subs='';
+    if(it.skuItems&&it.skuItems.length){ subs=it.skuItems.map(z=>{
+      const sq=Number(z.quantity), suc=(z.unitCost!=null&&z.unitCost!=='')?Number(z.unitCost):uc, slt=Math.round(sq*suc*100)/100;
+      return '<tr class="sub"><td style="padding-left:24px;color:#4a5a50">'+esc(z.label||('规格 #'+z.variantId))+'</td><td>'+sq+'</td><td>'+money(suc)+'</td><td>'+money(slt)+'</td></tr>';
+    }).join(''); }
+    return '<tr><td><b>'+esc(it.product_name)+'</b><div class="spec">货号 '+esc(it.product_sku||'—')+'</div></td><td>'+q+'</td><td>'+money(uc)+'</td><td>'+money(lt)+'</td></tr>'+subs;
+  }).join('');
+  const audit=[['创建（采购）',po.created_by,po.created_at],['审核',po.approved_by,po.approved_at],['确认下单',po.ordered_by,po.ordered_at],['入库',po.received_by,po.received_at]];
+  const auditHtml=audit.map(function(r){ return '<tr><td style="color:#6b7f76">'+r[0]+'</td><td><b>'+esc(opLabel(r[1]))+'</b></td><td>'+dt(r[2])+'</td></tr>'; }).join('');
+  const html='<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>采购单 '+esc(po.id)+'</title>'
+    +'<style>@page{size:A4;margin:16mm}*{box-sizing:border-box}body{font:14px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:#1a2b23;margin:0;padding:8px}'
+    +'h1{font-size:22px;margin:0 0 4px}.en{color:#8a9a92;font-size:12px;letter-spacing:1px}.top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #1a2b23;padding-bottom:10px;margin-bottom:14px}'
+    +'.meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;margin-bottom:14px}.meta div{display:flex;justify-content:space-between;border-bottom:1px dashed #d8e3dd;padding:5px 0}.meta span{color:#6b7f76}'
+    +'h2{font-size:15px;margin:18px 0 8px}.tbl{width:100%;border-collapse:collapse}.tbl th,.tbl td{border:1px solid #cdd8d2;padding:8px 10px;text-align:left}.tbl th{background:#eef3f0;font-weight:600}.tbl .sub td{background:#f7f9f8;font-size:12.5px;color:#4a5a50}.spec{color:#8a9a92;font-size:12px}'
+    +'.audit{width:100%;border-collapse:collapse;margin-top:6px}.audit th,.audit td{border:1px solid #cdd8d2;padding:8px 10px}.audit th{background:#eef3f0}'
+    +'.note{margin-top:14px;white-space:pre-wrap}.foot{margin-top:24px;color:#8a9a92;font-size:12px;text-align:center}'
+    +'.btn{margin-top:16px;padding:12px 18px;border:0;border-radius:10px;background:#1a2b23;color:#fff;font-size:15px;cursor:pointer}@media print{.noprint{display:none}}</style></head><body>'
+    +'<div class="top"><div><h1>采购单</h1><div class="en">PURCHASE ORDER</div></div><div style="text-align:right"><div style="font-size:24px;font-weight:700;letter-spacing:1px">'+esc(po.id)+'</div><div class="en">'+esc(st[po.status]||po.status)+'</div></div></div>'
+    +'<div class="meta"><div><span>制单日期</span><b>'+dt(po.created_at)+'</b></div><div><span>期望到货</span><b>'+dt(po.expected_at)+'</b></div>'
+    +'<div><span>供应商</span><b>'+esc(po.supplier_name||'—')+'</b></div><div><span>供应商编码</span><b>'+esc(po.supplier_code||'—')+'</b></div></div>'
+    +'<h2>采购明细</h2><table class="tbl"><thead><tr><th>商品 / 规格</th><th>采购数量</th><th>采购单价</th><th>小计</th></tr></thead><tbody>'+rowsHtml+'<tr><td colspan="3" style="text-align:right;font-weight:700">合计</td><td style="font-weight:700">'+money(total)+'</td></tr></tbody></table>'
+    +'<h2>审批流转（操作留痕）</h2><table class="audit"><thead><tr><th>环节</th><th>操作人</th><th>时间</th></tr></thead><tbody>'+auditHtml+'</tbody></table>'
+    + (po.note?('<h2>备注</h2><div class="note">'+esc(po.note)+'</div>'):'')
+    +'<div class="foot">本采购单由 ClubOS 自动生成 · 单据编号 '+esc(po.id)+'</div>'
+    +'<div class="noprint" style="text-align:center"><button class="btn" type="button" onclick="window.print()">打印 / 另存为 PDF</button></div>'
+    +'</body></html>';
+  const w=window.open('','_blank','width=820,height:1000');
+  if(!w){ showAlert({title:'无法打开打印窗口',message:'浏览器拦截了弹出窗口，请允许本站点弹出窗口后重试。'}); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+  setTimeout(function(){ try{ w.focus(); }catch(e){} },300);
+ };
  function injectWarehouseActions(){const head=document.querySelector('#warehouse .panel-title');if(!head||head.querySelector('.ux-ops-actions'))return;const box=document.createElement('div');box.className='ux-ops-actions';box.innerHTML='<button class="btn secondary" type="button" onclick="createWarehouse()">新增仓库</button><button class="btn secondary" type="button" onclick="createWarehouseLocation()">新增库位</button><button class="btn secondary" type="button" onclick="transferInventory()">移库 / 跨仓调拨</button><button class="btn secondary" type="button" onclick="countWarehouse()">库位盘点</button>';head.appendChild(box)}
  // Add task entry points without fabricating task state: order actions use actual WMS APIs.
  const originalOrders=window.loadOrders;

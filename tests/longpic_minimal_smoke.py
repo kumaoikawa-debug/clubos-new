@@ -48,7 +48,7 @@ p = longpic._FREE_PROMPT
 check('提示词有 __PHOTO_N__ 占位', '__PHOTO_N__' in p)
 check('提示词有 __PHOTO_FLOOR__ 占位', '__PHOTO_FLOOR__' in p)
 check('旧的「至少用 4 张」已移除', '至少用 4 张' not in p)
-check('首屏要求顶部压暗（品牌行可读）', '纯白' in p and '黑渐变' in p)
+check('封面叠字可读且共享户外风格', '压暗' in longpic.STYLE_PROMPT and 'data-photo-overlay' in p)
 check('无价格时写「价格待定」而不是留空', '价格待定' in p)
 
 print('[4] 兜底渲染带主题类')

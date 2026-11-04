@@ -46,8 +46,8 @@ PROVIDER_PRESETS: dict[str, dict[str, Any]] = {
         'label': '通义千问 · 阿里云百炼（DashScope 兼容模式）',
         'region': 'cn',
         'base_url': 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
-        'default_model': 'qwen-plus',
-        'vision_model': 'qwen3-vl-plus',   # qwen-vl-max 已被阿里下线（404 model_not_found），勿再回用
+        'default_model': 'qwen3.8-max',   # 2026-11 旗舰；旧 qwen-plus 为中端，长文案/排版明显偏弱
+        'vision_model': 'qwen3-vl-plus',   # qwen-vl-max / qwen3-vl-max 已被阿里下线（404 model_not_found），勿再回用
         'supports_vision': True,
         'doc': 'https://help.aliyun.com/zh/model-studio/',
     },

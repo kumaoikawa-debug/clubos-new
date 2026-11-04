@@ -43,11 +43,12 @@ import json, re, traceback
 from typing import Any
 
 import longpic_template as T
+from outdoor_longpic import STYLE_PROMPT, apply_style, photos_valid, content_text
 from ai_gateway import generate_json, record_mock_usage, GatewayResponse
 from cost_guard import scrub_cost_text, is_cost_row
 
 # 图片占位符：模板只输出这个形态，出口会校验 ref 是否真实存在
-_PH = re.compile(r'\{\{\s*media\s*:\s*([A-Za-z0-9_\-]+)\s*\}\}')
+_PH = re.compile(r'\{\{?\s*media\s*:\s*([A-Za-z0-9_\-]+)\s*\}?\}')
 
 _SYSTEM = """你是一位资深公众号内容主编。老板给你一份活动方案和一批真实照片，
 你要写出一篇**能直接发布的长图内容**：它会被套进一套已经定好的版式里（你不要管排版），
@@ -175,7 +176,11 @@ __DETAIL__
 
 ## ★ 信息唯一性（一图一事只说一遍）
 价格、名额、集合点、每条费用项、每个资格条件，**全图只出现一次**，放在最合适的组件里；
-其他组件严禁复述。团期价格与名额只出现在 `prices` / `signup` 区，行程与费用区不许再出现 ¥ 金额。
+其他组件严禁复述。行程与费用区不许再出现 ¥ 金额。
+**价格尤其如此（2026-11-03 用户实测「同一金额印了两遍」）**：`prices` 组件（团期价格表）和
+收尾 `signup.product.price`（超大数字落点）**二选一**——只要 prices 已列出团期价格，
+signup 就**不要再填 product.price**（报名区改放集合信息 / 名额 / 报名方式）；
+没有 prices 组件时，才用 signup.product.price 做价格落点。同一金额绝不允许出现两处。
 
 ## 选色规则（theme）
 - `"minimal"`（**默认，首选**）：2026-10-21 老板对照《星落彩林间·藏地川西寻秋（极简版）》定下的标准色——
@@ -193,8 +198,10 @@ __DETAIL__
 4. **多日活动必须按天分章**：eyebrow 写成 `DAY 1 — 成都→四姑娘山`、`DAY 2 — 双桥沟` 这种，
    每章配该天的代表照片；单日活动按「抵达 / 现场 / 收尾」分 3~5 章即可。
 5. **数字要少而大**：stats 一节最多 3 个（数字 + 单位 + 2~4 字标签）；不要再额外堆 chips。
-6. **收尾必须有价格重音**：资料里有真实对外价时，`signup.product.price` 必填（只写正数），
-   它会渲染成页面底部那个超大数字——这是整张图的落点。没价就只写 form，不要编。
+6. **收尾的价格落点（二选一）**：前面**没有** `prices` 组件、且资料里有真实对外价时，
+   `signup.product.price` 必填（只写正数），渲染成页面底部那个超大数字——这是整张图的落点；
+   前面**已有** prices 组件就**不要再填 product.price**——同一金额出现两次 = 事故
+   （2026-11-03 用户实测「价格多处重复」）。没价就只写 form，不要编。
 7. **不要装饰性组件**：不用 emoji、不用图标、不用"亮点卡"式堆叠；`chips` / `steps` 能不用就不用，
    要排清单就用 `params` 或 `kit`（发丝线分隔），这是极简版和卡片版的区别。
 8. **留白即设计**：节与节之间系统会自动留 110px 以上的黑；你要做的是**别用文字把空填满**。
@@ -289,66 +296,37 @@ __DIGEST__
 # 自由排版主路径（v4）：模型直出整段 HTML，按活动气质自己设计版式
 # ══════════════════════════════════════════════════════════════════════
 _FREE_SYSTEM = """你是一位作品上过知名设计杂志、专门给户外品牌做公众号长图的资深视觉设计师。
-你拿到一份活动方案和一批真实照片，要产出一张**能直接发布的 750px 宽宣传长图**——
-不是文案，是**整张图的 HTML**（版式、字体节奏、留白都由你定）。
+拿到一份真实活动方案和一批照片，你要产出的是**整张图的 HTML**——
+版式、配色、字体节奏、留白、照片裁切，都由你为这一场活动重新决定，不是往固定模板里填字。
 
-★ 品牌视觉已经定稿（2026-10-21，老板拿《星落彩林间·藏地川西寻秋（极简版）》确认）：
-**「极简画报」体系**——近黑底、满幅出血照片、宋体大标题、金棕小字眉标、零装饰。
-你的创作空间在**内容与节奏**：选哪张照片、怎么分章、哪句话值得放大、哪里留白；
-**不是在配色和形状上另起一套**。把这张图做得像一本摄影集的一页，而不是一张网页。
-判断标准只有一条：把成品递到懂设计的人面前，他愿意往下翻完，并承认「这张有被设计过」——
-不是 Word 文档，不是 PPT 大纲，更不是资料搬运。"""
+判断标准只有一条：把成品递给懂设计的人，他愿意从头翻到尾，并承认「这张有被设计过」。
+不是 Word 文档，不是 PPT 大纲，不是资料搬运，更不是每场都长一个样的浅底信息卡。
+下面的《品牌气质与构图工具箱》是气质下限与安全边界，**不是配色答案**：
+浅底还是深底、宋体大标题压在照片上还是放在独立色块里、这一场挑哪三种构图，全部由你决定。
+""" + STYLE_PROMPT
 
-_FREE_PROMPT = """## 你的产出
-一个 JSON 对象，两个键：
-{
-  "title": "活动名 · 宣传长图（内部用）",
-  "html": "一段 HTML 片段（不是整页，不要 <html>/<head>/<body>），会被渲染成 750px 宽长图"
-}
-`html` 里**可以有且只有一个 `<style>` 块**放在最前面，用来定义这套设计的配色与基础排版
-（推荐用 CSS 变量，如 `--ink / --accent / --bg / --card`）；其余样式写在行内 `style="..."`。
-字体只用系统字体栈（PingFang SC / Microsoft YaHei / sans-serif），**不要 @import 外部字体、
-不要写 CSS url() 引外部图片**；图片一律用 `{{media:ref}}`。
+_FREE_PROMPT = """## 产出
+一个 JSON 对象，两个键：{"title":"成品标题","html":"750px 宽 HTML 片段"}。
+`html` 里**必须有且只有一个 `<style>` 块**放在最前面，用来写这一场自己的设计系统
+（建议用 CSS 变量 --bg / --ink / --accent / --serif 收口）；其余样式写在行内 style 属性里。
+不要 html/head/body，不要外部字体、@import 或 CSS url() 引外部图片；图片一律 {{media:ref}}。
 
-## ★ 视觉体系：极简画报（定稿，必须照做；不要自创配色）
-这是 2026-10-21 老板拍板的品牌版式，所有长图都用这一套。它只靠三样东西：**照片、文字、黑**。
-- **底色**：整篇近黑一底到底，`--bg: #111312`（收尾区可用更深的 `#0A0B0B`）；
-  正文 `#F4F1EA`，次要信息 `#B7B2A8`，注释 `#7C776E`；强调只用**一个金棕** `#C9A26B`。
-- **零装饰**：全篇**不允许圆角、卡片、边框、阴影、胶囊按钮**。信息靠留白与 1px 发丝线
-  `rgba(255,255,255,.08~.12)` 分隔。不要 emoji、不要图标、不要彩色渐变（照片上的压暗渐层除外）。
-- **字体**：大标题用宋体 —— `font-family:"Songti SC","Noto Serif SC","STSong",serif`，
-  字重 600，字距 2~5px；正文用无衬线（PingFang SC），行高 1.95。
-  字号阶梯（整篇只用这一套）：首屏主标题 64~78px / 区块标题 44~48px / 正文 22~24px /
-  眉标 15~16px + 字距 5~7px / 图注 13~14px + 字距 3~4px / 收尾大数字 80~96px。
-- **照片满幅出血**：`width:100%`，贴齐 750px 画布两边（不内缩、不留边距、不圆角）；
-  单张图高度 430~760px 按画面内容定。叙事主图一律通栏；
-  只有装备 / 细节这类对照图可以两张并排（各 50%，间距 4px）。**三列以上小图墙一律禁止**。
-- **留白即设计**：区块上下 90~120px；宁可空着，也不要拿文字把空填满。
-- **眉标系统**：每个区块一条金棕小字眉标，统一「编号 — 名称」口径（如 `01 — 线路`、
-  `DAY 1 — 成都→四姑娘山`），字距 5~7px；多日活动必须按天分章。
-
-## ★ 版式节奏（照着排，别自由发挥成网页）
-1. **首屏**：满幅照片铺满 1100px 以上，**顶部必须压一层自上而下的黑渐变（0.55 → 0.15，占首屏上部 40%）**，
-   底部再压一层收口渐变；品牌行在顶部（15~16px、字距 8px、**纯白 #FFFFFF**，不许用金棕——
-   实测亮天空/雪山上金棕小字会整行消失），主标题（两行）压在下三分之一，标题里 3~6 个字用金棕高亮；
-   下面一行副标 + 日期地点。**标题压在图上的地方必须有 ≥55% 黑压暗**，白字要能一眼读清。
-2. **每个内容区块**：眉标 → 宋体大标题（≤14 字）→ 1~3 句正文（60~120 字）→ 一张满幅照片。
-   **每个区块只允许一个主视觉**，不要「标题 + 段落 + 一排小图 + 表格」地堆。
-3. **数字**：里程 / 海拔 / 天数这类关键数字用宋体 38~46px 排出，2~4 个并排，
-   数字与单位同行（`white-space:nowrap`），下面一行 14px 小字标签。
-4. **收尾**：一块更深的黑（`#0A0B0B`），英文小字（字距 9px）→ 宋体两行大标题 →
-   报名信息用发丝线逐行排列 → **超大价格数字（80~96px，单位单独一行）** →
-   白色方角二维码（唯一的亮块，仅在有二维码时）→ 极简品牌行。
-   **资料里没有对外价时不许编**：同一个位置写「价格待定」四个字（40~56px 宋体），
-   把落点占住；不要留空，更不要为了让版面好看编一个金额。
-5. **引言**：资料里最值得留下的一句话，单独成块：左侧 2px 金棕竖线 + 宋体 28~30px。
-6. 不要「浅底信息卡」当节奏块——极简版的节奏靠**照片与黑**，不靠色块。
-
-## ★ 结构锚点（这两块必须有，保证成品像样）
-1. **首屏**：一张满幅大图（`<img src="{{media:xxx}}">`），标题用大字号压在图上或图下，
-   带主办品牌行与一句本场专属定位；
-2. **结尾**：一块**深色**报名信息区，集中放「报名必看」：团期价格、名额余位、集合信息、
-   报名方式 —— 价格与名额**全图只在这里出现这一次**（见「信息唯一性」）。
+## 设计执行清单（给参数，不给模板；按本场素材挑至少 3 种构图）
+- **字号阶梯自己定一套并全篇只用这一套**：主标题约 60~80px、区块标题 38~48px、
+  正文 22~26px / 行高 1.8~2.0、眉标 14~16px + 字距 5~7px、图注 13~15px、
+  关键数字 72~96px。深浅两档对比要拉得开，别全篇一个字号。
+- **照片是主角**：叙事主图通栏 `width:100%`、贴齐 750px 两边不内缩，单张 430~760px 按画面定；
+  细节/对照图才允许两张并排（各约 48%），**三列以上小图墙一律禁止**。
+- **留白即设计**：区块上下 80~120px，宁可空着也别拿文字把版面填满；
+  每节只允许一个主视觉，不要「标题 + 段落 + 一排小图 + 表格」地堆。
+- **开场与收尾自己定**：满幅大图压字、深底色块题记、大留白题记、双图错落都可以；
+  收尾深色报名区集中放团期价格 / 名额 / 集合信息 / 报名方式，**价格与名额全图只出现这一次**；
+  资料里没有对外价时写「价格待定」占住落点，绝不编金额。
+- **节奏**：相邻两节不许同构；引言可单独成块（细竖线 + 衬线 28~30px）；
+  多日活动按天分章（如 `DAY 1 — 成都→四姑娘山`），单日按「抵达 / 现场 / 收尾」分 3~5 章即可。
+- 白字压在照片上时，该区域必须压暗 ≥55%，叠字容器标记 data-photo-overlay；
+  亮天空/雪山上不许放浅色小字。深绿停顿区可标 data-tone="forest"。
+- 不写巨大中文序号、不写每节编号、不写无意义英文标签、不套固定章节顺序。
 
 ## 八条硬规则（不可违反）
 1. **不创造事实**：只用资料里出现过的日期 / 价格 / 地点 / 人名 / 机构 / 资质 / 装备 / 数字；
@@ -359,7 +337,7 @@ _FREE_PROMPT = """## 你的产出
 4. 只允许这些标签：section div p h1 h2 h3 h4 strong em img figure figcaption ul ol li blockquote hr span small。
 5. 只输出一个 JSON 对象，不要 Markdown 代码围栏，不要解释文字。
 6. 所有文案是**纯文本**（可含换行）；不要写 `<br>` 之外的怪标签。
-7. **首屏 hero 与结尾 signup 必填**；整篇至少 8 个区块；
+7. 有照片时首屏必须有真实照片；结尾集中报名信息。章节数量由真实素材决定，不凑区块；
    **用图密度（极简画报的命门，2026-10-21 对照样张后从「至少 4 张」上调）**：
    本场可用照片 __PHOTO_N__ 张，成品**必须引用至少 __PHOTO_FLOOR__ 张不同的 ref**。
    照片是这套版式的主角——少于这个数，成品就从「摄影集」掉回「带插图的网页」。
@@ -405,8 +383,7 @@ _FREE_PROMPT = """## 你的产出
 - 正文是连贯段落（每段 2~4 句、60~180 字），不要一行一句靠换行装诗意。
 - 每节至少含 1 个**只有这场活动才有**的具体事实（数字 / 专名 / 动作 / 时刻）。
 - 与资料原文连续重合不得超过 12 个字。
-- 全篇正文合计 900~1500 字；不够就往资料里还有的具体安排上写
-  （几点集合、车程多久、谁带队、要不要自备什么、雨天怎么办），**不要靠形容词凑**。
+- 正文长短服从素材：有完整方案就展开关键安排，资料简短就精简，禁止为凑字数添加事实。
 
 ## 可用照片（ref｜横竖｜画面里实际有什么）
 __MEDIA__
@@ -599,18 +576,18 @@ def _html_ok(html: str, has_photos: bool, must_have: list[tuple[str, str]] | Non
     """
     h = str(html or '')
     # 首屏必须有图（前 1400 字符内出现 <img>）—— 没图的长图不像成品
-    if not _IMG_ANY.search(h[:1400]):
+    if has_photos and not _IMG_ANY.search(re.sub(r'<style\b[^>]*>.*?</style>', '', h, flags=re.I | re.S)[:1400]):
         return False, 'no hero image'
     # 自由排版必须自带 <style> 设计系统（配色 / 字号阶梯），没有就是没做设计
     if '<style' not in h.lower():
         return False, 'no style block'
     # 纯文本字数至少 400，否则太空
-    text = re.sub(r'<[^>]+>', '', h)
+    text = content_text(h)
     if len(text.strip()) < 400:
         return False, 'too thin (%d)' % len(text.strip())
     # 有可用照片时，全篇至少用 2 张（避免只首屏一张）
-    if has_photos and len(_IMG_ANY.findall(h)) < 2:
-        return False, 'only 1 image'
+    if has_photos and len(_IMG_ANY.findall(h)) < 1:
+        return False, 'no image'
     # 成本句直接判死刑（长图主视觉印成本 = 事故）；整段含任意 COST_LABELS 词就拒
     if is_cost_row(text):
         return False, 'cost leaked'
@@ -624,6 +601,20 @@ def _html_ok(html: str, has_photos: bool, must_have: list[tuple[str, str]] | Non
     #   阈值取 3：单标题 + 双栏（含/不含）天然出现 2 次不算重复，避免误杀好成品逼退模板兜底。
     if text.count('费用包含') > 2:
         return False, 'duplicated fee section'
+    # ★ 金额重复（2026-11-03 用户实测「¥ 6800 在长图里印了两遍」）：同一个 ¥ 金额在正文
+    #   出现 ≥2 次就是复述（prices 表 + 收尾大数字双渲染是主要病灶）。只数正文（text 已剥标签），
+    #   金额归一后比较（逗号分隔符不影响）。
+    _cnt = {}
+    for a in re.findall(r'¥\s*([0-9][0-9,，]*(?:\.[0-9]+)?)', text):
+        a = a.replace(',', '').replace('，', '')
+        if a:
+            _cnt[a] = _cnt.get(a, 0) + 1
+    for _a, _n in _cnt.items():
+        try:
+            if _n >= 2 and float(_a) > 0:
+                return False, 'duplicated price ¥%s x%d' % (_a, _n)
+        except ValueError:
+            pass
     # ★ 编造时刻（2026-10-11 act43 实锤）：资料里没有的 HH:MM 一个都不许出现在成品上。
     #   放在 must_have 之后：must_have 的「行程时刻」已按资料有无时刻条件化（见主流程），
     #   这里负责反向——资料没有却写了，就是编造。
@@ -728,8 +719,9 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
         if isinstance(gw.data, dict):
             cand = str(gw.data.get('html') or gw.data.get('body') or gw.data.get('content') or '')
             cand = sanitize_html(cand)
-            if len(cand) > 400 and _html_ok(cand, has_photos, must_have, known_times)[0]:
-                _n = len(_IMG_ANY.findall(cand))
+            if (len(cand) > 400 and _html_ok(cand, has_photos, must_have, known_times)[0]
+                    and photos_valid(cand, allowed, min(1, photo_total), (cover_url,) if cover_url else ())):
+                _n = len(set(_used_refs(cand)))
                 if _n >= photo_floor:
                     html, data = cand, gw.data
                     break
@@ -797,7 +789,9 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
             # 质量不够：如果模型同时给了现成 html 就用它，否则走回退
             if not html:
                 cand = str(data.get('html') or data.get('body') or '')
-                if cand and len(cand) > 400:
+                if (cand and len(cand) > 400
+                        and _html_ok(sanitize_html(cand), has_photos, must_have, known_times)[0]
+                        and photos_valid(cand, allowed, min(1, photo_total), (cover_url,) if cover_url else ())):
                     html, route = sanitize_html(cand), 'model-html'
                 else:
                     route = 'fallback(%s)' % why
@@ -812,6 +806,9 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
         html = _ensure_hero(html, caption_lines or [], allowed)
     html = scrub_html_sentences(html) if route == 'template' else scrub_cost_text(html)
 
+    if route == 'model-html':
+        html = apply_style(html)
+
     title = str(data.get('title') or master.get('title') or '活动宣传长图').strip()
     # 模型爱在标题后挂「· 宣传长图（内部用）」这类自我注释——那是给它的任务说明，
     # 不是给顾客看的文案。出口处剥掉，剥完为空再回退活动标题。
@@ -819,7 +816,7 @@ async def generate_longpic(club_id: int, activity_master: dict[str, Any],
     _t = re.sub(r'[·•]\s*宣传长图\s*$', '', _t).strip(' ··-——')
     if _t: title = _t
     return {'title': title, 'html': html, 'usedRefs': _used_refs(html),
-            'droppedRefs': dropped, 'route': route}, gw
+            'droppedRefs': dropped, 'route': route, 'style': 'outdoor-minimal-v1'}, gw
 
 
 _FIGURE_OPEN = re.compile(r'<figure\b[^>]*>', re.I)

@@ -9,7 +9,7 @@
     装备折扣 / 定位说明」，点一下即选中（描边+底色高亮），底部统一提交。
     当前订阅的套餐标「当前套餐」，运营一眼知道是维持还是真换。 */
  window.assignPlan=async id=>uxTask(async()=>{
-   const ps=(await api('/api/platform/ai-credit/plans')).filter(x=>x.status==='active');
+   const ps=(await api('/api/platform/ai-credit/plans')).filter(x=>x.status==='active'&&x.code!=='trial'); /* trial 体验套餐只随审核通过自动开通（2026-11-03），不进手动分配 */
    if(!ps.length){toast('请先创建套餐');return}
    let currentCode='';
    try{const cs=await api('/api/platform/credits');const c=(cs||[]).find(x=>Number(x.club_id)===Number(id));currentCode=c&&c.plan_code?String(c.plan_code):''}catch(e){}

@@ -185,11 +185,30 @@ def _backfill_v030_catalog(c):
 
 
 def _run_compat_migrations(c):
+    # ★ 2026-11-04：新列必须排在所有写它们的 INSERT / UPDATE 之前。
+    _ensure_column(c,'products','is_featured','is_featured INTEGER NOT NULL DEFAULT 0')
+    _ensure_column(c,'users','platform_member','platform_member INTEGER NOT NULL DEFAULT 0')
+    _ensure_column(c,'users','platform_member_since','platform_member_since TEXT')
+    # 「注册成为该俱乐部会员 → 自动成为总平台会员」用触发器兜住所有写入路径
+    # （报名 / 邀请码 / 买会员卡 / 会员中心 refresh_member），不漏任何一个调用点。
+    c.execute("""CREATE TRIGGER IF NOT EXISTS trg_club_member_platform
+        AFTER INSERT ON club_members
+        BEGIN
+          UPDATE users SET platform_member=1,
+            platform_member_since=COALESCE(platform_member_since,CURRENT_TIMESTAMP)
+          WHERE id=NEW.user_id;
+        END""")
+    # 存量会员回填（幂等；新库里 trigger 已经处理，这条只影响历史数据）
+    c.execute("""UPDATE users SET platform_member=1,
+        platform_member_since=COALESCE(platform_member_since,created_at)
+        WHERE platform_member=0 AND id IN (SELECT user_id FROM club_members)""")
     # v0.29 俱乐部设置：品牌 DIY（logo / slogan），名字本列就有
     _ensure_column(c,'clubs','logo_url','logo_url TEXT')
     _ensure_column(c,'clubs','slogan','slogan TEXT')
     _ensure_column(c,'clubs','contact_name','contact_name TEXT')
     _ensure_column(c,'clubs','contact_phone','contact_phone TEXT')
+    # 2026-11-03 官网申请表新增必填邮箱：后台审核通过后用它发账户密码与使用说明。
+    _ensure_column(c,'clubs','contact_email',"contact_email TEXT NOT NULL DEFAULT ''")
     _ensure_column(c,'clubs','city','city TEXT')
     # 活动城市（2026-10-23 用户反馈）：SaaS 面向全国，后台新建活动要选城市、C 端要按城市筛选。
     # 历史活动没有该列 → 前端按 location 文本兜底推导（static/ux/clubos-cities.js），不回写库。
@@ -213,6 +232,11 @@ def _run_compat_migrations(c):
     # 注意：public_club_application / platform_add_club 的 INSERT 会写该列，
     # 补列必须留在 _run_compat_migrations（init_db 第一个调用）里，天然在前。
     _ensure_column(c,'clubs','source',"source TEXT NOT NULL DEFAULT 'platform'")
+    # 2026-11-03 俱乐部企业资料（需求：后台详情展示公司名称/法人/公司地址以便管理）。
+    # 存量行 ADD COLUMN 自动落空串；补列天然排在所有写这些列的 UPDATE 之前。
+    _ensure_column(c,'clubs','company_name',"company_name TEXT NOT NULL DEFAULT ''")
+    _ensure_column(c,'clubs','legal_person',"legal_person TEXT NOT NULL DEFAULT ''")
+    _ensure_column(c,'clubs','company_address',"company_address TEXT NOT NULL DEFAULT ''")
     _ensure_column(c,'ai_credit_adjustment_debt','resolved_amount','resolved_amount INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'ai_credit_adjustment_debt','resolved_at','resolved_at TEXT')
     _ensure_column(c,'registrations','commerce_order_id','commerce_order_id TEXT')
@@ -313,6 +337,11 @@ def _run_compat_migrations(c):
     # 与 product_images 图集解耦 —— 头图不一定是图集里的某一张，运营可单独设。
     # 可空 + 无回填，幂等（_ensure_column 已判列存在）。
     _ensure_column(c,'products','cover_url','cover_url TEXT')
+    # PEAKTRACE 合成图头图裁切（2026-11-04）：官网商品图是「多视图合成图」（正面/背面/
+    # 细节拼一张），catalog_view=[srcW,srcH,cropX,cropY,cropW,cropH] 描述头图在合成图里的
+    # 裁切区。同步时原样落库（JSON 数组字符串，可空），前端按 SVG viewBox 只露裁切区，
+    # 复刻官网渲染（见 shared.js prodImgHtml）。可空 + 无回填，幂等。
+    _ensure_column(c,'products','catalog_view','catalog_view TEXT')
     # 颜色 × 尺码：规格从「一维的 name」升级成「颜色 + 尺码两个维度」，
     # 2 色 × 3 码要生成 6 个 SKU，而不是 6 个混在一维里的名字。
     # 存量规格的颜色尺码留空（不猜），C 端按老的一维 name 显示，功能不受影响。
@@ -348,6 +377,8 @@ def _run_compat_migrations(c):
     _ensure_column(c,'purchase_receipt_items','variant_id','variant_id INTEGER')
     _ensure_column(c,'purchase_receipts','request_key','request_key TEXT')
     _ensure_column(c,'purchase_receipts','request_hash','request_hash TEXT')
+    # 采购单「确认下单」操作人留痕（2026-11-02：单据需留存采购/审核/确认/入库各环节操作人）。
+    _ensure_column(c,'purchase_orders','ordered_by','ordered_by TEXT')
     c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_receipt_request ON purchase_receipts(request_key)')
     _ensure_column(c,'purchase_return_items','variant_id','variant_id INTEGER')
     # 品牌档案补全 + 来源 / 商城展示状态
@@ -1070,6 +1101,9 @@ def init_db():
             # 商品目录迁移要读 products.category，必须在补列之后 ——
             # 补列走 _run_compat_migrations（上面第一个调用），顺序天然成立。
             _backfill_v030_catalog(c)
+            # 2026-11-03：会员活动折扣默认开启。存量活动此前因默认 0（且后台无开关）一直不生效，
+            # 一次性把已发布活动翻成 1（仅跑一次，运营后续手动置 0 不会被重启覆盖）。
+            _backfill_v032_member_discount_default(c)
             return
         if os.getenv('CLUBOS_SECURITY_MODE','demo')=='production':
             # Never provision sample clubs, consumers, catalog, payments or credits in production.
@@ -1160,6 +1194,17 @@ def init_db():
         _backfill_v020_warehouse(c)
         _backfill_v021_finance(c)
         _backfill_v023_ai_credits(c)
+
+def _backfill_v032_member_discount_default(c):
+    # 2026-11-03：会员活动折扣默认开启。存量活动此前因 member_discount_enabled 默认 0、且后台无开关，
+    # 导致购买会员卡后「会员 9 折报名」永远不生效。这里一次性把已发布活动翻成 1。
+    # 用 _migrations 守护：仅执行一次，运营后续若手动把某场活动置 0（opt-out），重启不会被覆盖。
+    c.execute("CREATE TABLE IF NOT EXISTS _migrations(name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
+    if c.execute("SELECT 1 FROM _migrations WHERE name='member_discount_default_on'").fetchone():
+        return
+    c.execute("UPDATE activities SET member_discount_enabled=1 WHERE member_discount_enabled=0 AND status='published'")
+    c.execute("INSERT INTO _migrations(name,applied_at) VALUES('member_discount_default_on', datetime('now'))")
+
 
 def setting(key,default=None):
     with conn() as c:

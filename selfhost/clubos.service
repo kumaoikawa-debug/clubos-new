@@ -1,0 +1,24 @@
+# 裸机方案：systemd 单元（不使用 Docker 时）
+# 用法：
+#   1. pip install -r requirements.txt   （建议先用 python -m venv venv 建虚拟环境）
+#   2. 把本文件放到 /etc/systemd/system/clubos.service，按需改 User/WorkingDirectory/Environment
+#   3. sudo systemctl daemon-reload && sudo systemctl enable --now clubos
+#   4. 配合 nginx 反代（见 nginx-clubos.conf），必须 HTTPS（安全 Cookie 要求）
+[Unit]
+Description=ClubOS NEW backend
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/clubos-new
+Environment=CLUBOS_SECURITY_MODE=production
+Environment=CLUBOS_DB_PATH=/opt/clubos-new/data/clubos.db
+Environment=CLUBOS_PLATFORM_ADMIN_USER=admin
+Environment=CLUBOS_PLATFORM_ADMIN_PASS=请把这里换成至少14位的强密码
+ExecStart=/opt/clubos-new/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

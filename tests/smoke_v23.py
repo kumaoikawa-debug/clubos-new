@@ -17,7 +17,7 @@ plans=ok('get','/api/platform/ai-credit/plans').json();assert {x['code'] for x i
 packs=ok('get','/api/platform/ai-credit/topup-packages').json();assert any(x['code']=='T1000' for x in packs)
 pricing=ok('patch','/api/platform/ai-credit/task-pricing',json={'detail':30,'wechat':12,'xhs':8,'poster':6,'recap':16}).json();assert pricing['detail']==30
 # Public self-application is pending-only and exposes status without opening operating access.
-applic=ok('post','/api/public/club-applications',json={'name':'v23公开申请','contactName':'申请人','contactPhone':'13800000023','city':'成都'}).json();assert applic['status']=='pending'
+applic=ok('post','/api/public/club-applications',json={'name':'v23公开申请','contactName':'申请人','contactPhone':'13800000023','city':'成都','email':'v23apply@example.com'}).json();assert applic['status']=='pending'
 assert ok('get',f"/api/public/club-applications/{applic['applicationId']}").json()['status']=='pending'
 # Onboarding creates PENDING club with no operating rights.
 club=ok('post','/api/platform/clubs',json={'name':'v23待审核俱乐部','contactName':'测试负责人','contactPhone':'13900000023','city':'成都','applicationNote':'v23 test'}).json();cid=int(club['id']);assert club['status']=='pending'

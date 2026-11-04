@@ -96,7 +96,8 @@ anon = TestClient(app.app, base_url='https://testserver')
 # ── ① 官网申请：公开接口匿名提交，source=website ────────────────────────────
 r = anon.post('/api/public/club-applications', json={
     'name': '官网体验俱乐部', 'contactName': '王体验', 'contactPhone': '13811112222',
-    'city': '成都', 'applicationNote': '每月 4 场徒步，现在用微信群接龙'})
+    'city': '成都', 'email': 'wang@example.com',
+    'applicationNote': '每月 4 场徒步，现在用微信群接龙'})
 check('官网公开接口匿名提交成功', r.status_code == 200, r.text[:200])
 web_id = int(r.json()['applicationId'])
 with conn() as c:

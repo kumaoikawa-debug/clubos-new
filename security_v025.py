@@ -107,6 +107,20 @@ def install_tables() -> None:
 
     with conn() as c:
         if 'platform_department' not in {r[1] for r in c.execute('PRAGMA table_info(auth_accounts)')}:c.execute("ALTER TABLE auth_accounts ADD COLUMN platform_department TEXT NOT NULL DEFAULT 'all'")
+    # 2026-11-03 关闭内测免登录（CLUBOS_TEST_OPEN）后，总平台需一个管理员账户才能登录。
+    # 幂等：只在「还没有任何 active 平台账户」时创建一次。账号/密码优先读环境变量，
+    # 未配置时落默认值（≥14 位，满足 hash_password 要求）；部署后请尽快改密。
+    with conn() as c:
+        if not c.execute("SELECT 1 FROM auth_accounts WHERE role='platform' AND status='active'").fetchone():
+            username=os.getenv('CLUBOS_PLATFORM_ADMIN_USER','admin')
+            pwd=os.getenv('CLUBOS_PLATFORM_ADMIN_PASS') or 'ClubOS@2026Admin!'
+            if len(pwd)<14: pwd='ClubOS@2026Admin!'
+            try:
+                c.execute("INSERT INTO auth_accounts(username,password_hash,role,status,platform_department) VALUES(?,?,?,?,'all')",
+                          (username,hash_password(pwd),'platform','active'))
+                print(f'[security] 已创建平台管理员账户 {username}（默认密码 {pwd}；请尽快在部署环境变量 CLUBOS_PLATFORM_ADMIN_PASS 中修改并重新部署）',flush=True)
+            except Exception as e:
+                print(f'[security] 平台管理员账户已存在或创建失败：{e}',flush=True)
 
 def hash_password(password: str) -> str:
     if len(password) < 14:
@@ -209,6 +223,19 @@ def get_identity(request: Request) -> tuple[dict | None, str | None]:
     bearer = request.headers.get('authorization','')
     token = bearer[7:].strip() if bearer.lower().startswith('bearer ') else request.cookies.get('clubos_session','')
     mode = 'bearer' if bearer.lower().startswith('bearer ') else 'cookie'
+    # 网关（公开托管 *.app.workbuddy.host）会剥离 Cookie / Authorization 请求头，
+    # 导致浏览器会话无法跨请求保持（登录后立刻 401 被踢回登录页，表现为「闪退」）。
+    # 兼容多种可穿透网关的会话载体：X-ClubOS-Token、中性头 X-App-Session、查询参数 ?sid=。
+    if not token:
+        hdr = request.headers.get('x-clubos-token','').strip()
+        neu = request.headers.get('x-app-session','').strip()
+        q = (request.query_params.get('sid') or '').strip() if hasattr(request,'query_params') else ''
+        if hdr:
+            token = hdr; mode = 'token-header'
+        elif neu:
+            token = neu; mode = 'token-neutral'
+        elif q:
+            token = q; mode = 'token-query'
     if not token: return None, None
     with conn() as c:
         account = row(c.execute('''SELECT a.*,s.csrf_hash FROM auth_sessions s JOIN auth_accounts a ON a.id=s.account_id

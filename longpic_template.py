@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import html as _html
+from outdoor_longpic import apply_style
 import random
 import re
 from typing import Any, Iterable
@@ -565,6 +566,39 @@ def _real_price(x: Any) -> bool:
         return False
 
 
+def _doc_has_rendered_prices(doc: dict) -> bool:
+    """全文预扫描：sections 里是否存在**真实渲染出金额**的 prices 组件。
+
+    ★ 2026-11-03 用户实测「价格多处重复」：提示词同时要求 prices 组件（团期价格表）
+      和 signup.product.price（收尾超大数字），模型经常两个都填 → 同一 ¥ 金额印两遍。
+      提示词改了还会犯，改成代码保证：只要 prices 块真的渲染出了金额，收尾就不再渲染大价格。
+    """
+    for s in _lst(doc.get('sections')):
+        if not isinstance(s, dict):
+            continue
+        for b in _lst(s.get('blocks')):
+            if isinstance(b, dict) and str(b.get('type') or '').strip().lower() in (
+                    'prices', 'price', 'occurrences'):
+                for it in _lst(b.get('items')):
+                    if isinstance(it, dict) and (_real_price(it.get('price')) or _real_price(it.get('v'))):
+                        return True
+    return False
+
+
+def _doc_has_rendered_fee(doc: dict) -> bool:
+    """全文预扫描：sections 里是否有带实质内容的 fee（费用包含/不含）组件。
+
+    同样防「signup.product.inc 把费用清单在收尾又抄一遍」。"""
+    for s in _lst(doc.get('sections')):
+        if not isinstance(s, dict):
+            continue
+        for b in _lst(s.get('blocks')):
+            if isinstance(b, dict) and str(b.get('type') or '').strip().lower() in ('fee', 'cost'):
+                if _lst(b.get('inc')) or _lst(b.get('exc')):
+                    return True
+    return False
+
+
 # 内部成本口径的词，绝不进「费用包含」清单。
 # 依据（用户铁律）：成本数据不得出现在任何前端 —— 这是最后一道兜底，
 # 提示词已先要求"只抄资料里写给客人的费用包含，不要搬内部成本明细"。
@@ -986,7 +1020,11 @@ def _render_section(s: dict, ctx: Ctx) -> str:
     return '<section class="sec">%s</section>' % inner if inner.strip() else ''
 
 
-def _render_signup(s: dict, ctx: Ctx) -> str:
+def _render_signup(s: dict, ctx: Ctx, skip_price: bool = False, skip_fee: bool = False) -> str:
+    """skip_price / skip_fee（2026-11-03 价格费用去重）：
+    正文里 prices 块已渲染出真实金额 → 收尾不再渲染 signup.product.price 大数字；
+    正文里 fee 块已列过费用包含/不含 → 收尾 product.inc 不再重复抄费用清单。
+    两者都由 render() 预扫描决定，模型双填也不会把同一信息印两遍。"""
     if not isinstance(s, dict):
         s = {}
     parts = []
@@ -1018,10 +1056,12 @@ def _render_signup(s: dict, ctx: Ctx) -> str:
         price, unit = _s(prod, 'price'), _s(prod, 'unit') or '/ 人'
         inc = [_s(i) for i in _lst(prod.get('inc'))]
         inc = [i for i in inc if i.strip() and not _INTERNAL_COST.search(i)]
+        if skip_fee:
+            inc = []                                   # 正文 fee 块已列过，收尾不再重复
         if pics or price or inc:
             inc_html = '<div class="inc">%s</div>' % '<br>'.join('· ' + _e(i) for i in inc) if inc else ''
             txt = ''
-            if _real_price(price):
+            if _real_price(price) and not skip_price:   # 正文 prices 块已渲染金额 → 收尾不再放大价格
                 txt = '<div class="price"><small>¥</small>%s <small>%s</small></div>' % (_e(price), _e(unit))
             prod_html = '<div class="product">%s<div class="txt">%s%s</div></div>' % (pics, txt, inc_html)
             if pics or txt:
@@ -1059,12 +1099,16 @@ def render(doc: dict, allowed_refs: set[str] | None = None, cover_url: str | Non
     body = [_render_hero(doc.get('hero'), ctx, cover_url)]
     for s in _lst(doc.get('sections')):
         body.append(_render_section(s, ctx))
-    body.append(_render_signup(doc.get('signup'), ctx))
+    # ★ 2026-11-03 价格/费用去重：prices 块真渲染出了金额 → 收尾不再渲染大价格；
+    #   fee 块已列过费用包含/不含 → 收尾 product.inc 不再重复抄费用清单。
+    body.append(_render_signup(doc.get('signup'), ctx,
+                               skip_price=_doc_has_rendered_prices(doc),
+                               skip_fee=_doc_has_rendered_fee(doc)))
 
     html = ''.join(x for x in body if x)
     # 二维码：模板里占位，调用方若无二维码则整块已自带占位图（前端会替换 __QR__ 或按需删）
-    return ('<style>%s</style><div class="rc rc--%s">%s</div>'
-            % (build_css(theme), theme, html))
+    return apply_style('<style>%s</style><div class="rc rc--%s">%s</div>'
+                       % (build_css(theme), theme, html), strict=True)
 
 
 # ══════════════════════════════════════════════════════════════════════

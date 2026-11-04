@@ -679,3 +679,14 @@
 .w-inv__sub>td{background:var(--panel-2,#f7f9f8);font-size:13px;color:var(--muted,#5a6b64)}
 .w-inv__sub .w-inv__loc{margin-left:8px;font-size:12px;opacity:.75}
 .w-inv__chev{width:20px;text-align:center;color:var(--muted,#8a9a92);user-select:none}
+/* 采购审核 / 确认下单弹窗里的明细表：规格子行缩进、浅底区分（2026-11-02） */
+.po-detail__tbl td{vertical-align:top}
+.po-detail__sub>td{background:var(--panel-2,#f7f9f8);font-size:12.5px;color:var(--muted,#5a6b64)}
+
+/* 采购单列表：操作按钮组（2026-11-03 修复排版错乱）
+   旧模板把 list-row__end（状态标签）误嵌进 list-row__main，且最外层 list-row
+   永远没闭合 → 每行互相嵌套、文字被压成竖排单字。现已抽成 .po-actions 独立
+   flex 容器，按钮统一 sm 尺寸、可换行对齐，状态标签回到右侧 list-row__end。 */
+.po-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px}
+.po-actions .btn{margin:0}
+.po-actions .btn+ .btn{margin-left:0}

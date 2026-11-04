@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 __all__ = [
@@ -112,7 +113,7 @@ class GearPointsPolicyService:
     @staticmethod
     def _default_plan_lookup(c, club_id: int) -> dict[str, Any] | None:
         r = c.execute(
-            """SELECT p.code,p.name,p.gear_points_redeem_percent
+            """SELECT p.code,p.name,p.gear_points_redeem_percent,s.current_period_end AS pe
                FROM clubs cl
                LEFT JOIN club_ai_subscriptions s ON s.club_id=cl.id AND s.status='active'
                LEFT JOIN ai_credit_plans p ON p.code=COALESCE(s.plan_code,cl.plan)
@@ -121,8 +122,15 @@ class GearPointsPolicyService:
         ).fetchone()
         if r is None:
             return None
+        code = str(r["code"] or "")
+        # 体验套餐有 3 天硬期限（2026-11-03）：current_period_end 一过，装备积分
+        # 抵用权益同步停掉 —— 与 plan_gear_rate 对过期 trial 的处理保持同一口径。
+        if code == "trial":
+            pe = str(r["pe"] or "")[:10]
+            if not pe or pe < date.today().isoformat():
+                return None
         return {
-            "code": str(r["code"] or ""),
+            "code": code,
             "name": str(r["name"] or ""),
             "gear_points_redeem_percent": _num(
                 r["gear_points_redeem_percent"] if "gear_points_redeem_percent" in r.keys() else 0

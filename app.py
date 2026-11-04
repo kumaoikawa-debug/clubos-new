@@ -42,7 +42,7 @@ ROOT=Path(__file__).resolve().parent
 STATIC=ROOT/'static'
 UPLOAD=STATIC/'uploads'
 from security_v025 import (IS_PROD, sanitize_public_document, validate_production_config, install_tables, authorize_request,
-    issue_session, get_identity, revoke_session, record_audit)
+    issue_session, get_identity, revoke_session, record_audit, hash_password)
 validate_production_config()
 app=FastAPI(title='ClubOS NEW',version='0.25.0-production-hardening',
             docs_url=None if IS_PROD else '/docs',redoc_url=None if IS_PROD else '/redoc',
@@ -98,7 +98,7 @@ def login_page():
 @app.post('/api/auth/login')
 def login_account(request:Request,payload:dict=Body(...)):
     token,csrf,identity=issue_session(request,str(payload.get('username') or ''),str(payload.get('password') or ''))
-    response=JSONResponse({'ok':True,'identity':identity})
+    response=JSONResponse({'ok':True,'identity':identity,'token':token,'csrf':csrf})
     response.set_cookie('clubos_session',token,httponly=True,secure=IS_PROD,samesite='strict',max_age=3600,path='/')
     response.set_cookie('clubos_csrf',csrf,httponly=False,secure=IS_PROD,samesite='strict',max_age=3600,path='/')
     return response
@@ -542,27 +542,50 @@ def _leader_plan_for(c,club_id:int,activity:dict)->dict:
             'specialties':list(_LEADER_SPECIALTIES),'occurrences':out}
 
 
-def _gear_plan_for(c,master:dict,club_id:int)->dict:
-    """出行清单 × 商城在售装备 + 会员折扣。
+def _gear_plan_for(c,master:dict,club_id:int,user_id:int|None=None,public_view:bool=False)->dict:
+    """出行清单 × 商城在售装备 + 会员价。
 
     候选集合只含商城里 status='active' 的真实商品，推荐引擎不做任何商品条目的生成或补全；
     清单里没有对应装备时如实标注，不凑一个相近的顶上（与媒体清单同一条纪律）。
 
-    会员价按本俱乐部订阅套餐的装备折扣计算并随商品一起下发（折扣由总平台按套餐控制，
-    会员等级不参与），让「加入会员更便宜」这件事在出行清单上直接看得见，而不是藏在会员中心里。
+    ★ 2026-11-04：要享受会员价必须先注册成为**该俱乐部**的会员。结算层
+    （checkout._member_gear_discount）一直按 club_members 判定，展示层以前却对所有人
+    下发会员价。这里按 user_id 补上同一条判定，结果随商品下发，前端据此印入会引导。
+    套餐名（Pro / Enterprise）是后台运营概念，public_view=True 时一律不露出。
     """
     prods=rows(c.execute('SELECT id,name,price,stock,category,image_url,description FROM products WHERE status="active" ORDER BY id'))
     plan=gear_recommend.plan(prods,master).as_dict()
+    eligible=False
+    if user_id:
+        try:
+            eligible=c.execute('SELECT 1 FROM club_members WHERE club_id=? AND user_id=?',
+                               (club_id,int(user_id))).fetchone() is not None
+        except Exception:
+            eligible=False
+    plan['memberEligible']=bool(eligible)
     rate,plan_name,_=ai_credit_engine.plan_gear_rate(c,club_id)
     if rate<1:
         plan['memberDiscount']={'rate':round(rate,4),'discountZhe':round(rate*10,2),'planName':plan_name,
                                 'tierName':plan_name,'label':f'{plan_name} 套餐 {rate*10:g} 折'}
-        picks=[p for it in (plan.get('items') or []) for p in (it.get('matches') or [])]
+        picks=[]
+        for it in (plan.get('items') or []):
+            picks+=list(it.get('matches') or [])
+            picks+=list(it.get('substitutes') or [])
         picks+=list(plan.get('extras') or [])
         for p in picks:
             base=round(float(p.get('price') or 0),2); mp=round(base*rate,2)
             p['memberPrice']=mp; p['memberSavings']=round(base-mp,2)
             p['memberDiscount']=round(rate,4); p['memberTierName']=plan_name
+            p['memberEligible']=bool(eligible)
+    if public_view:
+        md=plan.get('memberDiscount') or {}
+        for k in ('planName','tierName','label','planCode'):
+            md.pop(k,None)
+        for it in (plan.get('items') or []):
+            for p in list(it.get('matches') or [])+list(it.get('substitutes') or []):
+                p.pop('memberTierName',None)
+        for p in (plan.get('extras') or []):
+            p.pop('memberTierName',None)
     return plan
 
 
@@ -651,8 +674,8 @@ async def _run_generate_job(club_id:int,job_id:int,source:dict,refresh_facts:boo
         title=master.get('title') or 'AI生成活动'
         with conn() as c:
             _pd=_club_points_defaults(c,club_id)
-            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,source_json,points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(
-                club_id,title,'draft',master.get('date',''),master.get('location',''),city_val,float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source)),_pd[0],_pd[1],_pd[2],_pd[3]))
+            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,source_json,points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent,member_discount_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(
+                club_id,title,'draft',master.get('date',''),master.get('location',''),city_val,float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source)),_pd[0],_pd[1],_pd[2],_pd[3],1))
             aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
             vid,_n=_reserve_detail_version(c,club_id=club_id,activity_id=aid,origin='ai-generate')
             _finalize_detail_version(c,version_id=vid,activity_id=aid,detail=detail,master=master,
@@ -770,8 +793,8 @@ async def ai_generate(club_id:int,background_tasks:BackgroundTasks,prompt:str=Fo
         title=master.get('title') or 'AI生成活动'
         with conn() as c:
             _pd=_club_points_defaults(c,club_id)
-            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,source_json,points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(
-                club_id,title,'draft',master.get('date',''),master.get('location',''),city_val,float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source)),_pd[0],_pd[1],_pd[2],_pd[3]))
+            c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,source_json,points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent,member_discount_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(
+                club_id,title,'draft',master.get('date',''),master.get('location',''),city_val,float(master.get('price') or 0),int(master.get('capacity') or 0),jdump(master),jdump(detail),jdump(_source_for_storage(source)),_pd[0],_pd[1],_pd[2],_pd[3],1))
             aid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
             vid,_n=_reserve_detail_version(c,club_id=club_id,activity_id=aid,origin='ai-generate')
             _finalize_detail_version(c,version_id=vid,activity_id=aid,detail=detail,master=master,
@@ -825,8 +848,8 @@ def create_activity_manual(club_id:int,payload:dict=Body(...)):
     ]})
     with conn() as c:
         _pd=_club_points_defaults(c,club_id)
-        cur=c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (club_id,title,'draft',event_date,location,city,price,capacity,jdump(master),jdump(detail),_pd[0],_pd[1],_pd[2],_pd[3]))
+        cur=c.execute('INSERT INTO activities(club_id,title,status,event_date,location,city,price,capacity,activity_master_json,detail_json,points_enabled,earn_club_points,accept_club_points,club_points_max_discount_percent,member_discount_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (club_id,title,'draft',event_date,location,city,price,capacity,jdump(master),jdump(detail),_pd[0],_pd[1],_pd[2],_pd[3],1))
         aid=int(cur.lastrowid)
         if occ_start:
             c.execute('INSERT INTO activity_occurrences(activity_id,club_id,start_at,price,capacity,status,label) VALUES(?,?,?,?,?,?,?)',
@@ -1678,11 +1701,33 @@ def longpic_status(club_id:int,activity_id:int):
 # ══ 活动回顾：异步作业表（与长图同理，live 真模型常超 55s 网关上限）══
 _RECAP_JOBS: dict[tuple[int, int], dict] = {}
 
-async def _recap_job(club_id:int,activity_id:int,master:dict,note:str,entries:list[dict]):
+async def _recap_job(club_id:int,activity_id:int,master:dict,note:str,entries:list[dict],layout_seed:str=''):
     # 独立回顾 activity_id 为 None（解耦、不绑定系统活动）；作业 key 用 (club_id, activity_id or 0) 保持一致
     job=_RECAP_JOBS.setdefault((club_id,activity_id or 0),{'status':'running'})
     try:
-        try: content,usage=await generate_recap(club_id,master,note,entries)
+        # ★ 2026-11-04：先做视觉打标，给每张现场照片补一句**画面描述**（desc）。
+        #   没有它，图注位只能显示文件名/哈希（用户截图里那行「b6598b6b69…」乱码），
+        #   写作模型也看不到照片内容，写出来的段落与照片对不上。
+        #   打标失败只降级为「无描述」，绝不让整条回顾生成挂掉。
+        try:
+            caps=await caption_media(club_id,master)
+            try:
+                persist_captions(master,caps)
+                # 打标结果要落回活动资料，否则下次生成又当成"没打标"重跑一遍。
+                if activity_id:
+                    with conn() as c:
+                        c.execute('UPDATE activities SET activity_master_json=?,updated_at=CURRENT_TIMESTAMP '
+                                  'WHERE id=? AND club_id=?',(jdump(master),activity_id,club_id))
+            except Exception: pass
+        except Exception: pass
+        by_ref={str(x.get('ref')):x for x in (master.get('media') or []) if isinstance(x,dict)}
+        for e in entries:
+            mm=by_ref.get(str(e.get('ref')))
+            if mm:
+                d=str(mm.get('desc') or '').strip()
+                if d:e['desc']=d
+                if mm.get('usable') is not None:e['usable']=mm.get('usable')
+        try: content,usage=await generate_recap(club_id,master,note,entries,layout_seed)
         except AIGatewayError as e:
             job.update(status='error',error=str(e)); return
         charge_credits(club_id,'recap',usage.usage_id)
@@ -1804,7 +1849,11 @@ async def recap_generate(club_id:int,activity_id:int,note:str=Form(''),
             except Exception:pass
             recap_entries.append({'ref':f'rcap_{_rcap_base+i:02d}','url':f'/static/uploads/{club_id}/{batch.name}/{p.name}',
                                   'kind':'photo','source':'recap','name':p.name,
-                                  'desc':p.stem,'width':w,'height':h})
+                                  # ★ 2026-11-04：desc 原来写的是文件名（p.stem），后果有两个：
+                                  #   ① 打标模块把"已有描述"当成已完成 → **从不生成画面描述**；
+                                  #   ② 没有描述时图注位只能显示文件名 → 用户看到一串哈希乱码。
+                                  #   现在留空，交给视觉打标补；打标失败则留空（前端不出图注）。
+                                  'desc':'','width':w,'height':h})
         if not recap_entries and not note:
             _names='、'.join(str(x or '文件') for x in _skipped[:3]) or '上传的文件'
             raise HTTPException(422,f'{_names}都没能作为照片读入。请换用 jpg/png 等常见图片格式，'
@@ -1872,7 +1921,8 @@ async def recap_generate_standalone(club_id:int,title:str=Form(''),event_date:st
             except Exception:pass
             recap_entries.append({'ref':f'rcap_{i:02d}','url':f'/static/uploads/{club_id}/{batch.name}/{p.name}',
                                   'kind':'photo','source':'recap','name':p.name,
-                                  'desc':p.stem,'width':w,'height':h})
+                                  # 同上：desc 留空，交给视觉打标（用文件名会挡住打标并变成乱码图注）
+                                  'desc':'','width':w,'height':h})
         if not recap_entries and not note:
             _names='、'.join(str(x or '文件') for x in _skipped[:3]) or '上传的文件'
             raise HTTPException(422,f'{_names}都没能作为照片读入。请换用 jpg/png 等常见图片格式，'
@@ -1895,6 +1945,39 @@ async def recap_generate_standalone(club_id:int,title:str=Form(''),event_date:st
 @app.get('/api/club/{club_id}/recap/status')
 def recap_status_standalone(club_id:int):
     return _RECAP_JOBS.get((club_id,0)) or {'status':'idle'}
+
+
+@app.post('/api/club/{club_id}/recap/retypeset')
+async def recap_retypeset(club_id:int,asset_id:int=Form(0)):
+    """「换一版排版」：用**上一次同一批素材**（现场照片 + 现场记录 + 事实锚点）再跑一次 AI，
+    只换版式、不改素材，不要求用户重新上传照片。版式种子让每次的结构真的不一样。
+    与首次生成共用 (club_id,0) 作业与 /recap/status 轮询，天然防并发、防双份计费。"""
+    club_or_404(club_id); ensure_credits(club_id,'recap')
+    with conn() as c:
+        if asset_id:
+            r=row(c.execute("SELECT * FROM content_assets WHERE id=? AND club_id=? AND channel='recap'",(asset_id,club_id)))
+        else:
+            r=row(c.execute("SELECT * FROM content_assets WHERE club_id=? AND channel='recap' ORDER BY id DESC LIMIT 1",(club_id,)))
+    if not r: raise HTTPException(404,'没有可换版的回顾，请先生成一份活动回顾。')
+    body=jload(r['body_json'],{}) or {}
+    media=[m for m in (body.get('media') or []) if isinstance(m,dict) and m.get('ref')]
+    note=str(body.get('note') or '')
+    if not media and not note:
+        raise HTTPException(422,'这份回顾没有留存原始素材，请重新上传照片生成一次再换版。')
+    facts=body.get('facts') if isinstance(body.get('facts'),dict) else {}
+    master={'title':str(body.get('title') or r['title'] or ''),
+            'date':facts.get('date'),'location':facts.get('location'),
+            'capacity':facts.get('capacity'),'duration':facts.get('duration'),
+            'media':list(media)}
+    key=(club_id,0)
+    prev=_RECAP_JOBS.get(key)
+    if prev and prev.get('status')=='running':
+        return {'pending':True,'channel':'recap','activityId':0,'status':'running','note':'正在生成中，请稍候。'}
+    seed=uuid.uuid4().hex[:8]
+    _RECAP_JOBS[key]={'status':'running','started':datetime.utcnow().isoformat(),
+                      'skipped':[],'retypeset':True}
+    asyncio.create_task(_recap_job(club_id,None,master,note,media,seed))
+    return {'pending':True,'channel':'recap','activityId':0,'status':'running'}
 
 
 # ══ 活动回顾（含独立回顾）现场照片的俱乐部鉴权媒体路由 ══
@@ -3581,7 +3664,9 @@ def credits(club_id:int):
     with conn() as c:
         st=ai_credit_engine.statement(c,club_id=club_id)
         st['topupPackages']=ai_credit_engine.topup_packages(c)
-        st['plans']=ai_credit_engine.plans(c)
+        # trial 体验套餐不进俱乐部自助订阅列表（2026-11-03）：它只随入驻审核通过
+        # 由平台自动开通，挂在这里会诱导俱乐部手动「订阅」一个不收费的档位。
+        st['plans']=[p for p in ai_credit_engine.plans(c) if p.get('code')!='trial']
         st['pendingOrders']=[x for x in ai_credit_engine.orders(c,club_id=club_id,limit=50) if x['status']=='pending']
         return {'account':st['account'],'ledger':st['ledger'][:60],'subscription':st['subscription'],'unresolvedDebt':st['unresolvedDebt'],
                 'creditsConsumed':st['creditsConsumed'],'successfulCalls':st['successfulCalls'],'topupPackages':st['topupPackages'],
@@ -3699,11 +3784,27 @@ def club_credit_ledger(club_id:int,date_from:str|None=None,date_to:str|None=None
 # 商品列表/详情共用的列：品牌与品类用子查询带出名字，避免每个调用点各写一遍 JOIN。
 # 保留 category 文本列是因为老接口（列表副标题、Medusa 同步）还在读它 ——
 # 迁移只回填 category_id，不删文本，两边同时可用。
-PROD_COLS = """id,name,sku,price,stock,status,image_url,cover_url,category,brand_id,category_id,gender,season,series,material,
+PROD_COLS = """id,name,sku,price,stock,status,image_url,cover_url,catalog_view,category,brand_id,category_id,gender,season,series,material,is_featured,
                source,inventory_mode,fulfillment_mode,
                (SELECT source_type FROM product_brands b WHERE b.id=products.brand_id) brand_source_type,
                (SELECT name FROM product_brands b WHERE b.id=products.brand_id) brand_name,
-               (SELECT name FROM product_categories ct WHERE ct.id=products.category_id) category_name"""
+               (SELECT name FROM product_categories ct WHERE ct.id=products.category_id) category_name,
+               (SELECT sort FROM product_categories ct WHERE ct.id=products.category_id) category_sort"""
+
+
+def _parse_catalog_view(raw):
+    """catalog_view 落库的是 JSON 数组字符串 [srcW,srcH,cropX,cropY,cropW,cropH]（PEAKTRACE
+    合成图头图裁切区）。解析成数值数组下发（前端 prodImgHtml 按 SVG viewBox 裁切）；
+    解析失败返回 None，前端退回普通整图渲染 —— 坏数据只降级展示，不打接口。"""
+    if not raw:
+        return None
+    try:
+        v = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(v, list) and len(v) == 6 and all(isinstance(n, (int, float)) for n in v):
+        return v
+    return None
 
 
 def _product_extras(c, ids:list[int]):
@@ -3748,6 +3849,8 @@ def _with_extras(c, product_list:list[dict]):
             all_imgs.append({'url':x['image_url']})
         d['images']=all_imgs
         d['coverUrl']=cover or (all_imgs[0]['url'] if all_imgs else None)
+        # 合成图头图裁切区：C 端列表/详情头图按它裁出干净单视图（2026-11-04）。
+        d['catalogView']=_parse_catalog_view(x.get('catalog_view'))
         d['variants']=variants.get(pid) or []
         external=(d.get('source')=='external_api' or d.get('inventory_mode')!='platform_owned' or d.get('brand_source_type')=='external_api')
         d['displayOnly']=external
@@ -4612,7 +4715,7 @@ def public_route_inquiry(activity_id:int,payload:dict=Body(...),background_tasks
 
 
 @app.get('/api/public/activities/{activity_id}')
-def public_activity(activity_id:int):
+def public_activity(activity_id:int, user_id:int|None=None):
     with conn() as c:
         a=row(c.execute('SELECT * FROM activities WHERE id=? AND status="published"',(activity_id,)))
         occ=rows(c.execute('SELECT *,MAX(capacity-sold,0) remaining FROM activity_occurrences WHERE activity_id=? AND status="open" ORDER BY start_at',(activity_id,)))
@@ -4646,7 +4749,7 @@ def public_activity(activity_id:int):
             except (TypeError, ValueError):
                 pass
     # 出行清单 × 商城在售装备：让 C 端报名页能直接把清单变成可下单的装备推荐
-    with conn() as _gc:a['gearRecommendations']=_gear_plan_for(_gc,a['activityMaster'],int(a['club_id']))
+    with conn() as _gc:a['gearRecommendations']=_gear_plan_for(_gc,a['activityMaster'],int(a['club_id']),user_id=user_id,public_view=True)
     # 带队领队：顾客挑团期时最想知道「谁带」，俱乐部端排好班之后这里必须看得见
     with conn() as _lc:a['leaders']=_public_leaders(_lc,activity_id,int(a['club_id']))
     # 出行指引（按团期）：集合/应急 + 已发送通知 + 分组 —— 后台执行页填的内容同步到 C 端活动页。
@@ -5651,7 +5754,13 @@ def public_member_center(club_id:int,user_id:int=1):
         purchase_enabled=bool(club_row and club_row['membership_purchase_enabled'])
         purchasable=membership_engine.purchasable_tiers(c,club_id) if purchase_enabled else []
         active_purchase=membership_engine.active_purchase(c,club_id=club_id,user_id=user_id) if purchase_enabled else None
+    # 2026-11-04：注册成为俱乐部会员即自动成为总平台会员（触发器 trg_club_member_platform 落库），
+    # 这里把标识回给 C 端，便于「我的」展示而不暴露后台套餐。
+    with conn() as _pc:
+        _u=row(_pc.execute('SELECT platform_member FROM users WHERE id=?',(user_id,)))
+    is_platform_member=bool(_u and _u.get('platform_member'))
     return {'member':member,'wallet':wallet,'benefits':benefits,'redemptions':redemptions,'tiers':tiers,
+            'isPlatformMember':is_platform_member,
             'activityHistory':history,'gearOwned':owned,'gearDiscount':gear_discount,
             'membershipPurchase':{'enabled':purchase_enabled,'tiers':purchasable,'activePurchase':active_purchase,'paymentAvailable':not IS_PROD}}
 
@@ -5960,11 +6069,16 @@ def update_platform_club_gear_points_policy(club_id:int,payload:dict=Body(...)):
 def public_club_application(payload:dict=Body(...)):
     name=str(payload.get('name') or '').strip()
     if not name: raise HTTPException(400,'俱乐部名称必填')
+    # 2026-11-03 官网申请新增必填邮箱：审核通过后后台用它给俱乐部发账户密码与使用说明。
+    email=str(payload.get('email') or '').strip()
+    if not email: raise HTTPException(400,'邮箱必填，用于接收账户密码与使用说明')
+    import re as _re
+    if not _re.match(r'^[^@\s]+@[^@\s]+\.[^@\s]+$',email): raise HTTPException(400,'邮箱格式不正确')
     with conn() as c:
         # source='website'：官网「申请体验」提交的申请（server.js 同源代理转发）。
         # 平台端「俱乐部入驻」按它区分来源并单列官网申请明细（platform_club_applications）。
-        c.execute('''INSERT INTO clubs(name,status,plan,contact_name,contact_phone,city,application_note,business_license_ref,source)
-                     VALUES(?,?,?,?,?,?,?,?,'website')''',(name,'pending','starter',payload.get('contactName'),payload.get('contactPhone'),payload.get('city'),payload.get('applicationNote'),payload.get('businessLicenseRef')))
+        c.execute('''INSERT INTO clubs(name,status,plan,contact_name,contact_phone,contact_email,city,application_note,business_license_ref,source)
+                     VALUES(?,?,?,?,?,?,?,?,?,'website')''',(name,'pending','starter',payload.get('contactName'),payload.get('contactPhone'),email,payload.get('city'),payload.get('applicationNote'),payload.get('businessLicenseRef')))
         cid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0]);ai_credit_engine.ensure_account(c,cid)
     return {'applicationId':cid,'status':'pending'}
 
@@ -5992,9 +6106,12 @@ def platform_clubs():
     with conn() as c:
         data=rows(c.execute('''SELECT cl.*,COALESCE(ac.balance,0) ai_credits,COALESCE(ac.monthly_quota,0) monthly_quota,
           s.plan_code subscription_plan,s.status subscription_status,s.current_period_end,
-          COALESCE((SELECT SUM(d.amount-d.resolved_amount) FROM ai_credit_adjustment_debt d WHERE d.club_id=cl.id AND d.resolved=0),0) ai_credit_debt
+          COALESCE((SELECT SUM(d.amount-d.resolved_amount) FROM ai_credit_adjustment_debt d WHERE d.club_id=cl.id AND d.resolved=0),0) ai_credit_debt,
+          COALESCE(acc.username,'') account_username
           FROM clubs cl LEFT JOIN ai_credit_accounts ac ON ac.club_id=cl.id
-          LEFT JOIN club_ai_subscriptions s ON s.club_id=cl.id ORDER BY cl.id DESC'''))
+          LEFT JOIN club_ai_subscriptions s ON s.club_id=cl.id
+          LEFT JOIN (SELECT club_id,username FROM auth_accounts WHERE role='club' AND status='active') acc ON acc.club_id=cl.id
+          ORDER BY cl.id DESC'''))
     # 总平台要看到俱乐部 logo：clubs.logo_url 存的是登录态代理地址
     # （/api/club/{id}/settings/logo.png），那是「某个俱乐部自己的」路由，
     # 平台管理员访问会被归属校验挡下。这里改用平台专属代理（见
@@ -6026,7 +6143,7 @@ def platform_club_applications(status:str='all',source:str='all'):
         if status in ('pending','active','disabled','rejected'):
             conds.append('cl.status=?');args.append(status)
         where=('WHERE '+' AND '.join(conds)) if conds else ''
-        data=rows(c.execute(f'''SELECT cl.id,cl.name,cl.status,cl.plan,cl.contact_name,cl.contact_phone,
+        data=rows(c.execute(f'''SELECT cl.id,cl.name,cl.status,cl.plan,cl.contact_name,cl.contact_phone,cl.contact_email,
                    cl.city,cl.application_note,cl.source,cl.created_at,cl.reviewed_at,cl.reviewed_by,cl.disabled_reason,cl.logo_url
                    FROM clubs cl {where}
                    ORDER BY CASE WHEN cl.status='pending' THEN 0 ELSE 1 END, cl.id DESC''',args))
@@ -6050,23 +6167,89 @@ def platform_add_club(payload:dict=Body(...)):
     name=str(payload.get('name') or '').strip()
     if not name: raise HTTPException(400,'俱乐部名称必填')
     with conn() as c:
-        c.execute('''INSERT INTO clubs(name,status,plan,contact_name,contact_phone,city,application_note,business_license_ref,source)
-                     VALUES(?,?,?,?,?,?,?,?,'platform')''',(name,'pending',payload.get('plan','pro'),payload.get('contactName'),payload.get('contactPhone'),payload.get('city'),payload.get('applicationNote'),payload.get('businessLicenseRef')))
+        c.execute('''INSERT INTO clubs(name,status,plan,contact_name,contact_phone,contact_email,city,application_note,business_license_ref,source)
+                     VALUES(?,?,?,?,?,?,?,?,?,'platform')''',(name,'pending',payload.get('plan','pro'),payload.get('contactName'),payload.get('contactPhone'),str(payload.get('contactEmail') or '').strip(),payload.get('city'),payload.get('applicationNote'),payload.get('businessLicenseRef')))
         cid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0]);ai_credit_engine.ensure_account(c,cid)
     return {'id':cid,'status':'pending'}
+
+def _gen_temp_password() -> str:
+    """生成 16 位高强度临时密码（仅含无歧义字符，满足 hash_password 的 ≥14 位要求）。"""
+    alphabet='abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    return ''.join(secrets.choice(alphabet) for _ in range(16))
+
+def _ensure_club_account(c, club_id:int, *, force_new:bool=False) -> dict:
+    """确保俱乐部存在 role='club' 的后台账户。
+       · 已存在且不强制重置 → 返回 {username, password:None}（不泄露旧密码）；
+       · 首次开通 → 新建并返回一次性明文密码；
+       · force_new=True（重置密码）→ 总是生成新密码并返回。
+       返回结构：{'username','password'(可能 None),'created'(bool),'reset'(bool)}。"""
+    acct=row(c.execute("SELECT * FROM auth_accounts WHERE role='club' AND club_id=? AND status='active'",(club_id,)))
+    if acct and not force_new:
+        return {'username':acct['username'],'password':None,'created':False,'reset':False}
+    pwd=_gen_temp_password();phash=hash_password(pwd);uname=f'club{club_id}'
+    if acct:
+        c.execute('UPDATE auth_accounts SET password_hash=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',(phash,acct['id']))
+        return {'username':acct['username'],'password':pwd,'created':False,'reset':True}
+    try:
+        c.execute("INSERT INTO auth_accounts(username,password_hash,role,club_id,status) VALUES(?,?,?,?,?)",(uname,phash,'club',club_id,'active'))
+    except IntegrityError:
+        uname=f'club{club_id}_{secrets.token_hex(2)}'
+        c.execute("INSERT INTO auth_accounts(username,password_hash,role,club_id,status) VALUES(?,?,?,?,?)",(uname,phash,'club',club_id,'active'))
+    return {'username':uname,'password':pwd,'created':True,'reset':False}
 
 @app.patch('/api/platform/clubs/{club_id}/status')
 def platform_club_status(club_id:int,payload:dict=Body(...)):
     status=str(payload.get('status') or '')
     if status not in {'pending','active','disabled','rejected'}: raise HTTPException(400,'status 不合法')
+    # 2026-11-04：account 只在 status=='active' 分支里赋值，其他状态（pending/disabled/rejected）
+    # 走到下面的 `if account:` 会抛 UnboundLocalError → 500。默认 None，非开通分支就不返回它。
+    account=None
     with conn() as c:
         if not c.execute('SELECT 1 FROM clubs WHERE id=?',(club_id,)).fetchone(): raise HTTPException(404,'俱乐部不存在')
         reason=str(payload.get('reason') or '')
         c.execute('''UPDATE clubs SET status=?,disabled_reason=?,reviewed_at=CASE WHEN ? IN ('active','rejected') THEN CURRENT_TIMESTAMP ELSE reviewed_at END,
                      reviewed_by=CASE WHEN ? IN ('active','rejected') THEN 'platform' ELSE reviewed_by END WHERE id=?''',(status,reason,status,status,club_id))
-        if status=='active': c.execute("UPDATE club_ai_subscriptions SET status='active',updated_at=CURRENT_TIMESTAMP WHERE club_id=? AND status='paused'",(club_id,))
+        if status=='active':
+            # 2026-11-03 审核通过自动开通「体验套餐」（trial）：100 积分 · 3 天体验期 ·
+            # 无装备折扣/无装备积分 · 仅基础功能。只对「当前没有生效订阅」的俱乐部发放
+            # —— 重新启用曾被停用的老俱乐部时，保留它原有的付费套餐不被覆盖。
+            # grant 幂等（source_id 固定 trial_{club_id}），重复点击不会重复发积分。
+            if payload.get('assignTrial'):
+                _sub=c.execute('SELECT status FROM club_ai_subscriptions WHERE club_id=?',(club_id,)).fetchone()
+                if not _sub or _sub['status']!='active':
+                    ai_credit_engine.assign_plan(c,club_id=club_id,plan_code='trial',auto_renew=False,period_days=3,create_order=False,allow_trial=True)
+                    ai_credit_engine.grant(c,club_id=club_id,amount=100,ledger_type='trial',source_type='trial_grant',source_id=f'trial_{club_id}',note='体验套餐开通赠送积分（3天体验期）')
+            c.execute("UPDATE club_ai_subscriptions SET status='active',updated_at=CURRENT_TIMESTAMP WHERE club_id=? AND status='paused'",(club_id,))
+            # 2026-11-03 审核通过自动为俱乐部开通后台账户（role='club'），初始密码一次性
+            # 返回给平台运营，由人工通过邮件/微信发给俱乐部（本系统不存明文密码，无法事后找回）。
+            account=_ensure_club_account(c,club_id)
         elif status in {'disabled','rejected'}: c.execute("UPDATE club_ai_subscriptions SET status='paused',updated_at=CURRENT_TIMESTAMP WHERE club_id=? AND status='active'",(club_id,))
-    return {'ok':True,'status':status}
+    res={'ok':True,'status':status}
+    if account: res['account']=account
+    return res
+
+@app.post('/api/platform/clubs/{club_id}/reset-password')
+def platform_club_reset_password(club_id:int):
+    """为俱乐部重置后台账户密码（无邮件自动发送：返回新明文密码，由运营手动发给俱乐部）。
+       幂等：账户不存在则一并创建。仅平台角色可访问。"""
+    with conn() as c:
+        if not c.execute('SELECT 1 FROM clubs WHERE id=?',(club_id,)).fetchone(): raise HTTPException(404,'俱乐部不存在')
+        acc=_ensure_club_account(c,club_id,force_new=True)
+    return {'ok':True,'account':acc}
+
+@app.patch('/api/platform/clubs/{club_id}')
+def platform_club_update(club_id:int,payload:dict=Body(...)):
+    """编辑俱乐部企业资料与基础信息（平台运营补录公司名称/法人/地址等，便于管理）。
+       仅平台角色可访问；密码永不在此接口返回，忘记密码走 reset-password。"""
+    with conn() as c:
+        if not c.execute('SELECT 1 FROM clubs WHERE id=?',(club_id,)).fetchone(): raise HTTPException(404,'俱乐部不存在')
+        allowed=('name','contact_name','contact_phone','contact_email','city','company_name','legal_person','company_address')
+        fields={k:str(payload[k] or '').strip() for k in allowed if k in payload}
+        if not fields: raise HTTPException(400,'没有可更新的字段')
+        if 'name' in fields and not fields['name']: raise HTTPException(400,'俱乐部名称不能为空')
+        setsql=','.join(f'{k}=?' for k in fields)
+        c.execute(f'UPDATE clubs SET {setsql} WHERE id=?',list(fields.values())+[club_id])
+    return {'ok':True,'updated':fields}
 
 @app.patch('/api/platform/clubs/{club_id}/plan')
 def platform_club_plan(club_id:int,payload:dict=Body(...)):
@@ -7423,8 +7606,8 @@ def platform_add_product(payload:dict=Body(...)):
         try:
             c.execute("""INSERT INTO products(name,sku,price,stock,status,image_url,category,commission_rate,reorder_point,description,
                      brand_id,category_id,gender,season,series,material,warehouse,commerce_sync_status,
-                     source,inventory_mode,fulfillment_mode,owner_id)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                     source,inventory_mode,fulfillment_mode,owner_id,is_featured)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                       (name,sku,float(payload.get('price') or 0),0,'draft',payload.get('image_url'),
                        category,payload.get('commission_rate',0.08),
                        max(0,int(payload.get('reorder_point',payload.get('reorderPoint',5)) or 0)),
@@ -7440,7 +7623,8 @@ def platform_add_product(payload:dict=Body(...)):
                        str(payload.get('source') or 'platform_self'),
                        str(payload.get('inventoryMode') or payload.get('inventory_mode') or 'platform_owned'),
                        str(payload.get('fulfillmentMode') or payload.get('fulfillment_mode') or 'platform_warehouse'),
-                       int(payload.get('ownerId')) if payload.get('ownerId') else None))
+                       int(payload.get('ownerId')) if payload.get('ownerId') else None,
+                       1 if (payload.get('is_featured') or payload.get('isFeatured')) else 0))
         except IntegrityError:
             raise HTTPException(409, f'款号「{payload.get("sku") or "(空)"}」已被占用，请换一个')
         pid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
@@ -7620,7 +7804,10 @@ def _norm_product_status(v)->str:
 def platform_update_product(product_id:int,payload:dict=Body(...)):
     allowed=['name','price','status','image_url','category','commission_rate','reorder_point','description',
              'brand_id','category_id','gender','season','series','material','warehouse',
-             'source','inventory_mode','fulfillment_mode','owner_id'];sets=[];vals=[]
+             'source','inventory_mode','fulfillment_mode','owner_id','is_featured'];sets=[];vals=[]
+    # 主推款开关：前端传 is_featured（也兼容 isFeatured / featured 驼峰），一律收敛成 0/1
+    if 'isFeatured' in payload and 'is_featured' not in payload: payload={**payload,'is_featured':payload.get('isFeatured')}
+    if 'featured' in payload and 'is_featured' not in payload: payload={**payload,'is_featured':payload.get('featured')}
     if 'reorderPoint' in payload and 'reorder_point' not in payload: payload={**payload,'reorder_point':payload.get('reorderPoint')}
     if 'inventoryMode' in payload and 'inventory_mode' not in payload: payload={**payload,'inventory_mode':payload.get('inventoryMode')}
     if 'fulfillmentMode' in payload and 'fulfillment_mode' not in payload: payload={**payload,'fulfillment_mode':payload.get('fulfillmentMode')}
@@ -7654,6 +7841,7 @@ def platform_update_product(product_id:int,payload:dict=Body(...)):
                 if k=='season': v=catalog_service.normalize_season(v)
                 if k=='series': v=catalog_service.normalize_series(v)
                 if k=='material': v=catalog_service.normalize_material(v)
+                if k=='is_featured': v=1 if (v is True or str(v) in ('1','true','True','yes','on')) else 0
                 sets.append(f'{k}=?');vals.append(v)
         # 品类换了就把 category 文本列一起改：两边不一致会让后台筛选和 C 端副标题打架
         if 'category_id' in payload:
@@ -8680,10 +8868,32 @@ def platform_link_supplier(product_id:int,payload:dict=Body(...)):
 def platform_purchase_orders(status:str|None=None,supplier_id:int|None=None):
     with conn() as c:return inventory_engine.list_purchase_orders(c,status=status,supplier_id=supplier_id)
 
+def _operator_label(request):
+    """把当前登录身份解析成单据上可读的操作人标签。
+    有真实用户（user_id）时显示「姓名（角色）」；平台/系统类身份显示中文角色名。
+    这样采购单电子单据才能留存「是哪个用户采购 / 审核 / 确认 / 入库」。"""
+    ROLE_CN={'platform_admin':'平台管理员','platform':'平台系统','club_admin':'俱乐部管理员',
+             'club':'俱乐部','member':'会员','leader':'领队','system':'系统'}
+    ident=getattr(request.state,'identity',None) or {}
+    uid=ident.get('user_id')
+    if uid:
+        try:
+            with conn() as c:
+                u=row(c.execute('SELECT name, role FROM users WHERE id=?',(uid,)))
+            if u and u.get('name'):
+                return f"{u['name']}（{ROLE_CN.get(u.get('role') or '',u.get('role') or '用户')}）"
+        except Exception:
+            pass
+    # 无 user_id 的平台 / 系统账号（如 demo 的 platform_admin）：退回中文角色名，避免落「platform」裸串。
+    uname=ident.get('username')
+    if uname: return ROLE_CN.get(uname,uname)
+    role=ident.get('role') or 'platform'
+    return ROLE_CN.get(role,role)
+
 @app.post('/api/platform/procurement/purchase-orders')
-def platform_create_purchase_order(payload:dict=Body(...)):
+def platform_create_purchase_order(request:Request,payload:dict=Body(...)):
     with conn() as c:
-        try:return inventory_engine.create_purchase_order(c,supplier_id=int(payload.get('supplierId') or 0),items=payload.get('items') or [],expected_at=payload.get('expectedAt'),note=str(payload.get('note') or ''),created_by='platform')
+        try:return inventory_engine.create_purchase_order(c,supplier_id=int(payload.get('supplierId') or 0),items=payload.get('items') or [],expected_at=payload.get('expectedAt'),note=str(payload.get('note') or ''),created_by=_operator_label(request))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
 
@@ -8694,16 +8904,16 @@ def platform_purchase_order_detail(po_id:str):
         except LookupError as e: raise HTTPException(404,str(e))
 
 @app.post('/api/platform/procurement/purchase-orders/{po_id}/approve')
-def platform_approve_purchase_order(po_id:str):
+def platform_approve_purchase_order(request:Request,po_id:str):
     with conn() as c:
-        try:return inventory_engine.approve_purchase_order(c,po_id=po_id,approved_by='platform')
+        try:return inventory_engine.approve_purchase_order(c,po_id=po_id,approved_by=_operator_label(request))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
 
 @app.post('/api/platform/procurement/purchase-orders/{po_id}/order')
-def platform_place_purchase_order(po_id:str):
+def platform_place_purchase_order(request:Request,po_id:str):
     with conn() as c:
-        try:return inventory_engine.place_purchase_order(c,po_id=po_id)
+        try:return inventory_engine.place_purchase_order(c,po_id=po_id,ordered_by=_operator_label(request))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
 
@@ -8715,9 +8925,9 @@ def platform_cancel_purchase_order(po_id:str,payload:dict=Body(default={})):
         except ValueError as e: raise HTTPException(409,str(e))
 
 @app.post('/api/platform/procurement/purchase-orders/{po_id}/receive')
-def platform_receive_purchase_order(po_id:str,payload:dict=Body(...)):
+def platform_receive_purchase_order(request:Request,po_id:str,payload:dict=Body(...)):
     with conn() as c:
-        try:out=inventory_engine.receive_purchase_order(c,po_id=po_id,items=payload.get('items') or [],received_by='platform',note=str(payload.get('note') or ''),location_id=payload.get('locationId'),request_key=payload.get('requestKey'))
+        try:out=inventory_engine.receive_purchase_order(c,po_id=po_id,items=payload.get('items') or [],received_by=_operator_label(request),note=str(payload.get('note') or ''),location_id=payload.get('locationId'),request_key=payload.get('requestKey'))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
     product_ids=out.pop('productIds',[])

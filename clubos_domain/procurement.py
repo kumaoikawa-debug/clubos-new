@@ -24,8 +24,27 @@ class ProcurementEngine:
         self.warehouse=warehouse_engine
         self.finance=finance_engine
 
-    def _po_id(self) -> str:
-        return "po_" + datetime.utcnow().strftime("%Y%m%d") + "_" + uuid.uuid4().hex[:8]
+    def _po_id(self, c=None, supplier_name=None) -> str:
+        # 采购单编码：品牌名(供应商名，仅保留字母数字) + 年月日 + 当日流水号
+        # 例：XXYY20261103001
+        prefix='PO'
+        if supplier_name:
+            p=''.join(ch for ch in str(supplier_name).upper() if ch.isalnum())
+            if p: prefix=p
+        date=datetime.now().strftime('%Y%m%d')
+        base=prefix+date
+        if c is None:
+            return base+'001'
+        seq=0
+        for r in c.execute("SELECT id FROM purchase_orders WHERE id LIKE ?",(base+'%',)):
+            suf=r['id'][len(base):]
+            if suf.isdigit():
+                seq=max(seq,int(suf))
+        candidate=base+str(seq+1).zfill(3)
+        guard=0
+        while c.execute("SELECT 1 FROM purchase_orders WHERE id=?",(candidate,)).fetchone() and guard<50:
+            seq+=1; candidate=base+str(seq+1).zfill(3); guard+=1
+        return candidate
 
     def _receipt_id(self) -> str:
         return "grn_" + datetime.utcnow().strftime("%Y%m%d") + "_" + uuid.uuid4().hex[:8]
@@ -169,7 +188,7 @@ class ProcurementEngine:
             line=round(cost*qty,2); subtotal+=line
             supplier_sku=str(raw.get('supplierSku') or (link['supplier_sku'] if link else '') or '')
             normalized.append((pid,qty,cost,line,supplier_sku))
-        po_id=self._po_id(); subtotal=round(subtotal,2)
+        po_id=self._po_id(c, supplier['name']); subtotal=round(subtotal,2)
         c.execute('''INSERT INTO purchase_orders(id,supplier_id,status,currency_code,subtotal,total_amount,expected_at,note,created_by)
                      VALUES(?,?,?,?,?,?,?,?,?)''',(po_id,supplier_id,'draft','cny',subtotal,subtotal,expected_at,note,created_by))
         for pid,qty,cost,line,ssku in normalized:
@@ -193,9 +212,16 @@ class ProcurementEngine:
               WHERE poi.purchase_order_id=? ORDER BY poi.id''',(po_id,)).fetchall()]
         for x in out['items']:
             x['skuItems']=json.loads(x.get('sku_plan_json') or '[]')
+            vs={int(v['id']):dict(v) for v in c.execute('SELECT id,color,size,name,sku FROM product_variants WHERE product_id=?',(x['product_id'],)).fetchall()}
             for z in x['skuItems']:
                 z['closed']=int(c.execute("SELECT COALESCE(SUM(quantity),0) FROM purchase_order_exceptions WHERE purchase_order_item_id=? AND variant_id=? AND resolution='closed'",(x['id'],z['variantId'])).fetchone()[0])
                 z['received']=int(c.execute('SELECT COALESCE(SUM(quantity),0) FROM purchase_receipt_items WHERE purchase_order_item_id=? AND variant_id=?',(x['id'],z['variantId'])).fetchone()[0])
+                v=vs.get(int(z.get('variantId') or -1))
+                if v:
+                    bits=[s for s in [v.get('color'),v.get('size'),v.get('name')] if s]
+                    z['label']=(' '.join(bits)+(' / '+v['sku'] if v.get('sku') else '')).strip(' /') or ('规格 #'+str(z.get('variantId')))
+                else:
+                    z['label']='规格 #'+str(z.get('variantId'))
             x['quantity_rejected']=rejected.get(int(x['id']),0)
             x['quantity_outstanding']=int(x['quantity_ordered'] or 0)-int(x['quantity_received'] or 0)-int(x['quantity_rejected'])
         out['orderedQty']=sum(int(x['quantity_ordered'] or 0) for x in out['items'])
@@ -204,6 +230,10 @@ class ProcurementEngine:
         out['outstandingQty']=out['orderedQty']-out['receivedQty']-out['rejectedQty']
         out['exceptions']=[dict(x) for x in c.execute('''SELECT e.*,p.name product_name FROM purchase_order_exceptions e
               JOIN products p ON p.id=e.product_id WHERE e.purchase_order_id=? ORDER BY e.id DESC''',(po_id,)).fetchall()]
+        # 入库操作人 / 入库时间取自最近一次到货收据（采购单可能分多次到货；单据展示最近一次入库留痕）。
+        rec=c.execute("SELECT received_by,received_at FROM purchase_receipts WHERE purchase_order_id=? ORDER BY received_at DESC,id DESC LIMIT 1",(po_id,)).fetchone()
+        if rec:
+            out['received_by']=rec['received_by']; out['received_at']=rec['received_at']
         return out
 
     def list_purchase_orders(self, c, *, status: str | None = None, supplier_id: int | None = None) -> list[dict[str, Any]]:
@@ -225,11 +255,11 @@ class ProcurementEngine:
         c.execute("UPDATE purchase_orders SET status='approved',approved_by=?,approved_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(approved_by,po_id))
         return self.get_purchase_order(c,po_id)
 
-    def place_purchase_order(self, c, *, po_id: str) -> dict[str, Any]:
+    def place_purchase_order(self, c, *, po_id: str, ordered_by: str = 'platform') -> dict[str, Any]:
         po=self.get_purchase_order(c,po_id)
         if po['status'] in ('ordered','partially_received','received'): return {**po,'idempotent':True}
         if po['status']!='approved': raise ValueError(f"当前采购单状态不能下单: {po['status']}")
-        c.execute("UPDATE purchase_orders SET status='ordered',ordered_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(po_id,))
+        c.execute("UPDATE purchase_orders SET status='ordered',ordered_by=?,ordered_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(ordered_by,po_id))
         # V1.1 在途联动（任务书 5.1）：确认下单 → 全部订购量进入 WMS「在途」。
         # on_order 只是实物库存之外的期望量（可售=on_hand-reserved，不包含在途），下单幂等性
         # 由状态机保证：只有 approved→ordered 这一次会走这里，重复调用在上面就返回了。

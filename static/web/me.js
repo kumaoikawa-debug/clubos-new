@@ -597,7 +597,7 @@ SUB_ME.member=function(){
   /* 装备折扣随俱乐部订阅套餐（平台控制，2026-10-23 起等级不参与）：
      作为一条横幅放在等级列表上方，逐等级的「装备 X 折」不再展示。 */
   const gdHtml=gd&&gd.rate<1
-    ? `<div class="me-gd">装备商城 <b>${esc(gd.discountZhe)} 折</b><span>本俱乐部「${esc(gd.planName||'订阅套餐')}」套餐权益 · 购物车与结算自动生效</span></div>`
+    ? `<div class="me-gd">装备商城 <b>${esc(gd.discountZhe)} 折</b><span>本俱乐部会员专享 · 购物车与结算自动生效</span></div>`
     : '';
   const tHtml=tiers.map(t=>{
     const cur=String((meWallet().memberLevel)||'');
