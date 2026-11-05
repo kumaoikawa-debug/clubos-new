@@ -302,9 +302,9 @@ window.wv=function(id,b){
    避免为「咨询」去做一整套登录身份改造。 */
 SUB_ME.inquiries=function(){
   const list=(window.myInquiries&&window.myInquiries())||[];
-  if(!list.length)return empty('还没有咨询过','在活动详情点「咨询这条线路」或「咨询领队」，之后的往来消息都会收在这里。');
+  if(!list.length)return empty('还没有咨询过','在活动详情点「咨询这条线路」或「咨询领队」。提交后收到回复，页面会弹提醒，点开就能看；也能随时从「我的 → 我的咨询」进来。（咨询记录保存在本机，换设备看不到历史对话）');
   return `<div class="me-iq">`
-    +`<div class="me-iq__hint">领队或俱乐部在站内回复后，这里会显示红点；点开可继续追问。</div>`
+    +`<div class="me-iq__hint">这里就是查看回复的入口。有回复时会标红点、页面也会弹提醒；点开任意一条可继续追问。</div>`
     +list.map(x=>`<button type="button" class="me-iq__row" data-kind="${esc(x.kind)}" data-id="${Number(x.id)}" `
       +`onclick="window.myInquiryOpen('${esc(x.kind)}',${Number(x.id)},'${esc(x.token||'')}')">`
       +`<span class="me-iq__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 5.8h13.6v10.4H9.4L5.2 19z"/><path d="M8.8 9.6h6.4M8.8 12.6h4"/></svg></span>`
@@ -322,7 +322,7 @@ SUB_ME_AFTER.inquiries=async function(){
       const msgs=d.messages||[];
       const last=msgs.length?msgs[msgs.length-1]:null;
       const prefix=last?(last.sender==='customer'?'我：':(last.sender==='leader'?'领队：':'俱乐部：')):'';
-      const unread=last&&last.sender!=='customer'&&d.status==='handled';
+      const unread=!!((window.__iqUnreadMap||{})[String(x.kind)+':'+Number(x.id)]);
       el.innerHTML=`<span class="me-iq__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 5.8h13.6v10.4H9.4L5.2 19z"/><path d="M8.8 9.6h6.4M8.8 12.6h4"/></svg>${unread?'<i class="me-iq__dot"></i>':''}</span>`
         +`<span class="me-iq__tx"><b>${esc(x.title||'我的咨询')}</b>`
         +`<em>${esc(prefix+(last?String(last.body||'').slice(0,42):'等待回复'))}</em>`
@@ -411,10 +411,13 @@ function meLeaderChip(l){
 function paintNoticeHint(){
   let n=0;
   try{ n=meNoticeUnread().length; }catch(e){ n=0; }
+  /* 2026-11-05：顶栏「信息」是顾客找「有人回复我」的第一直觉入口，角标把咨询
+     未读一起算；面板里也加了「咨询回复」区块（见 openNoticeSheet）。 */
+  const total=n+(Number(window.__iqUnreadCount)||0);
   const dot=document.getElementById('msgDot');
-  if(dot){ dot.hidden=!n; dot.textContent=n>99?'99+':String(n); }
+  if(dot){ dot.hidden=!total; dot.textContent=total>99?'99+':String(total); }
   const nd=document.getElementById('meNavDot');
-  if(nd) nd.hidden=!n;
+  if(nd) nd.hidden=!total;
   return n;
 }
 window.paintNoticeHint=paintNoticeHint;
@@ -426,6 +429,24 @@ function closeNoticeSheet(){
   const el=document.getElementById('wNoticeSheet');
   if(el)el.remove();
   document.documentElement.classList.remove('w-sheet-open');
+}
+/* 顶栏「信息」面板里的「咨询回复」区块：铃铛是顾客找消息的第一直觉入口，
+   以前只列出行通知，后台回了咨询点进来反而更困惑。未读来自 web.js 的全局轮询。 */
+function iqNoticeHtml(){
+  const map=window.__iqUnreadMap||{};
+  const list=(window.myInquiries&&window.myInquiries())||[];
+  const rows=list.filter(x=>map[String(x.kind)+':'+Number(x.id)]);
+  if(!rows.length)return '';
+  return `<div class="w-sh__iq"><div class="w-sh__iqhd"><b>咨询回复</b><span>${rows.length} 条新消息</span></div>`
+    +rows.map(x=>{
+      const d=map[String(x.kind)+':'+Number(x.id)]||{};
+      const who=d.lastSender==='leader'?(d.leaderName?('领队 '+d.leaderName):'领队'):'俱乐部';
+      return `<button type="button" class="w-sh__iqrow" onclick="closeNoticeSheet();window.myInquiryOpen('${esc(x.kind)}',${Number(x.id)},'${esc(x.token||'')}')">`
+        +`<span class="w-sh__iqic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 5.8h13.6v10.4H9.4L5.2 19z"/><path d="M8.8 9.6h6.4M8.8 12.6h4"/></svg></span>`
+        +`<span class="w-sh__iqtx"><b>${esc(x.title||'我的咨询')}</b><em>${esc(who+'：'+String(d.lastBody||'').slice(0,40))}</em></span>`
+        +`<span class="w-sh__iqgo">›</span></button>`;
+    }).join('')
+    +`<button type="button" class="w-sh__iqall" onclick="closeNoticeSheet();wv('wme');pushMe('inquiries')">查看全部咨询 ›</button></div>`;
 }
 function openNoticeSheet(){
   const items=(typeof meNoticeItems==='function')?meNoticeItems():[];
@@ -448,7 +469,8 @@ function openNoticeSheet(){
   }
   const body=el.querySelector('#wNoticeBody');
   const read=meNoticeReadSet();
-  body.innerHTML=`<div class="w-sh__noticehd"><b>俱乐部通知</b><span>${items.length} 条</span></div>`
+  body.innerHTML=iqNoticeHtml()
+    +`<div class="w-sh__noticehd"><b>俱乐部通知</b><span>${items.length} 条</span></div>`
     +`<div class="w-sh__noticelist" id="wNoticeList">`
     +(items.length
       ? items.map(n=>{

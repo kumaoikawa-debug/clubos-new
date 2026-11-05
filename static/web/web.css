@@ -2656,3 +2656,57 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .web-shell .me-iq__tx small{font-size:10.5px;color:#a3b0a8}
 .web-shell .me-iq__ar{flex:0 0 auto;font-style:normal;font-size:19px;color:#b6c3bb}
+
+
+/* ── 咨询回复 · 全局提醒（2026-11-05）─────────────────────────────────────────
+   顾客不进「我的」也要看得见领队/俱乐部回了话：贴在底部导航之上，
+   一条细边 + 轻阴影，不做装饰卡片；点主体直达对话，× 只关本次提醒。 */
+/* --w-navh 定义在 .web-shell 上，提醒条挂在 body 继承不到（实测 bottom 失效、元素落到视口外），
+   这里按导航实测高度 66px + 安全区自己算，不依赖父层变量。 */
+.w-iq-alert{position:fixed;left:50%;bottom:calc(78px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);
+  z-index:70;width:min(560px,calc(100% - 28px));display:flex;align-items:stretch;
+  background:#fff;border:1px solid #dce9e1;border-radius:16px;
+  box-shadow:0 10px 30px rgba(14,42,30,.16);overflow:hidden;
+  animation:wiqIn .26s cubic-bezier(.2,.8,.25,1)}
+@keyframes wiqIn{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
+.w-iq-alert__main{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:11px;
+  padding:11px 4px 11px 13px;background:none;border:0;text-align:left;cursor:pointer;color:inherit}
+.w-iq-alert__ic{position:relative;flex:0 0 auto;width:34px;height:34px;border-radius:11px;
+  background:#eaf5ee;display:flex;align-items:center;justify-content:center}
+.w-iq-alert__ic svg{width:19px;height:19px;fill:none;stroke:#2f7d52;stroke-width:1.7;
+  stroke-linecap:round;stroke-linejoin:round}
+.w-iq-alert__ic i{position:absolute;top:5px;right:5px;width:7px;height:7px;border-radius:50%;
+  background:#e2563f;border:1.5px solid #fff}
+.w-iq-alert__tx{flex:1 1 auto;min-width:0;display:grid;gap:2px}
+.w-iq-alert__tx b{font-size:13.5px;font-weight:800;color:#17342c;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.w-iq-alert__tx em{font-size:11.5px;font-style:normal;color:#84958b;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.w-iq-alert__go{flex:0 0 auto;font-size:12px;font-weight:700;color:#2f7d52;white-space:nowrap}
+.w-iq-alert__x{flex:0 0 auto;width:38px;border:0;background:none;color:#9aaba1;
+  font-size:20px;line-height:1;cursor:pointer}
+.w-iq-alert__x:active{background:#f3f7f4}
+/* 「我的」列表里「我的咨询」的数字角标 */
+.wme-li__badge{margin-left:auto;margin-right:8px;min-width:18px;height:18px;padding:0 5px;
+  border-radius:9px;background:#e2563f;color:#fff;font-size:10.5px;font-style:normal;
+  font-weight:700;line-height:18px;text-align:center}
+.wme-li__badge[hidden]{display:none}
+/* 顶栏「信息」面板里的咨询回复区块 */
+.w-sh__iq{padding:2px 0 12px;border-bottom:1px solid var(--w-line);margin-bottom:10px}
+.w-sh__iqhd{display:flex;align-items:baseline;justify-content:space-between;padding:4px 2px 8px}
+.w-sh__iqhd b{font-size:14px;font-weight:800;color:#17342c}
+.w-sh__iqhd span{font-size:11px;color:#e2563f}
+.w-sh__iqrow{width:100%;display:flex;align-items:center;gap:10px;padding:9px 10px;
+  background:#f4faf6;border:0;border-radius:12px;margin-bottom:7px;text-align:left;cursor:pointer}
+.w-sh__iqic{flex:0 0 auto;width:30px;height:30px;border-radius:9px;background:#fff;
+  display:flex;align-items:center;justify-content:center}
+.w-sh__iqic svg{width:17px;height:17px;fill:none;stroke:#2f7d52;stroke-width:1.7;
+  stroke-linecap:round;stroke-linejoin:round}
+.w-sh__iqtx{flex:1 1 auto;min-width:0;display:grid;gap:2px}
+.w-sh__iqtx b{font-size:12.5px;font-weight:700;color:#22372c;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.w-sh__iqtx em{font-size:11px;font-style:normal;color:#7d8f84;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.w-sh__iqgo{flex:0 0 auto;color:#90a398;font-size:17px}
+.w-sh__iqall{width:100%;border:0;background:none;padding:6px 2px;font-size:12px;
+  font-weight:700;color:#2f7d52;text-align:left;cursor:pointer}

@@ -5171,6 +5171,43 @@ def public_route_inquiry(activity_id:int,payload:dict=Body(...),background_tasks
     return {'ok':True,'inquiryId':int(iq),'accessToken':token,'kind':'route'}
 
 
+@app.post('/api/public/inquiries/unread')
+def public_inquiries_unread(payload:dict=Body(...)):
+    # C 端「有没有人回复我」的批量探测：一次请求查完本机所有会话。
+    # 与 public_inquiry_thread 的关键区别：这里**绝不清除** unread_customer ——
+    # 只有顾客真正点开对话（GET thread）才算已读，轮询因此不会把提醒吃掉。
+    src = payload.get('items') if isinstance(payload, dict) else None
+    if not isinstance(src, list): src = []
+    out = []
+    with conn() as c:
+        for x in src[:50]:
+            if not isinstance(x, dict): continue
+            try:
+                kind = str(x.get('kind') or '')
+                iid = int(x.get('id') or 0)
+                token = str(x.get('token') or '')
+                if kind not in _INQUIRY_TABLES or iid <= 0 or not token: continue
+                r = _inquiry_token_check(c, kind, iid, token)
+                club_id = int(r['club_id'])
+                msgs = _inquiry_messages(c, club_id, kind, iid)
+                last = msgs[-1] if msgs else None
+                l = row(c.execute('SELECT name FROM club_leaders WHERE id=?', (r.get('leader_id'),))) if r.get('leader_id') else None
+                a = row(c.execute('SELECT title FROM activities WHERE id=?', (r.get('activity_id'),))) if r.get('activity_id') else None
+                out.append({
+                    'kind': kind, 'id': iid,
+                    'unread': bool(int(r.get('unread_customer') or 0)) and bool(last and last['sender'] != 'customer'),
+                    'replyCount': sum(1 for m in msgs if m['sender'] != 'customer'),
+                    'lastSender': (last or {}).get('sender', ''),
+                    'lastBody': str((last or {}).get('body') or '')[:120],
+                    'lastAt': str((last or {}).get('createdAt') or ''),
+                    'leaderName': str(l.get('name') or '') if l else '',
+                    'activityTitle': str(a.get('title') or '') if a else '',
+                })
+            except (HTTPException, ValueError, TypeError, KeyError, AttributeError):
+                continue
+    return {'ok': True, 'items': out, 'unreadCount': sum(1 for x in out if x['unread'])}
+
+
 @app.get('/api/public/inquiries/{kind}/{inquiry_id}')
 def public_inquiry_thread(kind:str, inquiry_id:int, token:str=''):
     # C 端「我的咨询」凭 access_token 拉自己的往来消息；读到即清未读

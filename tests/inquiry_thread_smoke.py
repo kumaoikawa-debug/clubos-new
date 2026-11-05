@@ -10,7 +10,7 @@
 隔离方式同其它 smoke：app.py 模块级会 init_db()，必须在 import 前把
 CLUBOS_DB_PATH 指到临时库。
 """
-import os, sys, tempfile, pathlib, json
+import os, sys, tempfile, pathlib, json, re
 
 sys.path.insert(0, '.')
 os.environ['CLUBOS_DB_PATH'] = os.path.join(
@@ -187,6 +187,45 @@ check('回复过短 400', r.status_code == 400, str(r.status_code))
 r = client.get(f'/api/club/{CLUB}/inquiries/nope/{LQID}/thread')
 check('未知 kind 400', r.status_code == 400, str(r.status_code))
 
+print('\n── 批量未读探测：轮询不清未读，打开对话才清 ──')
+r = client.post(f'/api/club/{CLUB}/inquiries/leader/{LQID}/messages',
+                json={'message': '登山杖建议带一根，下坡能省不少力。'})
+check('制造一条未读回复 200', r.status_code == 200, str(r.status_code))
+BODY = {'items': [
+    {'kind': 'leader', 'id': LQID, 'token': LTK},
+    {'kind': 'route', 'id': RQID, 'token': RTK},
+    {'kind': 'leader', 'id': LQID, 'token': 'wrong-token'},
+    {'kind': 'nope', 'id': LQID, 'token': LTK},
+]}
+r = client.post('/api/public/inquiries/unread', json=BODY)
+check('批量未读端点 200', r.status_code == 200, str(r.status_code))
+d = r.json()
+valid = [x for x in d.get('items', []) if x.get('kind') in ('leader', 'route')]
+check('错 token / 未知 kind 被静默跳过', len(valid) == 2 and len(d.get('items', [])) == 2,
+      str(len(d.get('items', []))))
+hit = [x for x in valid if x['kind'] == 'leader' and int(x['id']) == LQID]
+clean = [x for x in valid if x['kind'] == 'route' and int(x['id']) == RQID]
+check('有回复的会话 unread=True', bool(hit) and hit[0]['unread'] is True, str(hit[:1]))
+check('已读会话 unread=False', bool(clean) and clean[0]['unread'] is False, str(clean[:1]))
+check('unreadCount 统计正确', int(d.get('unreadCount') or 0) == 1, str(d.get('unreadCount')))
+if hit:
+    check('下发最后一条 sender/body/时间', hit[0].get('lastSender') == 'club'
+          and '登山杖' in str(hit[0].get('lastBody') or '') and bool(hit[0].get('lastAt')),
+          str(hit[0].get('lastSender')) + ' / ' + str(hit[0].get('lastBody'))[:24])
+    check('下发领队名供提醒条显示', bool(hit[0].get('leaderName')), str(hit[0].get('leaderName')))
+for i in range(3):
+    d2 = client.post('/api/public/inquiries/unread', json=BODY).json()
+check('轮询 3 次仍保持未读（不误清）', int(d2.get('unreadCount') or 0) == 1,
+      str(d2.get('unreadCount')))
+r = client.get(f'/api/public/inquiries/leader/{LQID}?token={LTK}')
+check('顾客点开对话 200', r.status_code == 200, str(r.status_code))
+d3 = client.post('/api/public/inquiries/unread', json=BODY).json()
+check('打开后未读清零（提醒消失）', int(d3.get('unreadCount') or 0) == 0, str(d3.get('unreadCount')))
+r = client.post('/api/public/inquiries/unread', json={'items': []})
+check('空列表不报错', r.status_code == 200 and r.json().get('unreadCount') == 0, str(r.status_code))
+r = client.post('/api/public/inquiries/unread', json={'items': 'bad'})
+check('脏参数不报错', r.status_code == 200 and r.json().get('unreadCount') == 0, str(r.status_code))
+
 print('\n── 前端静态守门 ──')
 
 
@@ -231,8 +270,21 @@ check('AI 契约禁止装饰性容器', '禁止装饰性文字容器' in read('a
 check('iframe 兜底存在', 'figcaption{display:block' in read('static/shared.js'))
 check('schema 有消息表', 'CREATE TABLE IF NOT EXISTS inquiry_messages' in read('schema.sql'))
 check('老库补列存在', "_ensure_column(c,_t,'access_token'" in read('db.py'))
-for f in ['static/web/index.html', 'static/club/index.html', 'static/leader/index.html']:
-    check(f'{f} 缓存版本 20261105d', '20261105d' in read(f))
+
+# 2026-11-05 第二轮：后台回复后 C 端要有全局提示，且能直达对话
+check('C 端有页面级轮询', 'myInquiryPoll' in web_js and 'setInterval(kick,25000)' in web_js)
+check('C 端提醒条可一键直达对话', "id='wIqAlert'" in web_js and 'myInquiryOpen(t.kind' in web_js)
+check('提醒条只在真有未读时出现', "sig!==iqDismissed()" in web_js and "!document.getElementById('wInquirySheet')" in web_js)
+check('轮询用批量端点且不清未读', "/api/public/inquiries/unread" in web_js)
+check('铃铛角标合并咨询未读', '__iqUnreadCount' in me_js and 'total=n+' in me_js)
+check('消息面板有咨询回复区块', 'iqNoticeHtml' in me_js and '查看全部咨询' in me_js)
+check('我的咨询入口有数字角标', 'meIqBadge' in read('static/web/index.html'))
+check('提交文案写明查看路径', '我的 → 我的咨询' in web_js)
+check('提醒条样式存在', '.w-iq-alert' in web_css and '.wme-li__badge' in web_css)
+check('后端注册批量未读端点', "@app.post('/api/public/inquiries/unread')" in read('app.py'))
+for f in ['static/web/index.html', 'static/club/index.html', 'static/platform/index.html', 'static/leader/index.html']:
+    m = re.search(r'20261105([a-z])', read(f))
+    check(f'{f} 缓存版本不低于 20261105d', bool(m) and m.group(1) >= 'd', m.group(0) if m else 'NONE')
 
 print('\n' + ('ALL PASS' if not FAILS else f'FAILED: {len(FAILS)} -> ' + ', '.join(FAILS)))
 sys.exit(1 if FAILS else 0)

@@ -1924,7 +1924,7 @@ async function leaderAsk(){
         phone:String(v.phone||'').trim(),activityId:currentAct?currentAct.id:null})});
     myInquirySave('leader',r.inquiryId,r.accessToken,`咨询 ${d.name||'领队'}`);
     const go=await showConfirm({title:'已经发给领队了',
-      message:`${d.name||'领队'}或俱乐部工作人员会在这里直接回复你，也可以继续追问；同时也会通过 ${String(v.phone||'').trim()} 联系你。`,
+      message:`${d.name||'领队'}或俱乐部工作人员会在「我的 → 我的咨询」里回复你；收到回复时页面会弹提醒，点开就能继续追问。也会通过 ${String(v.phone||'').trim()} 联系你。`,
       confirmText:'查看对话'});
     if(go)myInquiryOpen('leader',r.inquiryId,r.accessToken);
   }catch(e){showAlert({title:'没发出去',message:e.message})}
@@ -1954,7 +1954,7 @@ async function routeAsk(){
         phone:String(v.phone||'').trim()})});
     myInquirySave('route',r.inquiryId,r.accessToken,`咨询《${currentAct.title||'这条线路'}》`);
     const go=await showConfirm({title:'已经发出去了',
-      message:`工作人员或领队会在这里直接回复你，也可以继续追问；同时也会通过 ${String(v.phone||'').trim()} 联系你。`,
+      message:`工作人员或领队会在「我的 → 我的咨询」里回复你；收到回复时页面会弹提醒，点开就能继续追问。也会通过 ${String(v.phone||'').trim()} 联系你。`,
       confirmText:'查看对话'});
     if(go)myInquiryOpen('route',r.inquiryId,r.accessToken);
   }catch(e){showAlert({title:'没发出去',message:e.message})}
@@ -1977,6 +1977,7 @@ function myInquirySave(kind,id,token,title){
   all.unshift({kind:String(kind),id:Number(id),token:String(token||''),
                title:String(title||'我的咨询').slice(0,60),ts:Date.now()});
   try{localStorage.setItem(IQ_KEY,JSON.stringify(all.slice(0,50)))}catch(e){}
+  try{myInquiryPoll()}catch(_e){}
 }
 let _iqCur=null,_iqTimer=null;
 function myInquiryClose(){
@@ -1986,6 +1987,7 @@ function myInquiryClose(){
   document.documentElement.classList.remove('w-sheet-open');
   /* 若「我的咨询」子页还开着，关抽屉后重绘一次：未读红点与最新一条立刻更新。 */
   try{if(window.__meRenderInquiries)window.__meRenderInquiries();}catch(_e){}
+  try{myInquiryPoll()}catch(_e){}
 }
 function myInquiryBubble(m){
   const mine=m.sender==='customer';
@@ -2017,6 +2019,8 @@ async function myInquiryOpen(kind,id,token){
   if(!id||!token)return;
   myInquiryClose();
   _iqCur={kind:String(kind),id:Number(id),token:String(token)};
+  /* 点开就先当已读：角标/提醒立刻消失，不等任何一个网络请求回来。 */
+  iqMarkReadLocal(kind,id);
   const el=document.createElement('div');
   el.id='wInquirySheet';el.className='w-sheet w-iq';
   el.innerHTML=`<div class="w-sheet__mask" data-close></div>`
@@ -2033,7 +2037,13 @@ async function myInquiryOpen(kind,id,token){
   el.addEventListener('click',e=>{const t=e.target.closest('[data-close]');if(t&&el.contains(t))myInquiryClose();});
   const ta=el.querySelector('#wIqInput');
   if(ta)ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();myInquirySend();}});
+  const _q=_iqCur;
   await myInquiryRefresh();
+  /* GET thread 已把后端未读清零：此前排队/在途的轮询结果一律作废，
+     否则稍早那次读到「未读=1」的旧响应会把角标短暂点回来。 */
+  _iqPollSeq++;
+  if(_q)iqMarkReadLocal(_q.kind,_q.id);
+  try{myInquiryPoll()}catch(_e){}
   _iqTimer=setInterval(()=>myInquiryRefresh(true),20000);
 }
 async function myInquirySend(){
@@ -2057,6 +2067,115 @@ window.myInquiryOpen=myInquiryOpen;
 window.myInquiryClose=myInquiryClose;
 window.myInquirySend=myInquirySend;
 window.myInquiryRefresh=myInquiryRefresh;
+
+/* ── 全局「有人回复了」提醒（2026-11-05 用户反馈：后台回复后 C 端毫无感知）──────
+   旧链路只有点进「我的 → 我的咨询」才查状态，顾客停在首页永远看不到；顶栏「信息」
+   铃铛又只统计出行通知，点进去也找不到咨询回复。这里补齐三件事：
+   ① 页面加载即轮询（25s，切回前台补一次），用批量端点一次拿全部未读；
+   ② 有未读时画一条悬浮提醒条，点一下直接打开那条对话（不用自己找入口）；
+   ③ 同步点亮铃铛角标、底部「我的」红点、「我的咨询」入口数字。
+   未读以服务端 unread_customer 为准，只有真正打开对话才清除；批量端点不清。 */
+const IQ_ALERT_KEY='clubos_iq_alert_dismissed';
+let _iqPollTimer=null,_iqPollSeq=0,_iqLastUnread=-1;
+window.__iqUnreadCount=0;
+window.__iqUnreadMap={};
+
+function iqSignature(list){
+  return list.map(x=>`${x.kind}:${x.id}:${x.lastAt||''}`).join('|');
+}
+function iqDismissed(){
+  try{return sessionStorage.getItem(IQ_ALERT_KEY)||''}catch(e){return ''}
+}
+function iqPaintBadges(unread){
+  window.__iqUnreadCount=unread.length;
+  const map={}; unread.forEach(x=>{map[String(x.kind)+':'+Number(x.id)]=x});
+  window.__iqUnreadMap=map;
+  const badge=document.getElementById('meIqBadge');
+  if(badge){ badge.hidden=!unread.length; badge.textContent=unread.length>99?'99+':String(unread.length); }
+  /* me.js 的 paintNoticeHint 把铃铛与「我的」tab 角标一起合并算 */
+  try{if(window.paintNoticeHint)window.paintNoticeHint()}catch(_e){}
+  /* 「我的咨询」子页开着时，只在未读数变化才重绘，避免每 25s 抖一下 */
+  if(unread.length!==_iqLastUnread){
+    _iqLastUnread=unread.length;
+    try{if(window.__meCurSub&&window.__meCurSub.k==='inquiries'&&window.__meRenderInquiries)
+      window.__meRenderInquiries()}catch(_e){}
+  }
+}
+function iqPaintAlert(unread){
+  let box=document.getElementById('wIqAlert');
+  const sig=iqSignature(unread);
+  const show=unread.length>0 && sig && sig!==iqDismissed()
+    && !document.getElementById('wInquirySheet') && !document.getElementById('wNoticeSheet');
+  if(!show){ if(box)box.remove(); return; }
+  const top=unread.slice().sort((a,b)=>String(b.lastAt||'').localeCompare(String(a.lastAt||'')))[0]||unread[0];
+  const who=top.lastSender==='leader'?(top.leaderName?('领队 '+top.leaderName):'领队'):'俱乐部';
+  const title=unread.length>1?`有 ${unread.length} 条新回复`:`${who} 回复了你`;
+  const sub=String(top.lastBody||'点击查看完整对话').slice(0,46);
+  const mine=myInquiries().find(x=>x.kind===top.kind&&Number(x.id)===Number(top.id));
+  window.__iqAlertTarget=mine?{kind:mine.kind,id:mine.id,token:mine.token}:null;
+  window.__iqAlertSig=sig;
+  if(!box){
+    box=document.createElement('div'); box.id='wIqAlert'; box.className='w-iq-alert';
+    box.innerHTML=`<button type="button" class="w-iq-alert__main" id="wIqAlertMain"></button>`
+      +`<button type="button" class="w-iq-alert__x" aria-label="关闭提醒">×</button>`;
+    document.body.appendChild(box);
+    box.querySelector('#wIqAlertMain').addEventListener('click',()=>{
+      const t=window.__iqAlertTarget; box.remove();
+      if(t&&window.myInquiryOpen)window.myInquiryOpen(t.kind,t.id,t.token);
+    });
+    box.querySelector('.w-iq-alert__x').addEventListener('click',()=>{
+      try{sessionStorage.setItem(IQ_ALERT_KEY,window.__iqAlertSig||'')}catch(_e){}
+      box.remove();
+    });
+  }
+  box.querySelector('#wIqAlertMain').innerHTML=
+    `<span class="w-iq-alert__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 5.8h13.6v10.4H9.4L5.2 19z"/><path d="M8.8 9.6h6.4M8.8 12.6h4"/></svg><i></i></span>`
+    +`<span class="w-iq-alert__tx"><b>${esc(title)}</b><em>${esc(sub)}</em></span>`
+    +`<span class="w-iq-alert__go">查看 ›</span>`;
+}
+/* 点开对话的瞬间先本地清掉角标：不等网络，顾客立刻看到「已读」。
+   随后串行轮询会拿后端真值再校准一次（后端 GET thread 已清 unread_customer）。 */
+function iqMarkReadLocal(kind,id){
+  const key=String(kind)+':'+Number(id);
+  const map=Object.assign({},window.__iqUnreadMap||{});
+  if(!map[key])return;
+  delete map[key];
+  const rest=Object.keys(map).map(k=>map[k]);
+  iqPaintBadges(rest);
+  iqPaintAlert(rest);
+}
+/* 串行队列：关抽屉 / 开抽屉 / 切前台会连发几次轮询，严格按发出顺序执行，
+   保证「点开对话后那次」最后落地，旧响应不会把已读状态盖回未读。 */
+let _iqPollChain=Promise.resolve();
+function myInquiryPoll(){
+  const seq=++_iqPollSeq;
+  _iqPollChain=_iqPollChain.then(()=>_iqPollDo(seq)).catch(()=>{});
+  return _iqPollChain;
+}
+async function _iqPollDo(seq){
+  const list=myInquiries();
+  if(!list.length){ if(seq===_iqPollSeq){iqPaintBadges([]);iqPaintAlert([]);} return; }
+  try{
+    const d=await api('/api/public/inquiries/unread',{method:'POST',
+      headers:{'Content-Type':'application/json'},cache:'no-store',
+      body:JSON.stringify({items:list.map(x=>({kind:x.kind,id:x.id,token:x.token}))})});
+    /* 关抽屉 / 开抽屉 / 切前台会连发几次：只认最后一次响应，
+       否则「点开对话已清未读」会被稍早那次旧响应重新点亮成未读。 */
+    if(seq!==_iqPollSeq)return;
+    const unread=(d&&Array.isArray(d.items))?d.items.filter(x=>x.unread):[];
+    iqPaintBadges(unread);
+    iqPaintAlert(unread);
+  }catch(_e){/* 网络抖动不打扰顾客，下一轮再试 */}
+}
+window.myInquiryPoll=myInquiryPoll;
+/* 页面级启动：脚本在 body 末尾，DOM 已就绪；隐藏时跳过，切回前台立刻补一次。 */
+(function iqBoot(){
+  const kick=()=>{ if(!document.hidden)myInquiryPoll(); };
+  kick();
+  _iqPollTimer=setInterval(kick,25000);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)kick()});
+  window.addEventListener('focus',kick);
+})();
 
 function leaderRaterKey(){
   let k='';
