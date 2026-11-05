@@ -18,6 +18,10 @@ python tests/points_max_redeemable_smoke.py
 # 积分现金换算比例（X 积分 = ¥1）：等级 > 俱乐部 > 平台的优先级、先换算再按 % 抵的
 # 现金闸门不变、报价与下单同源、装备积分不受影响、老库缺列回退。自带临时库隔离。
 python tests/points_redeem_rate_smoke.py
+
+# 未计费失败用量记录清理：只删 status=error 且 credits_charged=0 的本俱乐部记录，
+# 成功/已扣费/pending 一律不动（计费审计链完整），并守住 club.js 版本号。自带临时库隔离。
+python tests/ai_usage_cleanup_smoke.py
 # 删除活动的报名护栏：只有「未取消且未退款」的报名才拦得住（refunded 已全额退款，不该再拦）。
 # 自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/registration_delete_smoke.py

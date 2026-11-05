@@ -4057,6 +4057,23 @@ def club_ai_usage_summary(club_id:int,date_from:str|None=None,date_to:str|None=N
                                      if str(x.get('status') or '')=='success'),8),
             'byTask':sorted(tasks.values(),key=lambda b:(-b['calls'],-b['credits']))}
 
+@app.delete('/api/club/{club_id}/ai/usage/unbilled-failures')
+def club_ai_usage_clear_unbilled_failures(club_id:int):
+    """清理「生成失败且未扣费」的用量噪声记录。
+
+    只删本俱乐部 status='error' 且 COALESCE(credits_charged,0)=0 的记录：
+    这类是调用失败时留下的痕迹，没有产生任何 Credits 扣费或平台成本，
+    但会混进用量明细、把成功率算低（例如主视觉模型参数升级期间的一次 400）。
+    成功记录、pending 记录、以及已扣费的失败记录（可能涉及对账/退款）一律不动，
+    保证计费审计链完整。前端在「智能用量明细」提供二次确认后的手动清理入口。
+    """
+    club_or_404(club_id)
+    with conn() as c:
+        cur=c.execute("""DELETE FROM ai_usage_records
+                         WHERE club_id=? AND status='error'
+                           AND COALESCE(credits_charged,0)=0""",(int(club_id),))
+        return {'ok':True,'deleted':cur.rowcount}
+
 @app.get('/api/club/{club_id}/credits/ledger')
 def club_credit_ledger(club_id:int,date_from:str|None=None,date_to:str|None=None,limit:int=50,offset:int=0):
     """Credits 流水（2026-10-23 用户反馈）。旧的 GET /credits 是「当月账本前 60 条」：

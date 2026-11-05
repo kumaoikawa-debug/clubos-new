@@ -2774,10 +2774,14 @@ function ledRangeText(st){
 function ledBarHtml(key){
   const st=ledSt(key);
   const chips=LED_QUICK.map(q=>`<button type="button" class="led-chip${st.quick===q.k?' on':''}" onclick="ledQuick('${key}','${q.k}')">${q.label}</button>`).join('');
+  /* 只有用量页需要清理入口：账本（Credits 流水）是钱，绝不给批量删除按钮。 */
+  const clearBtn=key==='usage'
+    ?`<button type="button" class="btn ghost sm" onclick="clearUnbilledUsageFailures()">清理未计费失败记录</button>`
+    :'';
   return `<div class="led-chips">${chips}</div>`
     +`<div class="led-dates"><input type="date" data-led-from="${key}" value="${st.from}" aria-label="开始日期">`
     +`<span class="led-dates__sep">至</span><input type="date" data-led-to="${key}" value="${st.to}" aria-label="结束日期">`
-    +`<button type="button" class="btn ghost sm" onclick="ledApply('${key}')">应用</button></div>`;
+    +`<button type="button" class="btn ghost sm" onclick="ledApply('${key}')">应用</button>${clearBtn}</div>`;
 }
 function ledgerSumHtml(st){
   const s=st.sum||{income:0,expense:0,net:0,count:0};
@@ -2811,7 +2815,7 @@ function ledRowUsage(x,s){
   const tok=Number(x.input_tokens||0).toLocaleString('zh-CN')+' in / '+Number(x.output_tokens||0).toLocaleString('zh-CN')+' out';
   return `<div class="led-row"><span class="led-dot ${ok?'in':'out'}" aria-hidden="true"></span>`
     +`<div class="led-row__main"><div class="led-row__title">${esc(LED_TASK[x.task_type]||x.task_type||'智能调用')}`
-    +`<span class="led-badge ${ok?'ok':'bad'}">${ok?'成功':esc(x.status||'—')}</span></div>`
+    +`<span class="led-badge ${ok?'ok':'bad'}">${ok?'成功':(cred===0?'未计费失败':esc(x.status||'—'))}</span></div>`
     +`<div class="led-row__sub"><span class="led-mono">${esc(x.model||'—')}</span>${x.provider?' · '+esc(x.provider):''} · <span class="led-mono">${tok}</span> · <span class="led-row__time">${s.time}</span></div></div>`
     +`<div class="led-row__amt ${cred>0?'out':'flat'}">${cred>0?'−'+cred:'0'}<i>Credits</i></div></div>`;
 }
@@ -2892,6 +2896,23 @@ async function loadUsage(mode){
 }
 /* 旧名字保留：设置页 tab 与外部调用都还按 loadAIUsage 走。 */
 async function loadAIUsage(){return loadUsage('reset')}
+
+/* 清理「生成失败且未扣费」的用量噪声。这类记录没扣任何 Credits，也不是账单，
+   但混在明细里会把成功率算低、让运营误以为扣了费。只清这一类，成功记录、
+   pending 记录、已扣费的失败记录一律保留（后端同样按此口径硬闸门）。
+   club.js 里的函数要挂到 window，inline onclick 才找得到。 */
+window.clearUnbilledUsageFailures=async function(){
+  const yes=window.uxConfirm&&await uxConfirm({
+    title:'清理未计费失败记录',
+    message:'将删除本俱乐部「生成失败且未扣费」的智能调用记录。成功记录、已扣费记录不会受影响，Credits 余额与账单不变。如该失败仍需留作故障排查，请点取消。',
+    confirmText:'确认清理',danger:true});
+  if(!yes)return;
+  try{
+    const r=await api(`/api/club/${CLUB}/ai/usage/unbilled-failures`,{method:'DELETE'});
+    toast(r&&r.deleted?`已清理 ${r.deleted} 条未计费失败记录`:'没有需要清理的记录');
+    loadUsage('reset');
+  }catch(e){toast('清理失败：'+(e.message||'请重试'))}
+};
 function ledRefresh(key){return key==='ledger'?loadCreditLedger('reset'):loadUsage('reset')}
 function ledQuick(key,k){
   const st=ledSt(key),r=ledRangeOf(k);
