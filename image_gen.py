@@ -14,6 +14,7 @@
 import os
 import json
 import asyncio
+import random
 import uuid
 
 import httpx
@@ -88,7 +89,9 @@ async def generate_hero(prompt: str, *, negative_prompt: str = '', size: str = '
             'prompt': prompt,
             'negative_prompt': negative_prompt or DEFAULT_NEGATIVE,
         },
-        'parameters': {'size': size, 'n': n, 'prompt_extend': True, 'seed': -1},
+        # 注意：wanx2.1 校验 seed ∈ [0, 4294967290]，-1 会被 400 拒绝；用区间内随机种子保留多样性。
+        'parameters': {'size': size, 'n': n, 'prompt_extend': True,
+                       'seed': random.randint(0, 4294967290)},
     }
     async with _httpx_client(timeout) as client:
         try:
