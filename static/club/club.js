@@ -1,7 +1,7 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
 window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='info')await loadInfoCenter();if(v==='settings')await setTab(SETTINGS_TAB)}
-async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`AI Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>';loadClubAttention()}
+async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`智能 Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>';loadClubAttention()}
 /* 工作台「待处理事项」：C 端产生新报名 / 新订单后，俱乐部没有主动提醒，只能自己进
    报名管理 / 商城去翻。这里把各视图里「需要人跟进」的数字汇总到工作台一张卡上，
    每项可点击直接跳去处理 —— 等于给俱乐部端补上了测试中暴露的"通知"缺口，
@@ -248,7 +248,7 @@ function renderActivityList(){
   rows.sort(actSorter(sort));
   const cnt=$('#actRailCount'); if(cnt)cnt.textContent=(q||cityF!=='all'?`${rows.length} / ${_acts.length}`:`${rows.length}`)+' 场活动';
   box.innerHTML=rows.map(({a,k})=>activityMini(a,k)).join('')
-    ||`<div class="reg-none">${q?'没有匹配的活动，换个关键词或清空搜索。':'还没有活动，点右上角「＋ AI 发活动」。'}</div>`;
+    ||`<div class="reg-none">${q?'没有匹配的活动，换个关键词或清空搜索。':'还没有活动，点右上角「＋ 智能发活动」。'}</div>`;
   syncActRail();
 }
 function goActivity(id){_actOpenId=Number(id);go('activities');openActivity(Number(id))}
@@ -284,7 +284,7 @@ function activitySourceLine(a){
   if(extras-linkPhotos>0)bits.push('其中单独上传 '+(extras-linkPhotos)+' 张');
   return '<div class="sub" style="margin-top:6px">'+(lk?'本场按链接生成：':'本场按上传资料生成：')+bits.join(' · ')+'</div>';
 }
-async function openActivity(id){try{LEADER_CTX='activity';if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','AI 详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="panel-title"><div><div class="eyebrow">AI EDITORIAL PREVIEW</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期</div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:'<span class="tag">已发布</span>'}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}&v=${_cverId(a)}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button><button class="btn ghost" onclick="republishActivity(${id})" title="把当前这一版重新发布一次：C 端拿到的永远是最新版，这一步同时刷新 C 端版本戳，已打开的顾客页面会出现「有新版」提示">重新发布 / 同步 C 端</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="notice" style="margin:10px 0 18px">AI 自己决定页面叙事、图片节奏和区块顺序；这里没有模板 A/B/C。${activitySourceLine(a)}</div>${_syncNoticeHtml(a)}<div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面<br><span style="font-size:11px;opacity:.75">可点右侧自动选</span>'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button><button class="btn ghost" onclick="autoCover(${a.id})" title="从这份资料抽出的照片里挑一张做封面（优先沿用详情首图）">AI 从素材选一张</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
+async function openActivity(id){try{LEADER_CTX='activity';if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','智能详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="panel-title"><div><div class="eyebrow">智能内容预览</div><h2 style="margin:4px 0">${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期</div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:'<span class="tag">已发布</span>'}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}&v=${_cverId(a)}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button><button class="btn ghost" onclick="republishActivity(${id})" title="把当前这一版重新发布一次：C 端拿到的永远是最新版，这一步同时刷新 C 端版本戳，已打开的顾客页面会出现「有新版」提示">重新发布 / 同步 C 端</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="notice" style="margin:10px 0 18px">智能自己决定页面叙事、图片节奏和区块顺序；这里没有模板 A/B/C。${activitySourceLine(a)}</div>${_syncNoticeHtml(a)}<div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面<br><span style="font-size:11px;opacity:.75">可点右侧自动选</span>'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button><button class="btn ghost" onclick="autoCover(${a.id})" title="从这份资料抽出的照片里挑一张做封面（优先沿用详情首图）">智能从素材选一张</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
    现在每行都给出「改时间 / 价格」与「删除」；并把两种容易被当成 bug 的状态直接标出来：
    ¥0 不是出错而是「价格待定」（成本表来源的活动在俱乐部定价前会归零），
    已停止报名的团期也要一眼可见，否则老板会以为 C 端还能报。 */
@@ -305,7 +305,7 @@ if(a.activityMaster&&a.activityMaster.createdVia!=='manual'&&_noPlan){
   w.innerHTML=('<strong>'+(_plans.length?'这份方案没有读到文字内容':'这次只上传了照片，没有方案文字')+'</strong>'
     +'<div class="sub" style="margin-top:6px">'
     +(_plans.length
-      ?'《'+_plans.map(esc).join('》《')+'》的文字可能全部做成了图片，AI 读不到这些字。'
+      ?'《'+_plans.map(esc).join('》《')+'》的文字可能全部做成了图片，智能读不到这些字。'
       :'系统只识别到照片，没有读到任何文字资料。')
     +'当前的标题 / 日期 / 地点 / 行程因此是通用兜底内容，不是你的方案。'
     +'补一句活动说明（名称 / 日期 / 地点 / 人数）或换一份带文字的方案，点「重新生成 / 换一版」即可；'
@@ -420,8 +420,8 @@ function _syncNoticeHtml(a){
 let _regenDetailBusy=false;
 async function openRegenerateModal(id){
   try{
-    const r=await showForm({title:'重新生成 / 换一版',desc:'对当前这一版不满意？给个方向，AI 重新做叙事和排版。默认只换叙事/排版、保留全部事实（价格、日期、地点、人数、团期、政策都不会变）。',wide:true,fields:[
-      {name:'direction',label:'换版方向 / 要求（可选）',type:'textarea',placeholder:'例如：更年轻化一点、多放实拍图、换个更有冲击力的开场……不填则 AI 自己换一个角度。'},
+    const r=await showForm({title:'重新生成 / 换一版',desc:'对当前这一版不满意？给个方向，智能重新做叙事和排版。默认只换叙事/排版、保留全部事实（价格、日期、地点、人数、团期、政策都不会变）。',wide:true,fields:[
+      {name:'direction',label:'换版方向 / 要求（可选）',type:'textarea',placeholder:'例如：更年轻化一点、多放实拍图、换个更有冲击力的开场……不填则 智能自己换一个角度。'},
       {name:'mode',label:'换版方式',type:'select',value:'freeze',options:[
         {value:'freeze',label:'只换叙事/排版（保留所有事实，推荐）'},
         {value:'refresh',label:'连事实一起复核（仅当首版把日期/价格等读错了才用）'}
@@ -447,7 +447,7 @@ async function regenerateDetail(id,direction,refreshFacts){
         try{ j=await api(`/api/club/${CLUB}/activities/ai-generate/${r.jobId}`); misses=0; }
         catch(pe){ if(++misses>6)throw new Error('进度查询连续失败，请稍后刷新页面在活动详情查看结果（任务仍在后台运行）。'); continue; }
         const sec=Math.round((Date.now()-started)/1000);
-        toast(`AI 正在换版（已等 ${sec} 秒，约 1~5 分钟）…`);
+        toast(`智能正在换版（已等 ${sec} 秒，约 1~5 分钟）…`);
         if(j.status==='done'){done=true;}
         else if(j.status==='failed'){throw new Error(j.error||'后台换版失败，已保留上一版（未扣 Credits）。');}
         else if(Date.now()-started>10*60*1000){throw new Error('等待超时（10 分钟）。任务可能仍在后台运行，稍后刷新活动详情即可看到结果。');}
@@ -464,7 +464,7 @@ async function regenerateDetail(id,direction,refreshFacts){
 async function autoCover(id){try{const r=await api(`/api/club/${CLUB}/activities/${id}/cover/auto`,{method:'POST'});toast(r&&r.ref?`已选用素材 ${r.ref} 作封面`:'封面已自动设置');window.channelRenderResetCtx&&channelRenderResetCtx(Number(id));await openActivity(id);await loadActivities()}catch(e){showAlert({title:'没能自动选封面',message:e.message})}}
 async function uploadCover(id){let f=$('#coverFile')?.files?.[0];if(!f){toast('请先选择一张图片');return}let fd=new FormData();fd.append('file',f);try{await api(`/api/club/${CLUB}/activities/${id}/cover`,{method:'POST',body:fd});toast('封面已更新');window.channelRenderResetCtx&&channelRenderResetCtx(Number(id));await openActivity(id);await loadActivities()}catch(e){showAlert({title:'操作失败',message:e.message})}}
 $('#createForm').onsubmit=async e=>{
-  e.preventDefault();let b=$('#genBtn');b.disabled=true;b.textContent='AI正在读资料、选图并排版…';
+  e.preventDefault();let b=$('#genBtn');b.disabled=true;b.textContent='智能正在读资料、选图并排版…';
   try{
     let fd=new FormData(e.target);
     let r=await api(`/api/club/${CLUB}/activities/ai-generate`,{method:'POST',body:fd});
@@ -479,9 +479,9 @@ $('#createForm').onsubmit=async e=>{
         try{ j=await api(`/api/club/${CLUB}/activities/ai-generate/${r.jobId}`); misses=0; }
         catch(pe){ if(++misses>6)throw new Error('进度查询连续失败，请刷新页面稍后在活动列表查看结果（任务仍在后台运行）。'); continue; }
         const sec=Math.round((Date.now()-started)/1000);
-        b.textContent=`AI 正在生成（已等 ${sec} 秒，大资料约 1~5 分钟）…`;
+        b.textContent=`智能正在生成（已等 ${sec} 秒，大资料约 1~5 分钟）…`;
         if(j.status==='done'){done=true;r={activityId:j.activityId,source:j.source||r.source};}
-        else if(j.status==='failed'){throw new Error(j.error||'后台生成失败，已退还本次 AI Credits（如未扣）。');}
+        else if(j.status==='failed'){throw new Error(j.error||'后台生成失败，已退还本次 智能 Credits（如未扣）。');}
         else if(Date.now()-started>10*60*1000){throw new Error('等待超时（10 分钟）。任务可能仍在后台运行，稍后刷新活动列表即可看到结果。');}
       }
     }
@@ -516,16 +516,16 @@ $('#createForm').onsubmit=async e=>{
     if(msg==='请求失败'||msg==='Failed to fetch')msg='资料没能完整传到服务器——通常是资料总体积太大、上传时间过长被中断。'
       +'大图片系统已会自动压缩，请检查是否有过大的文档（如几十 MB 的 PPT/PDF），删掉不必要的文件后重试；'
       +'也可以只保留方案文档先试一次，确认能生成后再补照片。';
-    showAlert({title:'AI 生成失败',message:msg});
+    showAlert({title:'智能生成失败',message:msg});
   }
-  finally{b.disabled=false;b.textContent='AI直接生成详情'}
+  finally{b.disabled=false;b.textContent='智能直接生成详情'}
 };
 /* 手工新建活动：不走 AI、不消耗 Credits 的第二条创建路径。只落活动事实，生成一份最小可渲染的
    master+detail（facts 区块），让 C 端与俱乐部端立刻能编辑、能加团期、能发布；发布前可随时改。
    走 uxForm 而非新建一个 HTML 弹窗：少一套弹窗层、复用同一套校验/焦点/保持逻辑。 */
 async function createActivityManual(){
   const d=await uxForm({title:'手工新建活动',
-    subtitle:'不调用 AI、不消耗 Credits。先落活动事实，发布前可随时编辑；之后还能用 AI 重新生成文案。',
+    subtitle:'不调用智能、不消耗 Credits。先落活动事实，发布前可随时编辑；之后还能用智能重新生成文案。',
     fields:[
       {name:'title',label:'活动名称',type:'text',required:true,full:true,placeholder:'例如：10月24日 蓥华山轻徒步'},
       {name:'eventDate',label:'出发时间',type:'datetime',required:true,defaultTime:'08:00',help:'用于生成首个团期；只填日期时按 08:00 出发。'},
@@ -577,10 +577,10 @@ async function shareActivity(id){
   };
   return ov;
 }
-/* ===== AI 内容中心：生成 → 直接出成品（公众号图文 / 小红书卡片 / 海报）=====
+/* ===== 智能内容中心：生成 → 直接出成品（公众号图文 / 小红书卡片 / 海报）=====
    过去 genChannel 把接口返回的 JSON 塞进 <pre>，老板拿到的是一堆代码。
    现在交给 static/channel-render.js 渲染成能直接用的成品，并可复制 / 下载。 */
-/* ===== 活动选择器（AI 内容中心）=====
+/* ===== 活动选择器（智能内容中心）=====
    老板原话：「如果以后活动多了，也一个一个选太难选了。」
    原生 <select> 在几十场活动时只能一行行翻、还搜不了。这里换成 combobox：
    按钮显示当前活动 → 弹出「搜索 + 状态筛选 + 可滚动列表」，
@@ -749,7 +749,7 @@ async function loadContent(){
   const pickHost=actPickHost();
   if(!acts.length){
     if(pickHost)pickHost.innerHTML='<div class="act-pick__btn" style="cursor:default;color:var(--muted)">还没有活动</div>';
-    $('#channelArea').innerHTML='<div class="empty">先创建一场活动，再让 AI 做公众号 / 小红书 / 海报 / 长图等宣发内容。</div>';
+    $('#channelArea').innerHTML='<div class="empty">先创建一场活动，再让智能做公众号 / 小红书 / 海报 / 长图等宣发内容。</div>';
     // 活动回顾不依赖系统里的活动：即使一场活动都还没建，也能直接填信息生成回顾
     renderRecapPanel();
     $('#contentList').innerHTML='<div class="empty">还没有渠道内容</div>';
@@ -765,13 +765,13 @@ async function loadContent(){
   const a=acts.find(x=>x.id===keep)||acts[0];
   currentActivity=a;
   const cards=[
-    ['longpic','AI 宣传长图','按活动主题与照片自由编排长图，每场版式不同，可预览、复制和下载高清图片'],
-    ['wechat','微信公众号图文','AI 重排公众号阅读节奏；生成后可直接预览，并一键复制带格式图文到公众号编辑器'],
+    ['longpic','智能宣传长图','按活动主题与照片自由编排长图，每场版式不同，可预览、复制和下载高清图片'],
+    ['wechat','微信公众号图文','智能重排公众号阅读节奏；生成后可直接预览，并一键复制带格式图文到公众号编辑器'],
     ['xhs','小红书图文','文案为主：独立标题、Hook、正文与话题标签可直接复制走；另出一张 1080×1440 首页海报，并把其余现场照片裁成 3:4 九宫格配图'],
-    ['poster','活动招募海报','用活动真实封面 + AI 文案在本地合成 1080×1440 海报，可直接下载'],
-    ['hero','AI 主视觉海报','零上传也能生成一张符合活动调性的户外主视觉，自动设为活动封面，详情页与长图直接采用']
+    ['poster','活动招募海报','用活动真实封面 + 智能文案在本地合成 1080×1440 海报，可直接下载'],
+    ['hero','智能主视觉海报','零上传也能生成一张符合活动调性的户外主视觉，自动设为活动封面，详情页与长图直接采用']
   ];
-  $('#channelArea').innerHTML=cards.map(x=>`<div class="card channel-card"><div><strong>${x[1]}</strong><p>${x[2]}</p><div class="sub">当前活动：${esc(a.title)}</div></div><button class="btn secondary" onclick="genOrHero('${x[0]}',${a.id})">AI 生成${x[1]}</button></div>`).join('');
+  $('#channelArea').innerHTML=cards.map(x=>`<div class="card channel-card"><div><strong>${x[1]}</strong><p>${x[2]}</p><div class="sub">当前活动：${esc(a.title)}</div></div><button class="btn secondary" onclick="genOrHero('${x[0]}',${a.id})">智能生成</button></div>`).join('');
   renderRecapPanel();
   // 已生成内容里补上「这是哪场活动的」——以前只显示 活动 #12，活动一多就认不出来。
   // activity_id<=0 的是「独立回顾」（不绑定系统活动，见 2026-10-30 解耦），单独标注。
@@ -802,8 +802,8 @@ async function genOrHero(ch,id){ if(ch==='hero'){await aiGenerateHero(id);return
    零上传也能出图：解决「没照片就撑不起图文」；生成后自动设为活动封面，
    详情页封面大图 / 长图 / promoHtml 都直接采用。 */
 async function aiGenerateHero(id){
-  if(window.uxConfirm&&!await uxConfirm({title:'AI 生成主视觉海报',confirmText:'开始生成',
-    message:'系统会读取这场活动的资料（标题 / 地点 / 调性），调用通义万相生成一张户外主视觉，约需 10-30 秒，并自动设为活动封面。需总平台已在「AI 接入」里配置 DashScope / 通义万相 的 Key。'}))return;
+  if(window.uxConfirm&&!await uxConfirm({title:'智能生成主视觉海报',confirmText:'开始生成',
+    message:'系统会读取这场活动的资料（标题 / 地点 / 调性），调用通义万相生成一张户外主视觉，约需 10-30 秒，并自动设为活动封面。需总平台已在「智能接入」里配置 DashScope / 通义万相 的 Key。'}))return;
   try{
     await api(`/api/club/${CLUB}/activities/${id}/generate-hero`,{method:'POST'});
     toast('主视觉生成中，约 10-30 秒');
@@ -837,13 +837,13 @@ function _showHeroModal(url){
 }
 async function genChannel(ch,id){
   try{
-    // 生成会真花 AI Credits，动手前必须讲清楚。本地渲染成品（复制 / 下载）不再另计费。
+    // 生成会真花 智能 Credits，动手前必须讲清楚。本地渲染成品（复制 / 下载）不再另计费。
     // 长图会多跑一次「图片识别」：每张照片先让视觉模型写一句画面描述、判掉地图截图和
     // 别的活动的照片，否则写作模型是盲选图（实测会把路线地图选成首屏大图）。费用按
     // 公众号同一档计，所以这里把这件事对老板讲明白，而不是事后解释。
     const msg = ch==='longpic'
-      ? '系统会读取这场活动的真实资料并调用 AI：先识别每张照片的内容（剔除地图截图与不属于本活动的照片），再由模型自行排版成一张 750px 长图。过程中产生 AI Credits 计费，生成后可直接预览、下载 2 倍图、复制图文。'
-      : '系统会读取这场活动的真实资料并调用一次 AI，产生一次 AI Credits 计费。生成后直接给成品，可以复制 / 下载。';
+      ? '系统会读取这场活动的真实资料并调用智能：先识别每张照片的内容（剔除地图截图与不属于本活动的照片），再由模型自行排版成一张 750px 长图。过程中产生 智能 Credits 计费，生成后可直接预览、下载 2 倍图、复制图文。'
+      : '系统会读取这场活动的真实资料并调用一次智能，产生一次 智能 Credits 计费。生成后直接给成品，可以复制 / 下载。';
     if(window.uxConfirm&&!await uxConfirm({title:'生成'+channelLabel(ch)+'内容',
       message:msg,confirmText:'开始生成'}))return;
     const d=await api(`/api/club/${CLUB}/activities/${id}/channel/${ch}`,{method:'POST'});
@@ -867,7 +867,7 @@ async function genChannel(ch,id){
         }
         if(st.status==='error'){showAlert({title:'生成失败',message:st.error||'请重试'});return}
       }
-      showAlert({title:'仍在生成中',message:'这次生成时间较长，后台不会中断；稍后到「AI 内容中心 → 已生成内容」里查看成品。'});
+      showAlert({title:'仍在生成中',message:'这次生成时间较长，后台不会中断；稍后到「智能内容中心 → 已生成内容」里查看成品。'});
       await loadContent();
       return;
     }
@@ -902,7 +902,7 @@ function renderRecapPanel(){
     <div style="margin-top:12px"><div class="sub" style="margin-bottom:4px">基础文案 / 领队记录（可不填，但写了回顾才真实）</div>
     <textarea id="recapNote" rows="4" style="width:100%;max-width:680px;padding:8px 10px" placeholder="例如：12 个人全员登顶，山顶风大但出了太阳；下山路上有人扭了脚踝已处理；晚饭火锅全员到齐……"></textarea></div>
     <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <button class="btn secondary" id="recapGo">AI 生成活动回顾</button>
+      <button class="btn secondary" id="recapGo">智能生成活动回顾</button>
       <button class="btn secondary" id="recapRetypeset" style="display:none">换一版排版（用同一批照片）</button>
       <span class="sub" id="recapHint"></span>
     </div>`;
@@ -926,7 +926,7 @@ async function genRecap(){
   }
   const mat=[files.length?`${files.length} 张现场照片`:'',note?'你填写的现场记录':''].filter(Boolean).join(' 和 ');
   if(window.uxConfirm&&!await uxConfirm({title:'生成活动回顾',
-    message:`系统会结合你填写的活动信息${mat?'、'+mat:''}调用 AI 生成回顾图文，产生一次 AI Credits 计费。生成后可直接预览、复制、下载。`,
+    message:`系统会结合你填写的活动信息${mat?'、'+mat:''}调用智能生成回顾图文，产生一次 智能 Credits 计费。生成后可直接预览、复制、下载。`,
     confirmText:'开始生成'}))return;
   const fd=new FormData();
   fd.append('title',title);
@@ -980,7 +980,7 @@ window.clubRetypesetRecap=async function(opts){
   const assetId=window.__lastRecapAssetId||0;
   if(!assetId){showAlert({title:'还不能换版',message:'请先生成一份活动回顾，再点「换一版排版」。'});return}
   if(window.uxConfirm&&!await uxConfirm({title:'换一版排版',
-    message:'用同一批现场照片和记录重新生成，只换版式、不换素材，会产生一次 AI Credits 计费。',
+    message:'用同一批现场照片和记录重新生成，只换版式、不换素材，会产生一次 智能 Credits 计费。',
     confirmText:'重新排版'}))return;
   try{
     const fd=new FormData();fd.append('asset_id',String(assetId));
@@ -1031,7 +1031,7 @@ function renderRegRows(){
     const exec=os.length?os.map(o=>execStateLabel[o.execution_status||'preparing']||o.execution_status).join(' / '):'未排期';
     const execChip=os.length?`<span class="tag ${os.every(o=>o.execution_status==='completed')?'':'orange'}">执行：${esc(exec)}</span>`:`<span class="tag">未排期</span>`;
     return `<div class="list-row" style="cursor:pointer" onclick="openActivityRegs(${a.id})"><div class="list-row__main"><div class="list-row__title">${esc(a.title)}</div><div class="list-row__sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)}</div><div class="list-row__sub"><b>${os.length} 个档期</b> · 报名 ${rs.length} 笔 / ${parts} 人参加 · 实收 ${money(regCash(rs))}${pInfo?` · 资料待补 ${pInfo}`:''}${ins?` · 保险 ${ins}`:''}${rf?` · 待审退款 ${rf}`:''}</div></div><div class="list-row__end"><span class="tag ${a.status==='draft'?'orange':''}">${esc(enumCn(a.status))}</span>${execChip}<span class="sub">按档期 ›</span></div></div>`;
-  }).join('')||`<div class="empty">${q?'没有匹配的活动':'还没有活动，先让 AI 发一场。'}</div>`;
+  }).join('')||`<div class="empty">${q?'没有匹配的活动':'还没有活动，智能发一场。'}</div>`;
 }
 function renderRefundReview(refunds){
   const box=$('#refundReviewList'); if(!box)return;
@@ -1479,7 +1479,7 @@ async function editActivityPoints(id){
     await loadPointsPolicy();
   }catch(e){showAlert({title:'保存积分规则失败',message:e.message})}
 }
-async function loadCredits(){ try{skel('#creditLedger',5);let d=await api(`/api/club/${CLUB}/credits`),sub=d.subscription||{};$('#creditAccount').innerHTML=`<div class="grid g4"><div class="stat-tile"><div class="k">当前可用</div><div class="v">${d.account?.balance||0}</div><div class="hint">AI Credits</div></div><div class="stat-tile"><div class="k">当前套餐</div><div class="v" style="font-size:22px">${esc(sub.plan_name||sub.plan_code||'未开通')}</div><div class="hint">月额度 ${d.account?.monthly_quota||0}</div></div><div class="stat-tile"><div class="k">本月已用</div><div class="v">${d.creditsConsumed||0}</div><div class="hint">成功调用 ${d.successfulCalls||0} 次</div></div><div class="stat-tile"><div class="k">待偿欠账</div><div class="v">${d.unresolvedDebt||0}</div><div class="hint">后续获得 Credits 自动优先抵扣</div></div></div><div class="notice section">大模型由<b>总平台统一接入并结算</b>，俱乐部不需要也无法配置模型或密钥；Credits 只决定计费，不决定模型质量——平台不会因为余额或套餐降低模型、减少图片或截断资料。</div>`;$('#creditTopups').innerHTML=(d.topupPackages||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}</div><div class="list-row__sub">${money(x.amount)} · 共 ${x.credits} Credits · 单价 ${unitCreditPrice(x.amount,x.credits)}</div><button class="btn secondary" style="margin-top:6px" onclick="buyCredits('${x.code}')">创建充值订单</button></div></div>`).join('')||'<div class="empty">暂无充值包</div>';$('#creditPendingOrders').innerHTML=(d.pendingOrders||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.order_type==='subscription'?'套餐':'充值'} ${x.credits} Credits</div><div class="list-row__sub">${money(x.amount)} · 待付款确认 · ${esc(x.period_key||x.package_code||'')}</div></div></div>`).join('')||'<div class="empty">暂无待付款账单</div>';window._creditPlans=d.plans||[];$('#creditPlans').innerHTML=(d.plans||[]).map(p=>{const cur=sub.status==='active'&&sub.plan_code===p.code;const gd=Number(p.gear_discount||1);return `<div class="plan-card${cur?' on':''}"><div class="plan-card__hd"><strong>${esc(p.name)}</strong>${cur?'<span class="plan-card__cur">当前</span>':''}</div><div class="plan-card__fee">${Number(p.monthly_fee)>0?money(p.monthly_fee)+'<i>/月</i>':'定制价'}</div><div class="plan-card__meta">每月 ${p.monthly_credits} Credits${gd<1?` · 装备商城 ${Math.round(gd*100)/10} 折`:''}</div><div class="plan-card__desc">${esc(p.description||'')}</div><div style="margin-top:10px">${cur?'<button class="btn ghost" disabled>使用中</button>':`<button class="btn secondary" onclick="subscribePlan('${p.code}')">${sub.status==='active'?'切换到此套餐':'订阅此套餐'}</button>`}</div></div>`}).join('')||'<div class="empty">暂无可订阅套餐，请联系总平台开通</div>';await loadCreditLedger('reset')}
+async function loadCredits(){ try{skel('#creditLedger',5);let d=await api(`/api/club/${CLUB}/credits`),sub=d.subscription||{};$('#creditAccount').innerHTML=`<div class="grid g4"><div class="stat-tile"><div class="k">当前可用</div><div class="v">${d.account?.balance||0}</div><div class="hint">智能 Credits</div></div><div class="stat-tile"><div class="k">当前套餐</div><div class="v" style="font-size:22px">${esc(sub.plan_name||sub.plan_code||'未开通')}</div><div class="hint">月额度 ${d.account?.monthly_quota||0}</div></div><div class="stat-tile"><div class="k">本月已用</div><div class="v">${d.creditsConsumed||0}</div><div class="hint">成功调用 ${d.successfulCalls||0} 次</div></div><div class="stat-tile"><div class="k">待偿欠账</div><div class="v">${d.unresolvedDebt||0}</div><div class="hint">后续获得 Credits 自动优先抵扣</div></div></div><div class="notice section">大模型由<b>总平台统一接入并结算</b>，俱乐部不需要也无法配置模型或密钥；Credits 只决定计费，不决定模型质量——平台不会因为余额或套餐降低模型、减少图片或截断资料。</div>`;$('#creditTopups').innerHTML=(d.topupPackages||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.name)}</div><div class="list-row__sub">${money(x.amount)} · 共 ${x.credits} Credits · 单价 ${unitCreditPrice(x.amount,x.credits)}</div><button class="btn secondary" style="margin-top:6px" onclick="buyCredits('${x.code}')">创建充值订单</button></div></div>`).join('')||'<div class="empty">暂无充值包</div>';$('#creditPendingOrders').innerHTML=(d.pendingOrders||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${x.order_type==='subscription'?'套餐':'充值'} ${x.credits} Credits</div><div class="list-row__sub">${money(x.amount)} · 待付款确认 · ${esc(x.period_key||x.package_code||'')}</div></div></div>`).join('')||'<div class="empty">暂无待付款账单</div>';window._creditPlans=d.plans||[];$('#creditPlans').innerHTML=(d.plans||[]).map(p=>{const cur=sub.status==='active'&&sub.plan_code===p.code;const gd=Number(p.gear_discount||1);return `<div class="plan-card${cur?' on':''}"><div class="plan-card__hd"><strong>${esc(p.name)}</strong>${cur?'<span class="plan-card__cur">当前</span>':''}</div><div class="plan-card__fee">${Number(p.monthly_fee)>0?money(p.monthly_fee)+'<i>/月</i>':'定制价'}</div><div class="plan-card__meta">每月 ${p.monthly_credits} Credits${gd<1?` · 装备商城 ${Math.round(gd*100)/10} 折`:''}</div><div class="plan-card__desc">${esc(p.description||'')}</div><div style="margin-top:10px">${cur?'<button class="btn ghost" disabled>使用中</button>':`<button class="btn secondary" onclick="subscribePlan('${p.code}')">${sub.status==='active'?'切换到此套餐':'订阅此套餐'}</button>`}</div></div>`}).join('')||'<div class="empty">暂无可订阅套餐，请联系总平台开通</div>';await loadCreditLedger('reset')}
 catch(e){loaderError('#creditLedger',e,'Credits 数据加载失败')}}
 async function buyCredits(code){let r=await api(`/api/club/${CLUB}/credits/topups`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({packageCode:code})});toast(`充值订单已创建：${r.credits} Credits / ${money(r.amount)}，等待平台/支付确认`);loadCredits()}
 async function subscribePlan(code){
@@ -1519,22 +1519,22 @@ async function startClub(){
   await loadDash();
   loadCreateEngine();
 }
-/* 创建弹窗明示当前 AI 引擎：真实大模型 or 演示模式。避免老板把「演示模板内容」误判成 AI 没看资料。 */
+/* 创建弹窗明示当前 智能引擎：真实大模型 or 演示模式。避免老板把「演示模板内容」误判成 AI 没看资料。 */
 async function loadCreateEngine(){
   const box=document.getElementById('createEngine');if(!box)return;
   try{
     const m=await api('/api/club/'+CLUB+'/ai-mode');const live=m.mode==='live';
     box.className='ux-create-engine '+(live?'live':'mock');
     box.innerHTML=live
-      ?'<b>AI 引擎：真实大模型</b> · 会真实理解你上传的方案与照片，并按内容生成活动详情与宣发素材。'
-      :'<b>AI 引擎：演示模式</b> · 当前未接通大模型：系统仅按上传资料<b>抽取真实事实</b>（行程、费用、人数、照片）并套用通用文案，内容可用但表达为示例；由总平台接通模型后即为真实创作。';
+      ?'<b>智能引擎：真实大模型</b> · 会真实理解你上传的方案与照片，并按内容生成活动详情与宣发素材。'
+      :'<b>智能引擎：演示模式</b> · 当前未接通大模型：系统仅按上传资料<b>抽取真实事实</b>（行程、费用、人数、照片）并套用通用文案，内容可用但表达为示例；由总平台接通模型后即为真实创作。';
   }catch(e){box.style.display='none'}
 }
 startClub().catch(err=>{showAlert({title:'无法进入俱乐部后台',message:err.message});setTimeout(()=>location.href='/login',1800)});
 
 
 // v0.13 Activity Execution Center（2026-10-24 重做：出发日期/执行状态筛选 + 区间汇总 +
-//   按出发日分组——复用 AI Credits 明细的 .led-* 组件体系，长列表不再是无位置感的平铺。
+//   按出发日分组——复用 智能 Credits 明细的 .led-* 组件体系，长列表不再是无位置感的平铺。
 //   start_at 是自由文本（有 '2026-10-xx' 这类占位），取前 10 位解析日期；
 //   解析不出的归入「未定档期」组永远展示，任何筛选下都不会把团期悄悄藏没。）
 let _exeAll=null,currentExecutionOccurrence=null;
@@ -1662,13 +1662,13 @@ async function loadClubBI(){
    biCard('佣金净流水',money(g.commissionNetMovement),`实际打款 ${money(g.settlementPaidInWindow)}（单独统计）`),
    biCard('会员总数',m.totalMembers,`本期新增 ${m.newMembersInWindow}`),
    biCard('重复付费用户',a.repeatPayingUsers,`占本期付费用户 ${a.repeatPayingUserRatioPct}% · 非完整留存率`),
-   biCard('本期 AI 消耗',`${ai.creditsConsumedInWindow} Credits`,`成功 ${ai.successfulCalls} 次 · 失败 ${ai.failedCalls} 次`),
-   biCard('当前 AI 余额',`${ai.currentBalance} Credits`,`待偿欠账 ${ai.unresolvedDebt}`)
+   biCard('本期 智能消耗',`${ai.creditsConsumedInWindow} Credits`,`成功 ${ai.successfulCalls} 次 · 失败 ${ai.failedCalls} 次`),
+   biCard('当前智能余额',`${ai.currentBalance} Credits`,`待偿欠账 ${ai.unresolvedDebt}`)
   ].join('');
   $('#clubBITrend').innerHTML=biTrend(d);
   $('#clubBIActivityFinance').innerHTML=biLine('本期报名实收',money(a.paidCashInWindow))+biLine('本期实际现金退款',money(a.confirmedRefundCashInWindow))+biLine('本期现金净流入',money(a.netCashFlowInWindow))+biLine('本期订单截至当前净实收',money(a.bookingCohortNetCash),'含本期订单后来发生的退款')+biLine('俱乐部承担折扣',money(a.clubFundedDiscount))+biLine('平台承担补贴',money(a.platformFundedSubsidy))+biLine('全额退款订单',a.fullRefundOrders+' 笔')+biLine('部分退款订单',a.partialRefundOrders+' 笔');
   $('#clubBIMembers').innerHTML=biLine('本期独立付费用户',a.payingUsers)+biLine('重复付费用户',a.repeatPayingUsers)+biLine('新会员',m.newMembersInWindow)+biLine('会员活动积分余额',m.clubPointsBalance)+biLine('本期积分发放',m.clubPointsIssuedInWindow)+biLine('本期积分减少',m.clubPointsDebitedInWindow)+'<div class="sub" style="margin-top:14px">会员等级结构</div>'+Object.entries(m.tierCounts).map(([k,v])=>biLine(k,v+' 人')).join('');
-  $('#clubBICommerceAI').innerHTML=biLine('商城归因销售额',money(g.attributedGMV))+biLine('商城订单已付现金',money(g.attributedCashPaid))+biLine('本期商城现金退款',money(g.cashRefundedInWindow))+biLine('本期新增佣金',money(g.commissionEarnedInWindow))+biLine('本期佣金退款冲回',money(g.commissionReversedInWindow))+biLine('本期实际结算',money(g.settlementPaidInWindow))+biLine('本期 AI 奖励',g.aiRewardCreditsInWindow+' Credits')+biLine('本期 AI 调用成功',ai.successfulCalls+' 次');
+  $('#clubBICommerceAI').innerHTML=biLine('商城归因销售额',money(g.attributedGMV))+biLine('商城订单已付现金',money(g.attributedCashPaid))+biLine('本期商城现金退款',money(g.cashRefundedInWindow))+biLine('本期新增佣金',money(g.commissionEarnedInWindow))+biLine('本期佣金退款冲回',money(g.commissionReversedInWindow))+biLine('本期实际结算',money(g.settlementPaidInWindow))+biLine('本期智能奖励',g.aiRewardCreditsInWindow+' Credits')+biLine('本期 智能调用成功',ai.successfulCalls+' 次');
   $('#clubBIActivities').innerHTML=d.activities.length?`<div style="overflow-x:auto"><table class="table"><thead><tr><th>活动</th><th>报名订单</th><th>付费用户</th><th>报名实收</th><th>已确认退款</th><th>订单净实收</th><th>俱乐部折扣</th><th>平台补贴</th></tr></thead><tbody>${d.activities.map(x=>`<tr><td>${esc(x.title)}</td><td>${x.orders}</td><td>${x.paidBuyers}</td><td>${money(x.paidCash)}</td><td>${money(x.confirmedRefundCash)}</td><td><strong>${money(x.netCash)}</strong></td><td>${money(x.clubDiscount)}</td><td>${money(x.platformSubsidy)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">所选周期暂无成功付费报名。</div>';
   $('#clubBIDefinitions').innerHTML=Object.entries(d.definitions).map(([k,v])=>`<div style="padding:4px 0">${esc(v)}</div>`).join('');
  }catch(e){ $('#analyticsMetrics').innerHTML=`<div class="notice warn">经营数据读取失败：${esc(e.message)}</div>`; }
@@ -1751,7 +1751,7 @@ function openActivityRegs(id){
 /* 保存成功之后必须留下看得见的痕迹。原来只有一条 2.4 秒就消失的 toast，弹窗一关
    用户既不知道改了哪几项、也判断不了到底成没成功（用户明确反馈过「编辑修改活动之后
    不知道是否修改成功」）。这里在活动中心顶部留一条可关闭的横幅，只列**真正变化**的
-   字段，并写明 AI 详情文案不会跟着改 —— 否则用户会以为改了价格详情页就该跟着变。 */
+   字段，并写明 智能详情文案不会跟着改 —— 否则用户会以为改了价格详情页就该跟着变。 */
 function activitySavedBanner(changed){
   const host=document.getElementById('activities');if(!host)return;
   document.getElementById('actSavedBanner')?.remove();
@@ -1761,7 +1761,7 @@ function activitySavedBanner(changed){
   bar.innerHTML='<span class="act-saved__ok" aria-hidden="true">✓</span>'
     +'<div class="act-saved__body"><b>活动信息已保存</b>'
     +'<span>'+(changed.length?'本次改动：'+esc(changed.join('、'))+' · ':'本次未改动任何字段 · ')+'已同步到 C 端<i>'+esc(when)+'</i></span>'
-    +'<span class="act-saved__note">AI 详情文案不会自动跟着改；需要重写文案或排版请点「重新生成 / 换一版」。</span></div>'
+    +'<span class="act-saved__note">智能详情文案不会自动跟着改；需要重写文案或排版请点「重新生成 / 换一版」。</span></div>'
     +'<button type="button" class="act-saved__x" aria-label="关闭这条提示">×</button>';
   bar.querySelector('.act-saved__x').onclick=()=>bar.remove();
   host.prepend(bar);
@@ -1781,7 +1781,7 @@ function occurrenceSavedBanner(changed){
   bar.innerHTML='<span class="act-saved__ok" aria-hidden="true">✓</span>'
     +'<div class="act-saved__body"><b>团期已更新</b>'
     +'<span>'+(changed.length?'本次改动：'+esc(changed.join('、'))+' · ':'本次未改动任何字段 · ')+'C 端会按新团期展示<i>'+esc(when)+'</i></span>'
-    +'<span class="act-saved__note">填了正价即视为正式对外定价，C 端不再显示「价格待定」；已生成的 AI 详情文案不会自动跟着改。</span></div>'
+    +'<span class="act-saved__note">填了正价即视为正式对外定价，C 端不再显示「价格待定」；已生成的 智能详情文案不会自动跟着改。</span></div>'
     +'<button type="button" class="act-saved__x" aria-label="关闭这条提示">×</button>';
   bar.querySelector('.act-saved__x').onclick=()=>bar.remove();
   host.prepend(bar);
@@ -1795,7 +1795,7 @@ async function editActivity(id){
   const before={title:String(a.title||''),eventDate:String(a.event_date||''),location:String(a.location||''),
                 price:Number(a.price||0),capacity:Number(a.capacity||0),city:String(a.city||'')};
   const d=await uxForm({title:'编辑活动基本信息',
-    subtitle:'改的是活动事实（名称 / 日期 / 地点 / 价格 / 名额），会同步到 C 端与页面上的事实字段；AI 详情文案如需重写，请用「重新生成 / 换一版」。',
+    subtitle:'改的是活动事实（名称 / 日期 / 地点 / 价格 / 名额），会同步到 C 端与页面上的事实字段；智能详情文案如需重写，请用「重新生成 / 换一版」。',
     fields:[
       {name:'title',label:'活动名称',type:'text',required:true,full:true,value:a.title||''},
       {name:'eventDate',label:'活动日期',type:'text',value:a.event_date||'',placeholder:'如：2026-10-24 或 2026年10月24日'},
@@ -1806,7 +1806,7 @@ async function editActivity(id){
       {name:'checklist',label:'出行清单（每行一项）',type:'textarea',full:true,
        value:(a.activityMaster?.checklist||[]).join('\n'),
        placeholder:'冲锋衣\n登山杖\n头灯\n身份证件',
-       help:'AI 已按活动地点 / 天数 / 难度给出初稿；这里可增删改。保存后 C 端出行清单同步更新，商城可配的装备自动挂到对应条目上。'}
+       help:'智能已按活动地点 / 天数 / 难度给出初稿；这里可增删改。保存后 C 端出行清单同步更新，商城可配的装备自动挂到对应条目上。'}
     ],submitText:'保存并更新活动'});
   if(!d)return;
   const checklistLines=String(d.checklist||'').split('\n').map(x=>x.trim()).filter(Boolean);
@@ -1944,7 +1944,7 @@ async function openLeaderPick(occId,actId){
 const LEADER_ROLE_OPTS=[{value:'领队',label:'领队'},{value:'副领队',label:'副领队'},{value:'教练',label:'教练'},{value:'向导',label:'向导'},{value:'随队医护',label:'随队医护'}];
 
 /* 新增/编辑领队改成卡片内联表单，不再弹 uxForm 覆盖层。
-   原先点「＋ 新增领队」会在「AI 详情预览」正中间盖出一张弹窗，
+   原先点「＋ 新增领队」会在「智能详情预览」正中间盖出一张弹窗，
    填完还得先关掉才能继续看正文 —— 这是很强的打断，也解释了
    「怎么在活动详情预览里又跳出一个东西」。
    内联展开后表单就长在领队卡片里，与下面的名册同屏，改完直接提交。 */
@@ -2668,7 +2668,7 @@ const LED_QUICK=[{k:'today',label:'今天'},{k:'7d',label:'近 7 天'},{k:'30d',
 /* 任务名与 channel-render.js 的 LABEL 对齐：渠道生成时 task_type 直接就是渠道 id
    （wechat/xhs/poster/recap），只认 detail 会把英文 id 直接甩给用户。 */
 const LED_TASK={detail:'活动详情生成',wechat:'微信公众号图文',xhs:'小红书图文',poster:'活动招募海报',recap:'活动回顾'};
-const LED_TYPE={subscription:'套餐额度',topup:'充值',consume:'AI 消耗',mall_reward:'商城奖励',
+const LED_TYPE={subscription:'套餐额度',topup:'充值',consume:'智能消耗',mall_reward:'商城奖励',
   mall_reward_reverse:'奖励冲回',debt_recovery:'欠账抵扣',adjustment:'平台调整',refund:'退款'};
 const LED_WD=['周日','周一','周二','周三','周四','周五','周六'];
 const LED_STATE={ledger:{key:'ledger',quick:'7d',from:'',to:'',offset:0,items:[],total:0,sum:null,ready:false},
@@ -2749,7 +2749,7 @@ function ledRowUsage(x,s){
   const ok=String(x.status||'')==='success',cred=Number(x.credits_charged||0);
   const tok=Number(x.input_tokens||0).toLocaleString('zh-CN')+' in / '+Number(x.output_tokens||0).toLocaleString('zh-CN')+' out';
   return `<div class="led-row"><span class="led-dot ${ok?'in':'out'}" aria-hidden="true"></span>`
-    +`<div class="led-row__main"><div class="led-row__title">${esc(LED_TASK[x.task_type]||x.task_type||'AI 调用')}`
+    +`<div class="led-row__main"><div class="led-row__title">${esc(LED_TASK[x.task_type]||x.task_type||'智能调用')}`
     +`<span class="led-badge ${ok?'ok':'bad'}">${ok?'成功':esc(x.status||'—')}</span></div>`
     +`<div class="led-row__sub"><span class="led-mono">${esc(x.model||'—')}</span>${x.provider?' · '+esc(x.provider):''} · <span class="led-mono">${tok}</span> · <span class="led-row__time">${s.time}</span></div></div>`
     +`<div class="led-row__amt ${cred>0?'out':'flat'}">${cred>0?'−'+cred:'0'}<i>Credits</i></div></div>`;
@@ -2788,7 +2788,7 @@ function renderUsagePanel(){
   const sum=$('#usageSum');if(sum)sum.innerHTML=usageSumHtml(st);
   const box=$('#aiUsage');if(!box)return;
   box.innerHTML=ledListHtml('usage',st,ledRowUsage,x=>x.credits_charged,
-    (st.from||st.to)?'这个时间范围内没有 AI 调用记录':'还没有 AI 调用记录',true);
+    (st.from||st.to)?'这个时间范围内没有 智能调用记录':'还没有 智能调用记录',true);
 }
 async function loadCreditLedger(mode){
   const st=ledSt('ledger'),box=$('#creditLedger');if(!box)return;
@@ -3180,7 +3180,7 @@ function mpDelCustomWay(i){
 }
 
 let SETTINGS_TAB='brand';
-/* 设置中心 tab：领队资源库/业务介绍/AI Credits/收款账户都收进了设置页，
+/* 设置中心 tab：领队资源库/业务介绍/智能 Credits/收款账户都收进了设置页，
    每个 tab 面板沿用原 load 函数（DOM id 不变），首次切入时才拉数据。 */
 const SET_TAB_LOAD={brand:()=>loadSettings(),
   leaders:async()=>{await loadLeaders()},
