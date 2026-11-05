@@ -1,5 +1,5 @@
 from __future__ import annotations
-import uuid, os, io, csv, re, json, zipfile, shutil, asyncio, secrets, hmac, hashlib, base64
+import uuid, os, io, csv, re, json, zipfile, shutil, asyncio, secrets, hmac, hashlib, base64, subprocess
 from sqlite3 import IntegrityError
 from datetime import datetime, timedelta, date
 from pathlib import Path
@@ -17,12 +17,14 @@ from cost_guard import sanitize_for_frontend, master_has_cost_evidence
 from cost_guard import redact_cost_text
 from link_source import fetch_link, LinkError
 from ai_engine import (generate_activity, generate_channel, regenerate_detail, detail_outline,
-                       _fact_digest, pick_cover_media, generate_recap)
+                       _fact_digest, pick_cover_media, generate_recap, pick_detail_style,
+                       _DETAIL_STYLES)
+from image_gen import generate_hero, save_hero_image, build_hero_prompt
 from longpic import generate_longpic, build_fact_pack
 from image_caption import caption_media, caption_lines, persist_captions
 from ocr import ocr_image_text
 from ai_billing import ensure_credits, charge_credits, credit_cost
-from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config,
+from ai_gateway import (gateway_status, AIGatewayError, platform_provider_config, _record_usage,
                         update_platform_provider_config, test_provider_connection, effective_gateway_mode)
 from clubos_domain.club_analytics import ClubBusinessIntelligence
 from clubos_domain import club_biz
@@ -1696,6 +1698,267 @@ async def _longpic_job(club_id:int,activity_id:int,master:dict,detail:dict,
 @app.get('/api/club/{club_id}/activities/{activity_id}/channel/longpic/status')
 def longpic_status(club_id:int,activity_id:int):
     return _LONGPIC_JOBS.get((club_id,activity_id)) or {'status':'idle'}
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 服务端 HTML → 真实 PNG（2026-11-05 新增，解决两个老痛点）
+#   ① 微信分享带不走 iframe：把长图 / 活动详情宣传区块栅格化成一张真图，
+#      分享卡片与下载都拿真文件，不再是「预览在 iframe 里、发出去是空白」。
+#   ② 前端那条 SVG foreignObject 客户端导出链路常年「下载后只有文字 / 照片全空」
+#      （#529/#542 反复炸），服务端 Chromium 真渲染一次性根除。
+#
+# 渲染器：scripts/html_to_image.cjs（调用本机已装的 node Playwright + Chromium）。
+# 媒体解析：把 {{media:ref}} / 俱乐部代理 URL / /static/uploads 裸链 统一改成
+#           本地 file:// 绝对路径，Chromium 同源加载。
+# ══════════════════════════════════════════════════════════════════════
+import html as _html_mod  # 仅用于避免与变量名冲突时的占位（保留可读）
+
+_ROOT = os.path.dirname(os.path.abspath(__file__))
+_HTML2IMG_JS = os.path.join(_ROOT, 'scripts', 'html_to_image.cjs')
+_MEDIA_PROXY_SPLIT = re.compile(r'/media/([^"\'\s>]+)')
+_MEDIA_COVER_RE = re.compile(r'/api/club/\d+/activities/\d+/cover')
+_MEDIA_REF_IMG = re.compile(
+    r'(<img\b[^>]*?\bsrc=(["\']))\{\{?\s*media\s*:\s*([A-Za-z0-9_\-]+)\s*\}?\}\2')
+_MEDIA_REF_BARE = re.compile(r'\{\{?\s*media\s*:\s*([A-Za-z0-9_\-]+)\s*\}?\}')
+_MEDIA_PROXY_IMG = re.compile(
+    r'(<img\b[^>]*?\bsrc=(["\']))(/api/club/\d+/activities/\d+/media/[^"\'\s>]+)\2')
+
+
+def _file_url_of(u: str, root: str) -> str | None:
+    """把任意媒体地址规约成 file:// 绝对路径（仅本地渲染用）。"""
+    if not u:
+        return None
+    if u.startswith('file://'):
+        return u
+    if u.startswith('/static/uploads/'):
+        return 'file://' + os.path.join(root, u.lstrip('/'))
+    return None
+
+
+def _resolve_media_to_file(html: str, master: dict | None, root: str,
+                           cover_static: str | None = None) -> str:
+    """把长图 / 详情 HTML 里的媒体引用改写成 file://，供 Chromium 本地渲染。
+
+    支持的形态（与前端 resolveLongpic / mediaUrl 对齐）：
+      · <img src="{{media:ref}}"> / <img src="{media:ref}">  → 走 master 媒体池
+      · <img src="/api/club/.../media/<tail>">              → 俱乐部代理路由
+      · 裸 {{media:ref}} 占位符（不在 img 里）               → 解析不到就删掉，不引坏链
+      · /api/club/.../cover                                 → 活动封面文件
+    """
+    master = master if isinstance(master, dict) else {}
+    ref_map: dict[str, str] = {}
+    for m in (master.get('media') or []):
+        if isinstance(m, dict) and m.get('ref') and m.get('url'):
+            ref_map[str(m['ref'])] = str(m['url'])
+
+    def repl_ref_img(mm: re.Match) -> str:
+        f = _file_url_of(ref_map.get(mm.group(3)), root)
+        return (mm.group(1) + f) if f else mm.group(0)  # 解析不到就保留原样，不造破图
+
+    html = _MEDIA_REF_IMG.sub(repl_ref_img, html)
+
+    def repl_proxy_img(mm: re.Match) -> str:
+        tail = mm.group(3).split('/media/', 1)[1]
+        f = _file_url_of('/static/' + tail, root)
+        return (mm.group(1) + f) if f else mm.group(0)
+
+    html = _MEDIA_PROXY_IMG.sub(repl_proxy_img, html)
+
+    # 裸占位符：解析到就整段删掉（保留前后文字），解析不到保留原样
+    html = _MEDIA_REF_BARE.sub(
+        lambda mm: '' if _file_url_of(ref_map.get(mm.group(1)), root) else mm.group(0), html)
+
+    if cover_static:
+        cov = _file_url_of('/static/' + cover_static.lstrip('/'), root)
+        if cov:
+            html = _MEDIA_COVER_RE.sub(lambda _: cov, html)
+    return html
+
+
+def render_html_to_png(html: str, out_path: str, *, width: int = 750, scale: int = 2,
+                      root: str | None = None) -> str:
+    """把一段 HTML 片段渲染成 750px 宽、deviceScaleFactor=scale 的整页 PNG。"""
+    root = root or _ROOT
+    # 已经是完整文档就不二次包裹，否则包一层 750px 宽的骨架（含中文回退字体）
+    stripped = html.strip()
+    is_full = stripped.lower().startswith('<!doctype') or stripped.lower().startswith('<html')
+    if is_full:
+        body = html
+    else:
+        body = ('<!doctype html><html><head><meta charset="utf-8">'
+                '<style>html,body{margin:0;padding:0;width:%dpx;background:#fff;'
+                'font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;'
+                '-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}'
+                'img{max-width:100%%;height:auto;display:block}section{display:block}</style>'
+                '</head><body>' % width) + html + '</body></html>'
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    tmp = out_path + '.src.html'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(body)
+    try:
+        env = dict(os.environ)
+        env.pop('NODE_OPTIONS', None)  # 去掉 WorkBuddy 的 fs/network shim，避免干扰 chromium
+        proc = subprocess.run(
+            ['node', _HTML2IMG_JS, '--html', tmp, '--out', out_path,
+             '--width', str(width), '--scale', str(scale)],
+            capture_output=True, text=True, timeout=150, env=env)
+        if proc.returncode != 0 or not os.path.exists(out_path):
+            raise RuntimeError('html_to_image 失败: ' + (proc.stderr or proc.stdout or '').strip()[:600])
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    return out_path
+
+
+@app.post('/api/club/{club_id}/activities/{activity_id}/render-longpic')
+def render_longpic_image(club_id: int, activity_id: int):
+    """把已生成的宣传长图渲染成真实 PNG（服务端），返回可下载的图片地址。"""
+    with conn() as c:
+        a = row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?', (activity_id, club_id)))
+        if not a:
+            raise HTTPException(404, '活动不存在')
+        asset = row(c.execute(
+            "SELECT * FROM content_assets WHERE club_id=? AND activity_id=? AND channel='longpic' "
+            "ORDER BY id DESC LIMIT 1", (club_id, activity_id)))
+        if not asset:
+            raise HTTPException(400, '该活动还没有生成宣传长图，请先点「AI 生成」。')
+        body = jload(asset['body_json'], {}) if asset['body_json'] else {}
+        html = body.get('html') or ''
+        if not html:
+            raise HTTPException(400, '长图内容为空，无法渲染。')
+        master = jload(a['activity_master_json'], {}) if a.get('activity_master_json') else {}
+        cover = a.get('cover')
+        html = _resolve_media_to_file(html, master, _ROOT,
+                                     ('/static/uploads/' + cover) if cover else None)
+        out_dir = os.path.join(_ROOT, 'static', 'uploads', str(club_id), 'promos')
+        os.makedirs(out_dir, exist_ok=True)
+        fname = 'longpic_%d_%d.png' % (activity_id, asset['id'])
+        out_path = os.path.join(out_dir, fname)
+        render_html_to_png(html, out_path, width=750, scale=2, root=_ROOT)
+        img_url = ('/api/club/%d/activities/%d/shared-image/%s' % (club_id, activity_id, fname))
+        body['imageUrl'] = img_url
+        with conn() as c2:
+            c2.execute('UPDATE content_assets SET body_json=? WHERE id=?', (jdump(body), asset['id']))
+    return {'imageUrl': img_url, 'assetId': asset['id']}
+
+
+@app.post('/api/club/{club_id}/activities/{activity_id}/render-promo')
+def render_promo_image(club_id: int, activity_id: int):
+    """把活动详情的「宣传区块(promoHtml)」渲染成真实分享图（解决微信分享带不走 iframe）。"""
+    with conn() as c:
+        a = row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?', (activity_id, club_id)))
+        if not a:
+            raise HTTPException(404, '活动不存在')
+        detail = jload(a['detail_json'], {}) if a.get('detail_json') else {}
+        html = detail.get('promoHtml') or ''
+        if not html:
+            raise HTTPException(400, '该活动详情还没有宣传区块(promoHtml)。')
+        master = jload(a['activity_master_json'], {}) if a.get('activity_master_json') else {}
+        cover = a.get('cover')
+        html = _resolve_media_to_file(html, master, _ROOT,
+                                     ('/static/uploads/' + cover) if cover else None)
+        out_dir = os.path.join(_ROOT, 'static', 'uploads', str(club_id), 'promos')
+        os.makedirs(out_dir, exist_ok=True)
+        ts = datetime.utcnow().strftime('%Y%m%d%H%M%S')
+        fname = 'promo_%d_%s.png' % (activity_id, ts)
+        out_path = os.path.join(out_dir, fname)
+        render_html_to_png(html, out_path, width=750, scale=2, root=_ROOT)
+        img_url = ('/api/club/%d/activities/%d/shared-image/%s' % (club_id, activity_id, fname))
+    return {'imageUrl': img_url}
+
+
+@app.get('/api/club/{club_id}/activities/{activity_id}/shared-image/{fname}')
+def shared_image(club_id: int, activity_id: int, fname: str):
+    """流出渲染好的分享图（长图 / promo）。俱乐部鉴权路由，prod 不走 /static/uploads 裸链。"""
+    if not re.match(r'^[A-Za-z0-9_\-]+\.png$', fname or ''):
+        raise HTTPException(400, '非法的文件名')
+    p = os.path.join(_ROOT, 'static', 'uploads', str(club_id), 'promos', fname)
+    if not os.path.exists(p):
+        raise HTTPException(404, '图片不存在')
+    return FileResponse(p, media_type='image/png', filename=fname)
+
+
+# ══ 活动主视觉：AI 一键生成（通义万相，复用 DashScope Key）══
+# 解决「没上传照片就撑不起图文」：零上传也能生成一张符合调性的户外主视觉，
+# 落盘为活动封面，详情页封面大图 / 长图 / promoHtml 都能直接吃到。
+_HERO_JOBS: dict[tuple[int, int], dict] = {}
+
+
+async def _hero_job(club_id: int, activity_id: int, usage_id: int | None = None):
+    job = _HERO_JOBS.setdefault((club_id, activity_id), {'status': 'running'})
+    try:
+        with conn() as c:
+            a = row(c.execute('SELECT * FROM activities WHERE id=? AND club_id=?',
+                              (activity_id, club_id)))
+            if not a:
+                raise RuntimeError('活动不存在')
+        # 风格家族 → 调性词，让主视觉与这场活动已派发的版面同调
+        try:
+            master0 = jload(a['activity_master_json'], {}) if a.get('activity_master_json') else {}
+            sk = pick_detail_style(master=master0)
+            style_name = (_DETAIL_STYLES.get(sk) or {}).get('name', '')
+        except Exception:
+            style_name = ''
+        master = jload(a['activity_master_json'], {}) if a.get('activity_master_json') else {}
+        prompt = build_hero_prompt(master, style_name)
+        urls = await generate_hero(prompt, size='1024*1280', n=1)
+        rel = await save_hero_image(club_id, urls[0], _ROOT)
+        with conn() as c:
+            c.execute('UPDATE activities SET cover=? WHERE id=? AND club_id=?',
+                      (rel, activity_id, club_id))
+            # 同步进资料媒体池，promoHtml / 长图也能引用这张 AI 主视觉
+            try:
+                mm = jload(a['activity_master_json'], {}) if a.get('activity_master_json') else {}
+                media = mm.get('media') or []
+                media.append({'ref': 'ai-hero', 'url': '/static/uploads/' + rel,
+                              'kind': 'photo', 'source': 'ai'})
+                mm['media'] = media
+                c.execute('UPDATE activities SET activity_master_json=? WHERE id=? AND club_id=?',
+                          (jdump(mm), activity_id, club_id))
+            except Exception:
+                pass
+        job.update(status='done', imageUrl=('/static/uploads/' + rel))
+        # 生成成功 → 扣 Credits（默认 ai_cost_hero=10，与 poster 同级），
+        # 并回填 usage 记录状态 / 平台成本（通义万相 Plus ¥0.2/张）。
+        try:
+            if usage_id:
+                charge_credits(club_id, 'hero', usage_id)
+                with conn() as c:
+                    c.execute('UPDATE ai_usage_records SET status=?,provider_cost=? WHERE id=?',
+                              ('success', 0.2, usage_id))
+        except Exception:
+            pass
+    except Exception as e:  # 任何异常都要让前端退出轮询，不能永远转圈
+        job.update(status='error', error=str(e))
+        try:
+            if usage_id:
+                with conn() as c:
+                    c.execute('UPDATE ai_usage_records SET status=?,error=? WHERE id=?',
+                              ('error', str(e)[:400], usage_id))
+        except Exception:
+            pass
+
+
+@app.post('/api/club/{club_id}/activities/{activity_id}/generate-hero')
+def generate_hero_endpoint(club_id: int, activity_id: int, background_tasks: BackgroundTasks):
+    """后台一键生成活动主视觉海报（异步）。返回 jobId，前端轮询 /status。
+
+    计费：先 ensure_credits 校验俱乐部启用 + AI Credits 余额，再落一条 pending 的
+    ai_usage_records 记录（usage_id）交给后台作业；作业成功才 charge_credits。
+    """
+    club_or_404(club_id); ensure_credits(club_id, 'hero')
+    usage_id = _record_usage(club_id=club_id, task_type='hero',
+                             request_id='hero-' + uuid.uuid4().hex,
+                             provider='dashscope', model='wanx2.1-t2i-plus', status='pending')
+    background_tasks.add_task(_hero_job, club_id, activity_id, usage_id)
+    return {'jobId': '%d-%d' % (club_id, activity_id), 'status': 'queued'}
+
+
+@app.get('/api/club/{club_id}/activities/{activity_id}/generate-hero/status')
+def generate_hero_status(club_id: int, activity_id: int):
+    return _HERO_JOBS.get((club_id, activity_id)) or {'status': 'idle'}
 
 
 # ══ 活动回顾：异步作业表（与长图同理，live 真模型常超 55s 网关上限）══

@@ -768,9 +768,10 @@ async function loadContent(){
     ['longpic','AI 宣传长图','按活动主题与照片自由编排长图，每场版式不同，可预览、复制和下载高清图片'],
     ['wechat','微信公众号图文','AI 重排公众号阅读节奏；生成后可直接预览，并一键复制带格式图文到公众号编辑器'],
     ['xhs','小红书图文','文案为主：独立标题、Hook、正文与话题标签可直接复制走；另出一张 1080×1440 首页海报，并把其余现场照片裁成 3:4 九宫格配图'],
-    ['poster','活动招募海报','用活动真实封面 + AI 文案在本地合成 1080×1440 海报，可直接下载']
+    ['poster','活动招募海报','用活动真实封面 + AI 文案在本地合成 1080×1440 海报，可直接下载'],
+    ['hero','AI 主视觉海报','零上传也能生成一张符合活动调性的户外主视觉，自动设为活动封面，详情页与长图直接采用']
   ];
-  $('#channelArea').innerHTML=cards.map(x=>`<div class="card channel-card"><div><strong>${x[1]}</strong><p>${x[2]}</p><div class="sub">当前活动：${esc(a.title)}</div></div><button class="btn secondary" onclick="genChannel('${x[0]}',${a.id})">AI 生成${x[1]}</button></div>`).join('');
+  $('#channelArea').innerHTML=cards.map(x=>`<div class="card channel-card"><div><strong>${x[1]}</strong><p>${x[2]}</p><div class="sub">当前活动：${esc(a.title)}</div></div><button class="btn secondary" onclick="genOrHero('${x[0]}',${a.id})">AI 生成${x[1]}</button></div>`).join('');
   renderRecapPanel();
   // 已生成内容里补上「这是哪场活动的」——以前只显示 活动 #12，活动一多就认不出来。
   // activity_id<=0 的是「独立回顾」（不绑定系统活动，见 2026-10-30 解耦），单独标注。
@@ -796,6 +797,44 @@ async function deleteContentAsset(assetId){
   });
 }
 function channelLabel(c){return (window.ChannelRender&&ChannelRender.label(c))||c}
+async function genOrHero(ch,id){ if(ch==='hero'){await aiGenerateHero(id);return;} return genChannel(ch,id); }
+/* AI 一键生成活动主视觉（通义万相，复用总平台已配的 DashScope Key）。
+   零上传也能出图：解决「没照片就撑不起图文」；生成后自动设为活动封面，
+   详情页封面大图 / 长图 / promoHtml 都直接采用。 */
+async function aiGenerateHero(id){
+  if(window.uxConfirm&&!await uxConfirm({title:'AI 生成主视觉海报',confirmText:'开始生成',
+    message:'系统会读取这场活动的资料（标题 / 地点 / 调性），调用通义万相生成一张户外主视觉，约需 10-30 秒，并自动设为活动封面。需总平台已在「AI 接入」里配置 DashScope / 通义万相 的 Key。'}))return;
+  try{
+    await api(`/api/club/${CLUB}/activities/${id}/generate-hero`,{method:'POST'});
+    toast('主视觉生成中，约 10-30 秒');
+    const started=Date.now();
+    while(Date.now()-started<4*60*1000){
+      await new Promise(r=>setTimeout(r,3000));
+      let st; try{st=await api(`/api/club/${CLUB}/activities/${id}/generate-hero/status`)}catch(_e){continue}
+      if(st.status==='done'){
+        toast('主视觉已生成并设为封面');
+        _showHeroModal(st.imageUrl);
+        window.channelRenderResetCtx&&channelRenderResetCtx(Number(id));
+        try{await openActivity(id)}catch(_e){}
+        await loadActivities();
+        return;
+      }
+      if(st.status==='error'){ throw new Error(st.error||'生成失败'); }
+    }
+    throw new Error('生成超时，请稍后在内容中心重试');
+  }catch(e){ showAlert({title:'生成主视觉失败',message:e.message}) }
+}
+/* 轻量模态：展示生成好的主视觉，并提示已设为封面。 */
+function _showHeroModal(url){
+  const id='heroModal'; document.getElementById(id)&&document.getElementById(id).remove();
+  const m=document.createElement('div'); m.id=id;
+  m.style.cssText='position:fixed;inset:0;background:rgba(20,24,22,.72);display:flex;align-items:center;justify-content:center;z-index:9999;padding:24px';
+  m.innerHTML='<div style="background:#fff;border-radius:12px;max-width:420px;width:100%;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.3)">'
+    +'<img src="'+url+'?t='+Date.now()+'" style="width:100%;display:block" onerror="this.parentNode.innerHTML=\'<div style=&quot;padding:24px;color:#b54644&quot;>图片加载失败，但已设为封面</div>\'">'
+    +'<div style="padding:14px 16px;font-size:14px;color:#28342D">已自动设为活动封面，详情页、长图与宣传区都会采用这张主视觉。</div></div>';
+  m.onclick=(e)=>{ if(e.target===m) m.remove(); };
+  document.body.appendChild(m);
+}
 async function genChannel(ch,id){
   try{
     // 生成会真花 AI Credits，动手前必须讲清楚。本地渲染成品（复制 / 下载）不再另计费。
