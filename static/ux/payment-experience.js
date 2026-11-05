@@ -129,25 +129,43 @@ window.signupNow=async function(){if(!currentAct||!currentOcc){toast('请先选�
   /* 同意确认放在最前面：没同意就谈不上名额与资料校验（取消 = 放弃报名，不弹别的提示）。 */
   if(!await rulesConsent(currentAct))return;
   if(Number(currentOcc.remaining)<bookingParticipants.length){toast('本团期剩余名额不足，请重新选择');return}
-  const requireComplete=currentAct.participantPolicy?.allowIncompleteAtCheckout===false;
-  /* 证件必选（2026-10-09 用户要求）：证件类型 + 证件号码在付款之前必须交齐并过格式
-     校验，这一条不受俱乐部「允许先付款、后补资料」开关影响 —— 证件是投保与实名出行
-     的前提，出发前再补俱乐部来不及出保单；允许后补的只是紧急联系人（按俱乐部策略）。
-     校验失败把红框 + 内联文案落在具体字段上（paxShowError，web.js），而不是只 toast 一闪；
-     后端 participants.normalize_for_checkout 还有同规则硬闸，双保险。 */
-  if(typeof paxClearAllErrors==='function')paxClearAllErrors();
-  for(let i=0;i<bookingParticipants.length;i++){const p=bookingParticipants[i];
-    if(!p.name?.trim()){if(typeof paxShowError==='function')paxShowError(i,'name','请填写姓名');toast('请填写第 '+(i+1)+' 位参加人姓名');return}
-    if(!validPhone(p.phone)){if(typeof paxShowError==='function')paxShowError(i,'phone','手机号格式需要核对');toast('第 '+(i+1)+' 位参加人电话格式需要核对');return}
-    if(!p.idType){if(typeof paxShowError==='function')paxShowError(i,'idType','请选择证件类型');toast('请选择第 '+(i+1)+' 位参加人的证件类型');return}
-    const idErr=(typeof idNumberError==='function')?idNumberError(p.idType,p.idNumber):(!String(p.idNumber||'').trim()?'请填写证件号码':'');
-    if(idErr){if(typeof paxShowError==='function')paxShowError(i,'idNumber',idErr);toast('第 '+(i+1)+' 位参加人'+(idErr.startsWith('请')?'：':'的')+idErr);return}
-    if(requireComplete&&(!p.emergencyContactName||!validPhone(p.emergencyContactPhone))){if(typeof paxShowError==='function')paxShowError(i,'emergencyContactName','本活动要求付款前补齐紧急联系人资料');toast('本活动要求付款前补齐第 '+(i+1)+' 位参加人的紧急联系人资料');return}}
-  // 校验放在锁外：资料没填全时立刻给提示，不该让「立即报名」闪一下忙态。
-  return uxFlow('checkout',async()=>{
-   try{const cp=Number(document.getElementById('clubUse')?.value||0),gp=Number(document.getElementById('gearUse')?.value||0),code=document.getElementById('benefitUse')?.value||'';const q=await post('/api/public/activities/'+currentAct.id+'/checkout',{name:PAYER_NAME,phone:PAYER_PHONE,occurrenceId:currentOcc.id,clubPoints:cp,gearPoints:gp,voucherCodes:code?[code]:[],participants:bookingParticipants});const paid=await payCheckout(q);if(!paid)return;await receipt('报名成功',[['参加人数',(paid.participantCount||bookingParticipants.length)+' 人'],['实际支付',money(paid.cashPaid)],['获得活动积分',String(paid.clubPointsEarned||0)]]);await loadWallet();await openAct(currentAct.id)}catch(e){toast(e.message||'报名未完成，请到订单查看状态')}
-  });
- };
+  /* 报名人资料改为「确认报名后才弹出填写」（2026-11-05 用户需求 #594）：
+     先把团期 / 人数 / 规则都确认好，再弹出填写每位参加人姓名与证件的弹窗，
+     校验通过才真正建单支付。活动详情页不再常驻铺开这些表单。 */
+  openParticipantDialog();
+};
+/* 报名人资料填写弹窗：复用 web.js 的 renderParticipantForms（按 #paxForms 全局选择器取容器），
+   把容器放进弹窗 body 后调用一次即可渲染。校验与建单支付逻辑和原来一致，
+   只是从「页内直接校验」挪到了「弹窗确认后校验」。 */
+async function openParticipantDialog(){
+  const n=bookingParticipants.length;
+  const ov=uxDialog({title:'填写参加人资料',desc:'请填写 '+n+' 位参加人的资料。证件类型与证件号码为投保与实名出行所需，付款前必须填齐。',body:'<div id="paxForms"></div>',foot:'<button type="button" class="btn ghost" data-cancel>再想想</button><button type="button" class="btn" id="paxConfirmBtn" style="background:var(--brand,#1a2b23);color:#fff">确认报名并支付</button>',wide:true});
+  if(typeof renderParticipantForms==='function')renderParticipantForms();
+  const bodyEl=ov.querySelector('.ux-dialog-body');if(bodyEl){bodyEl.style.maxHeight='68vh';bodyEl.style.overflowY='auto'}
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+  ov.querySelector('#paxConfirmBtn').onclick=async()=>{
+    if(typeof paxClearAllErrors==='function')paxClearAllErrors();
+    const requireComplete=currentAct.participantPolicy?.allowIncompleteAtCheckout===false;
+    /* 证件必选（2026-10-09 用户要求）：证件类型 + 证件号码在付款之前必须交齐并过格式
+       校验，这一条不受俱乐部「允许先付款、后补资料」开关影响 —— 证件是投保与实名出行
+       的前提，出发前再补俱乐部来不及出保单；允许后补的只是紧急联系人（按俱乐部策略）。
+       校验失败把红框 + 内联文案落在具体字段上（paxShowError，web.js），而不是只 toast 一闪；
+       后端 participants.normalize_for_checkout 还有同规则硬闸，双保险。 */
+    for(let i=0;i<bookingParticipants.length;i++){const p=bookingParticipants[i];
+      if(!p.name?.trim()){if(typeof paxShowError==='function')paxShowError(i,'name','请填写姓名');toast('请填写第 '+(i+1)+' 位参加人姓名');return}
+      if(!validPhone(p.phone)){if(typeof paxShowError==='function')paxShowError(i,'phone','手机号格式需要核对');toast('第 '+(i+1)+' 位参加人电话格式需要核对');return}
+      if(!p.idType){if(typeof paxShowError==='function')paxShowError(i,'idType','请选择证件类型');toast('请选择第 '+(i+1)+' 位参加人的证件类型');return}
+      const idErr=(typeof idNumberError==='function')?idNumberError(p.idType,p.idNumber):(!String(p.idNumber||'').trim()?'请填写证件号码':'');
+      if(idErr){if(typeof paxShowError==='function')paxShowError(i,'idNumber',idErr);toast('第 '+(i+1)+' 位参加人'+(idErr.startsWith('请')?'：':'的')+idErr);return}
+      if(requireComplete&&(!p.emergencyContactName||!validPhone(p.emergencyContactPhone))){if(typeof paxShowError==='function')paxShowError(i,'emergencyContactName','本活动要求付款前补齐紧急联系人资料');toast('本活动要求付款前补齐第 '+(i+1)+' 位参加人的紧急联系人资料');return}}
+    /* 校验通过再关弹窗进入支付：表单数据已在 bookingParticipants，关弹窗不影响提交
+       （checkout 只读这个数组）；校验失败则留在弹窗里、红框落在具体字段上。 */
+    ov.uxClose();
+    uxFlow('checkout',async()=>{
+     try{const cp=Number(document.getElementById('clubUse')?.value||0),gp=Number(document.getElementById('gearUse')?.value||0),code=document.getElementById('benefitUse')?.value||'';const q=await post('/api/public/activities/'+currentAct.id+'/checkout',{name:PAYER_NAME,phone:PAYER_PHONE,occurrenceId:currentOcc.id,clubPoints:cp,gearPoints:gp,voucherCodes:code?[code]:[],participants:bookingParticipants});const paid=await payCheckout(q);if(!paid)return;await receipt('报名成功',[['参加人数',(paid.participantCount||bookingParticipants.length)+' 人'],['实际支付',money(paid.cashPaid)],['获得活动积分',String(paid.clubPointsEarned||0)]]);await loadWallet();await openAct(currentAct.id)}catch(e){toast(e.message||'报名未完成，请到订单查看状态')}
+    });
+  };
+}
  /* 「一点就下单」已废除：装备是实物，下单前必须走「商品详情 → 确认订单（地址 +
    价格明细）→ 支付」。这个函数现在只负责把任何遗留入口送进商品详情页 ——
    没有收货地址的直购下单必然被后端 400 拒掉，不如从源头就不给这条路。 */

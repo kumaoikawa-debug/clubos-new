@@ -334,7 +334,7 @@ async function syncPeaktraceCatalog(button){
   try{
     const r=await api('/api/platform/brands/peaktrace/sync',{method:'POST'});
     await loadProductDicts(true);await loadProducts();
-    showAlert({title:'PEAKTRACE 商品已同步',message:`新增 ${r.created} 件，更新 ${r.updated} 件，上游已移除 ${r.hidden} 件。新增商品在「待上架」中，上架后前端可展示。当前仅展示商品，暂不可购买。`});
+    showAlert({title:'PEAKTRACE 商品已同步',message:`新增 ${r.created} 件，更新 ${r.updated} 件，上游已移除 ${r.hidden} 件；已接通 ${r.skuCount||0} 个规格的上游可售库存。上游在售商品直接在 C 端上架并可售，价格 / 图片 / 规格 / 库存全部以 PEAKTRACE 为准${r.autoSync?'':'（当前为手动同步）'}。`});
   }catch(e){showAlert({title:'同步失败',message:e.message})}
   finally{button.disabled=false;button.textContent='同步 PEAKTRACE'}
 }

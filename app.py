@@ -2420,14 +2420,14 @@ def _leader_specs(raw)->list[str]:
 # ── 俱乐部设置：品牌 DIY（名称 / logo / slogan）+ 联系方式 ────────────────────
 # 订阅 SaaS 的俱乐部在这里自助包装自己的前端：C 端顶栏的名字、logo、首页品牌条
 # 都从这里取（public_club 白名单下发，见 _club_public_brand）。
-_CLUB_SETTINGS_FIELDS=('name','slogan','city','contact_name','contact_phone')
+_CLUB_SETTINGS_FIELDS=('name','slogan','city','contact_name','contact_phone','insurance_coverage_wan')
 
 @app.get('/api/club/{club_id}/settings')
 def club_settings_get(club_id:int):
     x=club_or_404(club_id)
     return {'name':x['name'],'slogan':x.get('slogan') or '','city':x.get('city') or '',
             'contactName':x.get('contact_name') or '','contactPhone':x.get('contact_phone') or '',
-            'logoUrl':x.get('logo_url') or ''}
+            'logoUrl':x.get('logo_url') or '','insuranceCoverageWan':float(x.get('insurance_coverage_wan') or 0)}
 
 @app.put('/api/club/{club_id}/settings')
 def club_settings_put(club_id:int,payload:dict=Body(...)):
@@ -2443,6 +2443,14 @@ def club_settings_put(club_id:int,payload:dict=Body(...)):
     if 'logo_url' in payload:
         # 仅供「移除 logo」置空；设置新值必须走上传端点（它负责落盘和带扩展名）
         fields['logo_url']=str(payload.get('logo_url') or '').strip() or None
+    # 保险保额是数值字段（单位：万），与上面的字符串字段分开校验：空/0 表示「未配置」
+    if 'insurance_coverage_wan' in fields:
+        try:
+            _wan=float(str(fields['insurance_coverage_wan'] or '0') or '0')
+        except (TypeError,ValueError):
+            raise HTTPException(400,'保险保额必须是数字（单位：万）')
+        if _wan<0 or _wan>9999: raise HTTPException(400,'保险保额超出合理范围')
+        fields['insurance_coverage_wan']=_wan
     if not fields: raise HTTPException(400,'没有需要更新的字段')
     with conn() as c:
         sets=','.join(f'{k}=?' for k in fields)
@@ -4282,6 +4290,12 @@ def _product_extras(c, ids:list[int]):
 def _with_extras(c, product_list:list[dict]):
     if not product_list: return product_list
     images,variants=_product_extras(c,[x['id'] for x in product_list])
+    # 已完成库存镜像的外部商品可售；其余外部品牌仍只展示（库存不外露）。
+    try:
+        mirrored_ids={int(r[0]) for r in c.execute("""SELECT DISTINCT product_id FROM external_product_mappings
+                        WHERE external_sku_id='' AND external_sync_status='stock_synced'""")}
+    except Exception:
+        mirrored_ids=set()
     out=[]
     for x in product_list:
         d=dict(x); pid=int(x['id'])
@@ -4302,7 +4316,10 @@ def _with_extras(c, product_list:list[dict]):
         # 合成图头图裁切区：C 端列表/详情头图按它裁出干净单视图（2026-11-04）。
         d['catalogView']=_parse_catalog_view(x.get('catalog_view'))
         d['variants']=variants.get(pid) or []
-        external=(d.get('source')=='external_api' or d.get('inventory_mode')!='platform_owned' or d.get('brand_source_type')=='external_api')
+        mirror_ok=(d.get('inventory_mode')=='external_mirror'
+                   and d.get('fulfillment_mode')=='platform_warehouse' and pid in mirrored_ids)
+        d['externalMirrored']=mirror_ok
+        external=not mirror_ok and (d.get('source')=='external_api' or d.get('inventory_mode')!='platform_owned' or d.get('brand_source_type')=='external_api')
         d['displayOnly']=external
         d['purchaseAvailable']=not external
         if external:
@@ -5301,6 +5318,10 @@ def public_activity(activity_id:int, user_id:int|None=None):
     a['pointsPolicy']=activity_points_policy.from_activity(a,_gp).as_dict()
     a['refundPolicy']=activity_refund_policy.from_activity(a).as_dict()
     a['participantPolicy']=participant_service.from_activity(a).as_dict()
+    # 活动团期「保障」提示：专业户外运动保险保额（俱乐部后台可配，单位：万），C 端展示「价值 X 万」。
+    with conn() as _ic:
+        _club=row(_ic.execute('SELECT insurance_coverage_wan FROM clubs WHERE id=?',(int(a.get('club_id') or 0),)))
+    a['insuranceCoverageWan']=float((_club or {}).get('insurance_coverage_wan') or 0)
     # 品牌 logo / 字标 / 空白底图属俱乐部内部素材；无论 PROD 还是 demo，C 端公开接口一律不曝光。
     # 仅放行 kind='photo' 的真实照片（kind 缺失的按照片处理，避免误删）。
     _m=a.get('activityMaster')
@@ -5314,7 +5335,7 @@ def public_activity(activity_id:int, user_id:int|None=None):
     a['updatedAt']=a.get('updated_at')
     if IS_PROD:
         # Public activity is not a dump of private activity_master_json (internalData).
-        a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy','gearRecommendations','leaders','detailVersionId','updatedAt')}
+        a={k:v for k,v in a.items() if k in ('id','club_id','title','event_date','location','price','capacity','status','cover','activityMaster','detail','occurrences','pointsPolicy','refundPolicy','participantPolicy','gearRecommendations','leaders','detailVersionId','updatedAt','insuranceCoverageWan')}
         # 领队白名单：与 _public_leaders 同一条脱敏纪律（手机号/内部备注绝不下发），
         # 但展示所需的字段要全部放行，否则前端卡片会变成「静态不可点」—— leaderId 没了就打不开
         # 领队主页、years_exp/cert_verified/rating 没了就少印年限/资质/评分（用户反馈「领队信息没显示完」）。
@@ -7532,12 +7553,59 @@ def delete_product_image(product_id:int, image_id:int):
 def platform_brands():
     with conn() as c: return catalog_service.list_brands(c, include_inactive=True)
 
+def _peaktrace_auto_sync_enabled():
+    return os.environ.get('PEAKTRACE_AUTO_SYNC','0')=='1'
+
+
+def _peaktrace_auto_loop():
+    """可选自动同步（PEAKTRACE_AUTO_SYNC=1）：上游上架/调价/改库存后无需人工点按钮。
+
+    守护线程、异常吞掉并继续下一轮；默认关闭，避免测试进程与未配置的实例访问外网。
+    PEAKTRACE_SYNC_TTL 控制轮询间隔（默认 900 秒）。
+    """
+    import time
+    time.sleep(20)   # 启动缓冲：等数据库初始化与网络就绪
+    while True:
+        try:
+            payload=peaktrace_catalog.fetch_catalog()
+            with conn() as c:
+                peaktrace_catalog.sync_catalog(c,payload)
+        except Exception as e:
+            print('[peaktrace] auto sync skipped:',type(e).__name__,str(e)[:160])
+        try:
+            time.sleep(max(60,int(os.environ.get('PEAKTRACE_SYNC_TTL','900'))))
+        except Exception:
+            time.sleep(900)
+
+
+if _peaktrace_auto_sync_enabled():
+    import threading
+    threading.Thread(target=_peaktrace_auto_loop,name='peaktrace-mirror-sync',daemon=True).start()
+
+
+@app.get('/api/platform/brands/peaktrace/status')
+def platform_peaktrace_status():
+    """给平台端显示「上次同步时间 / 已接通商品数」，不需要访问上游。"""
+    with conn() as c:
+        m=row(c.execute("""SELECT COUNT(*) n,MAX(last_inventory_sync_at) last_at
+                            FROM external_product_mappings
+                            WHERE external_sku_id='' AND external_sync_status='stock_synced'"""))
+        gone=row(c.execute("""SELECT COUNT(*) n FROM external_product_mappings
+                               WHERE external_sku_id='' AND external_sync_status='catalog_unavailable'"""))
+    return {'ok':True,'origin':peaktrace_catalog.ORIGIN,
+            'inventoryConnected':True,'autoSync':_peaktrace_auto_sync_enabled(),
+            'syncedProducts':int((m or {}).get('n') or 0),'lastSyncAt':(m or {}).get('last_at'),
+            'upstreamRemoved':int((gone or {}).get('n') or 0)}
+
+
 @app.post('/api/platform/brands/peaktrace/sync')
 def platform_sync_peaktrace():
-    try: products,categories=peaktrace_catalog.fetch_catalog()
-    except Exception: raise HTTPException(502,'PEAKTRACE 商品资料读取失败，请稍后重试；本地商品未改动')
+    """PEAKTRACE 主数据全量镜像：上游上架什么就卖什么，资料与库存都以上游为准。"""
+    try: payload=peaktrace_catalog.fetch_catalog()
+    except Exception as e:
+        raise HTTPException(502,'PEAKTRACE 商品数据读取失败，请稍后重试；本地商品未改动（%s）' % type(e).__name__)
     with conn() as c:
-        try:return peaktrace_catalog.sync_catalog(c,products,categories)
+        try:return peaktrace_catalog.sync_catalog(c,payload)
         except ValueError as e:raise HTTPException(409,str(e))
 
 @app.post('/api/platform/brands')
@@ -8295,15 +8363,22 @@ def _validate_product_publish(c,pid,changes=None):
     if not p:raise HTTPException(404,'商品不存在')
     p.update(changes or {})
     display_only=False
+    mirrored=False
     try:stock_control.owned(c,pid)
     except ValueError as e:
         display_only=bool(c.execute("SELECT 1 FROM external_product_mappings WHERE product_id=? AND external_sync_status='catalog_only'",(pid,)).fetchone())
         if not display_only:raise HTTPException(409,str(e))
+    else:
+        mirrored=stock_control.mirrored(c,p)
+    if c.execute("""SELECT 1 FROM external_product_mappings WHERE product_id=? AND external_sku_id=''
+                    AND external_sync_status='catalog_unavailable'""",(pid,)).fetchone():
+        raise HTTPException(409,'该商品已在 PEAKTRACE 下架，请在品牌后台重新上架后同步')
     missing=[]
     if not (p.get('image_url') or p.get('cover_url') or c.execute('SELECT 1 FROM product_images WHERE product_id=?',(pid,)).fetchone()):missing.append('商品图片')
     if not str(p.get('description') or '').strip():missing.append('商品详情')
     if float(p.get('price') or 0)<=0:missing.append('有效零售价')
-    if not display_only and not c.execute('SELECT 1 FROM warehouse_sku_balances WHERE product_id=? AND on_hand>0',(pid,)).fetchone():missing.append('已验收入库的 SKU')
+    # 镜像商品库存以上游为准：上游暂时 0 件也允许上架（C 端显示缺货），不逼运营补验收单
+    if not display_only and not mirrored and not c.execute('SELECT 1 FROM warehouse_sku_balances WHERE product_id=? AND on_hand>0',(pid,)).fetchone():missing.append('已验收入库的 SKU')
     if c.execute("SELECT 1 FROM stock_reconciliation WHERE product_id=? AND status='pending'",(pid,)).fetchone():missing.append('历史库存实盘核对')
     if missing:raise HTTPException(400,'上架前请补齐：'+'、'.join(missing))
 
@@ -8365,6 +8440,8 @@ def platform_update_product(product_id:int,payload:dict=Body(...)):
         if _norm_product_status(payload.get('status') or '')=='active' and p['status']!='active':
             _validate_product_publish(c,product_id,payload)
         if 'stock' in payload:
+            if p.get('inventory_mode')=='external_mirror':
+                raise HTTPException(409,'该商品库存以 PEAKTRACE 为准，请在品牌后台调整后重新同步')
             try: inventory_engine.set_absolute_stock(c,product_id=product_id,new_stock=max(0,int(payload.get('stock') or 0)),reason=str(payload.get('stockReason') or '平台手工修改库存'))
             except ValueError as e: raise HTTPException(409,str(e))
         for k in ('source','inventory_mode','fulfillment_mode'):

@@ -27,6 +27,10 @@ SYSTEM = """你是 ClubOS 的 AI 活动内容主编（Editorial Director），�
 6. 图片必须引用提供的 media ref，不得编造不存在的图片。根据横竖比、内容语义和叙事作用决定大图、双图、拼图或连续铺陈。
 7. AI Credits 是计费层，不得因此削弱输入、减少图片、缩短上下文、换弱模型或减少创作深度。
 8. 输出严格 JSON，不要 Markdown，不要解释。
+9. 版式节奏（从优秀户外长图学到的，借鉴而非照抄）：相邻 block 要有「图主导」与「文主导」的交替，
+   不要连着几节都是「小标题 + 一段字 + 一张图」的同构；图片满幅铺陈之后，接一段纯文字或一句
+   大字观点句（statement / quote）作为停顿。每屏只放大一个焦点，不要图文各半、平均用力。
+   留白、字号阶梯与克制的户外签名母题撑起高级感，而非装饰与堆砌。
 """
 
 BLOCK_TYPES = "hero|lead|narrative|statement|media|gallery|facts|timeline|info|quote|divider|cta|bigimage|imagetext|cards|numbercards|highlight|columns|table"

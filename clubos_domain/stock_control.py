@@ -3,10 +3,27 @@ import json
 from .product_stock import variant_of
 
 
+def mirrored(c, p):
+    """外部品牌「库存已镜像」：PEAKTRACE 等上游的可售库存已落进本地镜像仓。
+
+    只对这一组合放行，普通 external_api 商品仍然被 owned() 拦住（它们没有真实库存）。
+    必须同时满足：镜像库存模式 + 平台履约 + 存在一次成功的库存同步映射。
+    """
+    p=dict(p) if not isinstance(p,dict) else p
+    if p.get('inventory_mode')!='external_mirror' or p.get('fulfillment_mode')!='platform_warehouse':
+        return False
+    return bool(c.execute("""SELECT 1 FROM external_product_mappings
+                            WHERE product_id=? AND external_sku_id=''
+                            AND external_sync_status='stock_synced'""",(p.get('id'),)).fetchone())
+
+
 def owned(c, product_id):
     p=c.execute('SELECT * FROM products WHERE id=?',(product_id,)).fetchone()
     if not p: raise LookupError('商品不存在')
     p=dict(p)
+    # 2026-11-05 PEAKTRACE 全量直连：镜像库存已落到本地可售库位，走的是同一套
+    # reserve / 结算 / 出库链路，因此允许进入平台仓履约；外部品牌仍由上游主数据驱动。
+    if mirrored(c,p): return p
     brand=c.execute('SELECT source_type FROM product_brands WHERE id=?',(p.get('brand_id'),)).fetchone()
     if (brand and brand[0]=='external_api') or p.get('source')=='external_api' or p.get('inventory_mode')!='platform_owned' or p.get('fulfillment_mode')!='platform_warehouse':
         raise ValueError('外部品牌由品牌独立库存和履约，不能进入平台仓；真实接口尚未接通')

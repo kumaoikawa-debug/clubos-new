@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS clubs (
   home_banners_json TEXT,
   membership_purchase_enabled INTEGER NOT NULL DEFAULT 0, -- 2026-10-26 是否开通「购买会员」（0 关 / 1 开）
   referral_coupon_benefit_id INTEGER NOT NULL DEFAULT 0,  -- 2026-10-26 拉新：注册/邀请成功自动发放的活动券（0=未设定）
+  insurance_coverage_wan REAL NOT NULL DEFAULT 0,  -- 2026-11-05 活动团期「保障」提示：专业户外运动保险保额（单位：万），俱乐部后台可配置（0=未配置）
   -- 2026-10-31 俱乐部级「新活动默认积分规则」：新建活动时显式继承这四个值。
   -- 没有它，每场新活动都会撞上 activities 表写死的默认值（全开 + 可抵 100%），
   -- 运营想全场收紧就得逐场改一遍。默认值与 activities 的历史行为保持一致，

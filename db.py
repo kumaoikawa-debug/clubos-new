@@ -254,6 +254,10 @@ def _run_compat_migrations(c):
     _ensure_column(c,'registrations','booking_ref','booking_ref TEXT')
     _ensure_column(c,'registrations','points_policy_snapshot_json','points_policy_snapshot_json TEXT')
     _ensure_column(c,'registrations','club_benefit_discount','club_benefit_discount REAL NOT NULL DEFAULT 0')
+    # 2026-11-05 活动团期「保障」提示：专业户外运动保险保额（单位：万），俱乐部后台可配置。
+    # C 端活动详情展示「专业户外运动保险价值 X 万」，未配置则不显示该行。
+    # 存量行 ADD COLUMN 落 0 = 未配置，行为零变化。
+    _ensure_column(c,'clubs','insurance_coverage_wan','insurance_coverage_wan REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'registrations','platform_benefit_subsidy','platform_benefit_subsidy REAL NOT NULL DEFAULT 0')
     _ensure_column(c,'registrations','benefit_redemption_ids_json',"benefit_redemption_ids_json TEXT NOT NULL DEFAULT '[]'")
     _ensure_column(c,'benefit_redemptions','gift_note','gift_note TEXT')

@@ -991,6 +991,9 @@ function gearRow(p,opts,sub){
      不出现 Pro / Enterprise / 套餐 / 省 ¥X —— 顾客不需要知道后台套餐层级。
      能否真正享受会员价由结算层按 club_members 判定；这里只按后端下发的
      memberEligible 给一句入会引导，前端不自己造资格。 */
+  // 装备卡价格沿用 2026-11-04 用户口径：只写「原价:1000元；会员价:800元」，
+  // 不出现 ¥ 符号 / Pro / 套餐 / 省¥ 等后台字样（顾客无需知道后台套餐层级）。
+  // 活动详情的「原价¥200.00 / 会员价¥150.00」由 web.js 的 money() 单独渲染，二者不是同一处。
   const yuan=n=>Number(n||0).toFixed(2).replace(/\.00$/,'');
   const priceHtml='<span class="gear-price">原价:'+esc(yuan(base))+'元</span>'
     +(hasMember?'<span class="gear-price__sep">；</span><span class="gear-price gear-price--member">会员价:'+esc(yuan(mp))+'元</span>':'');

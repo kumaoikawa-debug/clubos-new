@@ -3338,6 +3338,7 @@ async function loadSettings(){
     <label style="display:block"><span class="sub">所在城市</span><input id="setCity" maxlength="30" style="width:100%;margin-top:4px" value="${esc(s.city||'')}" placeholder="例如：成都"></label>
     <label style="display:block"><span class="sub">联系人</span><input id="setContact" maxlength="20" style="width:100%;margin-top:4px" value="${esc(s.contactName||'')}" placeholder="姓名"></label>
     <label style="display:block"><span class="sub">联系电话</span><input id="setPhone" maxlength="20" style="width:100%;margin-top:4px" value="${esc(s.contactPhone||'')}" placeholder="手机号"></label>
+    <label style="display:block"><span class="sub">户外运动保险保额（万）· C 端活动详情「保障」行展示，留空=不显示</span><input id="setInsuranceWan" inputmode="decimal" style="width:100%;margin-top:4px" value="${s.insuranceCoverageWan?Number(s.insuranceCoverageWan):''}" placeholder="例如：60"></label>
   </div>
   <div style="margin-top:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
     <span id="setLogoPrev" style="width:56px;height:56px;border-radius:12px;overflow:hidden;background:var(--bg-soft,#f2f0ea);display:inline-flex;align-items:center;justify-content:center;flex:none">${clubLogoImgHtml()}</span>
@@ -3360,6 +3361,8 @@ async function saveClubSettings(){
   const tip=$('#setSaveTip');if(tip)tip.textContent='';
   const payload={name:$('#setName')?.value||'',slogan:$('#setSlogan')?.value||'',
     city:$('#setCity')?.value||'',contact_name:$('#setContact')?.value||'',contact_phone:$('#setPhone')?.value||''};
+  const wan=($('#setInsuranceWan')?.value||'').trim();
+  if(wan)payload.insurance_coverage_wan=wan;
   try{
     await api(`/api/club/${CLUB}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     // 顶栏 / 浏览器标题当场跟着改：不等刷新，也不留「这里改了后台没同步」的错觉

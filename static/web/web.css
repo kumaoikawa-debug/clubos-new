@@ -817,6 +817,10 @@
 .web-shell .occ.is-full .occ__price{color:var(--w-muted)}
 .web-shell .occ-hint{text-align:center;font-size:10.5px;color:var(--w-muted);letter-spacing:.5px;margin-bottom:2px}
 
+/* 报名人资料改为「点「立即报名」后在弹窗里填写」（2026-11-05 #594）：
+   详情页只显示人数摘要，不再常驻铺开姓名/证件表单。这里只是摘要占位卡的样式。 */
+.w-pax-summary{margin-top:10px;padding:11px 13px;border:1px dashed var(--w-line);border-radius:12px;background:#fbfcfa;font-size:13px;line-height:1.5;color:var(--w-muted)}
+.w-pax-summary b{color:var(--w-ink,#121714);font-weight:700}
 /* 参加人卡：每位一张，六格两列。字段各自带标签（原来只有 placeholder） */
 .w-pax{margin-top:12px;padding:13px;border:1px solid var(--w-line);border-radius:14px;background:#fcfdfb}
 .w-pax__hd{display:flex;align-items:center;gap:7px}
@@ -995,7 +999,7 @@
 .web-shell .gear-none{border:1px dashed #dde3dc;border-radius:11px;background:#fbfcfa}
 .web-shell .gear-missing{color:var(--w-muted);line-height:1.6}
 .web-shell .gear-extras{border-top:1px solid var(--w-line)}
-.web-shell .gear-price{color:var(--w-accent)}
+.web-shell .gear-price{color:var(--w-ink,#121714)}
 .web-shell .gear-was{color:var(--w-muted)}
 
 /* 信息折叠层（info-stack）：手机上一行一行铺开太长，默认是收起的 details */
@@ -2568,10 +2572,15 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
   .web-shell .info-stack .itin-day__digest{white-space:normal;overflow:visible;text-overflow:clip}
 }
 /* 装备价格：原价 / 会员价 双价，会员价强调色；入会引导弱化为灰字 */
-.gear-price{font-style:normal;font-weight:700;color:var(--w-accent,#b5552e);white-space:nowrap}
-.gear-price--member{color:var(--w-brand,#194b3d)}
+.gear-price{font-style:normal;font-weight:700;color:var(--w-ink,#121714);white-space:nowrap}
+.gear-price--member{color:#e23b3b;font-weight:700}
 .gear-price__sep{color:var(--w-muted,#8d968f);margin:0 2px}
 .gear-price__tip{font-style:normal;color:var(--w-muted,#8d968f);font-size:11px}
+/* 活动团期区三行权益提示：保障 / 优惠券 / 会员（2026-11-05） */
+.ben-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--w-line,#e6e9e4);border-radius:10px;background:#fbfcfa;margin-top:8px;font-size:13px;line-height:1.4}
+.ben-row__k{flex:0 0 auto;color:var(--w-muted,#7e8a84);font-weight:600;letter-spacing:.02em}
+.ben-row__v{flex:1;min-width:0;color:var(--w-ink,#121714);font-weight:600}
+.ben-row--hot .ben-row__v{color:#e23b3b}
 .web-shell .gear-meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:0}
 
 /* ── 2026-11-05 带队领队：多领队横滑 / 单领队专版 ────────────────────

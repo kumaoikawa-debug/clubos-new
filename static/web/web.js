@@ -1696,7 +1696,7 @@ currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0&&!occExpired(o))
 /* 参加人默认带一位：付款人自己（relationToPayer=本人）。
    证件类型默认「身份证」—— 绝大多数参加人是大陆居民；不是的话号码格式校验会
    逼着顾客把类型换成护照/台胞证等（号码按类型校验，选错类型过不去）。 */
-bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'身份证',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${tripGuideHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);renderParticipantForms();await loadActivityVouchers();await refreshQuote()}
+bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'身份证',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${tripGuideHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);paintPaxSummary();await loadActivityVouchers();await refreshQuote()}
 /* 回到活动列表。两个入口共用：详情页的「返回活动」、底部「活动」tab。 */
 function showActivityList(){
   const l=$('#activityList');if(l)l.style.display='block';
@@ -2399,7 +2399,7 @@ function bookingHtml(a){
         <button type="button" data-step="1" aria-label="增加一位参加人"${cur>=maxPax?' disabled':''}>+</button>
       </div>
     </div>
-    <div id="paxForms"></div>
+    <div id="paxSummary" class="w-pax-summary"></div>
     <div class="w-block__foot">${paxFootText(pp,maxPax,cur)}</div>
     <input type="hidden" id="participantCount" value="${cur}"></div>`;
   return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${earnNote}${pointArea}<button type="button" onclick="routeAsk()" style="width:100%;margin:4px 0 12px;padding:12px;border:1px solid var(--line,#e3e8e6);background:#fff;border-radius:12px;color:#1f2a28;font-weight:600;cursor:pointer">有疑问？先咨询这条线路</button><div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
@@ -2458,7 +2458,7 @@ function setParticipantCount(v){
     const foot=document.querySelector('#bookingCard .w-block__foot');
     if(foot)foot.textContent=paxFootText(currentAct?.participantPolicy||{},max,n);
   }
-  renderParticipantForms(); refreshQuote();
+  paintPaxSummary(); refreshQuote();
 }
 function removeParticipant(i){
   if(bookingParticipants.length<=1){toast('至少保留 1 位参加人');return}
@@ -2472,6 +2472,15 @@ function participantField(i,key,val){bookingParticipants[i][key]=val}
    证件两项（2026-10-09 用户要求）为付款前必填：类型用 shared.js 的 ID_TYPES 选单
    （自由文本写不出「居民身份证 / 台胞证」这种能进保单的值），号码按类型校验格式。
    每个字段带 data-pax/data-key，校验失败时 paxShowError 能定位到具体输入框聚焦。 */
+/* 报名人资料改成「点「立即报名」后在弹窗里填写」（2026-11-05 用户需求 #594）：
+   详情页只显示人数摘要，不再把每位参加人的姓名/证件表单直接铺开；表单在
+   payment-experience.js 的 signupNow → openParticipantDialog 里渲染进弹窗。
+   这里只负责把「已选 N 位」的提示画到 #paxSummary（容器在 bookingHtml 里）。 */
+function paintPaxSummary(){
+  const el=document.getElementById('paxSummary');if(!el)return;
+  const n=bookingParticipants.length;
+  el.innerHTML='<div class="w-pax-summary__line">已选 <b>'+n+'</b> 位参加人 · 点击「立即报名」后填写每位参加人的姓名与证件资料</div>';
+}
 function renderParticipantForms(){
   const box=$('#paxForms');if(!box)return;
   box.innerHTML=bookingParticipants.map((p,i)=>`<div class="w-pax">
@@ -2599,6 +2608,38 @@ function syncPointConfirm(mx){
   if(String(g.value||'0')!==wg){g.value=wg;drifted=true}
   return drifted;
 }
+/* 活动团期区三行权益提示（2026-11-05 用户需求）：保障 / 优惠券 / 会员。
+   数据全部来自真实接口，不做前端假算：
+   - 保障：俱乐部后台可配的保险保额（public_activity.insuranceCoverageWan），未配置不显示；
+   - 会员：price-quote 已算好的会员等级折扣（memberDiscount / memberDiscountRate）；
+   - 优惠券：拉「我的券包」按 平台券 + 本俱乐部活动券 自动匹配，有可用才显示。 */
+function benefitRow(k,v,hot){
+  return '<div class="ben-row'+(hot?' ben-row--hot':'')+'"><span class="ben-row__k">'+esc(k)+'</span><span class="ben-row__v">'+esc(v)+'</span></div>';
+}
+async function loadCouponBenefit(){
+  const row=document.getElementById('benCouponRow');
+  if(!row)return;
+  try{
+    const cs=await api('/api/public/coupons/mine?user_id='+USER+'&club_id='+CLUB);
+    const list=(Array.isArray(cs)?cs:[]).filter(c=>
+      String(c.benefit_type||'')==='activity_coupon' && String(c.status||'')==='issued' && !c.expired &&
+      (Number(c.owner_club_id||0)===Number(CLUB) || String(c.owner_type||'')==='PLATFORM'));
+    if(!list.length){row.style.display='none';return;}
+    const total=list.reduce((s,c)=>s+Number(c.cash_value||0),0);
+    row.outerHTML='<div class="ben-row ben-row--hot"><span class="ben-row__k">优惠券</span><span class="ben-row__v">你有 '+list.length+' 张可用券，最高可抵 '+money(total)+'</span></div>';
+  }catch(e){row.style.display='none'}
+}
+function paintActivityBenefits(q){
+  const box=document.getElementById('activityBenefitArea');
+  if(!box)return;
+  const rows=[];
+  const wan=Number(currentAct&&currentAct.insuranceCoverageWan||0);
+  if(wan>0)rows.push(benefitRow('保障','专业户外运动保险 · 保额 '+wan+' 万',false));
+  const mCut=Number(q&&q.memberDiscount||0),mRate=Number(q&&q.memberDiscountRate||0);
+  if(mCut>0)rows.push(benefitRow('会员','会员'+(mRate?mRate/10+' 折':'')+' · 立省 '+money(mCut),true));
+  box.innerHTML=rows.join('')+'<div class="ben-row ben-row--hot" id="benCouponRow" style="display:none"></div>';
+  if(rows.length||true)loadCouponBenefit();
+}
 async function refreshQuote(depth=0){if(!currentAct||!currentOcc||!$('#quoteBox'))return;let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';
 /* 成本闸门（2026-10-06）：没有对外售价的活动（priceFrom='pending'，老活动的团期价往往是
    成本表推出来的内部单价）根本不该报价。这里直接短路：不去打必然 409 的请求，也绝不
@@ -2618,6 +2659,7 @@ const qb=$('#quoteBox');if(!qb)return;qb.innerHTML=lines;
 /* 按钮上直接写清要付多少：顾客在点「立即报名」之前唯一真正想知道的就是这个数字，
    把它放在按钮上，省掉一次「点了才知道多少钱」的往返。 */
 const hint=$('#payHint');if(hint)hint.textContent=money(q.payable);
+paintActivityBenefits(q);
 if(drifted&&depth<4)return refreshQuote(depth+1)}catch(e){const qb2=$('#quoteBox');if(qb2)qb2.textContent=e.message}}
 /* 价格待定的活动连下单接口也不放行（后端与price-quote 同口径），前端先给一句能行动的话，
    而不是把409 的技术文案甩给顾客。 */
