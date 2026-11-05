@@ -3051,6 +3051,75 @@ def club_notice_summary(club_id:int):
 # 2026-10-29 统一收件箱（俱乐部端「信息」栏目）：合并线路咨询 + 领队咨询 + 企微轻量通知
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-11-05 站内咨询对话：从「只留痕 + 线下电话」升级为可往来沟通
+#   · 顾客提交咨询时拿一个随机 access_token，凭它认领自己的会话（不依赖完整登录改造）；
+#   · 首条消息就是原始留言，之后顾客可追问、领队/后台可回复，四端读同一份时间线；
+#   · 顾客追问 → status 回 new（红点重现）；领队/后台回复 → status=handled + 顾客未读+1。
+# ─────────────────────────────────────────────────────────────────────────────
+_INQUIRY_TABLES = {'route': 'route_inquiries', 'leader': 'leader_inquiries'}
+
+def _inquiry_table(kind: str):
+    t = _INQUIRY_TABLES.get(kind)
+    if not t:
+        raise HTTPException(400, '未知咨询类型')
+    return t
+
+def _inquiry_token_check(c, kind: str, inquiry_id: int, token: str, club_id: int | None = None):
+    # C 端公开读写的唯一归属凭证。老数据没有 token → 一律 404，防猜 id 看别人手机号。
+    table = _inquiry_table(kind)
+    t = str(token or '').strip()
+    if not t:
+        raise HTTPException(403, '缺少会话凭证')
+    if club_id:
+        r = row(c.execute(f'SELECT * FROM {table} WHERE id=? AND club_id=? AND access_token=?',
+                          (inquiry_id, club_id, t)))
+    else:
+        r = row(c.execute(f'SELECT * FROM {table} WHERE id=? AND access_token=?',
+                          (inquiry_id, t)))
+    if not r:
+        raise HTTPException(404, '咨询不存在或凭证不匹配')
+    return r
+
+def _inquiry_messages(c, club_id: int, kind: str, inquiry_id: int, limit: int = 100):
+    rs = rows(c.execute('SELECT id,sender,body,created_at FROM inquiry_messages '
+                        'WHERE club_id=? AND kind=? AND inquiry_id=? ORDER BY id LIMIT ?',
+                        (club_id, kind, inquiry_id, max(1, min(300, int(limit or 100))))))
+    return [{'id': int(x['id']), 'sender': str(x['sender']), 'body': str(x['body'] or ''),
+             'createdAt': x.get('created_at')} for x in rs]
+
+def _append_inquiry_message(c, club_id: int, kind: str, inquiry_id: int,
+                            sender: str, body: str):
+    # 写一条消息并同步咨询状态。sender: customer | leader | club
+    table = _inquiry_table(kind)
+    r = row(c.execute(f'SELECT id FROM {table} WHERE id=? AND club_id=?', (inquiry_id, club_id)))
+    if not r:
+        raise HTTPException(404, '咨询不存在')
+    now = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    mid = c.execute('INSERT INTO inquiry_messages(club_id,kind,inquiry_id,sender,body,created_at) '
+                    'VALUES(?,?,?,?,?,?)', (club_id, kind, inquiry_id, sender, body, now)).lastrowid
+    if sender == 'customer':
+        c.execute(f'UPDATE {table} SET status=?, last_message_at=?, unread_customer=0 '
+                  f'WHERE id=? AND club_id=?', ('new', now, inquiry_id, club_id))
+    else:
+        c.execute(f'UPDATE {table} SET status=?, handled_at=?, last_message_at=?, '
+                  f'unread_customer=1 WHERE id=? AND club_id=?',
+                  ('handled', now, now, inquiry_id, club_id))
+    return int(mid), now
+
+def _inquiry_thread_counts(c, club_id: int, kind: str, ids: list):
+    # 给列表批量算回复数 / 最后消息时间，避免逐条 N+1
+    if not ids:
+        return {}
+    qs = ','.join('?' for _ in ids)
+    rs = rows(c.execute(f'SELECT inquiry_id,COUNT(*) AS n,MAX(created_at) AS last '
+                        f'FROM inquiry_messages WHERE club_id=? AND kind=? '
+                        f'AND inquiry_id IN ({qs}) AND sender!=? GROUP BY inquiry_id',
+                        (club_id, kind, *ids, 'customer')))
+    return {int(x['inquiry_id']): {'replyCount': int(x['n'] or 0),
+                                   'lastMessageAt': x.get('last')} for x in rs}
+
+
 def _club_wecom_webhook(c, club_id:int):
     """该俱乐部是否配置了可用的企微群机器人 Webhook。没有就返回 None（不推送）。"""
     r=row(c.execute('SELECT wecom_webhook,wecom_enabled FROM club_integrations WHERE club_id=?',(club_id,)))
@@ -3114,6 +3183,14 @@ def club_inquiries(club_id:int, kind:str='all', status:str='all', q:str='', limi
                       'name':str(x.get('name') or ''),'phone':str(x.get('phone') or ''),
                       'message':str(x.get('message') or ''),'status':str(x.get('status') or 'new'),
                       'createdAt':x.get('created_at'),'handledAt':x.get('handled_at')})
+    # 对话计数：给每条咨询挂回复数与最后消息时间（一次 GROUP BY，不是逐条查）
+    with conn() as c:
+        for k in ('route','leader'):
+            ids=[i['id'] for i in items if i['kind']==k]
+            cnt=_inquiry_thread_counts(c,club_id,k,ids)
+            for i in items:
+                if i['kind']==k:
+                    i.update(cnt.get(i['id']) or {'replyCount':0,'lastMessageAt':None})
     if kind and kind!='all':
         items=[i for i in items if i['kind']==kind]
     if status and status!='all':
@@ -3144,6 +3221,29 @@ def club_inquiry_handled(club_id:int, kind:str, inquiry_id:int, payload:dict=Bod
                    inquiry_id,club_id))
     return {'ok':True,'status':'handled' if handled else 'new'}
 
+
+@app.get('/api/club/{club_id}/inquiries/{kind}/{inquiry_id}/thread')
+def club_inquiry_thread(club_id:int, kind:str, inquiry_id:int):
+    # 后台「信息」弹窗拉一条咨询的完整往来时间线（含顾客追问与历次回复）
+    club_or_404(club_id)
+    table=_inquiry_table(kind)
+    with conn() as c:
+        r=row(c.execute(f'SELECT id FROM {table} WHERE id=? AND club_id=?',(inquiry_id,club_id)))
+        if not r: raise HTTPException(404,'咨询不存在')
+        msgs=_inquiry_messages(c,club_id,kind,inquiry_id)
+    return {'ok':True,'messages':msgs,'replyCount':sum(1 for m in msgs if m['sender']!='customer')}
+
+@app.post('/api/club/{club_id}/inquiries/{kind}/{inquiry_id}/messages')
+def club_inquiry_reply(club_id:int, kind:str, inquiry_id:int, payload:dict=Body(...)):
+    # 俱乐部后台在「信息」里直接回复顾客（代领队回复也走这里）
+    club_or_404(club_id)
+    body=str(payload.get('message') or '').strip()
+    if len(body)<2: raise HTTPException(400,'回复内容太短')
+    if len(body)>800: raise HTTPException(400,'回复最多 800 字')
+    with conn() as c:
+        mid,now=_append_inquiry_message(c,club_id,kind,inquiry_id,'club',body)
+        msgs=_inquiry_messages(c,club_id,kind,inquiry_id)
+    return {'ok':True,'messageId':mid,'createdAt':now,'messages':msgs}
 
 @app.get('/api/club/{club_id}/integrations')
 def club_integrations_get(club_id:int):
@@ -3226,13 +3326,18 @@ def leader_my_inquiries(request:Request,club_id:int=1,leader_id:int=0,limit:int=
                              LEFT JOIN activities a ON a.id=iq.activity_id
                              WHERE iq.club_id=? AND iq.leader_id=?
                              ORDER BY (iq.status!='new'),iq.id DESC LIMIT ?''',(club_id,lid,lim)))
-        out=[{'id':int(x['id']),
+        cnt=_inquiry_thread_counts(c,club_id,'leader',[int(x['id']) for x in rs])
+        out=[]
+        for x in rs:
+            iid=int(x['id']); meta=cnt.get(iid) or {'replyCount':0,'lastMessageAt':None}
+            out.append({'id':iid,
               'name':str(x.get('name') or '山友'),
               'phone':str(x.get('phone') or ''),
               'message':str(x.get('message') or ''),
               'status':str(x.get('status') or 'new'),
               'activityTitle':str(x.get('activity_title') or ''),
-              'createdAt':x.get('created_at'),'handledAt':x.get('handled_at')} for x in rs]
+              'createdAt':x.get('created_at'),'handledAt':x.get('handled_at'),
+              'replyCount':meta['replyCount'],'lastMessageAt':meta['lastMessageAt']})
     return {'leader':{'leaderId':lid,'name':str(me.get('name') or '领队'),'role':str(me.get('role') or '领队')},
             'inquiries':out,'newCount':sum(1 for x in out if x['status']=='new')}
 
@@ -3254,6 +3359,35 @@ def leader_inquiry_handled(request:Request,inquiry_id:int,payload:dict=Body(defa
                    inquiry_id,club_id,int(me['id'])))
     return {'ok':True,'status':'handled' if handled else 'new'}
 
+
+@app.get('/api/leader/inquiries/{inquiry_id}/thread')
+def leader_inquiry_thread(request:Request,inquiry_id:int,club_id:int=1,leader_id:int=0):
+    # 领队执行端拉自己这条咨询的完整往来时间线
+    with conn() as c:
+        me=_leader_self(c,club_id,request,leader_id)
+        if not me: raise HTTPException(403,'请用领队账号登录后查看自己的咨询')
+        r=row(c.execute('SELECT id FROM leader_inquiries WHERE id=? AND club_id=? AND leader_id=?',
+                        (inquiry_id,club_id,int(me['id']))))
+        if not r: raise HTTPException(404,'这条咨询不属于你')
+        msgs=_inquiry_messages(c,club_id,'leader',inquiry_id)
+    return {'ok':True,'messages':msgs,'replyCount':sum(1 for m in msgs if m['sender']!='customer')}
+
+@app.post('/api/leader/inquiries/{inquiry_id}/messages')
+def leader_inquiry_reply(request:Request,inquiry_id:int,payload:dict=Body(...),
+                         club_id:int=1,leader_id:int=0):
+    # 领队在 /leader 直接回复顾客 —— 同步到 C 端「我的咨询」与后台「信息」
+    body=str(payload.get('message') or '').strip()
+    if len(body)<2: raise HTTPException(400,'回复内容太短')
+    if len(body)>800: raise HTTPException(400,'回复最多 800 字')
+    with conn() as c:
+        me=_leader_self(c,club_id,request,leader_id)
+        if not me: raise HTTPException(403,'请用领队账号登录')
+        r=row(c.execute('SELECT id FROM leader_inquiries WHERE id=? AND club_id=? AND leader_id=?',
+                        (inquiry_id,club_id,int(me['id']))))
+        if not r: raise HTTPException(404,'这条咨询不属于你')
+        mid,now=_append_inquiry_message(c,club_id,'leader',inquiry_id,'leader',body)
+        msgs=_inquiry_messages(c,club_id,'leader',inquiry_id)
+    return {'ok':True,'messageId':mid,'createdAt':now,'messages':msgs}
 
 @app.post('/api/club/{club_id}/leaders/{leader_id}/avatar')
 @app.post('/api/club/{club_id}/leaders/{leader_id}/avatar.{ext}')
@@ -4991,8 +5125,11 @@ def public_leader_inquiry(leader_id:int,payload:dict=Body(...),background_tasks:
         if activity_id and not c.execute('SELECT 1 FROM activities WHERE id=? AND club_id=?',
                                          (activity_id,club_id)).fetchone():
             activity_id=None
-        iq=c.execute('INSERT INTO leader_inquiries(club_id,leader_id,activity_id,name,phone,message) '
-                     'VALUES(?,?,?,?,?,?)',(club_id,leader_id,activity_id,name,phone,message)).lastrowid
+        token=secrets.token_urlsafe(24)
+        iq=c.execute('INSERT INTO leader_inquiries(club_id,leader_id,activity_id,name,phone,message,access_token) '
+                     'VALUES(?,?,?,?,?,?,?)',(club_id,leader_id,activity_id,name,phone,message,token)).lastrowid
+        c.execute('INSERT INTO inquiry_messages(club_id,kind,inquiry_id,sender,body) '
+                  'VALUES(?,?,?,?,?)',(club_id,'leader',iq,'customer',message))
         webhook=_club_wecom_webhook(c,club_id)
         a=row(c.execute('SELECT title FROM activities WHERE id=?',(activity_id,))) if activity_id else None
     if webhook and background_tasks is not None:
@@ -5001,7 +5138,8 @@ def public_leader_inquiry(leader_id:int,payload:dict=Body(...),background_tasks:
              'leaderName':str(r.get('name') or ''),
              'activityTitle':str(a.get('title') or '') if a else '',
              'backendLink':'/?view=info'})
-    return {'ok':True,'inquiryId':int(iq),'leader':str(r.get('name') or '')}
+    return {'ok':True,'inquiryId':int(iq),'accessToken':token,
+            'leader':str(r.get('name') or ''),'kind':'leader'}
 
 
 @app.post('/api/public/activities/{activity_id}/inquiries')
@@ -5020,15 +5158,59 @@ def public_route_inquiry(activity_id:int,payload:dict=Body(...),background_tasks
         a=row(c.execute('SELECT id,club_id,title FROM activities WHERE id=? AND status="published"',(activity_id,)))
         if not a: raise HTTPException(404,'活动不存在或未发布')
         club_id=int(a['club_id'])
-        iq=c.execute('INSERT INTO route_inquiries(club_id,activity_id,name,phone,message) '
-                     'VALUES(?,?,?,?,?)',(club_id,activity_id,name,phone,message)).lastrowid
+        token=secrets.token_urlsafe(24)
+        iq=c.execute('INSERT INTO route_inquiries(club_id,activity_id,name,phone,message,access_token) '
+                     'VALUES(?,?,?,?,?,?)',(club_id,activity_id,name,phone,message,token)).lastrowid
+        c.execute('INSERT INTO inquiry_messages(club_id,kind,inquiry_id,sender,body) '
+                  'VALUES(?,?,?,?,?)',(club_id,'route',iq,'customer',message))
         webhook=_club_wecom_webhook(c,club_id)
     if webhook and background_tasks is not None:
         background_tasks.add_task(_push_inquiry_to_wecom, webhook, '线路',
             {'name':name,'phone':phone,'message':message,
              'activityTitle':str(a.get('title') or ''),'backendLink':'/?view=info'})
-    return {'ok':True,'inquiryId':int(iq)}
+    return {'ok':True,'inquiryId':int(iq),'accessToken':token,'kind':'route'}
 
+
+@app.get('/api/public/inquiries/{kind}/{inquiry_id}')
+def public_inquiry_thread(kind:str, inquiry_id:int, token:str=''):
+    # C 端「我的咨询」凭 access_token 拉自己的往来消息；读到即清未读
+    with conn() as c:
+        r=_inquiry_token_check(c,kind,inquiry_id,token)
+        club_id=int(r['club_id'])
+        msgs=_inquiry_messages(c,club_id,kind,inquiry_id)
+        a=row(c.execute('SELECT title FROM activities WHERE id=?',(r.get('activity_id'),))) if r.get('activity_id') else None
+        l=row(c.execute('SELECT name FROM club_leaders WHERE id=?',(r.get('leader_id'),))) if r.get('leader_id') else None
+        c.execute(f'UPDATE {_inquiry_table(kind)} SET unread_customer=0 WHERE id=? AND club_id=?',
+                  (inquiry_id,club_id))
+    return {
+        'ok':True,'id':int(r['id']),'kind':kind,
+        'clubId':club_id,'name':str(r.get('name') or '匿名山友'),
+        'phone':str(r.get('phone') or ''),
+        'activityTitle':str(a.get('title') or '') if a else '',
+        'leaderName':str(l.get('name') or '') if l else '',
+        'status':str(r.get('status') or 'new'),
+        'createdAt':r.get('created_at'),'lastMessageAt':r.get('last_message_at'),
+        'messages':msgs,'replyCount':sum(1 for m in msgs if m['sender']!='customer'),
+    }
+
+@app.post('/api/public/inquiries/{kind}/{inquiry_id}/messages')
+def public_inquiry_followup(kind:str, inquiry_id:int, payload:dict=Body(...),
+                            token:str='', background_tasks:BackgroundTasks=None):
+    # 顾客在同一条咨询下追问 → status 回 new，领队端/后台红点重现，企微可继续通知
+    body=str(payload.get('message') or '').strip()
+    if len(body)<2: raise HTTPException(400,'把追问写具体一点')
+    if len(body)>500: raise HTTPException(400,'追问最多 500 字')
+    with conn() as c:
+        r=_inquiry_token_check(c,kind,inquiry_id,token)
+        club_id=int(r['club_id'])
+        mid,now=_append_inquiry_message(c,club_id,kind,inquiry_id,'customer',body)
+        msgs=_inquiry_messages(c,club_id,kind,inquiry_id)
+        webhook=_club_wecom_webhook(c,club_id)
+    if webhook and background_tasks is not None:
+        background_tasks.add_task(_push_inquiry_to_wecom, webhook, '顾客追问',
+            {'name':r.get('name'),'phone':r.get('phone'),'message':body,
+             'backendLink':'/?view=info'})
+    return {'ok':True,'messageId':mid,'createdAt':now,'messages':msgs}
 
 @app.get('/api/public/activities/{activity_id}')
 def public_activity(activity_id:int, user_id:int|None=None):

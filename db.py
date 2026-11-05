@@ -186,6 +186,12 @@ def _backfill_v030_catalog(c):
 
 def _run_compat_migrations(c):
     # ★ 2026-11-04：新列必须排在所有写它们的 INSERT / UPDATE 之前。
+    # 2026-11-05 咨询对话：两条老咨询表补「会话凭据 + 最后消息时间 + 顾客未读」。
+    # 存量行 access_token 为 NULL → C 端无法认领（安全默认），后台/领队端仍可回复。
+    for _t in ('leader_inquiries','route_inquiries'):
+        _ensure_column(c,_t,'access_token','access_token TEXT')
+        _ensure_column(c,_t,'last_message_at','last_message_at TEXT')
+        _ensure_column(c,_t,'unread_customer','unread_customer INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'products','is_featured','is_featured INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'users','platform_member','platform_member INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'users','platform_member_since','platform_member_since TEXT')

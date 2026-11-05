@@ -136,14 +136,25 @@
   font-size:11.5px;letter-spacing:.4px}
 .ed-caption{grid-column:1/-1;color:var(--ed-muted);font-size:var(--ed-cap);
   line-height:1.75;margin:9px 0 0}
-/* ── 图片图注：绿色胶囊标签（还原原产品 H5 的图注特征）─────────────── */
-.ed-cap-pill{display:inline-flex;align-items:center;gap:6px;
-  margin:12px var(--ed-pad) 0;background:var(--ed-accent-soft);color:#234a37;
-  border:1px solid #cfdfd5;border-radius:999px;padding:6px 13px;
-  font-size:11.5px;font-weight:700;letter-spacing:.3px;line-height:1.4}
-.ed-cap-pill::before{content:'';width:6px;height:6px;border-radius:50%;
-  background:var(--ed-accent);flex:0 0 auto}
+/* ── 图片图注：通栏细线小字（2026-11-05 用户截图根治）─────────────────
+   旧版是「浅绿胶囊」：display:inline-flex + border-radius:999px + 长中文图注。
+   图注被 renderPromo 塞进 .ed-gallery / .ed-media 的两列 grid 里成了第 5 个格子，
+   半列宽度里长中文折行 + 999px 圆角 → 视觉上就是「浅绿椭圆里两三字一竖条」。
+   两层一起根治：
+     ① grid-column:1/-1 + display:block + width:100% → 永不占窄列，文字横排满宽；
+     ② 去掉背景 / 圆角 / 圆形小点，改成一条 2px 竖线 + 灰色小字，图片继续当主视觉。
+   昨天(11-04)的补丁只跑在 iframe 内的 AI 直出 HTML 里，碰不到主文档 blocks 模板，
+   所以线上活动详情一点没变 —— 这次从产品模板本身改。 */
+.ed-cap-pill{display:block;grid-column:1/-1;width:100%;max-width:100%;min-width:0;
+  margin:12px var(--ed-pad) 0;background:none;color:var(--ed-muted);
+  border:0;border-left:2px solid var(--ed-accent);border-radius:0;
+  padding:1px 0 1px 10px;font-size:12px;font-weight:500;letter-spacing:0;
+  line-height:1.75;text-align:left;white-space:normal;overflow-wrap:break-word}
+.ed-cap-pill::before{display:none}
 .ed-media--full .ed-cap-pill{margin:10px var(--ed-pad) 0}
+/* 处在 grid 容器里时左右边距归零（容器已经有 --ed-pad，叠加会二次缩进） */
+.ed-gallery .ed-cap-pill,.ed-media.pair .ed-cap-pill,.ed-media.grid .ed-cap-pill,
+.ed-media.mosaic .ed-cap-pill,.ed-narrative .ed-cap-pill{margin:12px 0 0}
 
 /* ── 图片组：单图 / 并排 / 一大两小 / 整版铺满 ───────────────────────── */
 .ed-media{padding:var(--ed-gap) var(--ed-pad)}
@@ -218,11 +229,13 @@
   margin:0 0 14px;break-inside:avoid}
 .ed-quote{padding:clamp(36px,8vw,62px) var(--ed-pad);font-size:clamp(18px,4.8vw,27px);
   line-height:1.7;font-family:Georgia,"Songti SC","Noto Serif SC",serif;color:var(--ed-ink)}
-.ed-highlight{margin:var(--ed-gap) var(--ed-pad);background:var(--ed-accent-soft);
-  border-left:3px solid var(--ed-accent);border-radius:0 14px 14px 0;
-  padding:clamp(20px,4.4vw,28px) clamp(18px,4.4vw,28px)}
+/* 高亮提示（2026-11-05）：去掉浅绿底 / 圆角 / 粗左边框这类装饰性卡片。
+   改为上下两条发丝线夹一段正文，眉标做唯一识别点 —— 不抢图片的视觉主体。 */
+.ed-highlight{margin:var(--ed-gap) var(--ed-pad);background:none;
+  border:0;border-top:1px solid var(--ed-line);border-bottom:1px solid var(--ed-line);
+  border-radius:0;padding:22px 0}
 .ed-highlight .ed-kicker{margin-bottom:10px}
-.ed-highlight p{font-size:var(--ed-body);line-height:1.88;margin:0;color:var(--ed-ink)}
+.ed-highlight p{font-size:var(--ed-body);line-height:1.9;margin:0;color:var(--ed-ink2)}
 .ed-highlight p+p{margin-top:10px}
 .ed-divider{margin:var(--ed-gap) var(--ed-pad);height:1px;background:var(--ed-line);position:relative}
 .ed-divider::after{content:'';position:absolute;left:50%;top:50%;width:5px;height:5px;
@@ -285,14 +298,18 @@
 /* ── 「出发前知道」：编号须知，去卡片 ──────────────────────────────── */
 .ed-info{background:none}
 .info-list{display:grid;gap:0}
-.info-note{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;
-  background:none;border:0;border-top:1px solid var(--ed-line);border-radius:0;padding:16px 0}
-.info-note:first-child{border-top:0;padding-top:2px}
-.info-note__i{width:24px;height:24px;border-radius:50%;background:var(--ed-accent-soft);
-  color:var(--ed-accent);font-size:11.5px;font-weight:800;display:grid;place-items:center;line-height:1}
-.info-note__b b{display:block;font-size:15px;font-weight:800;color:var(--ed-ink);
-  margin-bottom:5px;letter-spacing:.01em}
-.info-note__b p{margin:0;font-size:var(--ed-body);line-height:1.88;color:var(--ed-ink2)}
+/* 「出发前知道」（2026-11-05）：去掉浅绿圆形编号徽章与逐条分隔线。
+   编号退成极淡的序号小字 + 一条细竖线，标题+正文紧凑排布，整块不再是编号卡片墙。 */
+.info-note{display:grid;grid-template-columns:28px 1fr;gap:10px;align-items:start;
+  background:none;border:0;border-radius:0;padding:9px 0}
+.info-note:first-child{padding-top:2px}
+.info-note__i{width:26px;height:auto;border-radius:0;background:none;
+  color:var(--ed-muted);font-size:12px;font-weight:700;display:block;line-height:1.9;
+  font-variant-numeric:tabular-nums;text-align:left;padding-right:8px;
+  border-right:1px solid var(--ed-line)}
+.info-note__b b{display:block;font-size:14.5px;font-weight:800;color:var(--ed-ink);
+  margin-bottom:3px;letter-spacing:.01em;line-height:1.6}
+.info-note__b p{margin:0;font-size:14px;line-height:1.78;color:var(--ed-ink2)}
 
 /* ── 费用清单 chips（含 / 不含）：轻量圆胶囊，长短不一的费用项也排得齐 ── */
 .info-chips{display:flex;flex-wrap:wrap;gap:8px}

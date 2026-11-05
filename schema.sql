@@ -1767,3 +1767,19 @@ CREATE INDEX IF NOT EXISTS idx_po_exceptions_po ON purchase_order_exceptions(pur
       note TEXT,created_at TEXT DEFAULT CURRENT_TIMESTAMP,resolved_at TEXT);
     
 CREATE TABLE IF NOT EXISTS purchase_shipments(id INTEGER PRIMARY KEY,purchase_order_id TEXT NOT NULL,request_key TEXT NOT NULL UNIQUE,carrier TEXT,tracking_no TEXT,items_json TEXT NOT NULL,shipped_at TEXT NOT NULL,FOREIGN KEY(purchase_order_id) REFERENCES purchase_orders(id));
+
+-- 2026-11-05 咨询对话：顾客与领队/俱乐部在站内往来消息。
+-- 一条咨询 = 一个会话；首条消息就是顾客最初留下的 message（由后端写入本表），
+-- 后续追问 / 领队回复 / 后台代回复都追加在这里，四端读同一份时间线。
+CREATE TABLE IF NOT EXISTS inquiry_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  inquiry_id INTEGER NOT NULL,
+  sender TEXT NOT NULL,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_inquiry_messages_thread
+  ON inquiry_messages(club_id,kind,inquiry_id,id);

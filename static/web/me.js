@@ -254,7 +254,7 @@ window.loadOrders=loadOrders;
 /* ── 二级页栈 ─────────────────────────────────────────────────────────── */
 const meStack=[];
 const SUB_ME={};
-const SUB_ME_TITLE={myregs:'我的报名',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息',pointsmall:'积分商城',invite:'邀请好友'};
+const SUB_ME_TITLE={myregs:'我的报名',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息',pointsmall:'积分商城',invite:'邀请好友',inquiries:'我的咨询'};
 const SUB_ME_AFTER={};
 function meStackOpen(){return meStack.length>0;}
 function meEnsureStack(){
@@ -292,6 +292,51 @@ const _wv=window.wv;
 window.wv=function(id,b){
   if(meStackOpen()){ meStack.length=0; renderMeSub(); }
   return _wv?_wv(id,b):undefined;
+};
+
+
+/* ── 我的咨询（2026-11-05）：C 端会员与领队/俱乐部的站内对话入口 ──────────
+   会话归属靠建单时后端下发的 accessToken，存在 localStorage（web.js 的 myInquirySave）。
+   列表先占位、再由 SUB_ME_AFTER 并行拉每条的最新状态与未读红点；点行打开对话抽屉。
+   凭证只在自己这台设备上，换设备看不到历史咨询 —— 这是有意的简化，
+   避免为「咨询」去做一整套登录身份改造。 */
+SUB_ME.inquiries=function(){
+  const list=(window.myInquiries&&window.myInquiries())||[];
+  if(!list.length)return empty('还没有咨询过','在活动详情点「咨询这条线路」或「咨询领队」，之后的往来消息都会收在这里。');
+  return `<div class="me-iq">`
+    +`<div class="me-iq__hint">领队或俱乐部在站内回复后，这里会显示红点；点开可继续追问。</div>`
+    +list.map(x=>`<button type="button" class="me-iq__row" data-kind="${esc(x.kind)}" data-id="${Number(x.id)}" `
+      +`onclick="window.myInquiryOpen('${esc(x.kind)}',${Number(x.id)},'${esc(x.token||'')}')">`
+      +`<span class="me-iq__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 5.8h13.6v10.4H9.4L5.2 19z"/><path d="M8.8 9.6h6.4M8.8 12.6h4"/></svg></span>`
+      +`<span class="me-iq__tx"><b>${esc(x.title||'我的咨询')}</b><em>正在读取最新回复…</em></span>`
+      +`<span class="me-iq__ar">›</span></button>`).join('')
+    +`</div>`;
+};
+SUB_ME_AFTER.inquiries=async function(){
+  const list=(window.myInquiries&&window.myInquiries())||[];
+  const rows=[...document.querySelectorAll('.me-iq__row')];
+  await Promise.all(list.map(async x=>{
+    const el=rows.find(r=>r.dataset.kind===x.kind&&Number(r.dataset.id)===Number(x.id)); if(!el)return;
+    try{
+      const d=await api(`/api/public/inquiries/${x.kind}/${Number(x.id)}?token=${encodeURIComponent(x.token||'')}`,{cache:'no-store'});
+      const msgs=d.messages||[];
+      const last=msgs.length?msgs[msgs.length-1]:null;
+      const prefix=last?(last.sender==='customer'?'我：':(last.sender==='leader'?'领队：':'俱乐部：')):'';
+      const unread=last&&last.sender!=='customer'&&d.status==='handled';
+      el.innerHTML=`<span class="me-iq__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.2 5.8h13.6v10.4H9.4L5.2 19z"/><path d="M8.8 9.6h6.4M8.8 12.6h4"/></svg>${unread?'<i class="me-iq__dot"></i>':''}</span>`
+        +`<span class="me-iq__tx"><b>${esc(x.title||'我的咨询')}</b>`
+        +`<em>${esc(prefix+(last?String(last.body||'').slice(0,42):'等待回复'))}</em>`
+        +`<small>${esc(String(d.lastMessageAt||d.createdAt||'').replace('T',' ').slice(0,16))}${d.replyCount?' · 已回复 '+Number(d.replyCount):''}</small></span>`
+        +`<span class="me-iq__ar">›</span>`;
+    }catch(_e){
+      el.innerHTML=`<span class="me-iq__ic">!</span><span class="me-iq__tx"><b>${esc(x.title||'我的咨询')}</b>`
+        +`<em>这条会话已失效，点开可重新发起咨询</em></span><span class="me-iq__ar">›</span>`;
+    }
+  }));
+};
+/* 关掉对话抽屉后，若「我的咨询」子页还开着就重绘一次，红点/最新一条立刻更新。 */
+window.__meRenderInquiries=function(){
+  try{if(window.__meCurSub&&window.__meCurSub.k==='inquiries')renderMeSub();}catch(_e){}
 };
 
 /* ── 俱乐部通知数据（2026-10-29 用户反馈「后台发布的通知，C 端客户没有提示」）─────────

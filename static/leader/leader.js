@@ -57,12 +57,14 @@ async function loadMyInquiries(){
   if(!list.length){box.innerHTML='';return}
   box.innerHTML=`<div class="card section" style="border-color:${n?'#e6c98d':'var(--line)'}">
     <h3 style="margin:0 0 4px">顾客咨询${n?` · <span style="color:#b8722d">待回复 ${n}</span>`:' · 已全部回复'}</h3>
-    <div class="sub" style="margin-bottom:8px">顾客在 C 端点你的名字问的问题，回完电话点「标记已回复」就收口。</div>
+    <div class="sub" style="margin-bottom:8px">顾客在 C 端点你的名字问的问题。点「回复」直接站内答复，顾客与俱乐部后台都能看到；急事可打电话。</div>
     ${list.map(i=>`<div class="list-row"><div class="list-row__main">
       <div class="list-row__title">${esc(i.name||'山友')} <span class="tag ${i.status==='new'?'orange':''}">${i.status==='new'?'待回复':'已回复'}</span></div>
       <div class="list-row__sub">${esc(i.message)}</div>
-      <div class="list-row__sub">${esc(i.phone||'')}${i.activityTitle?` · 来自《${esc(i.activityTitle)}》`:''} · ${esc(String(i.createdAt||'').slice(0,16))}</div>
+      <div class="list-row__sub">${esc(i.phone||'')}${i.activityTitle?` · 来自《${esc(i.activityTitle)}》`:''} · ${esc(String(i.createdAt||'').slice(0,16))}${Number(i.replyCount||0)?` · 往来 ${Number(i.replyCount)} 条回复`:''}</div>
     </div><div class="list-row__end"><div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+      <button class="btn" onclick="replyInquiry(${Number(i.id)})">回复</button>
+      <button class="btn ghost" onclick="viewInquiryThread(${Number(i.id)})">看往来</button>
       ${i.phone?`<a class="btn ghost" href="tel:${esc(i.phone)}">打电话</a>`:''}
       <button class="btn ghost" onclick="markInquiry(${Number(i.id)},${i.status==='new'?1:0})">${i.status==='new'?'标记已回复':'改回待回复'}</button>
     </div></div></div>`).join('')}
@@ -77,6 +79,38 @@ async function markInquiry(id,handled){
   }catch(e){showAlert({title:'操作失败',message:e.message})}
 }
 window.markInquiry=markInquiry;
+/* 领队站内回复（2026-11-05）：写进 inquiry_messages，C 端「我的咨询」与
+   俱乐部后台「信息」立即可见；同时把咨询状态置为已回复，待回复数 -1。 */
+async function replyInquiry(id){
+  const v=await uxForm({title:'回复顾客',subtitle:'回复会出现在顾客的「我的咨询」里，TA 可以继续追问',
+    fields:[{name:'message',label:'回复内容',type:'textarea',required:true,
+      placeholder:'例：这条线整体中等强度，第一天爬升约 600 米，有徒步经验就没问题，高原反应一般不明显。'}],
+    submitText:'发送回复'});
+  if(!v)return;
+  const body=String(v.message||'').trim();
+  if(body.length<2){showAlert({title:'再写具体一点',message:'回复内容至少 2 个字。'});return;}
+  try{
+    const url=`/api/leader/inquiries/${Number(id)}/messages?club_id=${CLUB}${qs.get('leader_id')?`&leader_id=${encodeURIComponent(qs.get('leader_id'))}`:''}`;
+    await api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:body})});
+    toast('已回复顾客');loadMyInquiries();
+  }catch(e){showAlert({title:'回复失败',message:e.message})}
+}
+async function viewInquiryThread(id){
+  let d;
+  try{
+    d=await api(`/api/leader/inquiries/${Number(id)}/thread?club_id=${CLUB}${qs.get('leader_id')?`&leader_id=${encodeURIComponent(qs.get('leader_id'))}`:''}`,{cache:'no-store'});
+  }catch(e){return showAlert({title:'打不开往来记录',message:e.message})}
+  const msgs=d.messages||[];
+  const html=msgs.length?msgs.map(m=>{
+    const who=m.sender==='customer'?'顾客':(m.sender==='leader'?'我':'俱乐部');
+    return `<div style="border-bottom:1px solid var(--line);padding:9px 0">`
+      +`<div class="sub" style="font-size:11px">${esc(who)} · ${esc(String(m.createdAt||'').replace('T',' ').slice(0,16))}</div>`
+      +`<div style="font-size:13.5px;line-height:1.7;white-space:pre-wrap">${esc(m.body||'')}</div></div>`;
+  }).join(''):'<div class="empty">暂无往来消息</div>';
+  uxDialog({title:'咨询往来',body:`<div style="max-height:52vh;overflow:auto">${html}</div>`});
+}
+window.replyInquiry=replyInquiry;
+window.viewInquiryThread=viewInquiryThread;
 
 /* ── 扫码签到（2026-10-30）：领队相机扫码核销 C 端签到码 ─────────────────── */
 /* 二维码内容 = 后端 HMAC 签名 token（"club.occurrence.participant.sig"）；

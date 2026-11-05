@@ -1755,8 +1755,23 @@ html.w-sheet-open{overflow:hidden}
 .web-shell .ed-cards{padding:14px}
 .web-shell .ed-numbercards{margin:18px 0}
 .web-shell .ed-numbercards .ed-numcard strong{font-size:26px}
-.web-shell .ed-highlight{margin:18px 0;padding:20px 18px}
-.web-shell .ed-highlight p{font-size:18px}
+/* 2026-11-05：C 端高亮块同步去装饰（旧覆盖把正文撑到 18px 变成一堵字墙） */
+.web-shell .ed-highlight{margin:20px 0;padding:18px 0;background:none;border:0;
+  border-top:1px solid #e7e9e4;border-bottom:1px solid #e7e9e4;border-radius:0}
+.web-shell .ed-highlight p{font-size:15px;line-height:1.82;color:#3f4f49}
+/* 图注在 C 端通栏细线：彻底堵死旧胶囊在 560px 容器里被 grid 压成竖椭圆 */
+.web-shell .ed-cap-pill{display:block;grid-column:1/-1;width:100%;margin:10px 0 0;
+  background:none;border:0;border-left:2px solid #2f6b48;border-radius:0;
+  padding:0 0 0 9px;color:#8d968f;font-size:12px;font-weight:500;line-height:1.7;
+  white-space:normal;overflow-wrap:break-word}
+.web-shell .ed-cap-pill::before{display:none}
+/* 「出发前知道」C 端同步：淡序号 + 紧凑正文 */
+.web-shell .info-note{grid-template-columns:26px 1fr;gap:9px;padding:8px 0;border-top:0}
+.web-shell .info-note__i{border-radius:0;background:none;color:#9aa8a0;
+  width:24px;height:auto;display:block;text-align:left;line-height:1.8;
+  padding-right:7px;border-right:1px solid #eceee9}
+.web-shell .info-note__b b{font-size:14px;margin-bottom:2px}
+.web-shell .info-note__b p{font-size:13.5px;line-height:1.72}
 .web-shell .ed-columns{padding:24px 18px;column-gap:22px}
 /* 2026-10-08 固定版块（积分/退款/报名人规则/注意事项/免责声明）正文样式 */
 .w-policy{padding:2px 0}
@@ -2558,3 +2573,86 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 .gear-price__sep{color:var(--w-muted,#8d968f);margin:0 2px}
 .gear-price__tip{font-style:normal;color:var(--w-muted,#8d968f);font-size:11px}
 .web-shell .gear-meta{display:flex;flex-wrap:wrap;align-items:baseline;gap:0}
+
+/* ── 2026-11-05 带队领队：多领队横滑 / 单领队专版 ────────────────────
+   .w-lead__grid 归「领队团队专区」继续使用，这里只给详情页新增两个容器，
+   所以两种情形互不影响，也不会动到评分局部替换依赖的 .w-lc / data-lid。 */
+.web-shell .w-lead__railhint{margin-top:12px;font-size:11.5px;color:#8a9a91;letter-spacing:.02em}
+.web-shell .w-lead__railhint i{font-style:normal;margin-left:3px;color:#4f8f68}
+.web-shell .w-lead__rail{display:flex;gap:10px;overflow-x:auto;overscroll-behavior-x:contain;
+  scroll-snap-type:x mandatory;padding:2px 2px 12px;margin-top:8px;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.web-shell .w-lead__rail::-webkit-scrollbar{display:none}
+.web-shell .w-lead__rail .w-lc{flex:0 0 76%;max-width:292px;scroll-snap-align:start}
+@media(min-width:640px){.web-shell .w-lead__rail .w-lc{flex-basis:48%;max-width:320px}}
+/* 单人：横向大卡，头像在左、信息在右；顶部一条眉标让整块不显得空 */
+.web-shell .w-lead__tag{display:flex;align-items:center;gap:7px;font-size:11px;
+  font-weight:750;letter-spacing:.14em;color:#2f6b48;text-transform:uppercase}
+.web-shell .w-lead__tag i{width:16px;height:2px;background:#2f6b48;border-radius:2px}
+.web-shell .w-lead__solo{margin-top:12px}
+.web-shell .w-lead__solo .w-lc{display:grid;grid-template-columns:92px minmax(0,1fr);
+  column-gap:16px;row-gap:3px;align-items:start;padding:18px 16px 14px;border-radius:20px;
+  background:linear-gradient(118deg,#f3f8f4 0%,#fff 62%);border-color:#e2ede5;
+  box-shadow:0 3px 14px rgba(16,57,42,.05)}
+.web-shell .w-lead__solo .w-lc__av{grid-column:1;grid-row:1/5;width:92px;height:92px;
+  margin:0;align-self:center}
+.web-shell .w-lead__solo .w-lc__ph{font-size:32px}
+.web-shell .w-lead__solo .w-lc__cred{grid-column:2;grid-row:1}
+.web-shell .w-lead__solo .w-lc__name{grid-column:2;grid-row:2;font-size:19px;line-height:1.35}
+.web-shell .w-lead__solo .w-lc__spec{grid-column:2;grid-row:3;font-size:12px}
+.web-shell .w-lead__solo .w-lc__foot{grid-column:1/-1;grid-row:5;margin-top:15px;padding-top:10px}
+.web-shell .w-lead__sologo{display:flex;align-items:center;justify-content:space-between;
+  width:100%;margin-top:10px;padding:10px 2px 0;border:0;border-top:1px solid #eff4f0;
+  background:none;font:inherit;font-size:12.5px;font-weight:650;color:#37714f;cursor:pointer}
+.web-shell .w-lead__sologo i{font-style:normal;font-size:18px;line-height:1}
+
+/* ── 2026-11-05 我的咨询 · 站内对话抽屉 ───────────────────────────────── */
+.w-iq__panel{display:flex;flex-direction:column;max-height:82vh;max-height:82dvh;overflow:hidden;
+  padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+.w-iq__hd{flex:0 0 auto;padding:14px 48px 10px 18px;display:grid;gap:3px}
+.w-iq__hd b{font-size:16px;font-weight:800;color:#10392a}
+.w-iq__hd span{font-size:11.5px;color:#8a9a91;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.w-iq__list{flex:1 1 auto;min-height:180px;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:6px 16px 14px;display:flex;flex-direction:column;gap:12px;background:#fbfcfa}
+.w-iq__msg{display:flex;flex-direction:column;max-width:84%;gap:4px}
+.w-iq__msg.is-me{align-self:flex-end;align-items:flex-end}
+.w-iq__msg.is-them{align-self:flex-start;align-items:flex-start}
+.w-iq__who{font-size:10.5px;font-weight:700;color:#4f8f68;letter-spacing:.03em}
+.w-iq__bubble{padding:10px 13px;border-radius:15px;font-size:13.5px;line-height:1.7;
+  white-space:pre-wrap;word-break:break-word}
+.w-iq__msg.is-me .w-iq__bubble{background:#17342c;color:#fff;border-bottom-right-radius:5px}
+.w-iq__msg.is-them .w-iq__bubble{background:#fff;color:#22322a;border:1px solid #e7eee9;
+  border-bottom-left-radius:5px}
+.w-iq__time{font-size:10px;color:#a3b0a8}
+.w-iq__none{margin:auto;padding:28px 0;text-align:center;font-size:12.5px;color:#9aa8a0}
+.w-iq__bar{flex:0 0 auto;display:flex;align-items:flex-end;gap:8px;padding:10px 14px 4px;
+  border-top:1px solid #eef2ef;background:#fff}
+.w-iq__bar textarea{flex:1 1 auto;min-width:0;max-height:96px;resize:none;padding:9px 11px;
+  border:1px solid #dfe9e2;border-radius:12px;font:inherit;font-size:13.5px;line-height:1.5;
+  color:#22322a;background:#fbfcfa;outline:none}
+.w-iq__bar textarea:focus{border-color:#8fbc9f;background:#fff}
+.w-iq__send{flex:0 0 auto;border:0;border-radius:12px;padding:10px 16px;font-size:13px;
+  font-weight:750;color:#fff;background:#2f6b48;cursor:pointer}
+.w-iq__send:disabled{opacity:.5;cursor:default}
+.w-iq__tip{flex:0 0 auto;padding:4px 16px 2px;font-size:10.5px;line-height:1.5;color:#9aa8a0}
+
+/* ── 我的 · 咨询列表（2026-11-05）─────────────────────────────────────── */
+.web-shell .me-iq{padding:2px 0}
+.web-shell .me-iq__hint{padding:2px 2px 10px;font-size:11.5px;line-height:1.6;color:#8a9a91}
+.web-shell .me-iq__row{position:relative;display:flex;align-items:center;gap:12px;width:100%;
+  padding:13px 2px;border:0;border-bottom:1px solid #eff3ef;background:none;
+  font:inherit;text-align:left;color:inherit;cursor:pointer}
+.web-shell .me-iq__row:last-child{border-bottom:0}
+.web-shell .me-iq__ic{position:relative;flex:0 0 auto;width:38px;height:38px;border-radius:12px;
+  background:#eef5f0;display:grid;place-items:center;color:#2f6b48;font-weight:800}
+.web-shell .me-iq__ic svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.6;
+  stroke-linecap:round;stroke-linejoin:round}
+.web-shell .me-iq__dot{position:absolute;right:-2px;top:-2px;width:9px;height:9px;border-radius:50%;
+  background:#d9603f;border:2px solid #fff}
+.web-shell .me-iq__tx{display:grid;gap:3px;min-width:0;flex:1 1 auto}
+.web-shell .me-iq__tx b{font-size:13.5px;font-weight:750;color:#22322a;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.web-shell .me-iq__tx em{font-style:normal;font-size:12px;color:#7d8c82;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.web-shell .me-iq__tx small{font-size:10.5px;color:#a3b0a8}
+.web-shell .me-iq__ar{flex:0 0 auto;font-style:normal;font-size:19px;color:#b6c3bb}

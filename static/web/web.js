@@ -1783,12 +1783,29 @@ function leaderCard(x){
     ? `<button type="button" class="w-lc" data-lid="${lid}" onclick="openLeaderSheet(${lid})">${inner}</button>`
     : `<div class="w-lc is-static">${inner}</div>`;
 }
+/* 2026-11-05 用户截图：多领队时卡片一直往下排，页面被拉得很长；
+   单领队时又只剩半张孤零零的小卡，两种情形都不好看。
+   这里按数量分版式，且**不动 .w-lead__grid**（领队团队专区仍复用它）：
+     · 单人 → .w-lead__solo 横向大卡（大头像在左、信息在右 + 一条「本场带队」眉标）
+     · 多人 → .w-lead__rail 横向可滑动轨道，露出下一张卡的边，不再纵向堆叠
+   leaderCard 的 DOM 契约（.w-lc / data-lid / onclick=openLeaderSheet）完全保留，
+   评分后的局部替换与领队主页抽屉都不受影响。 */
 function leadersHtml(a){
   const list=a.leaders||[];
   if(!list.length)return '';
-  return `<section class="w-block w-lead"><div class="w-block__head"><div><b>带队领队</b>`
-    +`<div class="w-block__hint">这场活动由本俱乐部领队带队，出发前会在订单里给出集合与联络方式。点开领队可看简介和 TA 带的近期活动，也能直接咨询或打分。</div></div></div>`
-    +`<div class="w-lead__grid">${list.map(leaderCard).join('')}</div></section>`;
+  const head=`<div class="w-block__head"><div><b>带队领队</b>`
+    +`<div class="w-block__hint">这场活动由本俱乐部领队带队，出发前会在订单里给出集合与联络方式。点开领队可看简介和 TA 带的近期活动，也能直接咨询或打分。</div></div></div>`;
+  if(list.length===1){
+    const lid=Number(list[0].leaderId||0);
+    return `<section class="w-block w-lead w-lead--solo">`
+      +`<div class="w-lead__tag"><i></i>本场带队领队</div>`+head
+      +`<div class="w-lead__solo">${leaderCard(list[0])}</div>`
+      +(lid?`<button type="button" class="w-lead__sologo" onclick="openLeaderSheet(${lid})">看 TA 的简介与近期活动 <i>›</i></button>`:'')
+      +`</section>`;
+  }
+  return `<section class="w-block w-lead">`+head
+    +`<div class="w-lead__railhint">共 ${list.length} 位领队 · 左右滑动查看 <i>↔</i></div>`
+    +`<div class="w-lead__rail">${list.map(leaderCard).join('')}</div></section>`;
 }
 
 /* ===== 领队主页（底部抽屉）=====
@@ -1901,11 +1918,15 @@ async function leaderAsk(){
     }});
   if(!v)return;
   try{
-    await api(`/api/public/leaders/${Number(d.leaderId)}/inquiries`,{method:'POST',
+    const r=await api(`/api/public/leaders/${Number(d.leaderId)}/inquiries`,{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:String(v.message||'').trim(),name:String(v.name||'').trim(),
         phone:String(v.phone||'').trim(),activityId:currentAct?currentAct.id:null})});
-    await showAlert({title:'已经发给领队了',message:`${d.name||'领队'}或俱乐部工作人员会通过 ${String(v.phone||'').trim()} 联系你。`});
+    myInquirySave('leader',r.inquiryId,r.accessToken,`咨询 ${d.name||'领队'}`);
+    const go=await showConfirm({title:'已经发给领队了',
+      message:`${d.name||'领队'}或俱乐部工作人员会在这里直接回复你，也可以继续追问；同时也会通过 ${String(v.phone||'').trim()} 联系你。`,
+      confirmText:'查看对话'});
+    if(go)myInquiryOpen('leader',r.inquiryId,r.accessToken);
   }catch(e){showAlert({title:'没发出去',message:e.message})}
 }
 /* 咨询线路：问题直接进俱乐部端「信息」统一收件箱（route_inquiries），
@@ -1927,15 +1948,116 @@ async function routeAsk(){
     }});
   if(!v)return;
   try{
-    await api(`/api/public/activities/${Number(currentAct.id)}/inquiries`,{method:'POST',
+    const r=await api(`/api/public/activities/${Number(currentAct.id)}/inquiries`,{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:String(v.message||'').trim(),name:String(v.name||'').trim(),
         phone:String(v.phone||'').trim()})});
-    await showAlert({title:'已经发出去了',message:`俱乐部工作人员会通过 ${String(v.phone||'').trim()} 联系你。`});
+    myInquirySave('route',r.inquiryId,r.accessToken,`咨询《${currentAct.title||'这条线路'}》`);
+    const go=await showConfirm({title:'已经发出去了',
+      message:`工作人员或领队会在这里直接回复你，也可以继续追问；同时也会通过 ${String(v.phone||'').trim()} 联系你。`,
+      confirmText:'查看对话'});
+    if(go)myInquiryOpen('route',r.inquiryId,r.accessToken);
   }catch(e){showAlert({title:'没发出去',message:e.message})}
 }
 /* 评分去重键：本机随机生成、长期复用。会员登录后换成 u:<userId>，
    这样同一个人换浏览器也不算两个人 —— 后端按 (领队, 键) 唯一，重复提交=改自己那条。 */
+
+/* ═══════════════════════════════════════════════════════════════════════
+   我的咨询 · 站内对话（2026-11-05）
+   C 端不依赖完整登录改造：建单时后端发一个随机 accessToken，本机存起来，
+   凭它拉自己的会话、追问、看领队/后台的回复；四端读同一份时间线。
+   抽屉挂到 body（和领队主页抽屉同一套 .w-sheet），z-index 980 < ux-overlay。
+   ═══════════════════════════════════════════════════════════════════════ */
+const IQ_KEY='clubos_my_inquiries';
+function myInquiries(){
+  try{const a=JSON.parse(localStorage.getItem(IQ_KEY)||'[]');return Array.isArray(a)?a:[]}catch(e){return []}
+}
+function myInquirySave(kind,id,token,title){
+  const all=myInquiries().filter(x=>!(x.kind===kind&&Number(x.id)===Number(id)));
+  all.unshift({kind:String(kind),id:Number(id),token:String(token||''),
+               title:String(title||'我的咨询').slice(0,60),ts:Date.now()});
+  try{localStorage.setItem(IQ_KEY,JSON.stringify(all.slice(0,50)))}catch(e){}
+}
+let _iqCur=null,_iqTimer=null;
+function myInquiryClose(){
+  if(_iqTimer){clearInterval(_iqTimer);_iqTimer=null;}
+  _iqCur=null;
+  const el=document.getElementById('wInquirySheet');if(el)el.remove();
+  document.documentElement.classList.remove('w-sheet-open');
+  /* 若「我的咨询」子页还开着，关抽屉后重绘一次：未读红点与最新一条立刻更新。 */
+  try{if(window.__meRenderInquiries)window.__meRenderInquiries();}catch(_e){}
+}
+function myInquiryBubble(m){
+  const mine=m.sender==='customer';
+  const who=mine?'我':(m.sender==='leader'?'领队':'俱乐部');
+  return `<div class="w-iq__msg ${mine?'is-me':'is-them'}">`
+    +(mine?'':`<span class="w-iq__who">${esc(who)}</span>`)
+    +`<div class="w-iq__bubble">${esc(m.body||'')}</div>`
+    +`<span class="w-iq__time">${esc(String(m.createdAt||'').replace('T',' ').slice(0,16))}</span></div>`;
+}
+function myInquiryPaint(d){
+  const list=document.getElementById('wIqList');if(!list)return;
+  const msgs=d.messages||[];
+  list.innerHTML=msgs.length?msgs.map(myInquiryBubble).join('')
+    :'<div class="w-iq__none">还没有消息</div>';
+  list.scrollTop=list.scrollHeight;
+  const sub=document.getElementById('wIqSub');
+  if(sub)sub.textContent=[d.activityTitle||d.leaderName||'我的咨询',
+    d.replyCount?`已回复 ${d.replyCount} 条`:'等待回复'].filter(Boolean).join(' · ');
+}
+async function myInquiryRefresh(silent){
+  const q=_iqCur;if(!q)return;
+  try{
+    const d=await api(`/api/public/inquiries/${q.kind}/${q.id}?token=${encodeURIComponent(q.token)}`,{cache:'no-store'});
+    if(!_iqCur||_iqCur.id!==q.id)return;
+    myInquiryPaint(d);
+  }catch(e){if(!silent)showAlert({title:'对话打不开',message:e.message})}
+}
+async function myInquiryOpen(kind,id,token){
+  if(!id||!token)return;
+  myInquiryClose();
+  _iqCur={kind:String(kind),id:Number(id),token:String(token)};
+  const el=document.createElement('div');
+  el.id='wInquirySheet';el.className='w-sheet w-iq';
+  el.innerHTML=`<div class="w-sheet__mask" data-close></div>`
+    +`<div class="w-sheet__panel w-iq__panel" role="dialog" aria-modal="true" aria-label="咨询对话">`
+    +`<button type="button" class="w-sheet__x" data-close aria-label="关闭">×</button>`
+    +`<div class="w-iq__hd"><b>咨询对话</b><span id="wIqSub">正在加载…</span></div>`
+    +`<div class="w-iq__list" id="wIqList"><div class="w-iq__none">正在加载对话…</div></div>`
+    +`<div class="w-iq__bar"><textarea id="wIqInput" rows="1" maxlength="500" placeholder="继续追问…"></textarea>`
+    +`<button type="button" class="w-iq__send" id="wIqSend" onclick="myInquirySend()">发送</button></div>`
+    +`<div class="w-iq__tip">领队或俱乐部工作人员会在这里回复你，也可以直接打你留的电话。</div>`
+    +`</div>`;
+  document.body.appendChild(el);
+  document.documentElement.classList.add('w-sheet-open');
+  el.addEventListener('click',e=>{const t=e.target.closest('[data-close]');if(t&&el.contains(t))myInquiryClose();});
+  const ta=el.querySelector('#wIqInput');
+  if(ta)ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();myInquirySend();}});
+  await myInquiryRefresh();
+  _iqTimer=setInterval(()=>myInquiryRefresh(true),20000);
+}
+async function myInquirySend(){
+  const q=_iqCur;if(!q)return;
+  const ta=document.getElementById('wIqInput'),btn=document.getElementById('wIqSend');
+  const body=String(ta&&ta.value||'').trim();
+  if(body.length<2){showAlert({title:'再写具体一点',message:'追问至少 2 个字。'});return;}
+  if(btn)btn.disabled=true;
+  try{
+    const d=await api(`/api/public/inquiries/${q.kind}/${q.id}/messages?token=${encodeURIComponent(q.token)}`,
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:body})});
+    if(ta)ta.value='';
+    myInquiryPaint({messages:d.messages||[],replyCount:(d.messages||[]).filter(m=>m.sender!=='customer').length});
+  }catch(e){showAlert({title:'没发出去',message:e.message})}
+  finally{if(btn)btn.disabled=false;}
+}
+/* IIFE 里的 me.js 要通过 window 调这些函数；inline onclick 也要能找到。 */
+window.myInquiries=myInquiries;
+window.myInquirySave=myInquirySave;
+window.myInquiryOpen=myInquiryOpen;
+window.myInquiryClose=myInquiryClose;
+window.myInquirySend=myInquirySend;
+window.myInquiryRefresh=myInquiryRefresh;
+
 function leaderRaterKey(){
   let k='';
   try{k=localStorage.getItem('clubos_rater_key')||''}catch(_e){}

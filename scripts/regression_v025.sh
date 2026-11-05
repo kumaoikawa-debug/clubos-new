@@ -175,3 +175,9 @@ python tests/member_v2_smoke.py
 # 新增会员接口须在生产模式检查身份与支付边界；收据打印直接执行原处理函数。
 python tests/security_membership_regression.py
 node tests/receipt_smoke.cjs
+
+# 2026-11-05 站内咨询对话 + 活动详情排版根治：
+# 守住 access_token 归属闸门（无/错/跨 kind/老数据一律拒）、四端同一份时间线、
+# 顾客追问→待回复红点重现、领队/后台回复→顾客未读，以及图注脱离 grid 窄列、
+# 高亮块去装饰、多领队横滑/单领队专版、缓存版本号等前端静态护栏。自带临时库隔离。
+python tests/inquiry_thread_smoke.py

@@ -443,6 +443,12 @@ function promoHtmlDoc(html){
     +'body{width:100%;overflow-x:hidden;font-family:-apple-system,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}'
     +'img,figure,video,iframe,svg,table,pre{max-width:100%!important}'
     +'img{max-width:100%;height:auto;display:block}section{display:block}a{color:inherit}'
+    /* 2026-11-05 契约兜底：AI 直出 HTML 里的 figcaption / 图注小字一律横排满宽，
+       禁止被 grid 挤成窄列，也禁止胶囊圆角把中文折成竖条。主文档 blocks 模板
+       的同类问题已在 shared.css 根治，这里管的是 iframe 内部。 */
+    +'figcaption{display:block;width:100%;max-width:100%;white-space:normal;'
+    +'overflow-wrap:break-word;line-height:1.7;font-size:12px;text-align:left}'
+    +'p,li,blockquote,span{max-width:100%;overflow-wrap:break-word}'
     /* 2026-11-04 用户截图「边界留白太多」：模型常给顶层区块写 48~80px 横向内边距，
        390px 屏上等于左右各砍掉一指宽。窄屏统一收到 18px，深色块/配色等设计不动。 */
     +'@media(max-width:720px){body>section,body>div,body>article,body>header,body>footer{'
@@ -500,6 +506,26 @@ function normalizePromoMobile(d,w){
         if(parseFloat(tc.fontSize)<13)try{t.style.fontSize='14px'}catch(_e){}
       });
       return;
+    }
+    /* 2026-11-05 加固：模型还爱写「浅绿圆角引用块」装一整段中文，以及
+       「圆形编号徽章」排在须知前面。这两类在窄 iframe 里就是截图里那种
+       装饰卡片墙。判据保守：文字成段(>=40 字) + 有背景色/圆角 + 宽度占满，
+       才把它摊成「上下发丝线 + 无底色」；短标签、真卡片一律不碰。 */
+    if(txt.length>=40&&r.width>vw*0.6&&cs.backgroundColor&&
+       cs.backgroundColor!=='rgba(0, 0, 0, 0)'&&cs.backgroundColor!=='transparent'){
+      var rad=parseFloat(cs.borderRadius||'0')||0;
+      if(rad>=8||/%/.test(String(cs.borderRadius||''))){
+        try{
+          el.style.setProperty('background','transparent','important');
+          el.style.setProperty('border-radius','0','important');
+          el.style.setProperty('border','0','important');
+          el.style.setProperty('border-top','1px solid rgba(0,0,0,.09)','important');
+          el.style.setProperty('border-bottom','1px solid rgba(0,0,0,.09)','important');
+          el.style.setProperty('padding-left','0','important');
+          el.style.setProperty('padding-right','0','important');
+        }catch(_e){}
+        return;
+      }
     }
     if(el.children.length===0&&/^[0-9][0-9.,]*$/.test(txt)&&parseFloat(cs.fontSize)>=28){
       if(parseFloat(cs.fontSize)>42)el.style.fontSize='40px';

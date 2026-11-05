@@ -111,7 +111,8 @@ function renderInfoList(){
       +`<div class="list-row__title">${who} <span class="tag ${it.kind==='route'?'tag--route':'tag--leader'}">${kindLabel}</span>${isNew?'<span class="tag orange">待处理</span>':'<span class="tag">已处理</span>'}</div>`
       +`<div class="list-row__sub">${sub}</div>`
       +`<div class="info-row__msg">${esc(it.message)}</div>`
-      +`<div class="info-row__meta">📞 ${esc(it.phone||'未留')} · ${esc(String(it.createdAt||'').replace('T',' '))}</div>`
+      +`<div class="info-row__meta">📞 ${esc(it.phone||'未留')} · ${esc(String(it.createdAt||'').replace('T',' '))}`
+      +(Number(it.replyCount||0)?` · <b style="color:#2f6b48">已回复 ${Number(it.replyCount)} 条</b>`:'')+`</div>`
       +`</div></div>`;
   }).join('');
 }
@@ -134,10 +135,30 @@ function infoSearchInput(){
 /* 关闭最上层的 uxDialog（uxClose 只是 overlay 实例方法，不是全局函数，故封装一层）。 */
 function infoClose(){const ov=document.querySelector('.ux-overlay');if(ov&&typeof ov.uxClose==='function')ov.uxClose();}
 
-function infoOpen(kind,id){
+/* 2026-11-05：咨询从「只留痕 + 打电话」升级为站内对话。
+   弹窗里直接读同一条 thread，顾客在 C 端「我的咨询」、领队在 /leader 看到的
+   都是这份消息；回复框发出去的消息会同步给三方。老咨询（没有消息表记录）
+   用原始 message 兜一条虚拟首条，后台不会突然看不到历史问题。 */
+function infoThreadHtml(msgs){
+  if(!msgs||!msgs.length)return '<div class="empty" style="padding:14px">暂无往来消息</div>';
+  return `<div class="info-thread">`+msgs.map(m=>{
+    const who=m.sender==='customer'?'顾客':(m.sender==='leader'?'领队':'俱乐部');
+    const mine=m.sender!=='customer';
+    return `<div class="info-thread__m ${mine?'is-staff':'is-cust'}">`
+      +`<span class="info-thread__who">${esc(who)} · ${esc(String(m.createdAt||'').replace('T',' ').slice(0,16))}</span>`
+      +`<div class="info-thread__b">${esc(m.body||'')}</div></div>`;
+  }).join('')+`</div>`;
+}
+async function infoOpen(kind,id){
   const it=infoItems.find(x=>x.kind===kind&&x.id===Number(id)); if(!it)return;
   const isNew=it.status==='new';
   const kindLabel=it.kind==='route'?'线路咨询':'领队咨询';
+  let msgs=[];
+  try{
+    const d=await api(`/api/club/${CLUB}/inquiries/${kind}/${Number(id)}/thread`,{cache:'no-store'});
+    msgs=d.messages||[];
+  }catch(_e){}
+  if(!msgs.length)msgs=[{sender:'customer',body:it.message,createdAt:it.createdAt}];
   const html=`<div class="info-detail">`
     +`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><span class="tag ${it.kind==='route'?'tag--route':'tag--leader'}">${kindLabel}</span>${isNew?'<span class="tag orange">待处理</span>':'<span class="tag">已处理</span>'}</div>`
     +`<div class="info-detail__kv"><b>顾客</b><span>${esc(it.name||'匿名山友')}</span></div>`
@@ -145,12 +166,30 @@ function infoOpen(kind,id){
     +`<div class="info-detail__kv"><b>线路</b><span>${esc(it.activityTitle||'(未关联活动)')}</span></div>`
     +(it.kind==='leader'?`<div class="info-detail__kv"><b>领队</b><span>${esc(it.leaderName||'')}</span></div>`:'')
     +`<div class="info-detail__kv"><b>提交时间</b><span>${esc(String(it.createdAt||'').replace('T',' '))}</span></div>`
-    +`<div class="info-detail__msg">${esc(it.message)}</div>`
-    +`<div class="sub" style="margin-top:10px">回复请直接拨打顾客电话（系统只做留痕与待办，不代发自动回复）。</div>`
-    +`<div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end"><button class="btn ghost" onclick="infoClose()">关闭</button><button class="btn" onclick="infoToggleHandled('${it.kind}',${it.id},${isNew})">${isNew?'标记为已处理':'改回待处理'}</button></div>`
+    +`<div class="info-detail__sec">往来消息</div>${infoThreadHtml(msgs)}`
+    +`<div class="info-detail__sec">回复顾客</div>`
+    +`<textarea id="infoReplyInput" class="info-reply__ta" maxlength="800" placeholder="直接在这里回复顾客，TA 会在「我的咨询」里看到，也可以继续追问…"></textarea>`
+    +`<div class="sub" style="margin-top:6px">发出即同步到顾客端与领队执行端；急事仍可直接拨打顾客电话。</div>`
+    +`<div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;flex-wrap:wrap">`
+    +`<button class="btn ghost" onclick="infoClose()">关闭</button>`
+    +`<button class="btn ghost" onclick="infoToggleHandled('${it.kind}',${it.id},${isNew})">${isNew?'标记为已处理':'改回待处理'}</button>`
+    +`<button class="btn" onclick="infoReply('${it.kind}',${it.id})">发送回复</button></div>`
     +`</div>`;
-  uxDialog({title:'顾客咨询',body:html});
+  uxDialog({title:'顾客咨询 · 对话',body:html});
 }
+async function infoReply(kind,id){
+  const ta=document.getElementById('infoReplyInput');
+  const body=String(ta&&ta.value||'').trim();
+  if(body.length<2){showAlert({title:'再写具体一点',message:'回复内容至少 2 个字。'});return;}
+  try{
+    await api(`/api/club/${CLUB}/inquiries/${kind}/${Number(id)}/messages`,
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:body})});
+    infoClose();await loadInfoCenter();pollLeaderInquiries();
+    toast('已回复，顾客在「我的咨询」里能看到');
+  }catch(e){showAlert({title:'回复失败',message:e.message})}
+}
+window.infoReply=infoReply;
+window.infoThreadHtml=infoThreadHtml;
 
 async function infoToggleHandled(kind,id,markHandled){
   try{

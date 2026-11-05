@@ -125,8 +125,9 @@ js = (ROOT / 'static/club/club.js').read_text()
 app_src = (ROOT / 'app.py').read_text()
 reg = (ROOT / 'scripts/regression_v025.sh').read_text()
 m = re.search(r'/static/club/club\.js\?v=([0-9a-z]+)', html)
-check('club.js 缓存版本 bump 到 20261105c',
-      bool(m) and m.group(1) == '20261105c', m.group(1) if m else None)
+# 只校验「不低于本功能上线的版本」，后续需求继续 bump 时不应误报 FAIL。
+check('club.js 缓存版本不低于用量清理上线版 20261105c',
+      bool(m) and m.group(1) >= '20261105c', m.group(1) if m else None)
 check('后端端点已注册',
       "@app.delete('/api/club/{club_id}/ai/usage/unbilled-failures')" in app_src)
 check('端点 SQL 带 credits 硬闸门',
