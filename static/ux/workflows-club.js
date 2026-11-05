@@ -61,6 +61,8 @@ window.addTier=async mode=>{
   const buy=String(mode||'CONDITION')==='PURCHASE';
   const zheField={name:'discountZhe',label:'活动报名折扣（折）',type:'number',min:0,max:9.9,step:.1,value:0,full:true,
     help:'填 8 = 打 8 折，填 0 = 该等级不打折。会员报名「开启了会员优惠」的活动时按此价立减，活动上还要打开开关才生效。'};
+  const rateField={name:'pointsRedeemRate',label:'积分换算（X 积分 = ¥1）',type:'number',min:0,max:10000,step:1,value:0,full:true,
+    help:'填 0 = 跟随俱乐部默认；填正数 = 本等级专属（例 100 / 50 / 20）。只影响该等级会员报名时用活动积分抵扣，装备积分不受影响。'};
   return uxTask(async()=>{
     const d=await uxForm({
       title: buy?'新建付费会员卡':'新建等级会员',
@@ -71,13 +73,15 @@ window.addTier=async mode=>{
         {name:'rank',label:'卡等级顺序（越大越高）',type:'number',min:1,step:1,value:30,required:true},
         {name:'price',label:'售价（元）',type:'number',min:0,step:.01,value:399},
         {name:'validMonths',label:'有效期（月）',type:'number',min:1,step:1,value:12},
-        zheField
+        zheField,
+        rateField
       ]:[
         {name:'name',label:'等级名称',required:true,value:'新等级'},
         {name:'rank',label:'等级顺序（越大越高）',type:'number',min:1,step:1,value:30,required:true},
         {name:'minActivitySpend',label:'累计活动消费 ≥（元）',type:'number',min:0,step:1,value:5000,required:true},
         {name:'minActivityCount',label:'累计活动次数 ≥',type:'number',min:0,step:1,value:10,required:true},
-        zheField
+        zheField,
+        rateField
       ],
       submitText: buy?'保存会员卡':'保存等级'});
     if(!d)return;
@@ -86,7 +90,8 @@ window.addTier=async mode=>{
       accessMode: buy?'PURCHASE':'CONDITION',
       price: buy?Number(d.price||0):0,
       validMonths:Number(d.validMonths||12),
-      activityDiscountPercent:Math.round(Number(d.discountZhe||0)*10)});
+      activityDiscountPercent:Math.round(Number(d.discountZhe||0)*10),
+      pointsRedeemRate:Number(d.pointsRedeemRate||0)});
     toast(buy?'会员卡已新增':'等级已新增');
     loadMembers();
   });
@@ -235,7 +240,7 @@ window.addMallItem=async()=>uxTask(async()=>{
       {name:'itemType',label:'兑换类型',type:'select',full:true,required:true,value:'coupon',options:[{value:'coupon',label:'优惠券（兑换即发到顾客券包）'},{value:'activity',label:'活动（生成核销码）'},{value:'service',label:'一次服务（生成核销码）'},{value:'goods',label:'实物（生成核销码）'}]},
       {name:'refId',label:'关联优惠券（仅优惠券类型）',type:'select',full:true,options:coupons.length?coupons.map(b=>({value:b.id,label:b.title})):[]},
       {name:'title',label:'商品名称',required:true,full:true,value:'露营灯兑换'},
-      {name:'pointsCost',label:'所需活动积分（100 分 = ¥1）',type:'number',min:1,step:1,value:500,required:true},
+      {name:'pointsCost',label:'所需活动积分',type:'number',min:1,step:1,value:500,required:true,help:'积分商城按固定积分标价，不按现金比例换算；报名抵扣的换算比例在「积分策略」里设置。'},
       {name:'stock',label:'库存（留空 = 不限）',type:'number',min:0,step:1,value:20},
       {name:'description',label:'兑换说明',full:true,value:'凭核销码到店领取'}
     ],submitText:'上架'});

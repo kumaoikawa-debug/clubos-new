@@ -223,6 +223,11 @@ def _run_compat_migrations(c):
     _ensure_column(c,'clubs','default_earn_club_points','default_earn_club_points INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'clubs','default_accept_club_points','default_accept_club_points INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'clubs','default_club_points_max_discount_percent','default_club_points_max_discount_percent REAL NOT NULL DEFAULT 100')
+    # 2026-11-05 活动积分现金换算比例（X 积分 = ¥1）：俱乐部级默认，0 = 跟随平台全局默认。
+    # 补列必须排在 _run_compat_migrations 里（init_db 第一个调用），因为下面的会员等级
+    # upsert 与积分策略 PATCH 都会写这两列，存量库启动晚一步就撞 OperationalError。
+    # 存量行落 0 = 完全沿用平台全局值，行为零变化，绝不把平台历史配置顶成 100。
+    _ensure_column(c,'clubs','points_redeem_rate','points_redeem_rate INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'clubs','reviewed_by','reviewed_by TEXT')
     _ensure_column(c,'clubs','disabled_reason','disabled_reason TEXT')
     # 入驻来源（2026-10-26）：官网「申请体验」表单提交的申请与平台手动
@@ -649,6 +654,9 @@ def _run_compat_migrations(c):
     _ensure_column(c,'clubs','membership_purchase_enabled','membership_purchase_enabled INTEGER NOT NULL DEFAULT 0')
     # 2026-10-26 第二批（会员折扣/升级赠券/拉新/券面自定义）：同样必须排在种子 INSERT 之前。
     _ensure_column(c,'club_member_tiers','activity_discount_percent','activity_discount_percent REAL NOT NULL DEFAULT 0')
+    # 2026-11-05 会员等级专属积分现金换算比例：0 = 跟随俱乐部生效值，正数 = 等级专属。
+    # 存量等级全部落 0，等价于「升级前所有等级都用同一个换算率」，行为零变化。
+    _ensure_column(c,'club_member_tiers','points_redeem_rate','points_redeem_rate INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'activities','member_discount_enabled','member_discount_enabled INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'member_benefits','face_json','face_json TEXT')
     _ensure_column(c,'clubs','referral_coupon_benefit_id','referral_coupon_benefit_id INTEGER NOT NULL DEFAULT 0')

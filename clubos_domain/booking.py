@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
+from .points_redeem_rate import resolve as resolve_club_points_redeem_rate
 
 @dataclass
 class BookingQuote:
@@ -38,15 +39,23 @@ class BookingEngine:
             return None
 
     def _quote_with_policy(self, *, c, activity: dict, amount: float, wallet: dict,
-                           requested_club_points: int, requested_gear_points: int):
+                           requested_club_points: int, requested_gear_points: int,
+                           user_id: int | None = None):
         gp = self._resolve_gear_policy(c, int(activity.get('club_id') or 0))
         policy = self.activity_points_policy.from_activity(activity, gp)
+        # 2026-11-05：积分现金换算比例按「会员等级 > 俱乐部 > 平台」解析。
+        # 与 CheckoutEngine.create_activity_intent 用同一个 resolver，报价与实扣同源。
+        club_points_redeem_rate = resolve_club_points_redeem_rate(
+            c, club_id=int(activity.get('club_id') or 0), user_id=user_id,
+            setting=self.points.setting)
         caps = dict(
             allow_club_points=policy.effective_accept_club_points,
             club_points_max_discount_percent=policy.club_points_max_discount_percent,
             allow_gear_points=policy.effective_accept_gear_points,
             # 装备积分上限走**百分比**口径（订单金额的 %），由总平台按套餐 + 按俱乐部决定。
             gear_points_max_discount_percent=policy.effective_gear_points_percent,
+            # 把比例放进同一个 caps：quote 与 max_redeemable 无条件共用，杜绝两处漂移。
+            club_points_redeem_rate=club_points_redeem_rate,
         )
         q = self.points.quote(
             amount=amount,
@@ -63,7 +72,7 @@ class BookingEngine:
             gear_points_balance=wallet['gearPoints'],
             **caps,
         )
-        return q, policy, max_redeemable
+        return q, policy, max_redeemable, club_points_redeem_rate
 
     def quote(self, c, *, activity_id:int, occurrence_id:int, user_id:int,
               requested_club_points:int=0, requested_gear_points:int=0, participant_count:int=1) -> BookingQuote:
@@ -79,15 +88,20 @@ class BookingEngine:
         if int(occ['sold']) + participant_count > int(occ['capacity']):
             raise ValueError('该团期剩余名额不足')
         wallet=self.wallet_snapshot(c,user_id,int(occ['club_id']))
-        q, policy, max_redeemable = self._quote_with_policy(
+        q, policy, max_redeemable, redeem_rate = self._quote_with_policy(
             c=c,
             activity=activity,
             amount=float(occ['price'])*participant_count,
             wallet=wallet,
             requested_club_points=requested_club_points,
             requested_gear_points=requested_gear_points,
+            user_id=user_id,
         )
-        return BookingQuote(occurrence=occ,wallet=wallet,points=q.as_dict(),points_policy=policy.as_dict(),
+        # 把本次真正生效的换算比例随报价下发：C 端展示「X 积分 = ¥1」不再写死 100，
+        # 也必须和 maxRedeemable.club.rate 是同一个数。
+        policy_dict=policy.as_dict()
+        policy_dict['pointsRedeemRate']=redeem_rate
+        return BookingQuote(occurrence=occ,wallet=wallet,points=q.as_dict(),points_policy=policy_dict,
                             max_redeemable=max_redeemable)
 
     def book(self, c, *, activity:dict, occurrence:dict, user_id:int,
@@ -100,16 +114,18 @@ class BookingEngine:
         if int(occurrence['sold']) + participant_count > int(occurrence['capacity']):
             raise OverflowError('该团期剩余名额不足')
         wallet=self.wallet_snapshot(c,user_id,int(activity['club_id']))
-        q, policy, _ = self._quote_with_policy(
+        q, policy, _, redeem_rate = self._quote_with_policy(
             c=c,
             activity=activity,
             amount=float(occurrence['price'])*participant_count,
             wallet=wallet,
             requested_club_points=requested_club_points,
             requested_gear_points=requested_gear_points,
+            user_id=user_id,
         )
         import json
-        snapshot=json.dumps(policy.as_dict(),ensure_ascii=False)
+        # 历史订单审计：把成交时生效的换算比例一起快照，日后调比例不会改写旧账口径。
+        snapshot=json.dumps({**policy.as_dict(),'pointsRedeemRate':redeem_rate},ensure_ascii=False)
         participant_policy=participant_policy or (self.participants.from_activity(activity).as_dict() if self.participants else {})
         c.execute("""INSERT INTO registrations(activity_id,occurrence_id,club_id,user_id,status,original_amount,club_point_discount,platform_point_subsidy,amount,commerce_order_id,booking_ref,points_policy_snapshot_json,participant_count,participant_policy_snapshot_json)
                      VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",(

@@ -1066,6 +1066,7 @@ async function loadMembers(){skel('#tierList',3);
      「付费会员卡」卡只列购买型，两边各有自己的＋按钮与编辑弹窗，不再混排。 */
   const isBuy=x=>String(x.access_mode||'CONDITION')==='PURCHASE';
   const zheTag=adp=>adp>0?` <span class="tag info">活动 ${(adp/10).toFixed(1).replace(/\.0$/,'')} 折</span>`:' <span class="sub" style="margin-left:6px">活动不打折</span>';
+  const rateTag=v=>Number(v||0)>0?` <span class="tag info">积分 ${Number(v)}:1</span>`:'';
   const rewardSub=x=>{
     const r=tierRewardOf(x.id); const txt=tierRewardText(r);
     return txt?`<div class="list-row__sub">升级奖励：${esc(txt)}</div>`:'';
@@ -1075,7 +1076,7 @@ async function loadMembers(){skel('#tierList',3);
   $('#tierList').innerHTML=condRows.map(x=>{
     const adp=Number(x.activity_discount_percent||0);
     return `<div class="list-row"><div class="list-row__main">
-      <div class="list-row__title">${esc(x.name)} <span class="tag">Rank ${x.rank}</span>${zheTag(adp)}${x.status!=='active'?' <span class="tag orange">已停用</span>':''}</div>
+      <div class="list-row__title">${esc(x.name)} <span class="tag">Rank ${x.rank}</span>${zheTag(adp)}${rateTag(x.points_redeem_rate)}${x.status!=='active'?' <span class="tag orange">已停用</span>':''}</div>
       <div class="list-row__sub">累计活动消费 ≥ ${money(x.min_activity_spend)} · 活动次数 ≥ ${x.min_activity_count} · ${x.qualification_mode==='ALL'?'同时满足':'任一满足'}</div>
       ${rewardSub(x)}</div>
       <div class="list-row__end"><button class="btn ghost" onclick="editTier(${x.id})">编辑</button></div></div>`;
@@ -1083,7 +1084,7 @@ async function loadMembers(){skel('#tierList',3);
   $('#cardList').innerHTML=cardRows.map(x=>{
     const adp=Number(x.activity_discount_percent||0);
     return `<div class="list-row"><div class="list-row__main">
-      <div class="list-row__title">${esc(x.name)} <span class="tag">¥${Number(x.price||0).toFixed(2).replace(/\.00$/,'')} · ${x.valid_months||12} 个月</span>${zheTag(adp)}${x.status!=='active'?' <span class="tag orange">已停用</span>':''}</div>
+      <div class="list-row__title">${esc(x.name)} <span class="tag">¥${Number(x.price||0).toFixed(2).replace(/\.00$/,'')} · ${x.valid_months||12} 个月</span>${zheTag(adp)}${rateTag(x.points_redeem_rate)}${x.status!=='active'?' <span class="tag orange">已停用</span>':''}</div>
       <div class="list-row__sub">购买开通 · 到期自动失效</div>
       ${rewardSub(x)}</div>
       <div class="list-row__end"><button class="btn ghost" onclick="editTierCard(${x.id})">编辑</button></div></div>`;
@@ -1339,13 +1340,16 @@ async function requestVisibility(pid,action){
    视图里，站在本页时它是 display:none，写进去用户看不到任何反应。 */
 let pointsActivities=[];
 let pointsDefault=null;
+let pointsRateInfo=null;
 async function loadPointsPolicy(){
   skel('#pointsList',6);
   try{
     /* 默认值读不到（接口异常 / 老库）就退回「全开 100%」，与 activities 表历史默认一致，
        绝不因为加功能让整页白屏。 */
     try{pointsDefault=await api(`/api/club/${CLUB}/points-default`)}catch(e){pointsDefault=null}
+    try{pointsRateInfo=await api(`/api/club/${CLUB}/points-redeem-rate`)}catch(e){pointsRateInfo=null}
     paintPointsDefault();
+    paintPointsRate();
     const list=await api(`/api/club/${CLUB}/activities`);
     pointsActivities=list||[];
     const d=pointsDefault||{enabled:true,earnClubPoints:true,acceptClubPoints:true,clubPointsMaxDiscountPercent:100};
@@ -1385,6 +1389,54 @@ function paintPointsDefault(){
   $('#pointsDefault').innerHTML='<div class="notice">'+lines.map(t=>'<div>'+esc(t)+'</div>').join('')
     +'<div class="sub" style="margin-top:6px">只影响<b>之后新建</b>的活动；已有活动不会被这里改动 —— 要改存量请用下面的「批量设置」。</div></div>'
     +'<div style="margin-top:10px"><button class="btn secondary" onclick="editPointsDefault()">修改默认规则</button></div>';
+}
+/* 「积分现金换算比例」卡片（2026-11-05）：X 积分 = ¥1。
+   生效优先级：会员当前等级专属 > 俱乐部默认 > 平台全局默认(100)。
+   各等级的专属值在「客户会员 → 等级会员 / 付费会员卡」里配，这里只读一览 + 改俱乐部默认。
+   刻意不把比例塞进「新活动默认规则」：那四个字段是活动级开关，会被新活动继承；
+   换算比例是俱乐部 / 会员级的资金口径，不属于任何一场活动。 */
+function paintPointsRate(){
+  const box=$('#pointsRateBox'); if(!box)return;
+  const d=pointsRateInfo;
+  if(!d){box.innerHTML='<div class="empty">换算比例加载失败，点右上「刷新」重试</div>';return}
+  const tierRows=(d.tiers||[]).map(t=>{
+    const own=Number(t.pointsRedeemRate||0)>0;
+    const src=own?'等级专属':(t.source==='club'?'跟随俱乐部默认':'跟随平台默认');
+    return `<div class="list-row"><div class="list-row__main">
+      <div class="list-row__title">${esc(t.name)} <span class="tag ${own?'info':''}">${t.effectiveRate} 积分 = ¥1</span>${t.status!=='active'?' <span class="tag orange">已停用</span>':''}</div>
+      <div class="list-row__sub">${esc(src)} · ${t.accessMode==='PURCHASE'?'付费会员卡':'等级会员'}</div>
+    </div></div>`;
+  }).join('')||'<div class="empty">还没有会员等级</div>';
+  const clubLine=Number(d.clubRate||0)>0
+    ? `本俱乐部单独设定 <b>${d.clubRate} 积分 = ¥1</b>（平台默认 ${d.platformRate} 积分 = ¥1）`
+    : `本俱乐部<b>跟随平台默认</b> ${d.platformRate} 积分 = ¥1`;
+  box.innerHTML='<div class="notice">'
+    +'<div>顾客报名时：先把活动积分按这个比例折成现金，再受活动规则「最多抵扣 N%」的现金上限约束。数字越小，同样的积分越值钱；但「最多抵 N%」这道成本闸门不变。</div>'
+    +`<div style="margin-top:6px">${clubLine}；未设等级专属比例时，本俱乐部默认生效 <b>${d.clubEffectiveRate} 积分 = ¥1</b>。</div>`
+    +'<div class="sub" style="margin-top:6px">只影响<b>俱乐部活动积分</b>在活动报名时的抵扣；装备积分由总平台出钱，仍按平台规则，不随这里变化。积分商城的兑换标价是固定积分，不按此比例折现金。</div>'
+    +'</div>'
+    +'<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn secondary" onclick="editPointsRedeemRate()">设置俱乐部默认比例</button><span class="sub">各等级专属比例在「客户会员 → 等级会员 / 付费会员卡」里设置</span></div>'
+    +'<div style="margin-top:12px"><div class="list-row__sub" style="margin-bottom:6px"><b>各会员等级实际生效</b></div>'+tierRows+'</div>';
+}
+async function editPointsRedeemRate(){
+  const d=pointsRateInfo||{};
+  const f=await uxForm({
+    title:'积分现金换算比例',
+    hint:'X 积分 = ¥1。填 0 或留空 = 跟随平台默认；填正数 = 本俱乐部单独设定。会员等级还可以再单独覆盖。',
+    fields:[
+      {name:'pointsRedeemRate',label:'本俱乐部默认（X 积分 = ¥1）',type:'number',min:0,max:Number(d.maxRate||10000),step:1,
+        full:true,value:String(Number(d.clubRate||0)),
+        help:`填 0 = 跟随平台默认（当前 ${Number(d.platformRate||100)} 积分 = ¥1）；例如填 50 表示 50 积分抵 ¥1。范围 1~${Number(d.maxRate||10000)}。`}
+    ],
+    submitText:'保存换算比例'
+  });
+  if(!f)return;
+  try{
+    await api(`/api/club/${CLUB}/points-redeem-rate`,{method:'PATCH',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({pointsRedeemRate:Number(f.pointsRedeemRate||0)})});
+    toast('积分换算比例已保存');
+    await loadPointsPolicy();
+  }catch(e){showAlert({title:'保存换算比例失败',message:e.message})}
 }
 async function editPointsDefault(){
   const d=pointsDefault||{};
@@ -2496,6 +2548,13 @@ function discountField(adp){
     value:zheValue(adp),full:true,
     help:'填 8 = 打 8 折，填 0 = 该等级不打折。会员报名「开启了会员优惠」的活动时按此价立减，活动上还要打开开关才生效。'};
 }
+/* 等级专属积分现金比（2026-11-05）：0 = 跟随俱乐部生效值；正数 = 本等级专属。
+   例：普通 100 / 高级 50 / 顶级 20 积分各抵 ¥1。只影响活动积分报名抵扣。 */
+function pointsRateField(rate){
+  return {name:'pointsRedeemRate',label:'本等级积分换算（X 积分 = ¥1）',type:'number',min:0,max:10000,step:1,
+    value:Number(rate||0),full:true,
+    help:'填 0 = 跟随俱乐部默认；填正数 = 本等级专属（例：普通 100 / 高级 50 / 顶级 20）。只影响该等级会员报名时用活动积分抵扣，装备积分不受影响。'};
+}
 async function editTier(tierId){
   const r=(_tiers||[]).find(x=>Number(x.id)===Number(tierId));
   if(!r){showAlert({title:'读取等级失败',message:'请重新打开「客户会员」再试'});return}
@@ -2510,6 +2569,7 @@ async function editTier(tierId){
       {name:'qualificationMode',label:'升级条件',type:'select',full:true,value:r.qualification_mode||'ANY',
         options:[{value:'ANY',label:'任一满足'},{value:'ALL',label:'同时满足'}]},
       discountField(r.activity_discount_percent),
+      pointsRateField(r.points_redeem_rate),
       ...rewardFields(tierId)
     ],submitText:'保存'});
   if(!d)return;
@@ -2520,7 +2580,7 @@ async function editTier(tierId){
       body:JSON.stringify({name:d.name,rank:d.rank,minActivitySpend:d.minActivitySpend,
         minActivityCount:d.minActivityCount,qualificationMode:d.qualificationMode,benefits,
         accessMode:'CONDITION',price:0,validMonths:Number(r.valid_months||12),
-        activityDiscountPercent:Math.round(Number(d.discountZhe||0)*10)})});
+        activityDiscountPercent:Math.round(Number(d.discountZhe||0)*10),pointsRedeemRate:Number(d.pointsRedeemRate||0)})});
     await saveTierReward(tierId,d);
     toast('等级会员已更新');
     await loadMembers();
@@ -2537,6 +2597,7 @@ async function editTierCard(tierId){
       {name:'price',label:'售价（元）',type:'number',min:0,step:.01,value:Number(r.price||399)},
       {name:'validMonths',label:'有效期（月）',type:'number',min:1,step:1,value:r.valid_months||12},
       discountField(r.activity_discount_percent),
+      pointsRateField(r.points_redeem_rate),
       ...rewardFields(tierId)
     ],submitText:'保存'});
   if(!d)return;
@@ -2546,7 +2607,7 @@ async function editTierCard(tierId){
       body:JSON.stringify({name:d.name,rank:d.rank,minActivitySpend:0,minActivityCount:0,
         qualificationMode:'ANY',benefits,
         accessMode:'PURCHASE',price:Number(d.price||0),validMonths:Number(d.validMonths||12),
-        activityDiscountPercent:Math.round(Number(d.discountZhe||0)*10)})});
+        activityDiscountPercent:Math.round(Number(d.discountZhe||0)*10),pointsRedeemRate:Number(d.pointsRedeemRate||0)})});
     await saveTierReward(tierId,d);
     toast('会员卡已更新');
     await loadMembers();

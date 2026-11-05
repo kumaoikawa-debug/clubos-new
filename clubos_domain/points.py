@@ -42,11 +42,29 @@ class ClubOSPointsEngine:
     def __init__(self, setting_getter):
         self.setting = setting_getter
 
+    def _club_rate(self, override: int | None = None) -> int:
+        """活动积分的现金换算比例（X 积分 = ¥1）。
+
+        `override` 由上游 `points_redeem_rate.resolve()` 按
+        「会员当前等级 > 俱乐部默认 > 平台全局」解析后传入。不传时退回平台全局值
+        —— 这是升级前的老行为，装备商城等不涉及会员等级的场景因此天然零变化。
+        装备积分不在这里：它由总平台出钱，继续走 `gear_points_redeem_rate`。
+        """
+        if override is not None:
+            try:
+                n = int(override)
+                if n >= 1:
+                    return n
+            except (TypeError, ValueError):
+                pass
+        return max(1, int(self.setting('club_points_redeem_rate', 100)))
+
     def quote(self, *, amount: float, club_points_balance: int, gear_points_balance: int,
               requested_club_points: int = 0, requested_gear_points: int = 0,
               allow_club_points: bool = True, club_points_max_discount_percent: float = 100.0,
               allow_gear_points: bool = True, gear_points_max_discount_amount: float | None = None,
-              gear_points_max_discount_percent: float | None = None) -> PointQuote:
+              gear_points_max_discount_percent: float | None = None,
+              club_points_redeem_rate: int | None = None) -> PointQuote:
         """Quote cash payable while respecting ClubOS activity-specific point rules.
 
         Balances alone never grant permission to redeem. The caller supplies the effective
@@ -55,12 +73,16 @@ class ClubOSPointsEngine:
         装备积分抵用上限现在走**百分比**口径（2026-10-24）：比例由「俱乐部订阅的套餐」
         决定资格与默认值，总平台再按俱乐部单独设定，比例基数是**订单金额**。
         `gear_points_max_discount_amount` 仍保留给装备商城等其它场景，两者同时给出时取更严的。
+
+        「先换算、再按百分比抵扣」（2026-11-05）：百分比先算出**现金**抵扣上限，
+        再乘 `club_points_redeem_rate` 得到**积分**上限；实际抵扣 = 使用积分 / 比例。
+        所以调比例只改变「多少积分能抵满」，不改变「最多能抵多少钱」这道成本闸门。
         """
         amount = max(0.0, float(amount))
         cp_req = max(0, int(requested_club_points or 0))
         gp_req = max(0, int(requested_gear_points or 0))
 
-        club_rate = max(1, int(self.setting('club_points_redeem_rate', 100)))
+        club_rate = self._club_rate(club_points_redeem_rate)
         gear_rate = max(1, int(self.setting('gear_points_redeem_rate', 100)))
 
         if allow_club_points:
@@ -105,7 +127,8 @@ class ClubOSPointsEngine:
     def max_redeemable(self, *, amount: float, club_points_balance: int, gear_points_balance: int,
                        allow_club_points: bool = True, club_points_max_discount_percent: float = 100.0,
                        allow_gear_points: bool = True, gear_points_max_discount_amount: float | None = None,
-                       gear_points_max_discount_percent: float | None = None) -> dict:
+                       gear_points_max_discount_percent: float | None = None,
+                       club_points_redeem_rate: int | None = None) -> dict:
         """What this wallet can actually deduct on this order, without the user typing anything.
 
         Implemented by asking the very same `quote()` with an unbounded request. The capping
@@ -126,8 +149,11 @@ class ClubOSPointsEngine:
             allow_gear_points=allow_gear_points,
             gear_points_max_discount_amount=gear_points_max_discount_amount,
             gear_points_max_discount_percent=gear_points_max_discount_percent,
+            club_points_redeem_rate=club_points_redeem_rate,
         )
-        club_rate = max(1, int(self.setting('club_points_redeem_rate', 100)))
+        # 展示用的 rate 必须与上面这次 quote 用的是同一个值，否则 C 端
+        # 「X 积分 = ¥1」会和真实抵扣金额对不上。
+        club_rate = self._club_rate(club_points_redeem_rate)
         gear_rate = max(1, int(self.setting('gear_points_redeem_rate', 100)))
 
         def side(allowed: bool, points: int, cash: float, balance: int, rate: int) -> dict:

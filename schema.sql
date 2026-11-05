@@ -20,6 +20,11 @@ CREATE TABLE IF NOT EXISTS clubs (
   default_earn_club_points INTEGER NOT NULL DEFAULT 1,
   default_accept_club_points INTEGER NOT NULL DEFAULT 1,
   default_club_points_max_discount_percent REAL NOT NULL DEFAULT 100,
+  -- 2026-11-05 俱乐部级「活动积分现金换算比例」：X 积分 = ¥1。
+  -- 0 = 跟随平台全局默认（platform_settings.club_points_redeem_rate，历史值 100）。
+  -- 故意不写 100：否则存量库升级后会把平台曾经改过的全局比例悄悄顶掉，
+  -- 破坏「存量行为零变化」。正数 = 俱乐部单独设定，覆盖平台默认。
+  points_redeem_rate INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -725,6 +730,10 @@ CREATE TABLE IF NOT EXISTS club_member_tiers (
   price REAL NOT NULL DEFAULT 0,               -- 购买型会员卡售价（¥），条件型恒 0
   valid_months INTEGER NOT NULL DEFAULT 12,    -- 购买型会员卡有效期（月）
   activity_discount_percent REAL NOT NULL DEFAULT 0, -- 2026-10-26 活动报名折扣（90=9折；0=该等级不折扣；活动还需开启参与开关）
+  -- 2026-11-05 会员等级专属「活动积分现金换算比例」：X 积分 = ¥1。
+  -- 0 = 跟随俱乐部生效值；正数 = 该等级专属（例：普通 100 / 高级 50 / 顶级 20）。
+  -- 只影响「俱乐部活动积分」在报名时的抵扣换算；装备积分由总平台出钱，不在此列。
+  points_redeem_rate INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'active',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

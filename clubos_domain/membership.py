@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from typing import Any
+from .points_redeem_rate import validate_rate, coerce_rate, FOLLOW
 
 logger = logging.getLogger(__name__)
 
@@ -76,23 +77,38 @@ class MembershipEngine:
         # 自己的 member_discount_enabled 开关（活动是前提条件）。
         adp = payload.get('activityDiscountPercent')
         activity_discount = 0.0 if adp in (None, '') else min(99.0, max(1.0, float(adp)))
+        # 2026-11-05 等级专属积分现金比（X 积分 = ¥1，0=跟随俱乐部生效值）。
+        # ★ 缺省时绝不覆盖：老前端 / 测试只要 PATCH 一次等级（改个名字），
+        #   就把运营辛苦配的「顶级 20 积分 = ¥1」清成跟随，是很难查的资损。
+        #   所以只有显式带 `pointsRedeemRate` 键才写，编辑时读回原值。
+        if 'pointsRedeemRate' in payload:
+            points_rate = validate_rate(payload.get('pointsRedeemRate'))
+        elif tier_id:
+            try:
+                old = c.execute('SELECT points_redeem_rate FROM club_member_tiers WHERE id=? AND club_id=?',
+                                (tier_id, club_id)).fetchone()
+                points_rate = coerce_rate(old[0]) if old else FOLLOW
+            except Exception:
+                points_rate = FOLLOW
+        else:
+            points_rate = FOLLOW
         if tier_id:
             exists = c.execute('SELECT id FROM club_member_tiers WHERE id=? AND club_id=?', (tier_id, club_id)).fetchone()
             if not exists:
                 raise LookupError('会员等级不存在')
             c.execute('''UPDATE club_member_tiers SET name=?,rank=?,min_activity_spend=?,min_activity_count=?,
                          qualification_mode=?,benefits_json=?,access_mode=?,price=?,valid_months=?,
-                         activity_discount_percent=?,status=?,updated_at=CURRENT_TIMESTAMP
+                         activity_discount_percent=?,points_redeem_rate=?,status=?,updated_at=CURRENT_TIMESTAMP
                          WHERE id=? AND club_id=?''',
                       (name,rank,spend,count,mode,json.dumps(benefits,ensure_ascii=False),
-                       access_mode,price,valid_months,activity_discount,status,tier_id,club_id))
+                       access_mode,price,valid_months,activity_discount,points_rate,status,tier_id,club_id))
             return tier_id
         c.execute('''INSERT INTO club_member_tiers(
             club_id,name,rank,min_activity_spend,min_activity_count,qualification_mode,benefits_json,
-            access_mode,price,valid_months,activity_discount_percent,status)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+            access_mode,price,valid_months,activity_discount_percent,points_redeem_rate,status)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (club_id,name,rank,spend,count,mode,json.dumps(benefits,ensure_ascii=False),
-                   access_mode,price,valid_months,activity_discount,status))
+                   access_mode,price,valid_months,activity_discount,points_rate,status))
         return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
 
     def _qualifies(self, tier: dict[str, Any], *, spend: float, count: int) -> bool:

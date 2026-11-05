@@ -33,6 +33,9 @@ from clubos_domain import c_profile
 from clubos_domain.gear_points_policy import GearPointsPolicyService
 from clubos_domain.commission_rate import ClubCommissionRateService
 from clubos_domain.product_catalog import ProductCatalogService
+from clubos_domain.points_redeem_rate import (resolve as resolve_club_points_redeem_rate,
+                                              describe as describe_club_points_redeem_rate,
+                                              validate_rate as validate_points_redeem_rate)
 from clubos_domain import ClubOSPointsEngine, BookingEngine, CheckoutEngine, ActivityPointsPolicyService, ActivityRefundPolicyService, MembershipEngine, BenefitEngine, CommerceRefundEngine, PaymentLifecycleEngine, RefundLifecycleEngine, ParticipantService, ActivityExecutionService, CommissionSettlementEngine, AfterSalesEngine, ProcurementEngine, WarehouseEngine, MerchandiseFinanceEngine, CommerceAnalyticsEngine, AICreditEngine, GearRecommendService, LeaderRecommendService
 from commerce_adapter import commerce_status, commerce_provider, MedusaClient
 from payment_providers import PaymentAccountService, provider_for_account, merchant_order_no, provider_refund_no
@@ -1206,6 +1209,35 @@ def update_club_points_default(club_id:int, payload:dict=Body(...)):
             raise HTTPException(404, '俱乐部不存在')
     return {'ok': True, 'enabled': bool(vals[0]), 'earnClubPoints': bool(vals[1]),
             'acceptClubPoints': bool(vals[2]), 'clubPointsMaxDiscountPercent': pct}
+
+# ── 活动积分「现金换算比例」X 积分 = ¥1（2026-11-05）──────────────────────
+# 与上面的「新活动默认规则」分开：那四个是**活动级**开关，会继承到新活动；
+# 换算比例是**俱乐部 / 会员级**的资金口径，不属于任何一场活动。
+# 生效优先级：会员当前等级专属 > 俱乐部默认 > 平台全局默认 > 100。
+@app.get('/api/club/{club_id}/points-redeem-rate')
+def get_club_points_redeem_rate(club_id:int):
+    """积分策略页「积分现金换算比例」卡片：平台默认 / 俱乐部设定 / 各等级生效一览。"""
+    with conn() as c:
+        return describe_club_points_redeem_rate(c, club_id=int(club_id), user_id=None, setting=setting)
+
+@app.patch('/api/club/{club_id}/points-redeem-rate')
+def update_club_points_redeem_rate(club_id:int, payload:dict=Body(...)):
+    """设俱乐部默认换算比例；`pointsRedeemRate=0` 表示跟随平台全局默认。
+
+    只改 clubs 一行，不碰任何活动、不碰任何会员等级 —— 各等级自己的专属比例
+    在「客户会员 → 等级会员 / 付费会员卡」里配，优先级高于这里。
+    装备积分由平台出钱，不受此设置影响。
+    """
+    try:
+        rate = validate_points_redeem_rate(payload.get('pointsRedeemRate'))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    with conn() as c:
+        cur = c.execute('UPDATE clubs SET points_redeem_rate=? WHERE id=?', (rate, int(club_id)))
+        if cur.rowcount == 0:
+            raise HTTPException(404, '俱乐部不存在')
+        return {'ok': True, **describe_club_points_redeem_rate(
+            c, club_id=int(club_id), user_id=None, setting=setting)}
 
 @app.post('/api/club/{club_id}/activities/points-policy/bulk')
 def bulk_update_activity_points_policy(club_id:int, payload:dict=Body(...)):
@@ -3646,7 +3678,11 @@ def public_points_mall(request:Request,club_id:int,user_id:int|None=None):
         items=points_mall_engine.list_items(c,club_id=club_id,include_inactive=False)
         redemptions=points_mall_engine.my_redemptions(c,club_id=club_id,user_id=user_id)
         wallet=wallet_snapshot(c,user_id,club_id)
-    return {'items':items,'redemptions':redemptions,'wallet':wallet}
+        # 2026-11-05：积分商城页头「X 积分 = ¥1」按该会员当前等级动态展示。
+        # 注意商城的 points_cost 是固定积分标价、不按现金比换算，所以文案只说明
+        # 「报名抵扣」的换算，避免让顾客以为兑换商品也在按这个比例折钱。
+        rate=resolve_club_points_redeem_rate(c,club_id=int(club_id),user_id=int(user_id),setting=setting)
+    return {'items':items,'redemptions':redemptions,'wallet':wallet,'pointsRedeemRate':rate}
 
 @app.post('/api/public/clubs/{club_id}/points-mall/{item_id}/redeem')
 def public_points_mall_redeem(request:Request,club_id:int,item_id:int,payload:dict=Body(...)):
@@ -5183,6 +5219,9 @@ def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_
         except ValueError as e:
             raise HTTPException(409,str(e))
     out=q.points; out['wallet']=q.wallet; out['occurrence']=q.occurrence; out['pointsPolicy']=q.points_policy
+    # 2026-11-05：本次真正生效的「X 积分 = ¥1」。同时也在 pointsPolicy 与
+    # maxRedeemable.club.rate 里，三处同源，C 端可任选一处展示，绝不写死 100。
+    out['pointsRedeemRate']=int(q.points_policy.get('pointsRedeemRate') or 100)
     # C 端不再让顾客自己填要抵多少积分：把「这张钱包在本单最多能抵多少」直接算好交给前端，
     # 顾客只做「用/不用」的确认。算法与真正下单时的封顶逻辑同源（points_engine.max_redeemable）。
     out['maxRedeemable']=q.max_redeemable
@@ -6017,6 +6056,9 @@ def public_member_center(club_id:int,user_id:int=1):
         purchase_enabled=bool(club_row and club_row['membership_purchase_enabled'])
         purchasable=membership_engine.purchasable_tiers(c,club_id) if purchase_enabled else []
         active_purchase=membership_engine.active_purchase(c,club_id=club_id,user_id=user_id) if purchase_enabled else None
+        # 2026-11-05：该会员「当前等级」生效的积分现金比，C 端会员中心据此显示
+        # 「X 积分 = ¥1」；等级升级后这里会自动变成更高等级的比例。
+        rate_info=describe_club_points_redeem_rate(c,club_id=int(club_id),user_id=int(user_id),setting=setting)
     # 2026-11-04：注册成为俱乐部会员即自动成为总平台会员（触发器 trg_club_member_platform 落库），
     # 这里把标识回给 C 端，便于「我的」展示而不暴露后台套餐。
     with conn() as _pc:
@@ -6024,6 +6066,8 @@ def public_member_center(club_id:int,user_id:int=1):
     is_platform_member=bool(_u and _u.get('platform_member'))
     return {'member':member,'wallet':wallet,'benefits':benefits,'redemptions':redemptions,'tiers':tiers,
             'isPlatformMember':is_platform_member,
+            'pointsRedeemRate':rate_info['effectiveRate'],
+            'pointsRedeemRateInfo':{k:rate_info[k] for k in ('platformRate','clubRate','clubEffectiveRate','effectiveRate','source','currentTier')},
             'activityHistory':history,'gearOwned':owned,'gearDiscount':gear_discount,
             'membershipPurchase':{'enabled':purchase_enabled,'tiers':purchasable,'activePurchase':active_purchase,'paymentAvailable':not IS_PROD}}
 

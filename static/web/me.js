@@ -928,7 +928,10 @@ function meMallPaint(d){
   const w=d.wallet||{};
   const filters=[['all','全部'],['coupon','优惠券'],['activity','活动'],['service','服务'],['goods','实物']];
   const shown=items.filter(x=>window._mallFilter==='all'||x.item_type===window._mallFilter);
-  const head=`<div class="me-gd"><b>${w.clubPoints??0}</b> 可用积分<span>报名付款可获得积分，报名时也可用积分抵扣；100 积分 = ¥1</span></div>`;
+  /* 2026-11-05：换算比例按当前会员等级由后端下发，不再写死 100 积分 = ¥1。
+     老缓存 / 接口异常时退回 100（升级前的历史口径），页面不至于显示 undefined。 */
+  const rate=Number(d.pointsRedeemRate||100)||100;
+  const head=`<div class="me-gd"><b>${w.clubPoints??0}</b> 可用积分<span>报名付款可获得积分，报名时也可用积分抵扣；当前 ${rate} 积分 = ¥1（按你的会员等级）</span></div>`;
   const chips=`<div class="me-mall__tabs">${filters.map(([k,t])=>`<button class="me-mall__tab${window._mallFilter===k?' on':''}" onclick="meMallFilter('${k}')">${t}</button>`).join('')}</div>`;
   const list=shown.length?shown.map(x=>{
     const off=x.stock!=null&&Number(x.stock)<=0;

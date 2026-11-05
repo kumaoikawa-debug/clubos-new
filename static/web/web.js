@@ -1408,7 +1408,7 @@ function gearCheckoutHtml(){
     <div class="w-co__rows">
       <div class="w-co__row"><span>商品金额（${c.count} 件）</span><b>${money(c.gross)}</b></div>
       ${c.isMem?`<div class="w-co__row w-co__row--cut"><span>会员等级折扣</span><b>-${money(c.memberCut)}</b></div>`:''}
-      ${CO_POINTS_MAX>0?`<div class="w-co__row"><span>装备积分抵扣</span><span class="w-co__pts"><input id="coPtsInp" type="number" min="0" max="${CO_POINTS_MAX}" value="${CO_POINTS}" inputmode="numeric" oninput="coOnPoints()" aria-label="使用装备积分"><b id="coPtsRow">-${money(c.ptsCut)}</b><em>可用 ${CO_POINTS_MAX} 分 · 100 分抵 ¥1</em></span></div>`:''}
+      ${CO_POINTS_MAX>0?`<div class="w-co__row"><span>装备积分抵扣</span><span class="w-co__pts"><input id="coPtsInp" type="number" min="0" max="${CO_POINTS_MAX}" value="${CO_POINTS}" inputmode="numeric" oninput="coOnPoints()" aria-label="使用装备积分"><b id="coPtsRow">-${money(c.ptsCut)}</b><em>可用 ${CO_POINTS_MAX} 分 · 平台装备积分 100 分抵 ¥1</em></span></div>`:''}
       ${(CO_VOUCHERS||[]).length?`<div class="w-co__row"><span>福利券</span><span class="w-co__pts"><select class="w-co__sel" id="coVsel" onchange="coOnVoucher()">${vouOpts}</select>${CO_VOUCHER?`<b id="coVRow">-${money(c.vCut)}</b>`:''}</span></div>`:''}
       <div class="w-co__row w-co__row--free"><span>运费</span><b>平台包邮</b></div>
     </div>
@@ -2342,7 +2342,10 @@ function syncPointConfirm(mx){
   const tg=cb.closest('.point-toggle');
   if(cash>0){
     if(tg)tg.style.display='';
-    capEl.innerHTML=`本单可抵 <b>${money(cash)}</b><i>用 ${pts} 积分</i>`;
+    /* 2026-11-05：比例由后端 maxRedeemable.club.rate 下发（会员等级可能不同），
+       页面不再暗示「100 分 = ¥1」。装备积分那一行仍是平台固定口径。 */
+    const cr=Number(cm.rate||0)||100;
+    capEl.innerHTML=`本单可抵 <b>${money(cash)}</b><i>用 ${pts} 积分</i><i>活动积分 ${cr} 分 = ¥1</i>`;
   }else{
     const clubOff=String(cm.limiter||'')==='off';
     const anyEmpty=String(cm.limiter||'')==='empty'||String(gm.limiter||'')==='empty';

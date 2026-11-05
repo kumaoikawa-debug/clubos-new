@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 from clubos_domain import stock_control as sc
 from clubos_domain.product_stock import variant_of, write_variant_stock
+from .points_redeem_rate import resolve as resolve_club_points_redeem_rate
 
 logger = logging.getLogger("checkout")
 
@@ -146,6 +147,12 @@ class CheckoutEngine:
                 gp = None
         policy = self.activity_points_policy.from_activity(activity, gp)
         original_amount = float(occurrence['price']) * participant_count
+        # 2026-11-05：与 BookingEngine._quote_with_policy 用同一个 resolver、同一组参数，
+        # 「页面报价」与「真实下单实扣」因此永远用同一个 X 积分 = ¥1。
+        # 装备商城的 create_gear_intent 不走这里（装备积分仍按平台全局比例）。
+        redeem_rate = resolve_club_points_redeem_rate(
+            c, club_id=int(activity['club_id']), user_id=user_id,
+            setting=self.points.setting)
         quote = self.points.quote(
             amount=original_amount,
             club_points_balance=wallet['clubPoints'],
@@ -156,6 +163,7 @@ class CheckoutEngine:
             club_points_max_discount_percent=policy.club_points_max_discount_percent,
             allow_gear_points=policy.effective_accept_gear_points,
             gear_points_max_discount_percent=policy.effective_gear_points_percent,
+            club_points_redeem_rate=redeem_rate,
         )
         # 会员等级活动折扣（2026-10-26）：先于券计算 —— 券基于「会员折后金额」判断门槛与抵扣。
         member_discount, member_rate = self._member_activity_discount(
@@ -169,7 +177,8 @@ class CheckoutEngine:
                 c,intent_id=intent_id,voucher_codes=voucher_codes,user_id=user_id,
                 club_id=int(activity['club_id']),kind='activity',amount_available=quote.payable)
         cash_amount=max(0.0,float(quote.payable)-float(benefit_quote['totalDiscount']))
-        policy_snapshot=policy.as_dict()
+        # 成交时生效的换算比例进快照：以后运营改比例，历史订单仍能解释「当时几分抵一块」。
+        policy_snapshot={**policy.as_dict(),'pointsRedeemRate':redeem_rate}
         participant_policy = participant_policy or (self.participants.from_activity(activity).as_dict() if self.participants else {})
         payload={'activityId':int(activity['id']),'occurrenceId':int(occurrence['id']),'participants':participants}
         redemption_ids=[x['redemptionId'] for x in benefit_quote['applied']]
