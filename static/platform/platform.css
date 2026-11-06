@@ -843,3 +843,15 @@
   .pk-print table{font-size:9px}
   .pk-print th,.pk-print td{padding:3px 4px}
 }
+
+/* ===== 成本 BOM（#641）：统一成本清单 ===== */
+.plat-bom-in{width:100%;padding:6px 8px;border:1px solid var(--line,#e3e3e8);border-radius:8px;background:#fff;font-size:13px;box-sizing:border-box}
+.plat-bom-table{overflow:auto;margin-top:8px}
+.plat-bom-table table input[type=number]{max-width:110px}
+.bom-preview{background:#f7f8fa;border:1px dashed #d7d9e0;border-radius:10px;padding:12px;min-height:84px}
+.bom-preview__row{font-weight:600;margin:4px 0;color:#1f2430}
+.bom-preview__lines{color:#555;font-size:13px;line-height:1.65}
+.tag.green{background:#e6f6ec;color:#1a7f43;border-color:#bfe6cd}
+.tag.muted{background:#f1f1f4;color:#8a8a93;border-color:#e3e3e8}
+.switch{display:inline-flex;align-items:center;gap:7px;cursor:pointer;user-select:none;font-size:14px;font-weight:600}
+.switch input{width:16px;height:16px;accent-color:#1a7f43}

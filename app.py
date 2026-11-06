@@ -10483,12 +10483,55 @@ def platform_order_profits(limit:int=200):
 def platform_product_profits():
     with conn() as c:return finance_engine.product_profit(c)
 
+@app.get('/api/platform/cost-bom')
+def platform_cost_bom_get():
+    with conn() as c:return finance_engine.get_bom(c)
+
+@app.post('/api/platform/cost-bom')
+def platform_cost_bom_save(payload:dict=Body(...)):
+    lines=payload.get('lines') or []
+    for ln in lines:
+        ct=str(ln.get('calcType') or 'fixed')
+        if ct not in ('fixed','per_item','percent_net','percent_cogs'):raise HTTPException(400,'不支持的计算方式: '+ct)
+        cat=str(ln.get('category') or 'other')
+        if cat not in ('logistics','packaging','other'):raise HTTPException(400,'不支持的成本类别: '+cat)
+    with conn() as c:
+        return finance_engine.save_bom(c,name=str(payload.get('name') or '默认成本清单'),note=str(payload.get('note') or ''),enabled=bool(payload.get('enabled',True)),lines=lines)
+
+@app.get('/api/platform/cost-bom/preview')
+def platform_cost_bom_preview(order_id:int|None=None):
+    with conn() as c:
+        if order_id is None:
+            r=c.execute('SELECT id FROM gear_orders ORDER BY id LIMIT 1').fetchone()
+            if not r:return {'orderId':None,'costSource':'none','shipping':0.0,'packaging':0.0,'otherCost':0.0,'contributionProfit':0.0,'bomLines':[]}
+            order_id=int(r[0])
+        try:p=finance_engine.order_profit(c,order_id)
+        except LookupError:raise HTTPException(404,'装备订单不存在')
+        return {'orderId':order_id,'costSource':p['costSource'],'shipping':p['shippingCost'],'packaging':p['packagingCost'],'otherCost':p['otherCost'],'contributionProfit':p['contributionProfit'],'bomLines':p['bomLines']}
+
 @app.patch('/api/platform/orders/{order_id}/operating-costs')
 def platform_order_operating_costs(order_id:int,payload:dict=Body(...)):
     shipping=max(0,float(payload.get('shippingCost') or 0));packaging=max(0,float(payload.get('packagingCost') or 0))
     with conn() as c:
         if not row(c.execute('SELECT id FROM gear_orders WHERE id=?',(order_id,))):raise HTTPException(404,'装备订单不存在')
-        c.execute('UPDATE gear_orders SET shipping_cost=?,packaging_cost=? WHERE id=?',(shipping,packaging,order_id))
+        # 手动录入即视为覆盖 BOM（#641）：置 override=1 使其始终优先于自动核算
+        c.execute('UPDATE gear_orders SET shipping_cost=?,packaging_cost=?,cost_bom_override=1 WHERE id=?',(shipping,packaging,order_id))
+        return finance_engine.order_profit(c,order_id)
+
+@app.post('/api/platform/orders/{order_id}/cost-override')
+def platform_order_cost_override(order_id:int,payload:dict=Body(default={})):
+    shipping=max(0,float(payload.get('shippingCost') or 0));packaging=max(0,float(payload.get('packagingCost') or 0))
+    with conn() as c:
+        if not row(c.execute('SELECT id FROM gear_orders WHERE id=?',(order_id,))):raise HTTPException(404,'装备订单不存在')
+        c.execute('UPDATE gear_orders SET shipping_cost=?,packaging_cost=?,cost_bom_override=1 WHERE id=?',(shipping,packaging,order_id))
+        return finance_engine.order_profit(c,order_id)
+
+@app.post('/api/platform/orders/{order_id}/cost-reset')
+def platform_order_cost_reset(order_id:int):
+    with conn() as c:
+        if not row(c.execute('SELECT id FROM gear_orders WHERE id=?',(order_id,))):raise HTTPException(404,'装备订单不存在')
+        # 恢复 BOM 自动核算（#641）：清掉手动覆盖标记，order_profit 将按启用模板重算
+        c.execute('UPDATE gear_orders SET cost_bom_override=0 WHERE id=?',(order_id,))
         return finance_engine.order_profit(c,order_id)
 
 @app.get('/api/platform/procurement/purchase-returns')

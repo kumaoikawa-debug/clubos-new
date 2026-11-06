@@ -489,6 +489,35 @@ def _run_compat_migrations(c):
     _ensure_column(c, 'external_fulfillment_orders', 'settled_at', 'settled_at TEXT')
     _ensure_column(c, 'external_fulfillment_orders', 'settle_note', 'settle_note TEXT')
     c.execute('CREATE INDEX IF NOT EXISTS idx_effo_settle ON external_fulfillment_orders(settle_status,fulfilled_at)')
+    # 成本 BOM（2026-11-07 / #641）：统一的「成本清单模板」，一次性录入所有会涉及的成本规则
+    # （物流运费 / 包材 / 其他运营成本），系统按规则自动算出每单成本与非税贡献利润，
+    # 取代逐单手动录入物流成本。模板为平台级（scope='all'），每行一条成本项，可启用/停用、排序。
+    # calc_type：fixed 每单固定 / per_item 按件(总件数) / percent_net 净销售比例 / percent_cogs 成本比例。
+    # category：logistics 计入物流成本 / packaging 计入包材成本 / other 计入其他运营成本。
+    c.execute('''CREATE TABLE IF NOT EXISTS cost_bom_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL DEFAULT '默认成本清单',
+        scope TEXT NOT NULL DEFAULT 'all',
+        target_id INTEGER,
+        is_active INTEGER NOT NULL DEFAULT 0,
+        note TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS cost_bom_lines (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        template_id INTEGER NOT NULL,
+        label TEXT NOT NULL,
+        category TEXT NOT NULL DEFAULT 'logistics',
+        calc_type TEXT NOT NULL DEFAULT 'fixed',
+        base_value REAL NOT NULL DEFAULT 0,
+        rate_value REAL NOT NULL DEFAULT 0,
+        sort INTEGER NOT NULL DEFAULT 0,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(template_id) REFERENCES cost_bom_templates(id) ON DELETE CASCADE)''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_cost_bom_lines_tpl ON cost_bom_lines(template_id,sort,id)')
+    # 订单级覆盖开关：1=手动覆盖（用 gear_orders.shipping_cost/packaging_cost），0=默认走 BOM 自动核算。
+    _ensure_column(c, 'gear_orders', 'cost_bom_override', 'cost_bom_override INTEGER NOT NULL DEFAULT 0')
     # 售后单 ↔ PEAKTRACE 退换货同步状态（#618）
     _ensure_column(c, 'after_sales_cases', 'external_sync_status', 'external_sync_status TEXT')
     _ensure_column(c, 'after_sales_cases', 'external_sync_error', 'external_sync_error TEXT')

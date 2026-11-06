@@ -294,6 +294,136 @@ class MerchandiseFinanceEngine:
         legacy=int(c.execute("SELECT COALESCE(SUM(quantity_delta),0) FROM inventory_movements WHERE product_id=? AND reference_type='gear_refund' AND reference_id=? AND quantity_delta>0",(item['product_id'],str(order_id))).fetchone()[0] or 0)
         return min(int(item['quantity'] or 0),after_sales+legacy)
 
+    def active_bom_template(self, c) -> dict[str, Any] | None:
+        """返回当前启用的成本 BOM 模板（含启用中的成本项），没有则返回 None。#641"""
+        t0 = c.execute(
+            "SELECT * FROM cost_bom_templates WHERE is_active=1 ORDER BY id LIMIT 1"
+        ).fetchone()
+        if not t0:
+            return None
+        t = dict(t0)
+        t["lines"] = [
+            dict(x)
+            for x in c.execute(
+                "SELECT * FROM cost_bom_lines WHERE template_id=? AND enabled=1 ORDER BY sort, id",
+                (t["id"],),
+            ).fetchall()
+        ]
+        return t
+
+    def compute_order_bom(self, c, order: dict, *, net_sales: float, cogs: float, total_qty: int, template: dict | None = None) -> dict[str, Any]:
+        """按成本 BOM 模板把成本分摊到单个订单，分物流/包材/其他三类。#641
+
+        calc_type: fixed=每单固定, per_item=base×总件数, percent_net=net_sales×rate, percent_cogs=cogs×rate。
+        """
+        tpl = template if template is not None else self.active_bom_template(c)
+        if not tpl:
+            return {"shipping": 0.0, "packaging": 0.0, "other": 0.0, "lines": [], "templateId": None}
+        shipping = packaging = other = 0.0
+        breakdown = []
+        for ln in tpl.get("lines", []):
+            ct = (ln.get("calc_type") or "fixed")
+            base = float(ln.get("base_value") or 0)
+            rate = float(ln.get("rate_value") or 0)
+            if ct == "fixed":
+                amt = base
+            elif ct == "per_item":
+                amt = base * max(0, int(total_qty))
+            elif ct == "percent_net":
+                amt = net_sales * rate
+            elif ct == "percent_cogs":
+                amt = cogs * rate
+            else:
+                amt = 0.0
+            amt = round(max(0.0, amt), 2)
+            cat = (ln.get("category") or "other")
+            if cat == "logistics":
+                shipping += amt
+            elif cat == "packaging":
+                packaging += amt
+            else:
+                other += amt
+            breakdown.append({
+                "label": ln.get("label"),
+                "category": cat,
+                "calcType": ct,
+                "amount": amt,
+            })
+        return {
+            "shipping": round(shipping, 2),
+            "packaging": round(packaging, 2),
+            "other": round(other, 2),
+            "lines": breakdown,
+            "templateId": tpl.get("id"),
+        }
+
+    def get_bom(self, c) -> dict[str, Any]:
+        """返回平台级成本 BOM（scope='all'），含全部成本项（不论启用/停用）。无则空脚手架。#641"""
+        t0 = c.execute(
+            "SELECT * FROM cost_bom_templates WHERE scope='all' ORDER BY id LIMIT 1"
+        ).fetchone()
+        if not t0:
+            return {"id": None, "name": "", "note": "", "isActive": 0, "lines": []}
+        t = dict(t0)
+        lines = [
+            dict(x)
+            for x in c.execute(
+                "SELECT id,template_id,label,category,calc_type,base_value,rate_value,sort,enabled "
+                "FROM cost_bom_lines WHERE template_id=? ORDER BY sort, id",
+                (t["id"],),
+            ).fetchall()
+        ]
+        norm = []
+        for ln in lines:
+            ln = dict(ln)
+            norm.append({
+                "id": ln["id"],
+                "label": ln["label"],
+                "category": ln["category"],
+                "calcType": ln["calc_type"],
+                "baseValue": ln["base_value"],
+                "rateValue": ln["rate_value"],
+                "sort": ln["sort"],
+                "enabled": ln["enabled"],
+            })
+        return {"id": t["id"], "name": t["name"], "note": t["note"] or "", "isActive": t["is_active"], "lines": norm}
+
+    def save_bom(self, c, *, name: str, note: str, enabled: bool, lines: list) -> dict[str, Any]:
+        """upsert 平台级成本 BOM：替换首个/同名模板的全部成本项。enabled 控制是否启用自动核算。#641"""
+        t0 = c.execute(
+            "SELECT * FROM cost_bom_templates WHERE scope='all' ORDER BY id LIMIT 1"
+        ).fetchone()
+        if t0:
+            tid = int(t0["id"])
+            c.execute(
+                "UPDATE cost_bom_templates SET name=?,note=?,is_active=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                (name or "默认成本清单", note or "", 1 if enabled else 0, tid),
+            )
+        else:
+            cur = c.execute(
+                "INSERT INTO cost_bom_templates (name,scope,target_id,is_active,note) VALUES (?, 'all', 0, ?, ?)",
+                (name or "默认成本清单", 1 if enabled else 0, note or ""),
+            )
+            tid = cur.lastrowid
+        c.execute("DELETE FROM cost_bom_lines WHERE template_id=?", (tid,))
+        for i, ln in enumerate(lines or []):
+            ln = ln or {}
+            c.execute(
+                "INSERT INTO cost_bom_lines (template_id,label,category,calc_type,base_value,rate_value,sort,enabled) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (
+                    tid,
+                    str(ln.get("label") or ""),
+                    str(ln.get("category") or "other"),
+                    str(ln.get("calcType") or "fixed"),
+                    float(ln.get("baseValue") or 0),
+                    float(ln.get("rateValue") or 0),
+                    int(ln.get("sort") or i),
+                    1 if ln.get("enabled", True) else 0,
+                ),
+            )
+        return self.get_bom(c)
+
     def order_profit(self, c, order_id: int) -> dict[str, Any]:
         o0 = c.execute("SELECT * FROM gear_orders WHERE id=?", (order_id,)).fetchone()
         if not o0:
@@ -318,11 +448,27 @@ class MerchandiseFinanceEngine:
         point_sub = self._money(o.get("platform_point_subsidy")) * (1 - refund_ratio)
         benefit_sub = 0.0 if str(o.get("status")) == "refunded" else self._money(o.get("platform_benefit_subsidy"))
         commission = self._money(c.execute("SELECT COALESCE(SUM(amount),0) FROM commission_ledger WHERE order_id=?", (order_id,)).fetchone()[0])
-        shipping = self._money(o.get("shipping_cost"))
-        packaging = self._money(o.get("packaging_cost"))
+        # 成本 BOM（#641）：未手动覆盖且存在启用模板时，自动按 BOM 分摊物流/包材/其他成本
+        override = int(o.get("cost_bom_override") or 0)
+        total_qty = sum(int(x.get("netCostQty") or 0) for x in items)
+        bom = None
+        if override == 0:
+            tpl = self.active_bom_template(c)
+            if tpl:
+                bom = self.compute_order_bom(c, o, net_sales=net_sales, cogs=cogs, total_qty=total_qty, template=tpl)
+        if bom:
+            shipping = bom["shipping"]
+            packaging = bom["packaging"]
+            other_cost = bom["other"]
+            cost_source = "BOM"
+        else:
+            shipping = self._money(o.get("shipping_cost"))
+            packaging = self._money(o.get("packaging_cost"))
+            other_cost = 0.0
+            cost_source = "manual" if override == 1 else "none"
         cogs = round(cogs, 2)
         gross_profit = round(net_sales - cogs, 2)
-        contribution = round(net_sales - cogs - point_sub - benefit_sub - commission - shipping - packaging, 2)
+        contribution = round(net_sales - cogs - point_sub - benefit_sub - commission - shipping - packaging - other_cost, 2)
         return {
             "orderId": order_id,
             "sourceClubId": o["source_club_id"],
@@ -339,6 +485,9 @@ class MerchandiseFinanceEngine:
             "clubCommission": commission,
             "shippingCost": shipping,
             "packagingCost": packaging,
+            "otherCost": round(other_cost, 2),
+            "costSource": cost_source,
+            "bomLines": bom["lines"] if bom else [],
             "contributionProfit": contribution,
             "contributionMarginPct": round((contribution / net_sales * 100), 2) if net_sales else 0.0,
             "items": items,
@@ -358,6 +507,7 @@ class MerchandiseFinanceEngine:
             "clubCommission",
             "shippingCost",
             "packagingCost",
+            "otherCost",
             "contributionProfit",
         ]
         sums = {k: round(sum(float(o[k] or 0) for o in orders), 2) for k in keys}
