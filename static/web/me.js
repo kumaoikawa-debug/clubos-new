@@ -1112,8 +1112,13 @@ function openAvatarSheet(){
         <div class="me-av__body">
           <div class="me-av__preview" id="meAvPrev"></div>
           <div class="me-av__name">${esc(ME.name||'会员')}</div>
+          <p class="me-av__hint">换一张清晰的照片，让大家更容易认出你</p>
           <input type="file" id="meAvFile" accept="image/*" hidden>
-          <button class="me-btn me-btn--block" type="button" onclick="mePickAvatar()">从相册选择图片</button>
+          <input type="file" id="meAvFileCam" accept="image/*" capture="environment" hidden>
+          <div class="me-av__src">
+            <button class="me-btn me-btn--block" type="button" onclick="mePickAvatar('cam')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.6-2h6.8L17 8h3v11H4z"/><circle cx="12" cy="13" r="3.3"/></svg>拍照</button>
+            <button class="me-btn me-btn--block" type="button" onclick="mePickAvatar('album')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2"/><circle cx="12" cy="11" r="3"/><path d="M8 17l2.2-2.4 1.8 2 1.6-1.8L17 17"/></svg>从相册选择</button>
+          </div>
           ${ME.wechatAvatar?`<button class="me-btn me-btn--block" type="button" onclick="meUseWechatAvatar()">使用微信头像</button>`
                             :`<button class="me-btn me-btn--block" type="button" disabled title="需在微信中授权后自动同步">使用微信头像（未授权）</button>`}
           ${ME.avatar?`<button class="me-btn me-btn--block me-btn--danger" type="button" onclick="meClearAvatar()">恢复默认头像</button>`:''}
@@ -1122,12 +1127,15 @@ function openAvatarSheet(){
     document.body.appendChild(el);
     document.documentElement.classList.add('w-sheet-open');
     el.addEventListener('click',function(e){ const t=e.target.closest('[data-close]'); if(t&&el.contains(t))closeAvatarSheet(); });
-    const fi=document.getElementById('meAvFile');
-    if(fi&&!fi._wired){ fi._wired=true; fi.addEventListener('change',meOnAvatarFile); }
+    const wire=function(id){ const fi=document.getElementById(id); if(fi&&!fi._wired){ fi._wired=true; fi.addEventListener('change',meOnAvatarFile); } };
+    wire('meAvFile'); wire('meAvFileCam');
   }
   const prev=document.getElementById('meAvPrev'); if(prev)prev.innerHTML=meAvatarInner(ME.name||'远',ME.avatar||'');
 }
-function mePickAvatar(){ const fi=document.getElementById('meAvFile'); if(fi)fi.click(); }
+function mePickAvatar(kind){
+  const fi=document.getElementById(kind==='cam'?'meAvFileCam':'meAvFile');
+  if(fi)fi.click();
+}
 function meOnAvatarFile(e){
   const f=e.target.files&&e.target.files[0]; if(!f) return;
   if(f.size>3*1024*1024){ if(window.toast)toast('图片不能超过 3MB'); return; }

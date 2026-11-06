@@ -919,6 +919,10 @@ def get_activity(club_id:int,activity_id:int):
     a.pop('source_json',None)
     a.pop('activity_master_json',None)
     a['activityMaster']=_master;a['detail']=_detail;a['occurrences']=occ
+    # 活动分类归属（2026-11-06）：后台详情页多选用。
+    with conn() as c:
+        a['categoryIds']=[int(r['category_id']) for r in rows(c.execute(
+            'SELECT category_id FROM activity_category_links WHERE activity_id=? ORDER BY category_id',(activity_id,)))]
     # ★ 成本闸门（2026-10-06）：俱乐部端也是前端。结构化 master 一律不含成本（原始成本底价
     # 留在 source_json，该字段任何前端都不下发），避免俱乐部端预览/再保存把成本带出去。
     # 没有成本键的活动（如手动建、仅填了公开售价）不受影响 —— price/费用包含 等公开字段原样保留。
@@ -3471,6 +3475,160 @@ def _serve_leader_avatar(club_id:int, leader_id:int, ext:str):
     return FileResponse(fp)
 
 
+# ═══ 活动分类（2026-11-06）：后台手动自定义类别 + 活动↔类别多对多 ═══════════
+# 替代 C 端按标题正则的自动分类（ACT_THEMES）：类别由俱乐部在后台维护
+# （增删 / 改名 / 换图 / 排序 / 停用），活动在详情页勾选归属（多选）。
+# 图片走与领队头像同一条纪律：库里存**俱乐部域代理地址**（生产 /static/uploads 被封死），
+# C 端经公开路由改写后访问；俱乐部端直接用俱乐部域地址（生产 public/* 只放行 member）。
+_CATIMG_URL_RE=re.compile(r'^/api/club/(\d+)/activity-categories/(\d+)/image(\.\w+)$')
+
+def _activity_categories_payload(c,club_id:int,include_inactive:bool=False,pub:bool=False):
+    where='' if include_inactive else ' AND active=1'
+    cats=rows(c.execute(f'SELECT id,name,image_url,sort_order,active FROM activity_categories WHERE club_id=?{where} ORDER BY sort_order,id',(club_id,)))
+    counts={r['category_id']:r['n'] for r in rows(c.execute(
+        '''SELECT l.category_id AS category_id,COUNT(*) AS n FROM activity_category_links l
+           JOIN activities a ON a.id=l.activity_id AND a.club_id=? AND a.status='published'
+           GROUP BY l.category_id''',(club_id,)))}
+    out=[]
+    for r in cats:
+        cid=int(r['id'])
+        m=_CATIMG_URL_RE.match(str(r.get('image_url') or ''))
+        img=None
+        if m and int(m.group(1))==club_id and int(m.group(2))==cid:
+            img=(f'/api/public/activity-categories/{cid}/image{m.group(3)}' if pub else m.group(0))
+        out.append({'id':cid,'name':str(r.get('name') or ''),'imageUrl':img,
+                    'sortOrder':int(r.get('sort_order') or 0),'active':bool(r.get('active')),
+                    'count':int(counts.get(cid,0))})
+    return out
+
+def _club_category_or_404(c,club_id:int,cat_id:int):
+    r=row(c.execute('SELECT id FROM activity_categories WHERE id=? AND club_id=?',(cat_id,club_id)))
+    if not r: raise HTTPException(404,'分类不存在')
+    return r
+
+@app.get('/api/club/{club_id}/activity-categories')
+def club_activity_categories(club_id:int):
+    """后台分类管理列表：含停用项与每类已发布活动数（含停用活动的活动不计数）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        return _activity_categories_payload(c,club_id,include_inactive=True,pub=False)
+
+@app.post('/api/club/{club_id}/activity-categories')
+def create_activity_category(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    name=str(payload.get('name') or '').strip()
+    if not name: raise HTTPException(400,'分类名称不能为空')
+    if len(name)>20: raise HTTPException(400,'分类名称最长 20 个字')
+    with conn() as c:
+        dup=row(c.execute('SELECT id FROM activity_categories WHERE club_id=? AND name=?',(club_id,name)))
+        if dup: raise HTTPException(400,'已存在同名分类')
+        mx=row(c.execute('SELECT COALESCE(MAX(sort_order),-1) AS m FROM activity_categories WHERE club_id=?',(club_id,)))
+        cur=c.execute('INSERT INTO activity_categories(club_id,name,sort_order,active) VALUES(?,?,?,1)',
+                      (club_id,name,int(mx['m'])+1))
+        cat_id=cur.lastrowid
+    return {'id':cat_id,'name':name}
+
+@app.patch('/api/club/{club_id}/activity-categories/{cat_id}')
+def update_activity_category(club_id:int,cat_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        _club_category_or_404(c,club_id,cat_id)
+        fields={}
+        if 'name' in payload:
+            name=str(payload.get('name') or '').strip()
+            if not name: raise HTTPException(400,'分类名称不能为空')
+            if len(name)>20: raise HTTPException(400,'分类名称最长 20 个字')
+            dup=row(c.execute('SELECT id FROM activity_categories WHERE club_id=? AND name=? AND id!=?',(club_id,name,cat_id)))
+            if dup: raise HTTPException(400,'已存在同名分类')
+            fields['name']=name
+        if 'sortOrder' in payload:
+            try: fields['sort_order']=int(payload.get('sortOrder'))
+            except (TypeError,ValueError): raise HTTPException(400,'排序必须是整数')
+        if 'active' in payload: fields['active']=1 if payload.get('active') else 0
+        if fields:
+            sets=','.join(f'{k}=?' for k in fields)
+            c.execute(f'UPDATE activity_categories SET {sets} WHERE id=? AND club_id=?',(*fields.values(),cat_id,club_id))
+    return {'ok':True}
+
+@app.delete('/api/club/{club_id}/activity-categories/{cat_id}')
+def delete_activity_category(club_id:int,cat_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        _club_category_or_404(c,club_id,cat_id)
+        c.execute('DELETE FROM activity_category_links WHERE category_id=?',(cat_id,))
+        c.execute('DELETE FROM activity_categories WHERE id=? AND club_id=?',(cat_id,club_id))
+    return {'ok':True}
+
+@app.post('/api/club/{club_id}/activity-categories/{cat_id}/image')
+@app.post('/api/club/{club_id}/activity-categories/{cat_id}/image.{ext}')
+async def upload_activity_category_image(club_id:int,cat_id:int,file:UploadFile=File(...),ext:str=''):
+    """上传/替换分类磁贴图。落盘 uploads/{club}/categories/{cat_id}/image{ext}，覆盖写。"""
+    club_or_404(club_id)
+    real=Path(file.filename or '').suffix.lower()
+    if real not in _PUBLIC_IMAGE_EXT: raise HTTPException(400,'仅支持图片文件：png/jpg/jpeg/webp/gif')
+    if ext and '.'+str(ext).lower().lstrip('.')!=real:
+        raise HTTPException(400,'路径里的扩展名与文件后缀不一致')
+    data=await file.read()
+    if len(data) > 5*1024*1024: raise HTTPException(413,'图片过大（上限 5MB）')
+    with conn() as c:
+        _club_category_or_404(c,club_id,cat_id)
+    dest=UPLOAD/str(club_id)/'categories'/str(cat_id)
+    dest.mkdir(parents=True,exist_ok=True)
+    (dest/f'image{real}').write_bytes(data)
+    for stale in dest.glob('image.*'):
+        if stale.suffix.lower()!=real: stale.unlink(missing_ok=True)
+    url=f'/api/club/{club_id}/activity-categories/{cat_id}/image{real}'
+    with conn() as c:
+        c.execute('UPDATE activity_categories SET image_url=? WHERE id=? AND club_id=?',(url,cat_id,club_id))
+    return {'imageUrl':url}
+
+def _serve_category_image(club_id:int,cat_id:int,ext:str):
+    with conn() as c:
+        r=row(c.execute('SELECT image_url FROM activity_categories WHERE id=? AND club_id=?',(cat_id,club_id)))
+    if not r: raise HTTPException(404,'分类不存在')
+    m=_CATIMG_URL_RE.match(str(r['image_url'] or ''))
+    if not m or int(m.group(1))!=int(club_id) or int(m.group(2))!=int(cat_id):
+        raise HTTPException(404,'该分类还没有设置图片')
+    ext='.'+str(ext).lower().lstrip('.')
+    if ext not in _PUBLIC_IMAGE_EXT: raise HTTPException(404,'不支持的图片格式')
+    fp=UPLOAD/str(int(club_id))/'categories'/str(int(cat_id))/f'image{ext}'
+    if not fp.is_file(): raise HTTPException(404,'分类图片文件已丢失')
+    return FileResponse(fp)
+
+@app.get('/api/club/{club_id}/activity-categories/{cat_id}/image.{ext}')
+def club_activity_category_image(club_id:int,cat_id:int,ext:str):
+    return _serve_category_image(club_id,cat_id,ext)
+
+@app.get('/api/public/activity-categories/{cat_id}/image.{ext}')
+def public_activity_category_image(cat_id:int,ext:str):
+    """C 端分类磁贴图：公开代理（顾客没有 club 角色，走不了俱乐部域那条）。"""
+    with conn() as c:
+        r=row(c.execute('SELECT club_id FROM activity_categories WHERE id=?',(cat_id,)))
+    if not r: raise HTTPException(404,'分类不存在')
+    return _serve_category_image(int(r['club_id']),cat_id,ext)
+
+@app.patch('/api/club/{club_id}/activities/{activity_id}/categories')
+def set_activity_categories(club_id:int,activity_id:int,payload:dict=Body(...)):
+    """整组替换活动的分类归属（多选，全量提交）。categoryIds=[] 表示清除全部分类。"""
+    club_or_404(club_id)
+    ids=payload.get('categoryIds')
+    if not isinstance(ids,list): raise HTTPException(400,'categoryIds 必须是数组')
+    try: ids=sorted({int(x) for x in ids})
+    except (TypeError,ValueError): raise HTTPException(400,'categoryIds 必须是整数数组')
+    with conn() as c:
+        a=row(c.execute('SELECT id FROM activities WHERE id=? AND club_id=?',(activity_id,club_id)))
+        if not a: raise HTTPException(404,'活动不存在')
+        if ids:
+            own={r['id'] for r in rows(c.execute(
+                f'SELECT id FROM activity_categories WHERE club_id=? AND id IN ({",".join("?"*len(ids))})',(club_id,*ids)))}
+            bad=[i for i in ids if i not in own]
+            if bad: raise HTTPException(400,'存在不属于本俱乐部的分类')
+        c.execute('DELETE FROM activity_category_links WHERE activity_id=?',(activity_id,))
+        for i in ids:
+            c.execute('INSERT OR IGNORE INTO activity_category_links(activity_id,category_id) VALUES(?,?)',(activity_id,i))
+    return {'ok':True,'categoryIds':ids}
+
+
 @app.post('/api/club/{club_id}/occurrences/{occurrence_id}/groups')
 def add_execution_group(club_id:int,occurrence_id:int,payload:dict=Body(...)):
     with conn() as c:
@@ -4774,7 +4932,26 @@ def public_activities(club_id:int):
         cov=a.get('cover')
         if cov and str(cov).startswith('/static/'):
             a['cover']='/api/public/activities/%d/media/%s'%(a['id'],quote(str(cov)[len('/static/'):],safe='/'))
+    # 活动分类（2026-11-06 后台自定义）：每场活动挂上所属类别 id 数组，
+    # C 端磁贴点击后按它过滤（不再前端按标题正则猜）。
+    if acts:
+        ids=[int(x['id']) for x in acts]
+        ph=','.join('?'*len(ids))
+        cmap={}
+        with conn() as c:
+            for r in rows(c.execute(f'SELECT activity_id,category_id FROM activity_category_links WHERE activity_id IN ({ph})',ids)):
+                cmap.setdefault(int(r['activity_id']),[]).append(int(r['category_id']))
+        for a in acts: a['categoryIds']=cmap.get(int(a['id']),[])
     return acts
+
+
+@app.get('/api/public/clubs/{club_id}/activity-categories')
+def public_activity_categories(club_id:int):
+    """C 端活动分类磁贴数据：仅启用项，附每类**已发布**活动数（0 场也下发，
+    由前端决定禁用样式 —— 与旧自动分类「0 场禁用」口径一致）。"""
+    if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
+    with conn() as c:
+        return _activity_categories_payload(c,club_id,include_inactive=False,pub=True)
 
 
 @app.get('/api/public/clubs/{club_id}/leaders')

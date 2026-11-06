@@ -1,6 +1,6 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
-window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='info')await loadInfoCenter();if(v==='settings')await setTab(SETTINGS_TAB)}
+window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='actcats')await loadActCats();if(v==='content')await loadContent();if(v==='regs')await loadRegs();if(v==='execution')await loadExecution();if(v==='members')await loadMembers();if(v==='mall')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='info')await loadInfoCenter();if(v==='settings')await setTab(SETTINGS_TAB)}
 async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`智能 Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>';loadClubAttention()}
 /* 工作台「待处理事项」：C 端产生新报名 / 新订单后，俱乐部没有主动提醒，只能自己进
    报名管理 / 商城去翻。这里把各视图里「需要人跟进」的数字汇总到工作台一张卡上，
@@ -3877,3 +3877,104 @@ function populateCreateCity(){
   sel.dataset.filled='1';
 }
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',populateCreateCity);else populateCreateCity();
+
+/* ═══ 活动分类（2026-11-06）：后台自定义分类 + 活动归属多选 ═══════════════════
+   C 端活动页顶部磁贴 = 本端「活动分类」维护的数据（替代旧的标题正则自动分类）：
+   增删 / 改名 / 换图 / 排序 / 停用在这里；每场活动归属哪些分类，
+   在活动详情的「活动分类」卡里勾选（PATCH .../categories 全量替换）。 */
+let ACT_CATS_MGR=[];
+async function loadActCats(){
+  try{ACT_CATS_MGR=await api(`/api/club/${CLUB}/activity-categories`)||[]}
+  catch(e){ACT_CATS_MGR=[];showAlert({title:'加载失败',message:e.message})}
+  renderActCats();
+}
+function renderActCats(){
+  const box=document.getElementById('actCatRows');if(!box)return;
+  if(!ACT_CATS_MGR.length){box.innerHTML='<div class="empty">还没有分类。点右上「＋ 新增分类」创建第一个，C 端活动页马上就能看到。</div>';return}
+  box.innerHTML=ACT_CATS_MGR.map((c,i)=>`
+    <div style="display:flex;gap:12px;align-items:center;padding:10px 0;${i?'border-top:1px solid var(--line)':''}">
+      <div style="width:64px;height:64px;border-radius:12px;flex:0 0 64px;background:#edf3f1 center/cover no-repeat;${c.imageUrl?`background-image:url('${esc(c.imageUrl)}')`:''};display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:11px;text-align:center">${c.imageUrl?'':'无图'}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:700">${esc(c.name)} ${c.active?'':'<span class="tag">已停用</span>'}</div>
+        <div class="sub">${c.count||0} 场已发布活动挂在此分类 · 排序 ${c.sortOrder}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn ghost sm" onclick="actCatMove(${c.id},${c.sortOrder-1})" title="上移一位">↑</button>
+        <button class="btn ghost sm" onclick="actCatMove(${c.id},${c.sortOrder+1})" title="下移一位">↓</button>
+        <button class="btn ghost sm" onclick="actCatRename(${c.id})">改名</button>
+        <label class="btn ghost sm" style="margin:0;cursor:pointer">换图<input type="file" accept="image/*" hidden onchange="actCatImage(${c.id},this)"></label>
+        <button class="btn ghost sm" onclick="actCatToggle(${c.id})">${c.active?'停用':'启用'}</button>
+        <button class="btn ghost sm" style="color:#b73a3a" onclick="actCatDelete(${c.id})">删除</button>
+      </div>
+    </div>`).join('');
+}
+async function addActCat(){
+  const d=await uxForm({title:'新增活动分类',hint:'分类显示在 C 端活动页顶部的磁贴行；图片可创建后在列表里上传替换。',fields:[{name:'name',label:'分类名称（最长 20 字）',type:'text',required:true,full:true,placeholder:'如：徒步穿越'}],submitText:'创建'});
+  if(!d)return;
+  try{await api(`/api/club/${CLUB}/activity-categories`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:d.name})});toast('分类已创建');await loadActCats()}
+  catch(e){showAlert({title:'创建失败',message:e.message})}
+}
+async function actCatRename(id){
+  const c=ACT_CATS_MGR.find(x=>x.id===id);if(!c)return;
+  const d=await uxForm({title:'修改分类名称',fields:[{name:'name',label:'分类名称',type:'text',required:true,full:true,value:c.name}],submitText:'保存'});
+  if(!d)return;
+  try{await api(`/api/club/${CLUB}/activity-categories/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:d.name})});toast('已改名');await loadActCats()}
+  catch(e){showAlert({title:'保存失败',message:e.message})}
+}
+async function actCatMove(id,sortOrder){
+  try{await api(`/api/club/${CLUB}/activity-categories/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({sortOrder})});await loadActCats()}
+  catch(e){showAlert({title:'操作失败',message:e.message})}
+}
+async function actCatToggle(id){
+  const c=ACT_CATS_MGR.find(x=>x.id===id);if(!c)return;
+  try{await api(`/api/club/${CLUB}/activity-categories/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({active:!c.active})});toast(c.active?'已停用（C 端磁贴不再显示）':'已启用');await loadActCats()}
+  catch(e){showAlert({title:'操作失败',message:e.message})}
+}
+async function actCatDelete(id){
+  const c=ACT_CATS_MGR.find(x=>x.id===id);if(!c)return;
+  if(!await uxConfirm({title:'删除分类',message:`删除「${c.name}」后，挂在该分类上的活动只是解除归属，活动本身不受影响。确认删除？`,confirmText:'删除',danger:true}))return;
+  try{await api(`/api/club/${CLUB}/activity-categories/${id}`,{method:'DELETE'});toast('已删除');await loadActCats()}
+  catch(e){showAlert({title:'删除失败',message:e.message})}
+}
+async function actCatImage(id,input){
+  const f=input&&input.files&&input.files[0];if(!f)return;
+  try{
+    const fd=new FormData();fd.append('file',f);
+    await api(`/api/club/${CLUB}/activity-categories/${id}/image`,{method:'POST',body:fd});
+    toast('分类图已更新');await loadActCats();
+  }catch(e){showAlert({title:'上传失败',message:e.message})}
+  input.value='';
+}
+/* 活动详情注入「活动分类」卡：不改动 openActivity 的巨型模板，包一层在渲染完成后插入。 */
+function injectActivityCats(){
+  const pane=document.getElementById('activityDetail');if(!pane||!currentActivity)return;
+  const anchor=pane.querySelector('#sec-occ');if(!anchor)return;
+  const old=pane.querySelector('#sec-cats');if(old)old.remove();
+  const sel=new Set((currentActivity.categoryIds||[]).map(Number));
+  const card=document.createElement('div');
+  card.className='card section';card.id='sec-cats';
+  card.innerHTML=`<div class="panel-title"><div><h3>活动分类</h3><div class="sub">勾选这场活动归属的分类（可多选），C 端活动页点分类磁贴即按此过滤。分类的增删改名换图在左侧「活动分类」里维护。</div></div></div>
+    ${ACT_CATS_MGR.length?`<div style="display:flex;gap:8px;flex-wrap:wrap">${ACT_CATS_MGR.map(c=>`<label class="actcat-pick${sel.has(c.id)?' on':''}"><input type="checkbox" value="${c.id}" ${sel.has(c.id)?'checked':''} onchange="this.closest('label').classList.toggle('on',this.checked)"> ${esc(c.name)}${c.active?'':'<span class="sub">（已停用）</span>'}</label>`).join('')}</div>`:'<div class="sub">还没有分类，先去左侧「活动分类」创建，再回来勾选。</div>'}
+    <div style="margin-top:12px"><button class="btn secondary" onclick="saveActivityCats(${currentActivity.id})">保存分类</button></div>`;
+  anchor.parentNode.insertBefore(card,anchor);
+}
+async function saveActivityCats(id){
+  const pane=document.getElementById('activityDetail');if(!pane)return;
+  const ids=[...pane.querySelectorAll('#sec-cats input[type=checkbox]:checked')].map(x=>Number(x.value));
+  try{
+    await api(`/api/club/${CLUB}/activities/${id}/categories`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({categoryIds:ids})});
+    toast('活动分类已保存');
+    currentActivity=await api(`/api/club/${CLUB}/activities/${id}`);
+  }catch(e){showAlert({title:'保存失败',message:e.message})}
+}
+/* 包一层 openActivity：详情渲染完成后把「活动分类」卡插到「团期价格」之前。
+   首次进入时若分类还没拉过，顺手拉一次（失败不阻塞详情）。 */
+const _openActivityOri=openActivity;
+openActivity=async function(id){
+  const r=await _openActivityOri(id);
+  try{
+    if(!ACT_CATS_MGR.length){try{ACT_CATS_MGR=await api(`/api/club/${CLUB}/activity-categories`)||[]}catch(e){ACT_CATS_MGR=[]}}
+    injectActivityCats();
+  }catch(e){}
+  return r;
+};

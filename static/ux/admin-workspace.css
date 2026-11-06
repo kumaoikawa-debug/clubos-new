@@ -170,3 +170,12 @@ body.admin-workspace {
   .admin-workspace .ux-dialog-head, .admin-workspace .ux-dialog-body {padding: 18px;}
   .admin-workspace .ux-dialog-foot {padding: 12px 18px;}
 }
+
+/* ── 活动分类（2026-11-06）：活动详情里的归属多选 chips ─────────────────── */
+.actcat-pick{
+  display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);
+  border-radius:999px;padding:7px 14px;cursor:pointer;font-size:13px;
+  background:#fff;transition:border-color .15s,background .15s,color .15s;
+}
+.actcat-pick input{accent-color:var(--brand);margin:0}
+.actcat-pick.on{border-color:var(--brand);background:#edf5f2;color:var(--brand);font-weight:700}

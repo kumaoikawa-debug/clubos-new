@@ -120,7 +120,10 @@ function bindHero(hero){
 }
 function heroSlide(x,i){
   const cov=x.cover||'',d=wDate(x.event_date);
-  return `<div class="w-hero__slide${cov?'':' is-fallback'}">
+  /* 需求 1（2026-11-06）：整张 slide 任意位置点击都能进详情（不只点「即刻探索」）。
+     根元素挂 onclick；CTA 按钮用 event.stopPropagation 自行触发并阻止冒泡，
+     避免「点按钮 → 按钮触发一次 + 冒泡到 slide 又触发一次」重复 openAct。 */
+  return `<div class="w-hero__slide${cov?'':' is-fallback'}" role="button" tabindex="0" onclick="openAct(${x.id})" onkeydown="if(event.key==='Enter'||event.key===' ')event.preventDefault(),openAct(${x.id})">
     ${cov?`<div class="w-hero__media" style="background-image:url('${esc(cov)}')"></div>`:'<div class="w-hero__media"></div>'}
     <div class="w-hero__scrim"></div>
     <div class="w-hero__copy">
@@ -132,7 +135,7 @@ function heroSlide(x,i){
         ${x.capacity?`<span class="w-hero__fact">限 ${x.capacity} 人</span>`:''}
         <span class="w-hero__fact">${priceHtml(x.price,{unit:' / 人',pending:x.priceFrom==='pending'})}</span>
       </div>
-      <button class="w-hero__cta" type="button" onclick="openAct(${x.id})">即刻探索${WI.arrow}</button>
+      <button class="w-hero__cta" type="button" onclick="event.stopPropagation();openAct(${x.id})">即刻探索${WI.arrow}</button>
     </div>
   </div>`;
 }
@@ -219,25 +222,50 @@ async function loadActivities(){
     renderActivityList();
   }catch(e){loaderError('#publicActivities',e,'loadActivities 加载失败')}
 }
-/* 分类磁贴：一行带图选项（参考图「在地探索」那一行）。磁贴图 = 该主题下第一场
-   活动的**真实封面**，没有就走品牌渐变兜底、不画假图；「全部」是品牌绿实心磁贴，
-   与主题磁贴一眼区分，也是「清除主题筛选」的固定入口。 */
+/* 分类磁贴：一行带图选项（参考图「在地探索」那一行）。
+   2026-11-06 起分类由**后台自定义**（clubs 后台「活动分类」维护：增删 / 改名 / 换图 /
+   排序 / 停用；活动归属在活动详情勾选，接口下发 categoryIds）。磁贴图优先用后台传的
+   分类图；后台没传图时退回「该分类下第一场活动的真实封面」；后端没配置或拉取失败时
+   整体退回旧的标题正则自动分类（ACT_THEMES）—— 老体验兜底，不会白屏也不会空一行。
+   首帧先用兜底渲染，分类数据异步到货后重渲染一次（loadActivityCats）。
+   「全部」是品牌绿实心磁贴，与自定义磁贴一眼区分，也是「清除分类筛选」的固定入口。 */
+let ACT_CATS=[],ACT_CATS_LOADED=false;
+function actCatsCustom(){return ACT_CATS_LOADED&&ACT_CATS.length>0}
+async function loadActivityCats(){
+  if(ACT_CATS_LOADED)return;ACT_CATS_LOADED=true;
+  try{ACT_CATS=await api(`/api/public/clubs/${CLUB}/activity-categories`)||[]}catch(e){ACT_CATS=[]}
+  if(actCatsCustom()){
+    /* 兜底帧期间用户可能已点了一个正则主题 key；切到自定义分类后那个 key 不存在了，归位「全部」。 */
+    if(ACT_CAT!=='all'&&!ACT_CATS.some(c=>String(c.id)===String(ACT_CAT)))ACT_CAT='all';
+    renderActivityList();
+  }
+}
+function actCatLabel(k){
+  if(k==='all')return '';
+  if(actCatsCustom()){const c=ACT_CATS.find(x=>String(x.id)===String(k));return c?c.name:''}
+  return actThemeLabel(k);
+}
 function renderActivityCats(){
   const box=$('#actCats');if(!box)return;
-  const tiles=[{k:'all',label:'全部'}].concat(ACT_THEMES);
+  const custom=actCatsCustom();
+  const tiles=custom
+    ?[{k:'all',label:'全部',count:ACT_ALL.length}].concat(ACT_CATS.map(c=>({k:String(c.id),label:c.name,img:c.imageUrl||'',count:c.count||0})))
+    :[{k:'all',label:'全部'}].concat(ACT_THEMES);
   box.innerHTML=tiles.map(t=>{
     const isAll=t.k==='all';
-    const n=isAll?ACT_ALL.length:ACT_ALL.filter(x=>actThemesOf(x).includes(t.k)).length;
+    const n=custom?(t.count||0):(isAll?ACT_ALL.length:ACT_ALL.filter(x=>actThemesOf(x).includes(t.k)).length);
     const off=!isAll&&n===0;
-    const first=isAll?null:ACT_ALL.find(x=>actThemesOf(x).includes(t.k)&&x.cover);
-    const cov=first?first.cover:'';
+    /* 图源：后台分类图 > 该分类第一场有封面活动的封面 > 品牌渐变兜底。 */
+    let cov=custom?(t.img||''):'';
+    if(!cov&&!isAll){const first=ACT_ALL.find(x=>actThemesOf(x).includes(t.k)&&x.cover);if(first)cov=first.cover}
     return `<button class="w-cat${t.k===ACT_CAT?' on':''}${isAll?' w-cat--all':''}${!isAll&&!cov?' is-fallback':''}${off?' is-off':''}" type="button" data-c="${t.k}"${off?' disabled':''} aria-pressed="${t.k===ACT_CAT}">
       <span class="w-cat__img"${cov?` style="background-image:url('${esc(cov)}')"`:''}></span>
       ${cov?`<img class="w-cat__pic" src="${esc(cov)}" alt="" loading="lazy" onerror="if(this.parentNode){this.closest('.w-cat').classList.add('is-fallback')}this.remove()">`:''}
       <span class="w-cat__scrim"></span>
-      <span class="w-cat__label"><b>${t.label}</b><i>${n} 场</i></span>
+      <span class="w-cat__label"><b>${esc(t.label)}</b><i>${n} 场</i></span>
     </button>`;
   }).join('');
+  loadActivityCats();
 }
 /* 地区 chips：第二道筛选。计数为 0 的地区禁用；「其它地区」只在真有这类活动时
    才出现（不占位、不点空）。 */
@@ -275,14 +303,17 @@ function renderActivityList(){
      （2026-09-29 同一个模式连踩三次：活动 chips、装备 cats/tabs、消费端 toolbar。） */
   renderActivityCats();renderActivityRegions();
   let list=ACT_ALL.slice();
-  if(ACT_CAT!=='all')list=list.filter(x=>actThemesOf(x).includes(ACT_CAT));
+  if(ACT_CAT!=='all'){
+    if(actCatsCustom())list=list.filter(x=>(x.categoryIds||[]).includes(Number(ACT_CAT)));
+    else list=list.filter(x=>actThemesOf(x).includes(ACT_CAT));
+  }
   if(ACT_CITY!=='all')list=list.filter(x=>{if(ACT_CITY==='other')return !actCityOf(x);return actCityOf(x)===ACT_CITY});
   /* 最新上架的排最前（id 倒序 = 上架顺序），与首页瀑布流同一口径。 */
   list.sort((a,b)=>Number(b.id||0)-Number(a.id||0));
   box.innerHTML=list.map(feedCard).join('');
   const cnt=$('#actCount');
   if(cnt){
-    const flt=[ACT_CAT!=='all'?actThemeLabel(ACT_CAT):'',ACT_CITY!=='all'?actCityLabel(ACT_CITY):''].filter(Boolean);
+    const flt=[ACT_CAT!=='all'?actCatLabel(ACT_CAT):'',ACT_CITY!=='all'?actCityLabel(ACT_CITY):''].filter(Boolean);
     const located=ACT_CITY_LOCATED&&ACT_CITY===ACT_CITY_LOCATED?'（已在 '+ACT_CITY_LOCATED+' 附近）':'';
     cnt.textContent=ACT_ALL.length
       ?(flt.length?flt.join(' · ')+' · 共 '+list.length+' 场'+located:'共 '+list.length+' 场可报名'+located)

@@ -31,14 +31,18 @@ const day=x=>window.wDay?wDay(x.event_date):'';
    30px 大标题从来没生效过（首页标题一直是被浏览器默认字号的 h2 顶着）。 */
 function homeSlide(x,i){
   const cov=x.cover||'',sub=[day(x),x.location||''].filter(Boolean).join(' · ');
-  return `<div class="w-hero__slide${cov?'':' is-fallback'}">
+  /* 需求 1（2026-11-06）：整张 hero 任意位置点按都能进活动详情，不再只认「即刻探索」。
+     根元素挂 onclick；CTA 自己 stopPropagation 触发，避免「按钮一次 + 冒泡到 slide 又一次」
+     重复 openAct。hero 轨道是横向轮播容器，nav-history 的 inHScroller 守卫会放行横滑、
+     轻点（位移 < MIN_SWIPE）也不会被当成手势 —— 两种交互互不干扰。 */
+  return `<div class="w-hero__slide${cov?'':' is-fallback'}" role="button" tabindex="0" onclick="openAct(${Number(x.id)})" onkeydown="if(event.key==='Enter'||event.key===' ')event.preventDefault(),openAct(${Number(x.id)})">
     ${cov?`<div class="w-hero__media" style="background-image:url('${esc(cov)}')"></div>`:'<div class="w-hero__media"></div>'}
     <div class="w-hero__scrim"></div>
     <div class="w-hero__copy">
       <div class="w-hero__eyebrow">${i===0?'本期主推':'即将出发'}</div>
       <h1>${esc(x.title)}</h1>
       ${sub?`<p class="w-hero__sub">${esc(sub)}</p>`:''}
-      <button class="w-hero__cta" type="button" onclick="openAct(${Number(x.id)})">即刻探索</button>
+      <button class="w-hero__cta" type="button" onclick="event.stopPropagation();openAct(${Number(x.id)})">即刻探索</button>
     </div>
   </div>`;
 }

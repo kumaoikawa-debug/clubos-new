@@ -1784,3 +1784,28 @@ CREATE TABLE IF NOT EXISTS inquiry_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_inquiry_messages_thread
   ON inquiry_messages(club_id,kind,inquiry_id,id);
+
+-- 2026-11-06 活动分类（后台手动自定义，替代前端按标题正则的自动分类）：
+-- 类别由俱乐部在后台维护（增删改名 / 换图 / 排序 / 停用），活动与类别多对多。
+-- 首次启动会为没有类别的俱乐部种入 4 个默认类别（徒步穿越/风光摄影/疗愈静心/亲子研学）
+-- 并按老的正则规则把存量已发布活动挂上去，保证 C 端磁贴一上线就有内容、可继续手动改。
+CREATE TABLE IF NOT EXISTS activity_categories (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  image_url TEXT,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_activity_categories_club ON activity_categories(club_id,active,sort_order,id);
+
+CREATE TABLE IF NOT EXISTS activity_category_links (
+  activity_id INTEGER NOT NULL,
+  category_id INTEGER NOT NULL,
+  PRIMARY KEY(activity_id,category_id),
+  FOREIGN KEY(activity_id) REFERENCES activities(id) ON DELETE CASCADE,
+  FOREIGN KEY(category_id) REFERENCES activity_categories(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_acl_category ON activity_category_links(category_id,activity_id);

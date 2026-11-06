@@ -33,6 +33,10 @@
   background:var(--w-bg);color:var(--w-ink);position:relative;
   font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
   -webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  /* 覆盖 shared.css 旧版 .web-shell 的 max-width:560px + 居中 + 左右灰边：
+     那是桌面「手机框」遗留，会让 C 端在 ≥560px（桌面/预览面板/部分手机横屏）出现
+     两侧白边。C 端必须通栏满屏，这里显式解除。 */
+  max-width:none;margin:0;border-left:0;border-right:0;
 }
 .web-shell button{font-family:inherit}
 
@@ -114,6 +118,7 @@
 .w-hero__slide{
   position:relative;flex:0 0 100%;scroll-snap-align:start;
   min-height:min(84vh,660px);display:flex;align-items:flex-end;overflow:hidden;
+  cursor:pointer;
 }
 /* 整张可点的轮播（后台自定义 banner 设了跳转目标）：给可点暗示，但别盖过 CTA 指针 */
 .w-hero__slide.is-link{cursor:pointer}
@@ -1497,12 +1502,18 @@ html.w-sheet-open{overflow:hidden}
 
 /* ── 活动页：分类磁贴 + 地区 chips（2026-10-17）─────────────────────────────
    参考图（松赞「在地探索」）：分类是一行带图磁贴，下面一行筛选 chips。
-   磁贴图 = 该主题下第一场活动的**真实封面**（JS 控制，没有就走渐变兜底）；
-   「全部」用品牌绿实心、不带图，与主题磁贴一眼区分，也是清除主题筛选的入口。
-   五个磁贴等宽（flex:1 1 0）不横滑：一屏放得下，横滑反而让人以为还有更多。 */
-.web-shell .w-cats{display:flex;gap:8px;padding:2px 0 2px}
+   磁贴图 = 后台分类图 > 该分类第一场活动真实封面（JS 控制，没有就走渐变兜底）；
+   「全部」用品牌绿实心、不带图，与自定义磁贴一眼区分，也是清除分类筛选的入口。
+   2026-11-06 分类改后台自定义、数量不再固定 5 个：磁贴改固定宽度 + 整行横滑
+   （一屏约 4.5 张、右侧露出下一张的边，暗示「还能往右划」）；滚动条隐藏。 */
+.web-shell .w-cats{
+  display:flex;gap:8px;padding:2px 0 2px;
+  overflow-x:auto;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity;
+  scrollbar-width:none;
+}
+.web-shell .w-cats::-webkit-scrollbar{display:none}
 .web-shell .w-cat{
-  position:relative;flex:1 1 0;min-width:0;aspect-ratio:1/1.12;
+  position:relative;flex:0 0 21%;min-width:0;aspect-ratio:1/1.12;
   border:0;padding:0;border-radius:14px;overflow:hidden;cursor:pointer;
   background:#e8ece9;text-align:left;scroll-snap-align:start;
   box-shadow:0 6px 16px rgba(18,23,20,.1);
@@ -1971,6 +1982,21 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
   background:linear-gradient(145deg,#a8f0cb,#3fbd85 58%,#1c8b60);
   box-shadow:0 8px 20px rgba(0,0,0,.28),0 0 0 3px rgba(255,255,255,.25);
 }
+/* 头像可点提示：右下角相机角标，明确「点这里换头像」 */
+.web-shell .wme-ava__wrap{position:relative;flex:0 0 44px;width:44px;height:44px;cursor:pointer}
+.web-shell .wme-ava__wrap .wme-ava{transition:transform .18s}
+.web-shell .wme-ava__wrap:active .wme-ava{transform:scale(.94)}
+.web-shell .wme-ava__cam{
+  position:absolute;right:-4px;bottom:-4px;width:19px;height:19px;border-radius:50%;
+  display:grid;place-items:center;background:#fff;color:#156243;
+  box-shadow:0 2px 7px rgba(0,0,0,.32);border:1.6px solid #156243;
+}
+.web-shell .wme-ava__cam svg{width:11px;height:11px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+/* 头像弹层：来源按钮两列 + 引导文案 */
+.me-av__hint{font-size:12.5px;color:#7e8a84;line-height:1.5;margin:0 0 14px;text-align:center}
+.me-av__src{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.me-av__src .me-btn{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:14px 8px}
+.me-av__src .me-btn svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .me-av__name{font-size:15px;font-weight:700;margin-bottom:14px}
 .web-shell .wme-card__who{min-width:0}
 

@@ -1122,6 +1122,8 @@ def init_db():
             # 2026-11-03：会员活动折扣默认开启。存量活动此前因默认 0（且后台无开关）一直不生效，
             # 一次性把已发布活动翻成 1（仅跑一次，运营后续手动置 0 不会被重启覆盖）。
             _backfill_v032_member_discount_default(c)
+            # 2026-11-06：活动分类后台化 —— 给没有类别的俱乐部种默认类别 + 正则挂存量活动（仅一次）。
+            _backfill_activity_categories(c)
             return
         if os.getenv('CLUBOS_SECURITY_MODE','demo')=='production':
             # Never provision sample clubs, consumers, catalog, payments or credits in production.
@@ -1212,6 +1214,8 @@ def init_db():
         _backfill_v020_warehouse(c)
         _backfill_v021_finance(c)
         _backfill_v023_ai_credits(c)
+        # 新库演示种子也要给俱乐部种默认活动分类（上面「已有 clubs」分支只覆盖存量库）。
+        _backfill_activity_categories(c)
 
 def _backfill_v032_member_discount_default(c):
     # 2026-11-03：会员活动折扣默认开启。存量活动此前因 member_discount_enabled 默认 0、且后台无开关，
@@ -1222,6 +1226,39 @@ def _backfill_v032_member_discount_default(c):
         return
     c.execute("UPDATE activities SET member_discount_enabled=1 WHERE member_discount_enabled=0 AND status='published'")
     c.execute("INSERT INTO _migrations(name,applied_at) VALUES('member_discount_default_on', datetime('now'))")
+
+
+def _backfill_activity_categories(c):
+    # 2026-11-06：活动分类后台化。为「一个类别都没有」的俱乐部种入 4 个默认类别
+    # （与旧前端 ACT_THEMES 同名同序），并按旧正则把存量**已发布**活动挂上类别，
+    # 保证 C 端磁贴从自动分类切到后台分类的第一天就不是空的；之后运营在后台
+    # 随意增删改名换图，重启不会被覆盖（_migrations 守护，仅执行一次）。
+    # 未命中任何正则的活动不强行归类 —— 它仍出现在「全部」里，后台可手动挂。
+    c.execute("CREATE TABLE IF NOT EXISTS _migrations(name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
+    if c.execute("SELECT 1 FROM _migrations WHERE name='activity_categories_seed'").fetchone():
+        return
+    defaults=[
+        ('徒步穿越', r'徒步|登山|穿越|爬山|古道|山径|速降|攀冰|越野'),
+        ('风光摄影', r'摄影|金山|日照|风光|观景|星空|云海|日出|日落|雪山|航拍'),
+        ('疗愈静心', r'疗愈|颂钵|冥想|禅修|森林|瑜伽|正念|温泉'),
+        ('亲子研学', r'亲子|儿童|研学|夏令营|成长营|自然教育'),
+    ]
+    import re as _re
+    for club in c.execute('SELECT id FROM clubs').fetchall():
+        cid=club[0]
+        if c.execute('SELECT 1 FROM activity_categories WHERE club_id=? LIMIT 1',(cid,)).fetchone():
+            continue
+        cat_ids=[]
+        for i,(name,pat) in enumerate(defaults):
+            cur=c.execute('INSERT INTO activity_categories(club_id,name,sort_order,active) VALUES(?,?,?,1)',(cid,name,i))
+            cat_ids.append(cur.lastrowid)
+        rex=[(_re.compile(pat),cid_i) for pat,cid_i in zip([d[1] for d in defaults],cat_ids)]
+        for act in c.execute("SELECT id,title FROM activities WHERE club_id=? AND status='published'",(cid,)).fetchall():
+            title=str(act[1] or '')
+            for rx,catid in rex:
+                if rx.search(title):
+                    c.execute('INSERT OR IGNORE INTO activity_category_links(activity_id,category_id) VALUES(?,?)',(act[0],catid))
+    c.execute("INSERT INTO _migrations(name,applied_at) VALUES('activity_categories_seed', datetime('now'))")
 
 
 def setting(key,default=None):
