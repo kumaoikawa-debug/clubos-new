@@ -42,6 +42,7 @@ from payment_providers import PaymentAccountService, provider_for_account, merch
 import logistics_engine
 from clubos_domain import stock_control as stock_control
 from clubos_domain import peaktrace_catalog
+from clubos_domain import external_fulfillment
 
 ROOT=Path(__file__).resolve().parent
 STATIC=ROOT/'static'
@@ -199,6 +200,8 @@ points_mall_engine=PointsMallEngine(benefit_engine)
 participant_service=ParticipantService()
 execution_service=ActivityExecutionService()
 commission_engine=CommissionSettlementEngine(setting)
+# 外部履约桥：已签收 → 冻结佣金（域模块不能反向 import app 的 commission_engine 实例，这里注入）
+external_fulfillment.on_delivered=lambda c,order_id: commission_engine.freeze_order(c,order_id=order_id)
 # 俱乐部佣金率（2026-10-24）：总平台按俱乐部单独设定；商品费率是默认基准。
 commission_rate_service=ClubCommissionRateService(setting)
 catalog_service=ProductCatalogService()
@@ -7738,21 +7741,42 @@ def _peaktrace_auto_loop():
     """可选自动同步（PEAKTRACE_AUTO_SYNC=1）：上游上架/调价/改库存后无需人工点按钮。
 
     守护线程、异常吞掉并继续下一轮；默认关闭，避免测试进程与未配置的实例访问外网。
-    PEAKTRACE_SYNC_TTL 控制轮询间隔（默认 900 秒）。
+    PEAKTRACE_SYNC_TTL 控制目录轮询间隔（默认 900 秒）；
+    PEAKTRACE_FULFILL_TTL 控制外部履约推送/轮询间隔（默认 120 秒 —— 发货状态
+    用户在等，比目录同步急得多）。两个循环合并跑一个线程，互不阻塞失败。
     """
     import time
     time.sleep(20)   # 启动缓冲：等数据库初始化与网络就绪
+    catalog_ttl=max(60,int(os.environ.get('PEAKTRACE_SYNC_TTL','900')))
+    fulfill_ttl=max(30,int(os.environ.get('PEAKTRACE_FULFILL_TTL','120')))
+    next_catalog=0.0
     while True:
+        now=time.time()
+        if now>=next_catalog:
+            try:
+                payload=peaktrace_catalog.fetch_catalog()
+                with conn() as c:
+                    peaktrace_catalog.sync_catalog(c,payload)
+            except Exception as e:
+                print('[peaktrace] auto sync skipped:',type(e).__name__,str(e)[:160])
+            next_catalog=now+catalog_ttl
+        # 外部履约桥：待推订单推上游 + 已推订单拉发货状态（各自独立失败）
         try:
-            payload=peaktrace_catalog.fetch_catalog()
-            with conn() as c:
-                peaktrace_catalog.sync_catalog(c,payload)
+            with conn() as c: due=external_fulfillment.due_pushes(c)
+            outs=external_fulfillment.push_orders(due)
+            with conn() as c: external_fulfillment.apply_push_results(c,outs)
         except Exception as e:
-            print('[peaktrace] auto sync skipped:',type(e).__name__,str(e)[:160])
+            print('[peaktrace] fulfillment push skipped:',type(e).__name__,str(e)[:160])
         try:
-            time.sleep(max(60,int(os.environ.get('PEAKTRACE_SYNC_TTL','900'))))
+            with conn() as c: pulls=external_fulfillment.due_pulls(c)
+            outs=external_fulfillment.pull_orders(pulls)
+            with conn() as c: external_fulfillment.apply_pull_results(c,outs)
+        except Exception as e:
+            print('[peaktrace] fulfillment pull skipped:',type(e).__name__,str(e)[:160])
+        try:
+            time.sleep(fulfill_ttl)
         except Exception:
-            time.sleep(900)
+            time.sleep(120)
 
 
 if _peaktrace_auto_sync_enabled():
@@ -8697,6 +8721,25 @@ def platform_orders(club_id:int|None=Query(None), date_from:str=Query(''), date_
             p=picks.get(x['id'])
             x['pickState']=p['status'] if p else None
             x['pickTaskId']=p['id'] if p else None
+        # 外部履约桥（2026-11-06）随行下发：externalMode 告诉前端这单是纯外部
+        # （PEAKTRACE 代发，禁本地发货）/混合；externalFulfillment 是供应商侧进度。
+        eff={r['order_id']:r for r in rows(c.execute('SELECT * FROM external_fulfillment_orders'))}
+        modes={}
+        ids=[x['id'] for x in out]
+        for chunk in (ids[i:i+100] for i in range(0,len(ids),100)):
+            ph=','.join('?'*len(chunk))
+            for r in rows(c.execute(f"""SELECT i.order_id,COUNT(*) n,
+                        SUM(CASE WHEN p.source='external_api' OR (p.inventory_mode IS NOT NULL
+                                  AND p.inventory_mode NOT IN ('','platform_owned')) THEN 1 ELSE 0 END) ext
+                        FROM gear_order_items i JOIN products p ON p.id=i.product_id
+                        WHERE i.order_id IN ({ph}) GROUP BY i.order_id""",chunk)):
+                modes[r['order_id']]='pure' if r['n']==r['ext'] else 'mixed'
+        for x in out:
+            x['externalMode']=modes.get(x['id'])
+            r=eff.get(x['id'])
+            x['externalFulfillment']=({'pushStatus':r['push_status'],'fulfillStatus':r['fulfill_status'],
+                'carrier':r['carrier'],'trackingNo':r['tracking_no'],
+                'pushError':r['push_error'],'externalOrderId':r['external_order_id']} if r else None)
         return out
 
 @app.get('/api/platform/orders/filters')
@@ -8837,9 +8880,23 @@ def platform_logistics_carriers():
     return logistics_engine.CARRIERS
 
 
+def _guard_external_order(c,order_id:int):
+    """纯外部（PEAKTRACE 代发）订单禁止本地拣货/打包/发货。
+
+    货根本不进本地仓：镜像库存只在结算时扣账，物理发货由供应商完成。
+    放行的话运营会拿着从未存在的本地库存去拣货，或者填一个与供应商
+    平行的运单 —— 顾客端就会出现两条互相矛盾的物流。
+    混合订单不拦：自营部分仍需本地履约。
+    """
+    mode=external_fulfillment.order_external_mode(c,order_id)
+    if mode=='pure':
+        raise HTTPException(409,'PEAKTRACE 代发订单：商品由供应商直接发货，请等待供应商回传物流（可用「同步外部履约」手动拉取）')
+
+
 @app.post('/api/platform/orders/{order_id}/shipment')
 def platform_create_shipment(order_id: int, payload: dict = Body(...)):
     """发货：建运单 + 写订单。承运商既接受编码也接受名称（运营可能直接填中文）。"""
+    with conn() as c:_guard_external_order(c,order_id)
     tracking = str(payload.get('trackingNo') or '').strip()
     if not tracking:
         raise HTTPException(400, '请填写物流单号')
@@ -9045,6 +9102,7 @@ def platform_warehouse_tasks(status:str|None=None):
 @app.post('/api/platform/orders/{order_id}/pick')
 def platform_order_pick(order_id:int):
     with conn() as c:
+        _guard_external_order(c,order_id)
         try:return warehouse_engine.create_pick_task(c,order_id=order_id)
         except ValueError as e:raise HTTPException(409,str(e))
 
@@ -9057,6 +9115,7 @@ def platform_mark_picked(task_id:str):
 @app.post('/api/platform/orders/{order_id}/pack')
 def platform_order_pack(order_id:int,payload:dict=Body(default={})):
     with conn() as c:
+        _guard_external_order(c,order_id)
         try:return warehouse_engine.pack_order(c,order_id=order_id,note=str(payload.get('note') or ''))
         except ValueError as e:raise HTTPException(409,str(e))
 
@@ -9114,6 +9173,48 @@ def _sync_order_shipment_to_medusa(order_id:int):
 @app.post('/api/platform/orders/{order_id}/ship')
 def platform_ship_order(order_id:int,payload:dict=Body(...)):
     return {**platform_create_shipment(order_id,payload),'status':'shipped'}
+
+
+# ==========================================================================
+# 外部履约桥（2026-11-06）：PEAKTRACE 代发订单的推送 / 拉取 / 回调
+# 自动链路在 _peaktrace_auto_loop；这里是运营手动兜底 + 供应商主动回调。
+# ==========================================================================
+@app.post('/api/platform/external-fulfillment/sync')
+def platform_external_fulfillment_sync():
+    """手动同步：把待推订单推给供应商 + 拉取已推订单的发货状态。
+
+    三段式（读 → HTTP → 落库）在这里拼装，网络等待不占用 SQLite 写事务。
+    """
+    with conn() as c:
+        due=external_fulfillment.due_pushes(c)
+    outs=external_fulfillment.push_orders(due)
+    with conn() as c:
+        push=external_fulfillment.apply_push_results(c,outs)
+        pulls=external_fulfillment.due_pulls(c)
+    pull_outs=external_fulfillment.pull_orders(pulls)
+    with conn() as c:
+        pull=external_fulfillment.apply_pull_results(c,pull_outs)
+    return {'ok':True,'push':push,'pull':pull}
+
+
+@app.post('/api/webhooks/external-fulfillment')
+async def external_fulfillment_webhook(request:Request):
+    """供应商（PEAKTRACE）发货/签收回调入口（无会话，凭 token 校验）。
+
+    token 口径与外部履约推送一致：JSON body.token（托管网关剥自定义头与查询串）。
+    没配置 token 时一律拒绝 —— 回调写的是发货状态，开放等于让任何人改物流。
+    """
+    try: body=await request.json()
+    except Exception: raise HTTPException(400,'invalid JSON')
+    if not isinstance(body,dict): raise HTTPException(400,'invalid JSON')
+    expected=external_fulfillment.webhook_token()
+    got=str(body.get('token') or '').strip()
+    if not expected or not got or not secrets.compare_digest(got,expected):
+        raise HTTPException(401,'token 校验失败')
+    with conn() as c:
+        try: return external_fulfillment.handle_webhook(c,body)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(409,str(e))
 
 @app.post('/api/platform/orders/{order_id}/shipment/sync-commerce')
 def platform_retry_shipment_commerce(order_id:int):

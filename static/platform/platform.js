@@ -530,16 +530,41 @@ function orderLogCell(x){
   const trace=x.tracking_no?`<button class="btn ghost sm" style="margin-top:4px" onclick="openShipmentTimeline(${x.id})">轨迹</button>`:'';
   return `<div class="plat-ordlog"><b>${esc(x.carrier||'承运商')}</b><span class="sub">${esc(x.tracking_no||'')}</span>${trace}</div>`;
 }
+/* 外部履约桥（2026-11-06）：PEAKTRACE 代发订单的行内状态 chip。 */
+function externalChip(x){
+  const f=x.externalFulfillment; if(!f)return '';
+  const st=f.fulfillStatus==='delivered'?'已签收':f.fulfillStatus==='shipped'?'已发货':'待供应商发货';
+  const cls=f.fulfillStatus==='awaiting_shipment'?'orange':'';
+  return `<span class="tag ${cls}">PEAKTRACE 代发 · ${st}</span>`
+    +(f.pushStatus==='failed'?`<span class="tag orange" title="${esc(f.pushError||'推送失败')}">推送失败</span>`:'');
+}
+/* 手动兜底：推一批待同步订单 + 拉一批供应商发货状态（后端三段式，幂等）。 */
+async function syncExternalFulfillment(){
+  try{
+    const r=await api('/api/platform/external-fulfillment/sync',{method:'POST'});
+    const p=(r&&r.push)||{},l=(r&&r.pull)||{};
+    toast(`同步完成：推送成功 ${p.pushed||0} / 失败 ${p.failed||0}，状态更新 ${l.updated||0}`);
+    loadOrders();
+  }catch(e){showAlert({title:'同步失败',message:e.message})}
+}
 function orderRowHtml(x){
-  const shipBtn=x.status==='refunded'?'':`<button class="btn secondary" onclick="openShipmentDialog(${x.id})">${x.tracking_no?'更新物流':'发货'}</button>`;
+  const pure=x.externalMode==='pure';
+  const shipBtn=(x.status==='refunded'||pure)?'':`<button class="btn secondary" onclick="openShipmentDialog(${x.id})">${x.tracking_no?'更新物流':'发货'}</button>`;
   /* 履约链路按后端下发的拣货进展渲染唯一「下一步」：
      未建拣货任务 → 创建拣货；拣货中 → 去仓储 WMS 完成拣货；已拣货未打包 → 完成打包；已打包 → 标签。
-     （打包有服务端前置校验：拣货未完成时提交会被 409「请先完成拣货核对」，所以不给未拣货的行放打包按钮。） */
+     （打包有服务端前置校验：拣货未完成时提交会被 409「请先完成拣货核对」，所以不给未拣货的行放打包按钮。）
+     纯外部订单（PEAKTRACE 代发）货不进本地仓：不给拣货/发货按钮，只显示供应商进度 + 同步按钮。 */
   let fulfill;
-  if(x.picked)fulfill='<span class="tag">已打包</span>';
-  else if(x.pickState==='picked')fulfill=`<button class="btn ghost" onclick="packOrder(${x.id})">完成打包</button>`;
-  else if(x.pickState==='pending')fulfill=`<span class="tag orange">拣货中</span><button class="btn ghost" onclick="gotoWarehousePick()">去完成拣货</button>`;
-  else fulfill=`<button class="btn ghost ux-pick-action" onclick="createPick(${x.id})">创建拣货</button>`;
+  if(pure){
+    const waitSync=!x.externalFulfillment||x.externalFulfillment.fulfillStatus==='awaiting_shipment';
+    fulfill=externalChip(x)+(waitSync?`<button class="btn ghost" onclick="syncExternalFulfillment(${x.id})">同步供应商状态</button>`:'');
+  }else{
+    if(x.picked)fulfill='<span class="tag">已打包</span>';
+    else if(x.pickState==='picked')fulfill=`<button class="btn ghost" onclick="packOrder(${x.id})">完成打包</button>`;
+    else if(x.pickState==='pending')fulfill=`<span class="tag orange">拣货中</span><button class="btn ghost" onclick="gotoWarehousePick()">去完成拣货</button>`;
+    else fulfill=`<button class="btn ghost ux-pick-action" onclick="createPick(${x.id})">创建拣货</button>`;
+    fulfill+=externalChip(x);
+  }
   return `<tr data-order-id="${x.id}" data-status="${esc(x.status)}"><td>#${x.id}</td><td>${esc(x.source_club)}</td><td>${esc(x.buyer)}${x.buyer_phone?`<div class="sub">${esc(x.buyer_phone)}</div>`:''}</td>`
     +`<td>${x.shipping_consignee?esc(x.shipping_consignee)+(x.shipping_phone?' '+esc(x.shipping_phone):'')+(x.shipping_address?'<div class="sub">'+esc(x.shipping_address)+'</div>':''):'<span class="sub">历史订单无地址</span>'}</td>`
     +`<td>${money(x.total)}</td><td><span class="tag ${x.status==='paid'?'orange':''}">${esc(enumCn(x.status))}</span></td>`

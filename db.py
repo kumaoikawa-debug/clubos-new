@@ -452,6 +452,28 @@ def _run_compat_migrations(c):
         snapshot_json TEXT, error TEXT,
         FOREIGN KEY(mapping_id) REFERENCES external_product_mappings(id) ON DELETE CASCADE)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_external_sync_logs_mapping ON external_inventory_sync_logs(mapping_id,synced_at)')
+    # 外部履约桥（2026-11-06）：PEAKTRACE 等外部品牌「代发货」订单的桥接表。
+    # 镜像方案（peaktrace_catalog）只同步了目录与库存，订单层此前零集成：顾客买了
+    # PEAKTRACE 商品后两边各扣各库存、没人发货。本表把需要供应商发货的订单挂起来：
+    # 支付成功建记录（pending）→ 自动推上游（pushed）→ 上游发货回传（shipped/delivered）。
+    # 一个订单只有一条履约记录（UNIQUE order_id），幂等由 ON CONFLICT 保证。
+    c.execute('''CREATE TABLE IF NOT EXISTS external_fulfillment_orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL UNIQUE,
+        brand_id INTEGER,
+        external_order_id TEXT,
+        push_status TEXT NOT NULL DEFAULT 'pending',
+        push_attempts INTEGER NOT NULL DEFAULT 0,
+        push_error TEXT,
+        pushed_at TEXT,
+        fulfill_status TEXT NOT NULL DEFAULT 'awaiting_shipment',
+        carrier TEXT, tracking_no TEXT,
+        payload_json TEXT,
+        last_pull_at TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(order_id) REFERENCES gear_orders(id) ON DELETE CASCADE)''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_effo_push ON external_fulfillment_orders(push_status,fulfill_status,id)')
     # 进销存 V1.1（2026-10-31）：采购拒收/异常登记（任务书 4.2③）。
     # 未到货量公式 = ordered - received - rejected：异常量不参与未到货，采购单才能正常收完。
     c.execute('''CREATE TABLE IF NOT EXISTS purchase_order_exceptions (

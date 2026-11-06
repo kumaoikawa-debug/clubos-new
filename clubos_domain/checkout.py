@@ -448,6 +448,13 @@ class CheckoutEngine:
         if self.benefits:
             self.benefits.consume_vouchers(c,intent_id=intent['id'],order_kind='gear',order_id=oid)
         c.execute('INSERT INTO commission_ledger(club_id,order_id,amount,status) VALUES(?,?,?,?)',(intent['club_id'],oid,commission,'pending'))
+        # 外部履约桥（2026-11-06）：含外部品牌（PEAKTRACE 镜像）明细的订单在这里挂
+        # 履约记录 —— 只落库，推送上游交给 auto loop / 手动同步，网络调用绝不进支付事务。
+        try:
+            from . import external_fulfillment
+            external_fulfillment.create_for_gear_order(c, oid)
+        except Exception:
+            logger.warning('external fulfillment record failed for gear order %s', oid, exc_info=True)
         earned=self.points.earn_gear_points(c,user_id=int(intent['user_id']),gear_order_id=oid,cash_paid=float(intent['cash_amount']))
         reward=int(float(intent['cash_amount'])/1000*int(self.setting('mall_ai_reward_per_1000_gmv',20)))
         if reward>0:
