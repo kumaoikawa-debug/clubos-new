@@ -1833,3 +1833,27 @@ CREATE TABLE IF NOT EXISTS platform_notice_reads (
   last_event_id INTEGER NOT NULL DEFAULT 0,
   read_at TEXT
 );
+
+-- ==========================================================================
+-- PEAKTRACE 销售结账单 · 出账审计留痕（2026-11-06 / #638）
+-- 财务对账要求「谁、在什么时候、按什么口径、导出了哪一份账单」可追溯：
+-- 每次下载 CSV / 打印 / 出具账单 / 批量标记结算状态都落一条，含账期、筛选
+-- 条件快照、笔数与金额合计。只增不改，供对账争议时回溯。
+-- 与 platform_notice_* 同理放 schema.sql：init_db 的 executescript 最先执行，
+-- 存量库命中「已有 clubs 提前 return」也不会漏建表。
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS pk_settlement_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  action TEXT NOT NULL,              -- export / print / issue / mark
+  statement_no TEXT,                 -- 账单号（同一账期+筛选口径稳定不变）
+  period_from TEXT,
+  period_to TEXT,
+  filters_json TEXT,                 -- 出账时的完整筛选条件快照
+  order_count INTEGER NOT NULL DEFAULT 0,
+  external_subtotal REAL NOT NULL DEFAULT 0,
+  payable REAL NOT NULL DEFAULT 0,
+  operator TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pksa_created ON pk_settlement_audit(created_at,id);

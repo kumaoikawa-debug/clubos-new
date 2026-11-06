@@ -1,4 +1,4 @@
-navInit();window.onView=v=>{if(v==='clubs')loadClubs();if(v==='pcredits')loadCredits();if(v==='ppoints')loadPointPolicy();if(v==='pbenefits'){try{loadPlatformCoupons()}catch(e){}}if(v==='products'){loadProducts();loadVisibilityRequests()}if(v==='supply')loadSupplyChain();if(v==='warehouse')loadWarehouse();if(v==='finance')loadFinance();if(v==='analytics'){loadAnalytics();loadPendingListing()}if(v==='orders')loadOrders();if(v==='aftersales')loadAfterSales();if(v==='commissions')loadCommissions()};
+navInit();window.onView=v=>{if(v==='clubs')loadClubs();if(v==='pcredits')loadCredits();if(v==='ppoints')loadPointPolicy();if(v==='pbenefits'){try{loadPlatformCoupons()}catch(e){}}if(v==='products'){loadProducts();loadVisibilityRequests()}if(v==='supply')loadSupplyChain();if(v==='warehouse')loadWarehouse();if(v==='finance')loadFinance();if(v==='analytics'){loadAnalytics();loadPendingListing()}if(v==='orders')loadOrders();if(v==='aftersales')loadAfterSales();if(v==='commissions')loadCommissions();if(v==='pksettle')loadPeaktraceSettlement()};
 /* logo 裂图兜底用事件委托绑一次（俱乐部表整块重渲染，逐个绑 onerror 会漏）。 */
 document.addEventListener('error',platLogoFallback,true);
 async function dash(){let d=await api('/api/platform/dashboard'),ai=d.aiBilling||{};$('#pMetrics').innerHTML=[['入驻俱乐部',d.clubs],['活跃俱乐部',d.activeClubs],['本月积分收入',money(ai.cashRevenueCny||0)],['装备GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');loadPlatformAttention()}
@@ -552,33 +552,333 @@ async function syncExternalFulfillment(){
     loadOrders();
   }catch(e){showAlert({title:'同步失败',message:e.message})}
 }
-/* PEAKTRACE 结算清单（2026-11-06）：clubos ↔ PEAKTRACE 货品结算凭据。 */
-async function loadPeaktraceSettlement(){
-  try{
-    const r=await api('/api/platform/external-fulfillment/settlement');
-    const orders=(r&&r.orders)||[];
-    const t=(r&&r.totals)||{count:0,externalSubtotal:0,payable:0};
-    $('#pksettleMetrics').innerHTML=`
-      <div class="stat"><div class="stat__v">${orders.length}</div><div class="stat__k">代发订单数</div></div>
-      <div class="stat"><div class="stat__v">¥${Number(t.externalSubtotal||0).toFixed(2)}</div><div class="stat__k">外部零售小计</div></div>
-      <div class="stat"><div class="stat__v">¥${Number(t.payable||0).toFixed(2)}</div><div class="stat__k">应付 PEAKTRACE</div></div>
-      <div class="stat"><div class="stat__v">${(r&&r.rate!=null)?Number(r.rate).toFixed(2):'1.00'}</div><div class="stat__k">当前结算比例</div></div>`;
-    $('#pksettleRows').innerHTML=orders.map(x=>{
-      const items=(x.items||[]).map(i=>`<div class="sub">${(i.sku||'-')} · ${esc(i.name||'')} × ${i.quantity||0}</div>`).join('')||'<span class="sub">—</span>';
-      const pushSt=x.pushStatus==='failed'?'<span class="tag orange">失败</span>':x.pushStatus==='pushed'?'已推送':'待推送';
-      const fulSt=x.fulfillStatus==='delivered'?'<span class="tag">已妥投</span>':x.fulfillStatus==='shipped'?'已发货':'待发货';
-      const time=`${x.pushedAt?esc(x.pushedAt.slice(0,10)):'-'} / ${x.fulfilledAt?esc(x.fulfilledAt.slice(0,10)):'-'}`;
-      return `<tr><td>#${x.orderId}${x.club?`<div class="sub">${esc(x.club)}</div>`:''}</td>
-        <td>${x.externalOrderId?esc(x.externalOrderId):'<span class="sub">未回写</span>'}</td>
-        <td>${esc(x.brand||'PEAKTRACE')}</td>
-        <td>${items}</td>
-        <td>¥${Number(x.externalSubtotal||0).toFixed(2)}</td>
-        <td>${Number(x.settlementRate||1).toFixed(2)}</td>
-        <td><b>¥${Number(x.payable||0).toFixed(2)}</b></td>
-        <td>${pushSt}</td><td>${fulSt}</td><td>${time}</td></tr>`;
-    }).join('')||'<tr><td colspan="10" class="sub" style="text-align:center;padding:18px">暂无 PEAKTRACE 代发订单</td></tr>';
-  }catch(e){showAlert({title:'加载失败',message:e.message})}
+/* ==========================================================================
+   PEAKTRACE 销售结账单（2026-11-06 / #640）
+   v1 只有「刷新」按钮 + 全量流水表；v2 是按账期出具的财务对账单：
+   筛选 / 分组 / 可结算口径 / 批量结算 / CSV 下载 / A4 打印 / 出账留痕。
+   所有 inline onclick 用到的函数都显式挂到 window，避免被后续脚本覆盖。
+   ========================================================================== */
+var pkState={data:null,selected:{},loading:false};
+function pkS(v){return v==null?'':String(v)}
+function pkY(v){return '¥'+Number(v||0).toFixed(2)}
+function pkEl(id){return document.getElementById(id)}
+function pkVal(id){var e=pkEl(id);return e?String(e.value||'').trim():''}
+function pkChecked(id){var e=pkEl(id);return !!(e&&e.checked)}
+function pkCut(v,n){v=pkS(v);return v.length>n?v.slice(0,n)+'…':v}
+
+function pkFilterParams(){
+  return {date_from:pkVal('pkDateFrom'),date_to:pkVal('pkDateTo'),
+    date_by:pkVal('pkDateBy')||'order',group_by:pkVal('pkGroupBy')||'none',
+    brand:pkVal('pkBrand'),club:pkVal('pkClub'),
+    settle_status:pkVal('pkSettleStatus')||'all',
+    fulfill_status:pkVal('pkFulfillStatus')||'all',
+    push_status:pkVal('pkPushStatus')||'all',q:pkVal('pkQ'),
+    min_amount:pkVal('pkMinAmount'),max_amount:pkVal('pkMaxAmount'),
+    billable:pkChecked('pkBillable')?'1':''};
 }
+function pkQuery(p){
+  var out=[];
+  Object.keys(p||{}).forEach(function(k){
+    var v=p[k];
+    if(v!==''&&v!==null&&v!==undefined)out.push(encodeURIComponent(k)+'='+encodeURIComponent(v));
+  });
+  return out.join('&');
+}
+function pkFillSelect(id,items,allLabel,allValue,keep){
+  var el=pkEl(id);if(!el)return;
+  var old=keep?el.value:'';
+  var html='<option value="'+esc(allValue)+'">'+esc(allLabel)+'</option>';
+  (items||[]).forEach(function(o){
+    var v=(typeof o==='string')?o:pkS(o.value);
+    var l=(typeof o==='string')?o:pkS(o.label);
+    /* dateBy/groupBy 的枚举首项本来就是默认值，别再重复插一个同 value 的「全部」项，
+       否则 select 里出现两个 none / 两个 order，用户看着像筛选坏了。 */
+    if(v===allValue)return;
+    html+='<option value="'+esc(v)+'">'+esc(l)+'</option>';
+  });
+  el.innerHTML=html;
+  if(keep&&old)el.value=old;
+}
+function pkSyncOptions(f,keep){
+  if(!f)return;
+  pkFillSelect('pkDateBy',f.dateBy,'按下单日','order',keep);
+  pkFillSelect('pkGroupBy',f.groupBy,'不分组','none',keep);
+  pkFillSelect('pkBrand',f.brands,'全部品牌','',keep);
+  pkFillSelect('pkClub',f.clubs,'全部俱乐部','',keep);
+  pkFillSelect('pkSettleStatus',f.settleStatuses,'全部结算状态','all',keep);
+  pkFillSelect('pkFulfillStatus',f.fulfillStatuses,'全部履约状态','all',keep);
+  pkFillSelect('pkPushStatus',f.pushStatuses,'全部推送状态','all',keep);
+}
+function pkDateStr(r,by){
+  var v=by==='pushed'?r.pushedAt:(by==='fulfilled'?r.fulfilledAt:r.orderCreated);
+  return pkS(v).slice(0,10);
+}
+function pkStatusTag(x){
+  var cls=x.settleStatus==='settled'?'is-done':x.settleStatus==='void'?'is-muted':'is-warn';
+  return '<span class="plat-pk-tag '+cls+'">'+esc(x.settleStatusCn||'待结算')+'</span>';
+}
+function pkPushTag(x){
+  var cls=x.pushStatus==='failed'?'is-bad':x.pushStatus==='pushed'?'':'is-muted';
+  return '<span class="plat-pk-tag '+cls+'">'+esc(x.pushStatusCn||'-')+'</span>';
+}
+function pkFulfillTag(x){
+  var cls=x.fulfillStatus==='delivered'?'is-done':x.fulfillStatus==='shipped'?'':'is-muted';
+  return '<span class="plat-pk-tag '+cls+'">'+esc(x.fulfillStatusCn||'-')+'</span>';
+}
+
+async function loadPeaktraceSettlement(){
+  if(pkState.loading)return;
+  pkState.loading=true;
+  try{
+    var qs=pkQuery(pkFilterParams());
+    var r=await api('/api/platform/external-fulfillment/settlement'+(qs?'?'+qs:''));
+    pkState.data=r||{};
+    pkState.selected={};
+    pkSyncOptions(pkState.data.filters,true);
+    pkRender(pkState.data);
+  }catch(e){showAlert({title:'加载失败',message:e.message})}
+  finally{pkState.loading=false}
+}
+
+function pkRender(r){
+  var st=r.statement||{},t=r.totals||{},orders=r.orders||[],by=(r.applied&&r.applied.date_by)||'order';
+  pkEl('pkStatementHead').innerHTML=
+    '<div class="plat-pk-statement__top"><div><div class="plat-pk-statement__no">'+esc(pkS(st.no))+'</div>'+
+      '<div class="plat-pk-statement__title">'+esc(pkS(st.title||'PEAKTRACE 销售结账单'))+' · '+esc(pkS(st.currency||'CNY'))+'</div></div>'+
+      '<div class="plat-pk-statement__stamp">生成时间 '+esc(pkS(st.generatedAt))+'<br>日期口径 '+esc(pkS(st.dateByCn))+' · 分组 '+esc(pkS(st.groupByCn))+'</div></div>'+
+    '<div class="plat-pk-statement__grid">'+
+      '<div><b>付款方</b><span>'+esc(pkS(st.payer))+'</span></div>'+
+      '<div><b>收款方</b><span>'+esc(pkS(st.payee))+'</span></div>'+
+      '<div><b>账期</b><span>'+esc(pkS(st.periodFrom)||'不限')+' ~ '+esc(pkS(st.periodTo)||'不限')+'</span></div>'+
+      '<div><b>全局结算比例</b><span>'+Number(st.rate||1).toFixed(2)+'（品牌专属比例优先）</span></div>'+
+    '</div>'+
+    '<div class="plat-pk-statement__desc">筛选口径：'+esc(pkS(st.filterDesc)||'全部代发订单')+'</div>';
+
+  pkEl('pksettleMetrics').innerHTML=
+    '<div class="stat"><div class="stat__v">'+Number(t.count||0)+'</div><div class="stat__k">本账单笔数 · '+Number(t.quantity||0)+' 件</div></div>'+
+    '<div class="stat"><div class="stat__v">'+pkY(t.externalSubtotal)+'</div><div class="stat__k">外部零售小计</div></div>'+
+    '<div class="stat"><div class="stat__v">'+pkY(t.pendingPayable)+'</div><div class="stat__k">本期可结算（未结）· '+Number(t.billableCount||0)+' 笔</div></div>'+
+    '<div class="stat"><div class="stat__v">'+pkY(t.settledPayable)+'</div><div class="stat__k">累计已结算</div></div>';
+
+  pkEl('pkRowCount').textContent='共 '+orders.length+' 行 · 可结算 '+Number(t.billableCount||0)+' 行';
+  pkEl('pksettleRows').innerHTML=orders.map(function(x){
+    var items=(x.items||[]).map(function(i){
+      return '<div class="plat-pk-item">'+esc(pkCut(i.sku||'-',26))+' · '+esc(pkCut(i.name||'',28))+
+        '<br><i>'+pkY(i.unitPrice)+' × '+Number(i.quantity||0)+' = '+pkY(i.subtotal)+'</i></div>';
+    }).join('')||'<span class="sub">无外部商品明细</span>';
+    var anom=(x.anomalies||[]).length?'<div class="plat-pk-anom">⚠ '+esc(x.anomalies.join('；'))+'</div>':'';
+    var reason=(!x.billable&&(x.blockedReasons||[]).length)?'<div class="plat-pk-reason">不可结算：'+esc(x.blockedReasons.join('；'))+'</div>':'';
+    var ship=x.fulfilledAt?pkS(x.fulfilledAt).slice(0,10):(x.pushedAt?pkS(x.pushedAt).slice(0,10):'-');
+    var logistics=(x.carrier?esc(x.carrier)+' ':'')+(x.trackingNo?esc(x.trackingNo):'');
+    return '<tr>'+
+      '<td><input type="checkbox" data-pk-id="'+Number(x.orderId)+'" onchange="pkSelectOne('+Number(x.orderId)+',this.checked)"></td>'+
+      '<td class="plat-pk-cell"><div class="plat-pk-id">#'+Number(x.orderId)+'</div>'+
+        '<div class="sub">'+esc(pkCut(x.externalRef||'无渠道单号',30))+'</div>'+
+        '<div class="sub">'+esc(pkCut(x.externalOrderId||'未回写上游单号',30))+'</div>'+
+        '<div class="sub">账期 '+esc(pkDateStr(x,by)||'-')+'</div></td>'+
+      '<td class="plat-pk-cell">'+esc(x.club||'未归属俱乐部')+'<div class="sub">'+esc(x.buyer||'-')+'</div>'+
+        '<div class="sub">'+esc(x.brand||'PEAKTRACE')+'</div></td>'+
+      '<td>'+items+'</td>'+
+      '<td class="plat-pk-num">'+Number(x.quantity||0)+'</td>'+
+      '<td class="plat-pk-num">'+pkY(x.externalSubtotal)+'</td>'+
+      '<td class="plat-pk-num">'+Number(x.settlementRate||1).toFixed(2)+
+        '<div class="sub">'+(x.settlementRateSource==='brand'?'品牌专属':'全局默认')+'</div></td>'+
+      '<td class="plat-pk-pay">'+pkY(x.payable)+'</td>'+
+      '<td>'+pkStatusTag(x)+(x.settledAt?'<div class="sub">'+esc(pkS(x.settledAt).slice(0,10))+'</div>':'')+
+        (x.settleNote?'<div class="sub">'+esc(pkCut(x.settleNote,18))+'</div>':'')+
+        (x.billable?'':'<div class="plat-pk-reason">不计入本期</div>')+'</td>'+
+      '<td class="plat-pk-cell">'+pkPushTag(x)+' '+pkFulfillTag(x)+
+        '<div class="sub">妥投/推送 '+esc(ship)+'</div>'+
+        (logistics?'<div class="sub">'+logistics+'</div>':'')+anom+reason+'</td></tr>';
+  }).join('')||'<tr><td colspan="10" class="sub" style="text-align:center;padding:22px">当前筛选下没有 PEAKTRACE 代发订单</td></tr>';
+  var ca=pkEl('pkCheckAll');if(ca)ca.checked=false;
+  pkUpdateSelectionHint();
+
+  var groups=r.groups||[];
+  pkEl('pkGroups').innerHTML=groups.length?
+    ('<div class="plat-pk-tablewrap__cap">分组小计 · '+esc(pkS(st.groupByCn)||'')+'</div><div class="plat-pk-subgrid">'+
+      groups.map(function(g){
+        return '<div class="plat-pk-subcard"><b>'+esc(g.key)+'</b>'+
+          '<div>'+Number(g.count)+' 笔 · '+Number(g.quantity)+' 件</div>'+
+          '<div>零售小计 '+pkY(g.externalSubtotal)+' / 应付 '+pkY(g.payable)+'</div>'+
+          '<div>其中可结算 '+pkY(g.billablePayable)+'</div></div>';
+      }).join('')+'</div>'):
+    '<div class="plat-pk-subgrid"><div class="sub">未启用分组小计。可在筛选面板选「按品牌 / 俱乐部 / 日期 / 结算状态」后点查询。</div></div>';
+
+  pkEl('pkTotals').innerHTML='<div class="plat-pk-total__row"><div class="plat-pk-total__box">'+
+    '<div>流水应付合计<strong>'+pkY(t.payable)+'</strong></div>'+
+    '<div>本期可结算（未结）<strong>'+pkY(t.pendingPayable)+'</strong></div>'+
+    '<div>累计已结算<strong>'+pkY(t.settledPayable)+'</strong></div>'+
+    '<div>已冲销<strong>'+pkY(t.voidPayable)+'</strong></div></div>'+
+    '<div class="plat-pk-total__words">本期应付大写：'+esc(pkS(st.payableInWords))+'</div></div>';
+}
+
+function pkUpdateSelectionHint(){
+  var n=Object.keys(pkState.selected).filter(function(k){return pkState.selected[k]}).length;
+  var el=pkEl('pkSelectionHint');if(el)el.textContent='已选 '+n+' 笔';
+}
+function pkSelectOne(id,on){pkState.selected[id]=!!on;pkUpdateSelectionHint()}
+function pkToggleAll(on){
+  document.querySelectorAll('#pksettleRows input[data-pk-id]').forEach(function(cb){
+    cb.checked=!!on;pkState.selected[cb.getAttribute('data-pk-id')]=!!on;
+  });
+  pkUpdateSelectionHint();
+}
+function pkApplyFilters(){return loadPeaktraceSettlement()}
+function pkResetFilters(){
+  ['pkDateFrom','pkDateTo','pkQ','pkMinAmount','pkMaxAmount'].forEach(function(id){var e=pkEl(id);if(e)e.value=''});
+  var e=pkEl('pkBillable');if(e)e.checked=false;
+  ['pkDateBy','pkGroupBy','pkBrand','pkClub','pkSettleStatus','pkFulfillStatus','pkPushStatus'].forEach(function(id){
+    var x=pkEl(id);if(x)x.selectedIndex=0;
+  });
+  return loadPeaktraceSettlement();
+}
+function pkISO(d){var m=d.getMonth()+1,day=d.getDate();return d.getFullYear()+'-'+(m<10?'0':'')+m+'-'+(day<10?'0':'')+day}
+function pkQuickPeriod(kind){
+  var from=pkEl('pkDateFrom'),to=pkEl('pkDateTo');if(!from||!to)return;
+  var now=new Date(),a,b;
+  if(kind==='all'){a=b=null}
+  else if(kind==='month'){a=new Date(now.getFullYear(),now.getMonth(),1);b=new Date(now.getFullYear(),now.getMonth()+1,0)}
+  else if(kind==='lastmonth'){a=new Date(now.getFullYear(),now.getMonth()-1,1);b=new Date(now.getFullYear(),now.getMonth(),0)}
+  else{b=new Date(now);a=new Date(now.getTime()-29*86400000)}
+  from.value=a?pkISO(a):'';to.value=b?pkISO(b):'';
+  return loadPeaktraceSettlement();
+}
+
+async function pkDownload(){
+  var qs=pkQuery(pkFilterParams());
+  try{
+    var resp=await fetch('/api/platform/external-fulfillment/settlement/export'+(qs?'?'+qs:''),{credentials:'same-origin'});
+    if(!resp.ok)throw new Error('HTTP '+resp.status);
+    var blob=await resp.blob();
+    var no=(pkState.data&&pkState.data.statement&&pkState.data.statement.no)||'bill';
+    var a=document.createElement('a');
+    a.href=URL.createObjectURL(blob);
+    a.download='PEAKTRACE销售结账单_'+no+'.csv';
+    document.body.appendChild(a);a.click();
+    setTimeout(function(){URL.revokeObjectURL(a.href);if(a.parentNode)a.parentNode.removeChild(a)},1500);
+    toast('账单 CSV 已下载，出账记录已留痕');
+  }catch(e){showAlert({title:'下载失败',message:e.message})}
+}
+
+function pkPrintRows(d){
+  var by=(d.applied&&d.applied.date_by)||'order';
+  return (d.orders||[]).map(function(x,n){
+    var items=(x.items||[]).map(function(i){
+      return esc(pkS(i.sku))+' '+esc(pkS(i.name))+' '+pkY(i.unitPrice)+'×'+Number(i.quantity||0)+'='+pkY(i.subtotal);
+    }).join('；')||'—';
+    return '<tr><td class="num">'+(n+1)+'</td>'+
+      '<td>#'+Number(x.orderId)+'<br>'+esc(pkS(x.externalRef))+'<br>'+esc(pkS(x.externalOrderId))+'</td>'+
+      '<td class="nowrap">'+esc(pkDateStr(x,by)||'-')+'</td>'+
+      '<td>'+esc(pkS(x.club))+'<br>'+esc(pkS(x.buyer))+'</td>'+
+      '<td class="nowrap">'+esc(pkS(x.brand))+'</td>'+
+      '<td>'+items+'</td>'+
+      '<td class="num">'+Number(x.quantity||0)+'</td>'+
+      '<td class="num">'+pkY(x.externalSubtotal)+'</td>'+
+      '<td class="num">'+Number(x.settlementRate||1).toFixed(2)+'</td>'+
+      '<td class="num">'+pkY(x.payable)+'</td>'+
+      '<td>'+esc(pkS(x.settleStatusCn))+'</td>'+
+      '<td>'+esc(pkS(x.fulfillStatusCn))+'<br>'+esc(pkS(x.carrier))+' '+esc(pkS(x.trackingNo))+'</td></tr>';
+  }).join('');
+}
+function pkPrintHtml(d){
+  var st=d.statement||{},t=d.totals||{},groups=d.groups||[];
+  var gh='';
+  if(groups.length){
+    gh='<div class="pk-print__groups"><b>分组小计（'+esc(pkS(st.groupByCn))+'）</b><table><thead><tr>'+
+      '<th>分组</th><th class="num">笔数</th><th class="num">件数</th><th class="num">零售小计</th>'+
+      '<th class="num">应付</th><th class="num">其中可结算</th></tr></thead><tbody>'+
+      groups.map(function(g){return '<tr><td>'+esc(g.key)+'</td><td class="num">'+Number(g.count)+'</td>'+
+        '<td class="num">'+Number(g.quantity)+'</td><td class="num">'+pkY(g.externalSubtotal)+'</td>'+
+        '<td class="num">'+pkY(g.payable)+'</td><td class="num">'+pkY(g.billablePayable)+'</td></tr>'}).join('')+
+      '</tbody></table></div>';
+  }
+  return '<div class="pk-print">'+
+    '<div class="pk-print__title">PEAKTRACE 销售结账单</div>'+
+    '<div class="pk-print__no">账单号 '+esc(pkS(st.no))+'　·　币种 '+esc(pkS(st.currency))+'　·　生成时间 '+esc(pkS(st.generatedAt))+'</div>'+
+    '<div class="pk-print__meta">'+
+      '<div><b>付款方：</b>'+esc(pkS(st.payer))+'</div>'+
+      '<div><b>收款方：</b>'+esc(pkS(st.payee))+'</div>'+
+      '<div><b>账期：</b>'+esc(pkS(st.periodFrom)||'不限')+' ~ '+esc(pkS(st.periodTo)||'不限')+'</div>'+
+      '<div><b>日期口径：</b>'+esc(pkS(st.dateByCn))+'</div>'+
+      '<div><b>结算比例：</b>'+Number(st.rate||1).toFixed(2)+'（品牌专属优先）</div>'+
+    '</div>'+
+    '<div class="pk-print__desc">筛选口径：'+esc(pkS(st.filterDesc))+'　｜　口径说明：仅「已推送供应商 + 上游已妥投 + 主订单已发货 + 未退款/未冲销」计入本期可结算。</div>'+
+    '<table><colgroup><col style="width:3%"><col style="width:13%"><col style="width:8%"><col style="width:9%">'+
+      '<col style="width:8%"><col style="width:20%"><col style="width:4%"><col style="width:7%">'+
+      '<col style="width:4%"><col style="width:8%"><col style="width:6%"><col style="width:10%"></colgroup>'+
+      '<thead><tr><th class="num">序</th><th>单号 / 渠道单号 / 上游单号</th><th>账期日期</th><th>俱乐部 / 买家</th>'+
+      '<th>品牌</th><th>商品明细（SKU·名称·单价×数量=小计）</th><th class="num">件数</th>'+
+      '<th class="num">零售小计</th><th class="num">比例</th><th class="num">应付</th><th>结算</th><th>履约 / 物流</th></tr></thead>'+
+      '<tbody>'+(pkPrintRows(d)||'<tr><td colspan="12" style="text-align:center">本账期无结算明细</td></tr>')+'</tbody></table>'+
+    '<div class="pk-print__sum">本账单 '+Number(t.count||0)+' 笔 / '+Number(t.quantity||0)+' 件　·　外部零售小计 '+pkY(t.externalSubtotal)+
+      '　·　流水应付合计 '+pkY(t.payable)+'　·　<b>本期可结算（未结）'+pkY(t.pendingPayable)+'</b>　·　累计已结算 '+pkY(t.settledPayable)+
+      '<br>本期应付金额大写：<b>'+esc(pkS(st.payableInWords))+'</b></div>'+gh+
+    '<div class="pk-print__sign"><div>制表（ClubOS 财务）：</div><div>复核：</div>'+
+      '<div>付款方确认（ClubOS）：</div><div>收款方确认（PEAKTRACE）：</div><div>结算日期：　　年　　月　　日</div></div>'+
+    '<div class="pk-print__foot"><span>本账单由 ClubOS 总平台按选定账期与筛选口径自动生成，双方各执一份作为货品结算凭据。</span>'+
+      '<span>账单号 '+esc(pkS(st.no))+'</span></div></div>';
+}
+function pkPrint(){
+  var d=pkState.data;
+  if(!d){toast('请先加载账单');return}
+  var area=pkEl('pkPrintArea');
+  if(!area){area=document.createElement('div');area.id='pkPrintArea';document.body.appendChild(area)}
+  area.innerHTML=pkPrintHtml(d);
+  document.body.classList.add('pk-printing');
+  var done=function(){document.body.classList.remove('pk-printing');window.removeEventListener('afterprint',done)};
+  window.addEventListener('afterprint',done);
+  /* 打印留痕走原生 fetch（fire-and-forget）：api() 会挂全局写忙碌遮罩，
+     打印瞬间若遮罩还在，可能被一起渲染进版面或打断打印对话框。 */
+  fetch('/api/platform/external-fulfillment/settlement/audit',{method:'POST',credentials:'same-origin',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:'print',filters:d.applied||{},note:'打印账单 '+(d.statement&&d.statement.no||'')})}).catch(function(){});
+  setTimeout(function(){window.print()},80);
+}
+async function pkIssue(){
+  var d=pkState.data;if(!d)return;
+  var t=d.totals||{};
+  if(!window.confirm('出具账单：将把当前筛选下「可结算且待结算」的 '+Number(t.billableCount||0)+' 笔（'+pkY(t.pendingPayable)+'）标记为已结算，并写入出账记录。确认继续？'))return;
+  try{
+    var r=await api('/api/platform/external-fulfillment/settlement/audit',{method:'POST',allowRepeat:true,
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action:'issue',filters:d.applied||{},note:'出具账单 '+(d.statement&&d.statement.no||'')})});
+    toast('账单已出具，'+(r.issued||0)+' 笔标记为已结算');
+    await loadPeaktraceSettlement();
+  }catch(e){showAlert({title:'出具失败',message:e.message})}
+}
+async function pkMark(status){
+  var ids=Object.keys(pkState.selected).filter(function(k){return pkState.selected[k]}).map(Number);
+  if(!ids.length){toast('请先勾选要标记的订单');return}
+  var label={settled:'已结算',void:'已冲销',pending:'撤销结算（回到待结算）'}[status]||status;
+  if(!window.confirm('确认把选中的 '+ids.length+' 笔标记为「'+label+'」？'))return;
+  try{
+    await api('/api/platform/external-fulfillment/settlement/mark',{method:'POST',allowRepeat:true,
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({orderIds:ids,status:status})});
+    toast('已标记 '+ids.length+' 笔为「'+label+'」');
+    await loadPeaktraceSettlement();
+  }catch(e){showAlert({title:'标记失败',message:e.message})}
+}
+async function pkLoadAudit(){
+  var box=pkEl('pkAuditList');if(!box)return;
+  try{
+    var r=await api('/api/platform/external-fulfillment/settlement/audit?limit=30');
+    var items=(r&&r.items)||[];
+    if(!items.length){box.innerHTML='<div class="sub" style="padding:6px 0">暂无出账记录。下载、打印或出具账单后会自动留痕。</div>';return}
+    box.innerHTML='<table class="table"><thead><tr><th>时间</th><th>动作</th><th>账单号</th><th>账期</th><th>笔数</th><th>应付</th><th>备注</th></tr></thead><tbody>'+
+      items.map(function(a){
+        return '<tr><td>'+esc(pkS(a.createdAt))+'</td><td>'+esc(pkS(a.actionCn))+'</td>'+
+          '<td>'+esc(pkS(a.statementNo))+'</td><td>'+esc(pkS(a.periodFrom)||'-')+' ~ '+esc(pkS(a.periodTo)||'-')+'</td>'+
+          '<td>'+Number(a.orderCount||0)+'</td><td>'+pkY(a.payable)+'</td><td>'+esc(pkS(a.note))+'</td></tr>';
+      }).join('')+'</tbody></table>';
+  }catch(e){box.innerHTML='<div class="sub">加载失败：'+esc(e.message)+'</div>'}
+}
+/* inline onclick 显式导出，避免后续脚本重定义同名全局 */
+window.pkApplyFilters=pkApplyFilters;window.pkResetFilters=pkResetFilters;
+window.pkQuickPeriod=pkQuickPeriod;window.pkDownload=pkDownload;window.pkPrint=pkPrint;
+window.pkIssue=pkIssue;window.pkMark=pkMark;window.pkToggleAll=pkToggleAll;
+window.pkSelectOne=pkSelectOne;window.pkLoadAudit=pkLoadAudit;
+window.loadPeaktraceSettlement=loadPeaktraceSettlement;
 function orderRowHtml(x){
   const pure=x.externalMode==='pure';
   const shipBtn=(x.status==='refunded'||pure)?'':`<button class="btn secondary" onclick="openShipmentDialog(${x.id})">${x.tracking_no?'更新物流':'发货'}</button>`;

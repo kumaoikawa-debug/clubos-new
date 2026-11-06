@@ -181,3 +181,9 @@ node tests/receipt_smoke.cjs
 # 顾客追问→待回复红点重现、领队/后台回复→顾客未读，以及图注脱离 grid 窄列、
 # 高亮块去装饰、多领队横滑/单领队专版、缓存版本号等前端静态护栏。自带临时库隔离。
 python tests/inquiry_thread_smoke.py
+
+# PEAKTRACE 销售结账单（2026-11-06 / #640）：守住「不许多付钱」的结算资格口径 ——
+# 推送失败 / 未妥投 / 妥投却无发货时间（#625 串单指纹）/ 已退款 / 已冲销一律
+# 不计入本期可结算；另验合计拆分、分组守恒、账单号稳定性与人民币大写。
+# 自带临时库隔离，不需要 CLUBOS_DB_PATH。
+python tests/pk_settlement_smoke.py

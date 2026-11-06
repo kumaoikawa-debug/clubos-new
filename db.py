@@ -482,6 +482,13 @@ def _run_compat_migrations(c):
     _ensure_column(c, 'external_fulfillment_orders', 'external_ref', 'external_ref TEXT')
     _ensure_column(c, 'external_fulfillment_orders', 'pull_error', 'pull_error TEXT')
     c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_effo_ref ON external_fulfillment_orders(external_ref)')
+    # 销售结账单（2026-11-06 / #638）：结算状态跟着履约记录走，不另建结算订单表
+    # （与「共享库存、不单独建仓」同一口径）。pending 待结算 / settled 已结算 / void 已冲销。
+    # 财务出账后把本批标成 settled，下期账单默认不再计入，避免重复付款。
+    _ensure_column(c, 'external_fulfillment_orders', 'settle_status', "settle_status TEXT NOT NULL DEFAULT 'pending'")
+    _ensure_column(c, 'external_fulfillment_orders', 'settled_at', 'settled_at TEXT')
+    _ensure_column(c, 'external_fulfillment_orders', 'settle_note', 'settle_note TEXT')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_effo_settle ON external_fulfillment_orders(settle_status,fulfilled_at)')
     # 售后单 ↔ PEAKTRACE 退换货同步状态（#618）
     _ensure_column(c, 'after_sales_cases', 'external_sync_status', 'external_sync_status TEXT')
     _ensure_column(c, 'after_sales_cases', 'external_sync_error', 'external_sync_error TEXT')

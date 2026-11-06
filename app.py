@@ -9316,63 +9316,485 @@ def platform_external_fulfillment_sync():
     return {'ok':True,'push':push,'pull':pull}
 
 
-@app.get('/api/platform/external-fulfillment/settlement')
-def platform_external_settlement():
-    """PEAKTRACE 结算清单（clubos ↔ PEAKTRACE 货品结算）。
+# ==========================================================================
+# PEAKTRACE 销售结账单（2026-11-06 / #638–#639）
+#
+# v1 只是「代发订单流水」：全量行一把梭，推送失败 / 还没发货的订单也被算进
+# 「应付 PEAKTRACE」，财务照着这张表付款会多付。v2 按真实财务对账单口径重做：
+#   · 账期：日期区间 + 日期基准（下单日 / 推送日 / 妥投日）。账单号由账期与
+#     筛选口径稳定派生，同一份账单可反复导出、引用、核对。
+#   · 可结算资格（billable）：已推送成功 + 上游已妥投 + 主订单确实发过货 +
+#     主订单未退款/售后。「妥投但 shipped_at 为空」正是 #625 串单的指纹，
+#     必须排除，否则会把旧单的妥投当成新单的结算依据。
+#   · 结算状态：pending 待结算 / settled 已结算 / void 已冲销。出账后批量
+#     标 settled，下期账单默认不再计入，避免重复付款。
+#   · 合计拆分：流水合计 vs 本期可结算（未结）vs 累计已结算；另有分组小计、
+#     人民币大写金额、金额构成（单价 × 数量）、异常标记，便于逐笔对账。
+#   · 出账审计：下载 / 打印 / 出具账单 / 标记状态都落 pk_settlement_audit，
+#     含账期与筛选条件快照，争议时可回溯。
+# 兼容：不带任何参数时仍返回 {rate, orders, totals}，旧调用方无感。
+# ==========================================================================
+PK_SETTLE_STATUSES = ('pending', 'settled', 'void')
+PK_SETTLE_CN = {'pending': '待结算', 'settled': '已结算', 'void': '已冲销'}
+PK_FULFILL_CN = {'awaiting_shipment': '待发货', 'shipped': '已发货', 'delivered': '已妥投'}
+PK_PUSH_CN = {'pending': '待推送', 'pushed': '已推送', 'failed': '推送失败'}
+PK_DATE_BY = {'order': '下单日', 'pushed': '推送日', 'fulfilled': '妥投日'}
+PK_GROUP_BY = {'none': '不分组', 'brand': '按品牌', 'club': '按俱乐部', 'date': '按日期',
+               'month': '按月份', 'settle_status': '按结算状态', 'fulfill_status': '按履约状态'}
+PK_AUDIT_CN = {'export': '下载 CSV', 'print': '打印账单', 'issue': '出具账单', 'mark': '标记结算状态'}
 
-    用户付款付到 clubos，PEAKTRACE 的款由 clubos 结算过来 —— 这份清单就是两边之间的
-    货品结算凭据：每一行 = 一笔已推给 PEAKTRACE 的代发订单，列出 clubos 订单号、上游
-    外部订单号、品牌、商品(SKU+名称+数量)、外部零售小计、推送/履约状态、发货与妥投时间，
-    以及按结算比例算出的「应付 PEAKTRACE」。结算比例优先取品牌 product_brands.settlement_ratio
-    （settlement_mode='sales_ratio' 且 >0 时生效），否则用全局 PEAKTRACE_SETTLEMENT_RATE
-    （默认 1.0）。
-    """
+
+def _pk_digits_cn(n):
+    """整数转中文大写（账单合计用），分段处理 万/亿/兆 与中间的零。"""
+    d = '零壹贰叁肆伍陆柒捌玖'
+    small = ['', '拾', '佰', '仟']
+    big = ['', '万', '亿', '兆']
+    if n <= 0:
+        return '零'
+    parts = []
+    x, gi = int(n), 0
+    while x > 0:
+        parts.append((x % 10000, gi)); x //= 10000; gi += 1
+    res = ''
+    for k in range(len(parts) - 1, -1, -1):
+        val, idx = parts[k]
+        seg, zero = '', False
+        for i, ch in enumerate(str(val).zfill(4)):
+            v = int(ch)
+            if v == 0:
+                zero = True
+            else:
+                if zero and seg: seg += '零'
+                seg += d[v] + small[3 - i]
+                zero = False
+        if seg:
+            if res and val < 1000: res += '零'
+            res += seg + big[idx]
+    return res or '零'
+
+
+def _rmb_upper(n):
+    """人民币金额大写，打印账单签字页与 CSV 抬头共用。"""
+    n = round(float(n or 0) + 1e-9, 2)
+    if n == 0:
+        return '零元整'
+    sign = '负' if n < 0 else ''
+    a = abs(n); yuan = int(a); cents = int(round((a - yuan) * 100))
+    jiao, fen = divmod(cents, 10)
+    d = '零壹贰叁肆伍陆柒捌玖'
+    s = sign + _pk_digits_cn(yuan) + '元'
+    if jiao == 0 and fen == 0: return s + '整'
+    if jiao == 0: return s + '零' + d[fen] + '分'
+    return s + d[jiao] + '角' + (d[fen] + '分' if fen else '整')
+
+
+def _pk_date_ok(v):
+    try:
+        date.fromisoformat(v); return True
+    except Exception:
+        return False
+
+
+def _pk_filters(params):
+    """把 query/body 归一化成筛选条件，非法值一律落回安全默认。"""
+    def s(k, d=''):
+        v = params.get(k, d)
+        return str(v if v is not None else '').strip()
+    def f(k):
+        try:
+            v = params.get(k, '')
+            return float(v) if str(v).strip() != '' else None
+        except (TypeError, ValueError):
+            return None
+    d = {'date_from': s('date_from'), 'date_to': s('date_to'),
+         'date_by': s('date_by', 'order') or 'order', 'brand': s('brand'), 'club': s('club'),
+         'settle_status': s('settle_status', 'all') or 'all',
+         'fulfill_status': s('fulfill_status', 'all') or 'all',
+         'push_status': s('push_status', 'all') or 'all', 'q': s('q'),
+         'min_amount': f('min_amount'), 'max_amount': f('max_amount'),
+         'group_by': s('group_by', 'none') or 'none',
+         'billable': str(s('billable')).lower() in ('1', 'true', 'yes')}
+    if d['date_by'] not in PK_DATE_BY: d['date_by'] = 'order'
+    if d['group_by'] not in PK_GROUP_BY: d['group_by'] = 'none'
+    for k, allowed in (('settle_status', PK_SETTLE_STATUSES),
+                       ('fulfill_status', tuple(PK_FULFILL_CN)),
+                       ('push_status', tuple(PK_PUSH_CN))):
+        if d[k] not in (*allowed, 'all'): d[k] = 'all'
+    if not _pk_date_ok(d['date_from']): d['date_from'] = ''
+    if not _pk_date_ok(d['date_to']): d['date_to'] = ''
+    return d
+
+
+def _pk_filter_desc(f):
+    """筛选条件的人话描述，写进 CSV 抬头和打印页，避免账单脱离口径。"""
+    parts = []
+    if f['date_from'] or f['date_to']:
+        parts.append('账期 %s ~ %s（%s）' % (f['date_from'] or '不限', f['date_to'] or '不限', PK_DATE_BY[f['date_by']]))
+    for k, label in (('brand', '品牌'), ('club', '俱乐部'), ('q', '关键词')):
+        if f[k]: parts.append('%s=%s' % (label, f[k]))
+    for k, label, cn in (('settle_status', '结算', PK_SETTLE_CN),
+                         ('fulfill_status', '履约', PK_FULFILL_CN),
+                         ('push_status', '推送', PK_PUSH_CN)):
+        if f[k] != 'all': parts.append('%s=%s' % (label, cn.get(f[k], f[k])))
+    if f['min_amount'] is not None or f['max_amount'] is not None:
+        parts.append('应付 %s ~ %s' % (f['min_amount'] if f['min_amount'] is not None else '不限',
+                                      f['max_amount'] if f['max_amount'] is not None else '不限'))
+    if f['billable']: parts.append('仅可结算')
+    return '；'.join(parts) or '全部代发订单'
+
+
+def _pk_date_of(r, by):
+    v = r['orderCreated'] if by == 'order' else (r['pushedAt'] if by == 'pushed' else r['fulfilledAt'])
+    return (v or '')[:10]
+
+
+def _pk_build(params):
+    """销售结账单唯一数据源：GET / export / 出具账单 / 审计全部走这里，口径不会漂。"""
+    f = _pk_filters(params)
     rate = float(os.environ.get('PEAKTRACE_SETTLEMENT_RATE', '1.0') or '1.0')
     with conn() as c:
-        rows_eff = rows(c.execute("""SELECT e.*, b.name brand_name, b.settlement_mode, b.settlement_ratio,
-                                           g.user_id, g.total, g.created_at order_created, u.name buyer, cl.name club_name
-                                    FROM external_fulfillment_orders e
-                                    LEFT JOIN product_brands b ON b.id=e.brand_id
-                                    LEFT JOIN gear_orders g ON g.id=e.order_id
-                                    LEFT JOIN users u ON u.id=g.user_id
-                                    LEFT JOIN clubs cl ON cl.id=g.source_club_id
-                                    ORDER BY e.id DESC"""))
-        out=[]; total_sub=0.0; total_pay=0.0
-        for e in rows_eff:
-            payload=jload(e.get('payload_json') or '{}', {})
-            items=payload.get('items') or []
-            # 外部零售小计：订单里属外部镜像商品的明细合计（clubos 实际代收金额）
-            ext_sub=0.0
-            for it in rows(c.execute("""SELECT i.unit_price, i.quantity, p.source, p.inventory_mode
-                                        FROM gear_order_items i JOIN products p ON p.id=i.product_id
-                                        WHERE i.order_id=?""", (int(e['order_id']),))):
-                is_ext = (it['source']=='external_api' or (it['inventory_mode'] or '') not in ('','platform_owned'))
-                if is_ext: ext_sub += float(it['unit_price'] or 0)*int(it['quantity'] or 0)
+        base = rows(c.execute("""SELECT e.*, b.name brand_name, b.settlement_mode, b.settlement_ratio,
+                                        g.user_id, g.total, g.created_at order_created, g.status order_status,
+                                        g.shipped_at, g.delivered_at, g.refunded_at, g.after_sales_status,
+                                        g.tracking_no order_tracking_no, g.carrier order_carrier,
+                                        u.name buyer, cl.name club_name
+                                 FROM external_fulfillment_orders e
+                                 LEFT JOIN product_brands b ON b.id=e.brand_id
+                                 LEFT JOIN gear_orders g ON g.id=e.order_id
+                                 LEFT JOIN users u ON u.id=g.user_id
+                                 LEFT JOIN clubs cl ON cl.id=g.source_club_id
+                                 ORDER BY e.id DESC"""))
+        allrows = []
+        for e in base:
+            oid = int(e['order_id'])
+            payload = jload(e.get('payload_json') or '{}', {})
+            pitems = payload.get('items') or []
+            psku = {}
+            for p in pitems:
+                psku.setdefault(str(p.get('name') or ''), str(p.get('sku') or ''))
+            # 金额一律以 gear_order_items 的成交单价 × 数量为真源；payload 只补上游 SKU。
+            dbitems = rows(c.execute("""SELECT i.unit_price,i.quantity,p.name product_name,p.source,p.inventory_mode
+                                         FROM gear_order_items i JOIN products p ON p.id=i.product_id
+                                         WHERE i.order_id=? ORDER BY i.id""", (oid,)))
+            items, ext_sub, qty = [], 0.0, 0
+            for it in dbitems:
+                is_ext = (it['source'] == 'external_api'
+                          or (it['inventory_mode'] or '') not in ('', 'platform_owned'))
+                if not is_ext:
+                    continue
+                up = float(it['unit_price'] or 0); qn = int(it['quantity'] or 0)
+                sub = round(up * qn, 2)
+                ext_sub += sub; qty += qn
+                nm = str(it['product_name'] or '')
+                sku = psku.get(nm, '')
+                if not sku and len(items) < len(pitems):
+                    sku = str(pitems[len(items)].get('sku') or '')
+                items.append({'sku': sku, 'name': nm, 'unitPrice': up,
+                              'quantity': qn, 'subtotal': sub})
             br = float(e.get('settlement_ratio') or 0)
-            use_ratio = (br if (e.get('settlement_mode')=='sales_ratio' and br>0) else rate)
-            payable = round(ext_sub*use_ratio, 2)
-            total_sub += ext_sub; total_pay += payable
-            out.append({
-                'orderId': e['order_id'],
-                'externalOrderId': e.get('external_order_id'),
-                'brand': e.get('brand_name') or 'PEAKTRACE',
-                'buyer': e.get('buyer') or '',
-                'club': e.get('club_name') or '',
-                'items': [{'sku': it.get('sku'), 'name': it.get('name'), 'quantity': it.get('quantity')} for it in items],
+            brand_mode = (e.get('settlement_mode') == 'sales_ratio' and br > 0)
+            use_ratio = br if brand_mode else rate
+            payable = round(ext_sub * use_ratio, 2)
+            settle_status = str(e.get('settle_status') or 'pending')
+            if settle_status not in PK_SETTLE_STATUSES: settle_status = 'pending'
+            fulfill_status = str(e.get('fulfill_status') or 'awaiting_shipment')
+            push_status = str(e.get('push_status') or 'pending')
+            order_status = str(e.get('order_status') or '')
+            # 可结算资格：四个硬条件，任一不满足都不该进入付款合计。
+            blocked = []
+            if push_status != 'pushed': blocked.append('未成功推送供应商')
+            if fulfill_status != 'delivered': blocked.append('上游未妥投')
+            if not (e.get('shipped_at') or ''): blocked.append('主订单无发货时间')
+            if order_status in ('refunded', 'cancelled', 'after_sales') or (e.get('refunded_at') or ''):
+                blocked.append('主订单已退款/售后')
+            if settle_status == 'void': blocked.append('已冲销')
+            anomalies = []
+            if push_status == 'failed': anomalies.append('推送失败')
+            if fulfill_status == 'delivered' and not (e.get('shipped_at') or ''):
+                anomalies.append('妥投但无发货时间（疑似串单）')
+            if e.get('pull_error'): anomalies.append('状态同步异常')
+            if not e.get('external_order_id'): anomalies.append('缺上游单号')
+            allrows.append({
+                'orderId': oid,
+                'externalRef': e.get('external_ref') or '',
+                'externalOrderId': e.get('external_order_id') or '',
+                'brand': e.get('brand_name') or 'PEAKTRACE', 'brandId': e.get('brand_id'),
+                'buyer': e.get('buyer') or '', 'club': e.get('club_name') or '',
+                'items': items, 'itemCount': len(items), 'quantity': qty,
                 'externalSubtotal': round(ext_sub, 2),
-                'pushStatus': e.get('push_status'),
-                'fulfillStatus': e.get('fulfill_status'),
-                'pushError': e.get('push_error'),
-                'pushedAt': e.get('pushed_at'),
-                'fulfilledAt': e.get('fulfilled_at'),
-                'updatedAt': e.get('updated_at'),
-                'orderCreated': e.get('order_created'),
                 'settlementRate': use_ratio,
+                'settlementRateSource': 'brand' if brand_mode else 'global',
                 'payable': payable,
+                'settleStatus': settle_status, 'settleStatusCn': PK_SETTLE_CN[settle_status],
+                'settledAt': e.get('settled_at') or '', 'settleNote': e.get('settle_note') or '',
+                'pushStatus': push_status, 'pushStatusCn': PK_PUSH_CN.get(push_status, push_status),
+                'fulfillStatus': fulfill_status, 'fulfillStatusCn': PK_FULFILL_CN.get(fulfill_status, fulfill_status),
+                'pushError': e.get('push_error') or '', 'pullError': e.get('pull_error') or '',
+                'carrier': e.get('carrier') or e.get('order_carrier') or '',
+                'trackingNo': e.get('tracking_no') or e.get('order_tracking_no') or '',
+                'pushedAt': e.get('pushed_at') or '', 'fulfilledAt': e.get('fulfilled_at') or '',
+                'shippedAt': e.get('shipped_at') or '', 'updatedAt': e.get('updated_at') or '',
+                'orderCreated': e.get('order_created') or '', 'orderStatus': order_status,
+                'billable': not blocked, 'blockedReasons': blocked, 'anomalies': anomalies,
             })
-    return {'rate': rate, 'orders': out,
-            'totals': {'count': len(out), 'externalSubtotal': round(total_sub,2), 'payable': round(total_pay,2)}}
+        q = f['q'].lower()
+        kept = []
+        for r in allrows:
+            if f['date_from'] or f['date_to']:
+                dv = _pk_date_of(r, f['date_by'])
+                if not dv: continue
+                if f['date_from'] and dv < f['date_from']: continue
+                if f['date_to'] and dv > f['date_to']: continue
+            if f['brand'] and r['brand'] != f['brand']: continue
+            if f['club'] and r['club'] != f['club']: continue
+            if f['settle_status'] != 'all' and r['settleStatus'] != f['settle_status']: continue
+            if f['fulfill_status'] != 'all' and r['fulfillStatus'] != f['fulfill_status']: continue
+            if f['push_status'] != 'all' and r['pushStatus'] != f['push_status']: continue
+            if f['billable'] and not r['billable']: continue
+            if f['min_amount'] is not None and r['payable'] < f['min_amount']: continue
+            if f['max_amount'] is not None and r['payable'] > f['max_amount']: continue
+            if q:
+                hay = ' '.join([str(r['orderId']), r['externalRef'], r['externalOrderId'],
+                                r['brand'], r['club'], r['buyer'], r['trackingNo']]
+                               + [str(i.get('sku') or '') + ' ' + str(i.get('name') or '') for i in r['items']]).lower()
+                if q not in hay: continue
+            kept.append(r)
 
+    cnt = len(kept)
+    sub = round(sum(r['externalSubtotal'] for r in kept), 2)
+    pay = round(sum(r['payable'] for r in kept), 2)
+    qty = sum(r['quantity'] for r in kept)
+    billable_rows = [r for r in kept if r['billable']]
+    pending_pay = round(sum(r['payable'] for r in billable_rows if r['settleStatus'] == 'pending'), 2)
+    settled_pay = round(sum(r['payable'] for r in billable_rows if r['settleStatus'] == 'settled'), 2)
+    void_pay = round(sum(r['payable'] for r in kept if r['settleStatus'] == 'void'), 2)
+    by_status = {}
+    for k, cn in PK_SETTLE_CN.items():
+        sel = [r for r in kept if r['settleStatus'] == k]
+        by_status[k] = {'label': cn, 'count': len(sel),
+                        'payable': round(sum(r['payable'] for r in sel), 2)}
+
+    groups = []
+    gby = f['group_by']
+    if gby != 'none':
+        buckets = {}
+        for r in kept:
+            if gby == 'brand': key = r['brand'] or '未标注品牌'
+            elif gby == 'club': key = r['club'] or '未归属俱乐部'
+            elif gby == 'date': key = _pk_date_of(r, f['date_by']) or '无日期'
+            elif gby == 'month': key = (_pk_date_of(r, f['date_by']) or '')[:7] or '无日期'
+            elif gby == 'settle_status': key = r['settleStatusCn']
+            else: key = r['fulfillStatusCn']
+            b = buckets.setdefault(key, {'key': key, 'count': 0, 'quantity': 0,
+                                         'externalSubtotal': 0.0, 'payable': 0.0, 'billablePayable': 0.0})
+            b['count'] += 1; b['quantity'] += r['quantity']
+            b['externalSubtotal'] += r['externalSubtotal']; b['payable'] += r['payable']
+            if r['billable']: b['billablePayable'] += r['payable']
+        groups = [{'key': b['key'], 'count': b['count'], 'quantity': b['quantity'],
+                   'externalSubtotal': round(b['externalSubtotal'], 2),
+                   'payable': round(b['payable'], 2),
+                   'billablePayable': round(b['billablePayable'], 2)}
+                  for b in sorted(buckets.values(), key=lambda x: x['key'])]
+
+    all_dates = [r['orderCreated'][:10] for r in allrows if r['orderCreated']]
+    period_from = f['date_from'] or (min(all_dates) if all_dates else '')
+    period_to = f['date_to'] or (max(all_dates) if all_dates else '')
+    # 账单号只由「账期 + 影响订单集合的筛选」决定。group_by 纯展示（不改集合），
+    # 不能进 hash —— 否则同一份账单切一下分组就换号，财务没法引用同一张单。
+    seed = json.dumps({'from': period_from, 'to': period_to,
+                       **{k: f[k] for k in ('date_by', 'brand', 'club', 'settle_status',
+                                            'fulfill_status', 'push_status', 'q',
+                                            'min_amount', 'max_amount', 'billable')}},
+                      ensure_ascii=False, sort_keys=True, default=str)
+    token = hashlib.sha256(seed.encode('utf-8')).hexdigest()[:6].upper()
+    compact = lambda d: (d or '00000000').replace('-', '')
+    no = 'PK-%s-%s-%s' % (compact(period_from), compact(period_to), token)
+    statement = {
+        'no': no, 'periodFrom': period_from, 'periodTo': period_to,
+        'dateBy': f['date_by'], 'dateByCn': PK_DATE_BY[f['date_by']],
+        'groupByCn': PK_GROUP_BY[gby],
+        'generatedAt': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        'currency': 'CNY', 'rate': rate,
+        'payer': 'ClubOS 总平台（远拓户外）', 'payee': 'PEAKTRACE',
+        'title': 'PEAKTRACE 销售结账单',
+        'filterDesc': _pk_filter_desc(f),
+        'payableInWords': _rmb_upper(pending_pay),
+        'totalInWords': _rmb_upper(pay),
+    }
+    totals = {
+        'count': cnt, 'externalSubtotal': sub, 'payable': pay, 'quantity': qty,
+        'billableCount': len(billable_rows),
+        'billablePayable': round(sum(r['payable'] for r in billable_rows), 2),
+        'pendingPayable': pending_pay, 'settledPayable': settled_pay, 'voidPayable': void_pay,
+        'byStatus': by_status, 'amountInWords': _rmb_upper(pay),
+    }
+    return {
+        'rate': rate, 'orders': kept, 'totals': totals, 'statement': statement,
+        'filters': {
+            'brands': sorted({r['brand'] for r in allrows if r['brand']}),
+            'clubs': sorted({r['club'] for r in allrows if r['club']}),
+            'settleStatuses': [{'value': k, 'label': v} for k, v in PK_SETTLE_CN.items()],
+            'fulfillStatuses': [{'value': k, 'label': v} for k, v in PK_FULFILL_CN.items()],
+            'pushStatuses': [{'value': k, 'label': v} for k, v in PK_PUSH_CN.items()],
+            'dateBy': [{'value': k, 'label': v} for k, v in PK_DATE_BY.items()],
+            'groupBy': [{'value': k, 'label': v} for k, v in PK_GROUP_BY.items()],
+        },
+        'applied': f, 'groups': groups,
+    }
+
+
+def _pk_audit(c, action, data, note='', operator='platform', *, count=None, payable=None, subtotal=None):
+    """出账留痕：只增不改，含账期、筛选快照、笔数与金额。"""
+    s, t = data['statement'], data['totals']
+    c.execute("""INSERT INTO pk_settlement_audit
+                 (action,statement_no,period_from,period_to,filters_json,order_count,
+                  external_subtotal,payable,operator,note)
+                 VALUES(?,?,?,?,?,?,?,?,?,?)""",
+              (action, s['no'], s['periodFrom'], s['periodTo'], jdump(data['applied']),
+               int(t['count'] if count is None else count),
+               float(t['externalSubtotal'] if subtotal is None else subtotal),
+               float(t['payable'] if payable is None else payable), operator, note))
+    return c.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+
+@app.get('/api/platform/external-fulfillment/settlement')
+def platform_external_settlement(request: Request):
+    """PEAKTRACE 销售结账单：账期 / 多维筛选 / 分组小计 / 可结算口径 / 账单抬头。"""
+    return _pk_build(dict(request.query_params))
+
+
+@app.get('/api/platform/external-fulfillment/settlement/export')
+def platform_external_settlement_export(request: Request):
+    """按当前筛选导出账单 CSV（UTF-8 BOM，Excel 直开不乱码），并落一条出账审计。"""
+    params = dict(request.query_params)
+    fmt = str(params.pop('format', 'csv') or 'csv').lower()
+    if fmt != 'csv':
+        raise HTTPException(400, '仅支持 format=csv')
+    data = _pk_build(params)
+    s, t, f = data['statement'], data['totals'], data['applied']
+    buf = io.StringIO(); w = csv.writer(buf)
+    w.writerow(['PEAKTRACE 销售结账单'])
+    w.writerow(['账单号', s['no'], '币种', s['currency'], '生成时间', s['generatedAt']])
+    w.writerow(['账期', '%s ~ %s' % (s['periodFrom'], s['periodTo']), '日期口径', s['dateByCn'], '分组', s['groupByCn']])
+    w.writerow(['付款方', s['payer'], '收款方', s['payee'], '全局结算比例', s['rate']])
+    w.writerow(['筛选口径', s['filterDesc']])
+    w.writerow(['笔数', t['count'], '件数', t['quantity'], '外部零售小计', t['externalSubtotal']])
+    w.writerow(['本期可结算(未结)', t['pendingPayable'], '累计已结算', t['settledPayable'], '流水应付合计', t['payable']])
+    w.writerow(['应付金额大写', s['payableInWords']])
+    w.writerow([])
+    w.writerow(['序号', 'ClubOS 订单号', '渠道单号', '上游订单号', '账期日期', '俱乐部', '买家', '品牌',
+                '商品明细（SKU·名称·单价×数量=小计）', '件数', '外部零售小计', '结算比例', '比例来源',
+                '应付 PEAKTRACE', '结算状态', '结算时间', '推送状态', '履约状态', '承运商', '运单号',
+                '推送时间', '妥投时间', '是否可结算', '不可结算原因', '异常'])
+    for n, r in enumerate(data['orders'], 1):
+        detail = '；'.join('%s·%s·¥%.2f×%d=¥%.2f' % (i['sku'] or '-', i['name'],
+                          i['unitPrice'], i['quantity'], i['subtotal']) for i in r['items'])
+        w.writerow([n, r['orderId'], r['externalRef'], r['externalOrderId'],
+                    _pk_date_of(r, f['date_by']), r['club'], r['buyer'], r['brand'], detail,
+                    r['quantity'], r['externalSubtotal'], r['settlementRate'],
+                    '品牌专属' if r['settlementRateSource'] == 'brand' else '全局默认',
+                    r['payable'], r['settleStatusCn'], r['settledAt'],
+                    r['pushStatusCn'], r['fulfillStatusCn'], r['carrier'], r['trackingNo'],
+                    r['pushedAt'], r['fulfilledAt'], '是' if r['billable'] else '否',
+                    '；'.join(r['blockedReasons']), '；'.join(r['anomalies'])])
+    w.writerow([])
+    w.writerow(['合计', '', '', '', '', '', '', '', '', t['quantity'], t['externalSubtotal'],
+                '', '', t['payable'], '', '', '', '', '', '', '', '', '', '', ''])
+    w.writerow(['本期可结算(未结)', t['pendingPayable'], '累计已结算', t['settledPayable'],
+                '已冲销', t['voidPayable'], '大写', s['payableInWords']])
+    if data['groups']:
+        w.writerow([])
+        w.writerow(['分组小计（%s）' % s['groupByCn'], '笔数', '件数', '外部零售小计', '应付', '其中可结算'])
+        for g in data['groups']:
+            w.writerow([g['key'], g['count'], g['quantity'], g['externalSubtotal'],
+                        g['payable'], g['billablePayable']])
+    with conn() as c:
+        _pk_audit(c, 'export', data, '下载 CSV 账单')
+    return Response(content=('\ufeff' + buf.getvalue()).encode('utf-8'),
+                    media_type='text/csv; charset=utf-8',
+                    headers={'Content-Disposition': 'attachment; filename="pk_settlement_%s.csv"' % s['no']})
+
+
+@app.get('/api/platform/external-fulfillment/settlement/audit')
+def platform_external_settlement_audit(limit: int = 30):
+    """出账记录：谁 / 何时 / 按什么口径导出了哪一份账单。"""
+    limit = max(1, min(200, int(limit or 30)))
+    with conn() as c:
+        rs = rows(c.execute('SELECT * FROM pk_settlement_audit ORDER BY id DESC LIMIT ?', (limit,)))
+    return {'items': [{
+        'id': r['id'], 'action': r['action'], 'actionCn': PK_AUDIT_CN.get(r['action'], r['action']),
+        'statementNo': r['statement_no'], 'periodFrom': r['period_from'], 'periodTo': r['period_to'],
+        'filters': jload(r['filters_json'] or '{}', {}), 'orderCount': r['order_count'],
+        'externalSubtotal': r['external_subtotal'], 'payable': r['payable'],
+        'operator': r['operator'], 'note': r['note'], 'createdAt': r['created_at'],
+    } for r in rs]}
+
+
+@app.post('/api/platform/external-fulfillment/settlement/audit')
+async def platform_external_settlement_audit_log(request: Request):
+    """打印 / 出具账单留痕。action='issue' 时把本批「可结算且待结算」的行标为已结算。"""
+    body = await request.json()
+    action = str(body.get('action') or '').strip()
+    if action not in ('print', 'issue'):
+        raise HTTPException(400, '未知出账动作')
+    params = body.get('filters') or {}
+    if not isinstance(params, dict):
+        raise HTTPException(400, 'filters 格式错误')
+    clean = {k: ('1' if v is True else '0' if v is False else v)
+             for k, v in params.items() if v not in (None, '')}
+    data = _pk_build(clean)
+    note = str(body.get('note') or '')[:200]
+    issued = 0
+    with conn() as c:
+        if action == 'issue':
+            ids = [r['orderId'] for r in data['orders'] if r['billable'] and r['settleStatus'] == 'pending']
+            if ids:
+                now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                c.executemany("""UPDATE external_fulfillment_orders
+                                 SET settle_status='settled',settled_at=?,settle_note=?,
+                                     updated_at=CURRENT_TIMESTAMP WHERE order_id=?""",
+                              [(now, note or ('出具账单 ' + data['statement']['no']), i) for i in ids])
+                issued = len(ids)
+        aid = _pk_audit(c, action, data, note or ('出具 %d 笔' % issued if action == 'issue' else '打印账单'))
+    return {'ok': True, 'auditId': aid, 'statementNo': data['statement']['no'], 'issued': issued}
+
+
+@app.post('/api/platform/external-fulfillment/settlement/mark')
+async def platform_external_settlement_mark(request: Request):
+    """批量修正结算状态（已结算 / 已冲销 / 撤销回待结算）。"""
+    body = await request.json()
+    status = str(body.get('status') or '').strip()
+    if status not in PK_SETTLE_STATUSES:
+        raise HTTPException(400, '未知结算状态')
+    raw = body.get('orderIds') or []
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(400, '请先选择要标记的订单')
+    try:
+        ids = sorted({int(x) for x in raw})
+    except (TypeError, ValueError):
+        raise HTTPException(400, '订单号格式错误')
+    note = str(body.get('note') or '')[:200]
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    with conn() as c:
+        found = rows(c.execute('SELECT order_id FROM external_fulfillment_orders WHERE order_id IN (%s)'
+                               % ','.join('?' * len(ids)), ids))
+        found_ids = {int(r['order_id']) for r in found}
+        missing = [i for i in ids if i not in found_ids]
+        if missing:
+            raise HTTPException(404, '订单不存在：' + ','.join(map(str, missing[:5])))
+        c.executemany("""UPDATE external_fulfillment_orders
+                         SET settle_status=?,settled_at=?,settle_note=?,updated_at=CURRENT_TIMESTAMP
+                         WHERE order_id=?""",
+                      [(status, now if status != 'pending' else '', note, i) for i in ids])
+    data = _pk_build({})
+    marked = [r for r in data['orders'] if r['orderId'] in found_ids]
+    with conn() as c:
+        aid = _pk_audit(c, 'mark', data,
+                        '批量标记「%s」%d 笔：%s' % (PK_SETTLE_CN[status], len(ids), ','.join(map(str, ids[:12]))),
+                        count=len(ids),
+                        payable=round(sum(r['payable'] for r in marked), 2),
+                        subtotal=round(sum(r['externalSubtotal'] for r in marked), 2))
+    return {'ok': True, 'updated': len(ids), 'status': status, 'auditId': aid}
 
 
 # ==========================================================================
