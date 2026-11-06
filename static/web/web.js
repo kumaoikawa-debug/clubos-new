@@ -1036,35 +1036,39 @@ function pdSheetStock(){const s=pdCurSize();return s?Number(s.stock||0):0}
 function pdMaxQty(){return Math.max(1,Math.min(5,pdSheetStock()))}
 function pdOpenSheet(mode){
   if(!P_CUR)return;
+  /* 防重复 ID 导致的「关不掉 / 跳不过去」：productDetailHtml() 每次重渲染都会重建
+     pdMask/pdSheet。旧实现把它们直接移到 .web-shell，详情再次渲染后就会在 #productDetail
+     里多出一份隐藏副本，document.getElementById('pdSheet') 会选到那份隐藏副本，使关闭 /
+     确认只作用于隐藏副本（可见抽屉关不掉、也跳不过去），且重复打开时还会把已移走的节点删掉。
+     统一做法：打开时彻底清除所有旧副本，用上一份（无论来自 #productDetail 还是 shell）
+     的内部结构重建「唯一一份」挂到 .web-shell —— 无论首次打开、关掉再开、还是详情重复渲染，
+     全局始终只有一份 pdMask/pdSheet，关闭 / 确认永远作用于可见的那份。 */
+  const shell=document.querySelector('.web-shell')||document.body;
+  const prevSheet=document.getElementById('pdSheet');
+  const inner=prevSheet?prevSheet.innerHTML:'';
+  $$('#pdMask,#pdSheet').forEach(el=>el.remove());
   PD_MODE=mode==='buy'?'buy':'cart';
   PD_SIZE=P_VID!=null?P_VID:null;
-  /* 颜色跟着已选规格走：详情页默认选中第一个有货规格时 PD_COLOR 已经设过，
-     这里再兜一次（直接刷新进详情、或 P_VID 被外部改过的路径）。 */
+  /* 颜色跟着已选规格走：详情页默认选中第一个有货规格时 PD_COLOR 已经设过，这里再兜一次。 */
   if(!PD_COLOR){
     const v=productVariants(P_CUR).find(x=>String(x.id)===String(PD_SIZE));
     if(v&&v.color)PD_COLOR=v.color;
   }
   PD_QTY=1;
-  const mask=$('#pdMask'),sheet=$('#pdSheet');
-  if(!mask||!sheet)return;
-  /* ★ 两个节点必须挂到 .web-shell 下再显示（不能留在 #productDetail 里、也不能挂 body）：
-     · 留在 #productDetail：.web-shell .wview 那条淡入动画给 #wmall 留了一个 identity
-       transform，position:fixed 会被这个祖先吸住、变成相对 #wmall 定位 —— 遮罩看着正常
-       （#wmall 盒子就是整页），抽屉却跑到页面最底部去了（实测截图里只有遮罩、没有抽屉）。
-     · 挂到 body：CSS 变量全在 .web-shell 上定义，出了这个壳 var(--w-ink) 失效，
-       背景变透明、白字白底（实测 chipBg=rgba(0,0,0,0)）。
-     .web-shell 自己是 position:relative 且没有 transform，挂这儿两边都成立。 */
-  const shell=document.querySelector('.web-shell')||document.body;
-  if(mask.parentElement!==shell)shell.appendChild(mask);
-  if(sheet.parentElement!==shell)shell.appendChild(sheet);
+  const mask=document.createElement('div');mask.id='pdMask';mask.className='w-pd__mask';mask.setAttribute('onclick','pdCloseSheet()');mask.hidden=true;
+  const sheet=document.createElement('div');sheet.id='pdSheet';sheet.className='w-pd__sheet';sheet.hidden=true;
+  sheet.innerHTML=inner||'';
+  shell.appendChild(mask);shell.appendChild(sheet);
+  /* .web-shell 自己是 position:relative 且没有 transform，挂这儿两边都成立
+     （留在 #productDetail 会被祖先 transform 吸住、挂 body 会丢 .web-shell 的 CSS 变量）。 */
   mask.hidden=false;sheet.hidden=false;
   requestAnimationFrame(()=>{mask.classList.add('on');sheet.classList.add('on')});
   pdPaintSheet();
 }
 function pdCloseSheet(){
-  const mask=$('#pdMask'),sheet=$('#pdSheet');
-  mask?.classList.remove('on');sheet?.classList.remove('on');
-  setTimeout(()=>{if(mask)mask.hidden=true;if(sheet)sheet.hidden=true},240);
+  /* 作用于所有匹配节点（而不只是 $ 选中的第一个），彻底关掉抽屉、避免重复 ID 残留导致关不掉。 */
+  $$('#pdMask,#pdSheet').forEach(el=>el.classList.remove('on'));
+  setTimeout(()=>{$$('#pdMask,#pdSheet').forEach(el=>el.hidden=true)},240);
 }
 function pdPaintSheet(){
   const p=P_CUR;if(!p)return;
