@@ -6680,10 +6680,10 @@ def user_order_center(user_id:int,club_id:int=1):
             x['refundProgress']=_refund_progress('gear',x.get('refund_status'))
             x['orderKind']='gear'
             # 外部履约桥随行：让 C 端区分「物流已妥投·待确认收货」与「已签收」
-            ef=row(c.execute('SELECT push_status,fulfill_status,carrier,tracking_no,external_order_id,fulfilled_at FROM external_fulfillment_orders WHERE order_id=?',(x['id'],)))
+            ef=row(c.execute('SELECT push_status,fulfill_status,carrier,tracking_no,external_order_id,fulfilled_at,external_ref FROM external_fulfillment_orders WHERE order_id=?',(x['id'],)))
             x['externalFulfillment']=({'pushStatus':ef['push_status'],'fulfillStatus':ef['fulfill_status'],
                 'carrier':ef['carrier'],'trackingNo':ef['tracking_no'],'externalOrderId':ef['external_order_id'],
-                'fulfilledAt':ef['fulfilled_at']} if ef else None)
+                'fulfilledAt':ef['fulfilled_at'],'externalRef':ef['external_ref']} if ef else None)
             # 退换货申请窗口（默认签收/妥投后 7 天）：后端算好剩余天数下发，C 端只展示
             x['returnWindowLimitDays'],x['returnWindowDays']=_return_window_state(x,ef)
         # 待支付单在 confirming 之前不会落一行 registrations / gear_orders，所以它不会出现在
@@ -8844,7 +8844,8 @@ def platform_orders(club_id:int|None=Query(None), date_from:str=Query(''), date_
             r=eff.get(x['id'])
             x['externalFulfillment']=({'pushStatus':r['push_status'],'fulfillStatus':r['fulfill_status'],
                 'carrier':r['carrier'],'trackingNo':r['tracking_no'],
-                'pushError':r['push_error'],'externalOrderId':r['external_order_id']} if r else None)
+                'pushError':r['push_error'],'externalOrderId':r['external_order_id'],
+                'externalRef':r['external_ref'],'pullError':r['pull_error']} if r else None)
         return out
 
 @app.get('/api/platform/orders/filters')

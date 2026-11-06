@@ -29,9 +29,12 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+from datetime import datetime
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
 
@@ -54,6 +57,62 @@ def _token() -> str:
 def webhook_token() -> str:
     """上游回调 ClubOS 用的共享 token（与推送同一把，简单可核对）。"""
     return os.environ.get('EXTERNAL_FULFILLMENT_WEBHOOK_TOKEN', '').strip() or _token()
+
+
+
+def _ref_from_row(c, o) -> str:
+    """生成/读取本订单的全局唯一渠道单号。
+
+    ★ 绝不能用裸 order_id：库重置或数据迁移后自增 id 会复用，而上游云端
+    commerce 文档不随重发清空，旧 B2B 单会被幂等命中（#625 串单事故）。
+    优先用已落库的 external_ref；建记录前用 gear_orders.commerce_order_id
+    里的随机段派生（确定性，保证 create → push → pull 全程同一个号）。
+    """
+    try:
+        rec = c.execute('SELECT external_ref FROM external_fulfillment_orders WHERE order_id=?',
+                        (int(o['id']),)).fetchone()
+    except Exception:
+        rec = None
+    if rec and str(rec['external_ref'] or '').strip():
+        return str(rec['external_ref']).strip()
+    raw = str(o['commerce_order_id'] or '').strip()
+    token = raw.rsplit('_', 1)[-1] if raw else uuid4().hex
+    return 'CB-%s-%s' % (int(o['id']), token[:16].upper())
+
+
+def _fingerprint(o, items) -> str:
+    """业务指纹：上游幂等命中时用来判断是不是同一笔订单（拒绝对不上还复用）。"""
+    raw = json.dumps({
+        'placedAt': str(o['created_at'] or ''),
+        'consignee': [str(o['shipping_consignee'] or ''), str(o['shipping_phone'] or ''),
+                      str(o['shipping_address'] or '')],
+        'items': [[str(it.get('externalInventoryId') or it.get('externalSku') or ''),
+                   int(it.get('quantity') or 0)] for it in items],
+    }, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()[:32]
+
+
+def _ref_for_rec(rec) -> str:
+    """轮询用：优先 external_ref 列，存量行退回 payload 快照，最后确定性兜底。"""
+    ref = str(rec.get('external_ref') or '').strip()
+    if ref:
+        return ref
+    try:
+        ref = str((json.loads(rec.get('payload_json') or '{}')).get('clubosOrderId') or '').strip()
+    except Exception:
+        pass
+    return ref or ('CB-%s-LEGACY' % rec.get('order_id'))
+
+
+def _parse_ts(s):
+    raw = str(s or '').strip()
+    if not raw:
+        return None
+    raw = raw.replace('T', ' ').rstrip('Z').split('.')[0]
+    try:
+        return datetime.strptime(raw[:19], '%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return None
 
 
 def external_items(c, order_id: int) -> list[dict]:
@@ -112,10 +171,10 @@ def create_for_gear_order(c, order_id: int) -> dict | None:
         if not payload:
             return None
         brand = c.execute("SELECT id FROM product_brands WHERE lower(name)='peaktrace'").fetchone()
-        c.execute("""INSERT INTO external_fulfillment_orders(order_id,brand_id,payload_json)
-                     VALUES(?,?,?) ON CONFLICT(order_id) DO NOTHING""",
+        c.execute("""INSERT INTO external_fulfillment_orders(order_id,brand_id,payload_json,external_ref)
+                     VALUES(?,?,?,?) ON CONFLICT(order_id) DO NOTHING""",
                   (int(order_id), brand['id'] if brand else None,
-                   json.dumps(payload, ensure_ascii=False)))
+                   json.dumps(payload, ensure_ascii=False), payload['clubosOrderId']))
         rec = c.execute('SELECT * FROM external_fulfillment_orders WHERE order_id=?',
                         (int(order_id),)).fetchone()
         return dict(rec) if rec else None
@@ -163,8 +222,11 @@ def build_payload(c, order_id: int) -> dict | None:
     o = c.execute('SELECT * FROM gear_orders WHERE id=?', (int(order_id),)).fetchone()
     if not o:
         return None
+    ref = _ref_from_row(c, o)
     return {
-        'clubosOrderId': int(order_id),
+        'clubosOrderId': ref,
+        'clubosOrderNumericId': int(order_id),
+        'orderFingerprint': _fingerprint(o, items),
         'source': 'clubos',
         'placedAt': o['created_at'],
         'consignee': {'name': o['shipping_consignee'] or '',
@@ -248,7 +310,9 @@ def pull_orders(records: list[dict], *, origin: str | None = None, timeout: floa
         for rec in records:
             try:
                 r = client.post(base + '/api/b2b/orders/get',
-                                json={'token': _token(), 'clubosOrderId': int(rec['order_id'])})
+                                json={'token': _token(),
+                                      'clubosOrderId': _ref_for_rec(rec),
+                                      'clubosOrderNumericId': int(rec['order_id'])})
                 if r.status_code == 200:
                     d = r.json() if isinstance(r.json(), dict) else {}
                     o = d.get('order')
@@ -260,7 +324,8 @@ def pull_orders(records: list[dict], *, origin: str | None = None, timeout: floa
                                     'status': str(o.get('status') or ''),
                                     'carrier': str(exp.get('company') or ''),
                                     'trackingNo': str(exp.get('no') or ''),
-                                    'externalOrderId': o.get('id')})
+                                    'externalOrderId': o.get('id'),
+                                    'createdAt': str(o.get('createdAt') or o.get('placedAt') or '')})
                 else:
                     results.append({'id': rec['id'], 'orderId': rec['order_id'], 'found': False,
                                     'error': f'HTTP {r.status_code}'})
@@ -271,18 +336,49 @@ def pull_orders(records: list[dict], *, origin: str | None = None, timeout: floa
 
 
 def apply_pull_results(c, results: list[dict]) -> dict:
+    """轮询结果落库。★ #625：落库前必须验明上游订单确实属于本单，否则拒绝串单。"""
     updated = 0
+    rejected = 0
     for res in results:
         c.execute('UPDATE external_fulfillment_orders SET last_pull_at=CURRENT_TIMESTAMP WHERE id=?',
                   (int(res['id']),))
-        if res.get('found') and res.get('status') in ('shipped', 'completed') and res.get('trackingNo'):
+        if not (res.get('found') and res.get('status') in ('shipped', 'completed') and res.get('trackingNo')):
+            continue
+        rec = c.execute('SELECT * FROM external_fulfillment_orders WHERE id=?', (int(res['id']),)).fetchone()
+        if rec is None:
+            rejected += 1
+            continue
+        # 守卫一：上游订单号必须与本地已登记的一致（防止拉到别的订单）
+        known = str(rec['external_order_id'] or '').strip()
+        got = str(res.get('externalOrderId') or '').strip()
+        if known and got and known != got:
+            c.execute('UPDATE external_fulfillment_orders SET pull_error=? WHERE id=?',
+                      ('上游订单号不匹配，疑似串单，已忽略', int(res['id'])))
+            rejected += 1
+            continue
+        # 守卫二：上游订单创建时间不能早于 ClubOS 订单（历史单状态不得套到新单）
+        upstream_at = _parse_ts(res.get('createdAt'))
+        local_row = c.execute('SELECT created_at FROM gear_orders WHERE id=?',
+                              (int(res['orderId']),)).fetchone()
+        local_at = _parse_ts(local_row['created_at'] if local_row else '')
+        if upstream_at and local_at and (local_at - upstream_at).total_seconds() > 600:
+            c.execute('UPDATE external_fulfillment_orders SET pull_error=? WHERE id=?',
+                      ('上游订单早于本单创建时间，疑似历史单，已忽略', int(res['id'])))
+            rejected += 1
+            continue
+        try:
             apply_upstream(c, int(res['orderId']),
                            carrier=res.get('carrier') or PROVIDER,
                            tracking_no=res['trackingNo'],
                            status=('delivered' if res['status'] == 'completed' else 'shipped'),
                            external_order_id=res.get('externalOrderId'))
+            c.execute('UPDATE external_fulfillment_orders SET pull_error=NULL WHERE id=?', (int(res['id']),))
             updated += 1
-    return {'polled': len(results), 'updated': updated}
+        except (ValueError, LookupError) as e:
+            c.execute('UPDATE external_fulfillment_orders SET pull_error=? WHERE id=?',
+                      (str(e)[:300], int(res['id'])))
+            rejected += 1
+    return {'polled': len(results), 'updated': updated, 'rejected': rejected}
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +423,11 @@ def apply_upstream(c, order_id: int, *, carrier: str, tracking_no: str,
         raise ValueError('订单已退款，不再同步供应商物流')
     # —— 上游物流妥投：只推进履约表的「物流妥投」态，不触碰订单主状态 ——
     if is_delivered:
+        # ★ #625 串单守卫：妥投必须先发货。主订单仍停在 paid/processing 且无
+        # shipped_at，说明这条妥投来自别的订单（典型：上游历史单被幂等复用），
+        # 直接拒绝，绝不把旧运单号写进新订单。
+        if (o['status'] or '') in ('paid', 'processing') and not (o['shipped_at'] or ''):
+            raise ValueError('订单尚未发货，拒绝上游妥投回传（疑似串单）')
         events = events or [{'time': None, 'desc': '物流已送达，待您确认收货'}]
         logistics_engine.upsert_shipment(
             c, order_id=int(order_id), provider=PROVIDER, carrier=carrier, carrier_code='',
@@ -363,14 +464,24 @@ def apply_upstream(c, order_id: int, *, carrier: str, tracking_no: str,
 
 def handle_webhook(c, payload: dict) -> dict:
     """供应商发货回调（token 校验在 app.py 完成）。未知订单 → LookupError。"""
-    oid = payload.get('clubosOrderId')
-    try:
-        oid = int(oid)
-    except (TypeError, ValueError):
-        raise ValueError('缺少 clubosOrderId')
-    rec = c.execute('SELECT * FROM external_fulfillment_orders WHERE order_id=?', (oid,)).fetchone()
+    # #625：上游回调带的是全局唯一渠道单号，优先用数字 id 反查，再按 ref 查；
+    # 纯数字 ref 是升级前的老单，仅作兼容兜底。
+    rec = None
+    numeric = payload.get('clubosOrderNumericId')
+    if numeric not in (None, ''):
+        try:
+            rec = c.execute('SELECT * FROM external_fulfillment_orders WHERE order_id=?',
+                            (int(numeric),)).fetchone()
+        except (TypeError, ValueError):
+            rec = None
+    ref = str(payload.get('clubosOrderId') or '').strip()
+    if rec is None and ref:
+        rec = c.execute('SELECT * FROM external_fulfillment_orders WHERE external_ref=?', (ref,)).fetchone()
+    if rec is None and ref.isdigit():
+        rec = c.execute('SELECT * FROM external_fulfillment_orders WHERE order_id=?', (int(ref),)).fetchone()
     if not rec:
         raise LookupError('未找到该订单的外部履约记录')
+    oid = int(rec['order_id'])
     carrier = str(payload.get('carrier') or '').strip()
     tracking = str(payload.get('trackingNo') or payload.get('tracking_no') or '').strip()
     status = str(payload.get('status') or 'shipped')
@@ -414,7 +525,7 @@ def build_return_payload(c, case: dict, *, action: str,
                          return_carrier: str = '', return_tracking_no: str = '') -> dict:
     """把 ClubOS 售后单翻译成上游 B2B 退换货单（sku 口径与订单推送一致）。"""
     order_id = int(case['order_id'])
-    rec = c.execute('SELECT external_order_id FROM external_fulfillment_orders WHERE order_id=?',
+    rec = c.execute('SELECT * FROM external_fulfillment_orders WHERE order_id=?',
                     (order_id,)).fetchone()
     items = []
     for it in (case.get('items') or []):
@@ -434,7 +545,8 @@ def build_return_payload(c, case: dict, *, action: str,
                       'quantity': int(it.get('quantity') or 1)})
     return {
         'clubosCaseId': str(case['id']),
-        'clubosOrderId': order_id,
+        # 退换货渠道单号仅作展示/关联（上游幂等按 caseId），不参与撞号
+        'clubosOrderId': ((rec['external_ref'] if rec else None) or ('CB-%d-LEGACY' % order_id)),
         'externalOrderId': (rec['external_order_id'] if rec else None),
         'caseType': case.get('case_type'),
         'reason': case.get('reason') or '',

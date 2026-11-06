@@ -476,6 +476,12 @@ def _run_compat_migrations(c):
     c.execute('CREATE INDEX IF NOT EXISTS idx_effo_push ON external_fulfillment_orders(push_status,fulfill_status,id)')
     # 结算清单需要供应商「妥投时间」（2026-11-06）：单独记账，避免与订单确认收货时间混淆。
     _ensure_column(c, 'external_fulfillment_orders', 'fulfilled_at', 'fulfilled_at TEXT')
+    # #625 串单修复：跨系统渠道单号（全局唯一）。ClubOS 库重置后自增 order_id 从 1 复用，
+    # 而上游 commerce 文档在云端持久化（重发不重置），裸数字单号会幂等命中历史 B2B 单，
+    # 把旧运单号 / 妥投状态套到新订单上。所有推送、轮询、回调一律改用 external_ref。
+    _ensure_column(c, 'external_fulfillment_orders', 'external_ref', 'external_ref TEXT')
+    _ensure_column(c, 'external_fulfillment_orders', 'pull_error', 'pull_error TEXT')
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_effo_ref ON external_fulfillment_orders(external_ref)')
     # 售后单 ↔ PEAKTRACE 退换货同步状态（#618）
     _ensure_column(c, 'after_sales_cases', 'external_sync_status', 'external_sync_status TEXT')
     _ensure_column(c, 'after_sales_cases', 'external_sync_error', 'external_sync_error TEXT')
