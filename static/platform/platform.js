@@ -536,7 +536,7 @@ function externalChip(x){
   const st=f.fulfillStatus==='delivered'?'已签收':f.fulfillStatus==='shipped'?'已发货':'待供应商发货';
   const cls=f.fulfillStatus==='awaiting_shipment'?'orange':'';
   return `<span class="tag ${cls}">PEAKTRACE 代发 · ${st}</span>`
-    +(f.pushStatus==='failed'?`<span class="tag orange" title="${esc(f.pushError||'推送失败')}">推送失败</span>`:'');
+    +(f.pushStatus==='failed'?`<span class="tag orange">推送失败<div class="sub" style="font-weight:400;max-width:260px;white-space:normal">${esc(f.pushError||'原因未知，请点「同步供应商状态」重试')}</div></span>`:'');
 }
 /* 手动兜底：推一批待同步订单 + 拉一批供应商发货状态（后端三段式，幂等）。 */
 async function syncExternalFulfillment(){

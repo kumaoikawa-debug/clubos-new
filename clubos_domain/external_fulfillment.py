@@ -57,10 +57,15 @@ def webhook_token() -> str:
 
 
 def external_items(c, order_id: int) -> list[dict]:
-    """订单里属于外部品牌镜像商品的明细（带上游 SKU key，用于上游扣库存）。"""
+    """订单里属于外部品牌镜像商品的明细（带上游 SKU key，用于上游扣库存）。
+
+    ★ 上游库存 key 用 external_inventory_id（`productId|spec`，如 `gongga|M`）——
+    external_sku_id 存的是裸尺寸（sync_catalog 以规格名建 variant 级映射），
+    拿它当 sku 上游匹配不到库存位，曾导致线上推送 409「上游库存不足：M」。
+    """
     out = []
     for r in c.execute("""SELECT i.variant_id,i.quantity,p.name,p.source,p.inventory_mode,
-                                 m.external_product_id,m.external_sku_id
+                                 m.external_product_id,m.external_sku_id,m.external_inventory_id
                           FROM gear_order_items i
                           JOIN products p ON p.id=i.product_id
                           LEFT JOIN external_product_mappings m
@@ -75,7 +80,8 @@ def external_items(c, order_id: int) -> list[dict]:
         out.append({'variantId': r['variant_id'], 'quantity': int(r['quantity'] or 0),
                     'name': r['name'],
                     'externalProductId': r['external_product_id'],
-                    'externalSku': r['external_sku_id']})
+                    'externalSku': r['external_sku_id'],
+                    'externalInventoryId': r['external_inventory_id']})
     return out
 
 
@@ -102,23 +108,10 @@ def create_for_gear_order(c, order_id: int) -> dict | None:
     任何异常都不该打断支付收尾 —— 调用方（_finalize_gear）自行 try/except。
     """
     try:
-        items = external_items(c, order_id)
-        if not items:
-            return None
-        o = c.execute('SELECT * FROM gear_orders WHERE id=?', (int(order_id),)).fetchone()
-        if not o:
+        payload = build_payload(c, int(order_id))
+        if not payload:
             return None
         brand = c.execute("SELECT id FROM product_brands WHERE lower(name)='peaktrace'").fetchone()
-        payload = {
-            'clubosOrderId': int(order_id),
-            'source': 'clubos',
-            'placedAt': o['created_at'],
-            'consignee': {'name': o['shipping_consignee'] or '',
-                          'phone': o['shipping_phone'] or '',
-                          'address': o['shipping_address'] or ''},
-            'items': [{'sku': it['externalSku'] or '', 'externalProductId': it['externalProductId'],
-                       'name': it['name'], 'quantity': it['quantity']} for it in items],
-        }
         c.execute("""INSERT INTO external_fulfillment_orders(order_id,brand_id,payload_json)
                      VALUES(?,?,?) ON CONFLICT(order_id) DO NOTHING""",
                   (int(order_id), brand['id'] if brand else None,
@@ -134,7 +127,11 @@ def create_for_gear_order(c, order_id: int) -> dict | None:
 # 推送（三段式：读 → 发 → 落）
 # ---------------------------------------------------------------------------
 def due_pushes(c, limit: int = 20) -> list[dict]:
-    """待推送记录（pending 或 failed），payload 已随行。"""
+    """待推送记录（pending 或 failed），payload 已随行。
+
+    failed 行的 payload_json 实时重建：快照可能来自旧版本代码（如 sku 格式
+    修复前的裸尺寸），不重建则重推永远带着坏 key。
+    """
     out = []
     for r in c.execute(f"""SELECT * FROM external_fulfillment_orders
                            WHERE push_status IN ('{PUSH_PENDING}','{PUSH_FAILED}')
@@ -144,9 +141,39 @@ def due_pushes(c, limit: int = 20) -> list[dict]:
             d['_payload'] = json.loads(d.get('payload_json') or '{}')
         except Exception:
             d['_payload'] = None
+        if d.get('push_status') == PUSH_FAILED:
+            try:
+                rebuilt = build_payload(c, int(d['order_id']))
+                if rebuilt:
+                    d['_payload'] = rebuilt
+                    c.execute('UPDATE external_fulfillment_orders SET payload_json=? WHERE id=?',
+                              (json.dumps(rebuilt, ensure_ascii=False), int(d['id'])))
+            except Exception:
+                pass
         if d['_payload']:
             out.append(d)
     return out
+
+
+def build_payload(c, order_id: int) -> dict | None:
+    """构造推送 payload（create_for_gear_order 与 failed 重推共用）。"""
+    items = external_items(c, order_id)
+    if not items:
+        return None
+    o = c.execute('SELECT * FROM gear_orders WHERE id=?', (int(order_id),)).fetchone()
+    if not o:
+        return None
+    return {
+        'clubosOrderId': int(order_id),
+        'source': 'clubos',
+        'placedAt': o['created_at'],
+        'consignee': {'name': o['shipping_consignee'] or '',
+                      'phone': o['shipping_phone'] or '',
+                      'address': o['shipping_address'] or ''},
+        'items': [{'sku': (it['externalInventoryId'] or it['externalSku'] or ''),
+                   'externalProductId': it['externalProductId'],
+                   'name': it['name'], 'quantity': it['quantity']} for it in items],
+    }
 
 
 def push_orders(records: list[dict], *, origin: str | None = None, timeout: float = 15.0) -> list[dict]:
