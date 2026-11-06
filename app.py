@@ -8687,7 +8687,16 @@ def platform_orders(club_id:int|None=Query(None), date_from:str=Query(''), date_
     with conn() as c:
         packed={r['order_id'] for r in rows(c.execute("SELECT DISTINCT order_id FROM warehouse_tasks WHERE task_type='pack' AND status='packed'"))}
         out=rows(c.execute(sql, values))
-        for x in out:x['packed']=x['id'] in packed
+        # 拣货进展随行下发：行内按「未建任务→拣货中→已拣货」渲染下一步按钮，
+        # 否则运营点完「创建拣货」看不到任何变化，也不知道要去仓储 WMS 点「完成拣货」。
+        picks={}
+        for r in rows(c.execute("SELECT order_id,status,id FROM warehouse_tasks WHERE task_type='pick' AND status IN ('pending','picked')")):
+            picks[r['order_id']]=r
+        for x in out:
+            x['packed']=x['id'] in packed
+            p=picks.get(x['id'])
+            x['pickState']=p['status'] if p else None
+            x['pickTaskId']=p['id'] if p else None
         return out
 
 @app.get('/api/platform/orders/filters')

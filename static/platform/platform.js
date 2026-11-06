@@ -532,11 +532,19 @@ function orderLogCell(x){
 }
 function orderRowHtml(x){
   const shipBtn=x.status==='refunded'?'':`<button class="btn secondary" onclick="openShipmentDialog(${x.id})">${x.tracking_no?'更新物流':'发货'}</button>`;
+  /* 履约链路按后端下发的拣货进展渲染唯一「下一步」：
+     未建拣货任务 → 创建拣货；拣货中 → 去仓储 WMS 完成拣货；已拣货未打包 → 完成打包；已打包 → 标签。
+     （打包有服务端前置校验：拣货未完成时提交会被 409「请先完成拣货核对」，所以不给未拣货的行放打包按钮。） */
+  let fulfill;
+  if(x.picked)fulfill='<span class="tag">已打包</span>';
+  else if(x.pickState==='picked')fulfill=`<button class="btn ghost" onclick="packOrder(${x.id})">完成打包</button>`;
+  else if(x.pickState==='pending')fulfill=`<span class="tag orange">拣货中</span><button class="btn ghost" onclick="gotoWarehousePick()">去完成拣货</button>`;
+  else fulfill=`<button class="btn ghost ux-pick-action" onclick="createPick(${x.id})">创建拣货</button>`;
   return `<tr data-order-id="${x.id}" data-status="${esc(x.status)}"><td>#${x.id}</td><td>${esc(x.source_club)}</td><td>${esc(x.buyer)}${x.buyer_phone?`<div class="sub">${esc(x.buyer_phone)}</div>`:''}</td>`
     +`<td>${x.shipping_consignee?esc(x.shipping_consignee)+(x.shipping_phone?' '+esc(x.shipping_phone):'')+(x.shipping_address?'<div class="sub">'+esc(x.shipping_address)+'</div>':''):'<span class="sub">历史订单无地址</span>'}</td>`
     +`<td>${money(x.total)}</td><td><span class="tag ${x.status==='paid'?'orange':''}">${esc(enumCn(x.status))}</span></td>`
     +`<td>${orderLogCell(x)}</td><td>${x.after_sales_status||'无'}</td>`
-    +`<td><div style="display:flex;gap:6px;flex-wrap:wrap">${x.commerce_sync_status==='shipment_error'?`<button class="btn ghost" onclick="retryOrderCommerce(${x.id})">重试交易同步</button>`:''}${x.packed?'<span class="tag">已打包</span>':`<button class="btn ghost" onclick="packOrder(${x.id})">完成打包</button>`}${shipBtn}${x.status==='shipped'?`<button class="btn ghost" onclick="markDelivered(${x.id})">标记签收</button>`:''}${x.status!=='refunded'?`<button class="btn ghost" onclick="refundOrder(${x.id})">全额退款</button>`:''}</div></td></tr>`;
+    +`<td><div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">${x.commerce_sync_status==='shipment_error'?`<button class="btn ghost" onclick="retryOrderCommerce(${x.id})">重试交易同步</button>`:''}${fulfill}${shipBtn}${x.status==='shipped'?`<button class="btn ghost" onclick="markDelivered(${x.id})">标记签收</button>`:''}${x.status!=='refunded'?`<button class="btn ghost" onclick="refundOrder(${x.id})">全额退款</button>`:''}</div></td></tr>`;
 }
 async function loadOrders(){
   try{
@@ -846,6 +854,13 @@ async function openWarehouseDetail(code){
 }
 window.toggleWInvDetail=function(id){const subs=[...document.querySelectorAll('[data-sub="'+id+'"]')];if(!subs.length)return;const open=subs[0].style.display!=='none';subs.forEach(t=>t.style.display=open?'none':'');const chev=document.getElementById(id+'chev');if(chev)chev.textContent=open?'▸':'▾';};
 async function markPicked(id){await api(`/api/platform/warehouse/tasks/${id}/picked`,{method:'POST'});toast('拣货完成');loadWarehouse()}
+/* 订单行「去完成拣货」：跳到仓储 WMS，让运营在任务列表里点「完成拣货」（有实物核对语义，不代点）。 */
+function gotoWarehousePick(){
+  const nav=document.querySelector('button[data-view="warehouse"]');
+  if(nav)nav.click();else if(typeof window.go==='function')window.go('warehouse');
+  if(typeof loadWarehouse==='function')loadWarehouse();
+  toast('在下方任务列表点「完成拣货」，然后回订单履约继续打包');
+}
 
 async function loadFinance(){try{skel('#supplierFinanceList',4);let [ss,sum,orders,products]=await Promise.all([api('/api/platform/finance/supplier-summary'),api('/api/platform/profit/summary'),api('/api/platform/profit/orders?limit=50'),api('/api/platform/profit/products')]);let payable=ss.reduce((a,x)=>a+Number(x.outstanding||0),0),overdue=ss.reduce((a,x)=>a+Number(x.overdue||0),0);$('#financeMetrics').innerHTML=[['供应商应付',money(payable)],['逾期应付',money(overdue)],['贡献利润',money(sum.contributionProfit)],['贡献毛利率',`${Number(sum.contributionMarginPct||0).toFixed(1)}%`]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');$('#supplierFinanceList').innerHTML=ss.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.supplierName)}</div> · 应付 ${money(x.outstanding)}${x.overdue>0?` <span class="tag orange">逾期 ${money(x.overdue)}</span>`:''}<div class="list-row__sub">已付 ${money(x.paidAmount)} · 已冲贷项 ${money(x.creditsApplied)} · 未用贷项 ${money(x.availableCredit)} · 采购价差 ${money(x.purchasePriceVariance)}</div><button class="btn ghost" style="margin-top:7px" onclick="paySupplier(${x.supplierId},${x.outstanding})">登记付款</button></div></div>`).join('')||'<div class="empty">暂无供应商应付</div>';$('#orderProfitList').innerHTML=orders.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">订单 #${x.orderId}</div> · 净销售 ${money(x.netSales)} · <b>${money(x.contributionProfit)}</b> <div class="list-row__sub">COGS ${money(x.cogs)} · 佣金 ${money(x.clubCommission)} · 积分/福利 ${money(Number(x.platformPointSubsidy)+Number(x.platformBenefitSubsidy))} · 物流包装 ${money(Number(x.shippingCost)+Number(x.packagingCost))}</div><button class="btn ghost" style="margin-top:6px" onclick="setOrderCosts(${x.orderId},${x.shippingCost||0},${x.packagingCost||0})">录入物流成本</button><div class="list-row__end"><span class="tag ${x.contributionProfit<0?'orange':''}">${Number(x.contributionMarginPct||0).toFixed(1)}%</span></div></div></div>`).join('')||'<div class="empty">暂无商城订单</div>';$('#productProfitList').innerHTML=`<table class="table"><thead><tr><th>商品</th><th>净销量</th><th>净销售</th><th>COGS</th><th>毛利</th><th>毛利率</th></tr></thead><tbody>${products.map(x=>`<tr><td>${esc(x.name)}<div class="sub">${esc(x.sku)}</div></td><td>${x.netUnits}</td><td>${money(x.netSales)}</td><td>${money(x.cogs)}</td><td><strong>${money(x.grossProfit)}</strong></td><td>${Number(x.grossMarginPct||0).toFixed(1)}%</td></tr>`).join('')}</tbody></table>`}catch(e){loaderError('#supplierFinanceList',e,'loadFinance 加载失败')}}
 async function paySupplier(supplierId,outstanding){if(Number(outstanding)<=0){showAlert({title:'没有应付余额',message:'当前没有应付余额。'});return}const v=await showForm({title:'登记供应商付款',submitText:'登记付款',fields:[{name:'amt',label:'本次付款金额',type:'number',value:Number(Number(outstanding).toFixed(2)),min:0.01,required:true},{name:'ref',label:'银行/支付凭证号',required:true}]});if(!v)return;await api('/api/platform/finance/supplier-payments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({supplierId,amount:Number(v.amt||0),paymentRef:v.ref,paymentMethod:'bank',note:'平台供应商付款'})});toast('供应商付款已登记');loadFinance()}

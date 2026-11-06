@@ -77,8 +77,8 @@ window.loadSupplyChain=async function(){await oldSupply();const ps=await api('/a
 window.manualAdjust=async()=>uxTask(async()=>{const options=await skuOptions();if(!options.length)return toast('没有自营 SKU');const f=await uxForm({title:'自营 SKU 库存调整',subtitle:'仅用于有凭证的实盘差异；采购到货请走验收。',fields:[{name:'vid',label:'商品 / 颜色 / 尺码',type:'select',options:options.map(x=>({value:x.v.id,label:label(x.p,x.v)})),required:true,full:true},{name:'quantityDelta',label:'差异数量（调减填负数）',type:'number',step:1,value:0,required:true},{name:'reason',label:'实盘依据 / 原因',required:true,full:true}],submitText:'记录库存调整'});if(!f)return;const x=options.find(x=>x.v.id===Number(f.vid));await post('/api/platform/inventory/adjustments',{productId:x.p.id,variantId:x.v.id,quantityDelta:Number(f.quantityDelta),reason:f.reason});refresh();});
 // Replace the brittle table-column hook with explicit row data from the server renderer.
 window.retryOrderCommerce=async id=>uxTask(async()=>{const r=await post(`/api/platform/orders/${id}/shipment/sync-commerce`);toast(r.status==='synced'?'交易引擎已同步':r.message||'仍待同步');loadOrders();});
-const oldOrders=window.loadOrders;
-window.loadOrders=async function(){await oldOrders();document.querySelectorAll('#orderRows tr[data-status]').forEach(tr=>{if(!['paid','processing','confirmed'].includes(tr.dataset.status)||tr.querySelector('.ux-pick-action'))return;const b=document.createElement('button');b.className='btn ghost ux-pick-action';b.textContent='创建拣货';b.onclick=()=>createPick(Number(tr.dataset.orderId));tr.lastElementChild.querySelector('div')?.prepend(b);});};
+// 「创建拣货」按钮改由 orderRowHtml 按后端 pickState 渲染（2026-11-06）：这里不再补挂，
+// 否则已拣货/拣货中的行会被无条件再挂一个创建拣货，破坏「创建→拣货→打包→发货」的单一入口。
 })();
 (function(){
 if(!location.pathname.startsWith('/platform'))return;
