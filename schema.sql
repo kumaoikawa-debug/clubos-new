@@ -1809,3 +1809,27 @@ CREATE TABLE IF NOT EXISTS activity_category_links (
   FOREIGN KEY(category_id) REFERENCES activity_categories(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_acl_category ON activity_category_links(category_id,activity_id);
+
+-- ==========================================================================
+-- 平台后台「新增未读」提醒（2026-11-06 / #620）
+-- 事件账本 + 每栏目水位。event_key 由「来源 + 行 + 状态」拼成，INSERT OR IGNORE
+-- 天然去重：新记录与状态推进各自只登记一次，不需要在每个写接口里埋点。
+-- 放在 schema.sql（init_db 的 executescript 最前面执行），避免存量库命中
+-- init_db 的「已有 clubs 就提前 return」而漏建表。
+-- ==========================================================================
+CREATE TABLE IF NOT EXISTS platform_notice_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  channel TEXT NOT NULL,
+  source TEXT NOT NULL,
+  event_key TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  title TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_pne_channel ON platform_notice_events(channel,id);
+
+CREATE TABLE IF NOT EXISTS platform_notice_reads (
+  channel TEXT PRIMARY KEY,
+  last_event_id INTEGER NOT NULL DEFAULT 0,
+  read_at TEXT
+);

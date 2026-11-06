@@ -9373,6 +9373,136 @@ def platform_external_settlement():
             'totals': {'count': len(out), 'externalSubtotal': round(total_sub,2), 'payable': round(total_pay,2)}}
 
 
+
+# ==========================================================================
+# 平台后台「新增未读」提醒（2026-11-06 / #620）：订单履约 / 售后管理 / PEAKTRACE 结算
+#
+# 需求口径：「两端后台有新增订单或信息需要有一个提示」。
+# 存量待办数（如待发货 3 单）不等于「新增未读」——前者一直挂着，后者是
+# 「自上次点开这个栏目以来，又发生了什么」。所以这里用事件账本 + 水位：
+#   · 每次 summary 把业务表当前状态折算成去重事件键，INSERT OR IGNORE 补登；
+#   · 未读数 = id > 该栏目水位 的事件数；
+#   · 点开栏目 → mark-read 把水位推到当前最大事件 id。
+# 事件键里带状态，因此「新订单」「发货」「妥投」「售后审核」「B2B 重新发货」
+# 都会各自产生一条新事件；不改动任何既有写接口。
+# ==========================================================================
+PLATFORM_NOTICE_CHANNELS = ('orders', 'aftersales', 'pksettle')
+
+
+def _platform_notice_candidates(c):
+    """从业务表现态派生事件键。返回 [(channel, source, event_key, kind, title, at)]。"""
+    ev = []
+    # 订单履约：新订单 / 主订单状态推进 / 新物流单号（只看近 30 天，避免扫全表）
+    for o in rows(c.execute("""SELECT id, status, created_at, shipped_at, delivered_at, tracking_no
+                               FROM gear_orders
+                               WHERE created_at >= datetime('now','-30 day')""")):
+        oid = int(o['id'])
+        created = o.get('created_at') or ''
+        changed = o.get('delivered_at') or o.get('shipped_at') or created
+        ev.append(('orders', 'gear_orders', f'order:{oid}:new', 'new_order',
+                   f'新订单 #{oid}', created))
+        ev.append(('orders', 'gear_orders', f'order:{oid}:status:{o.get("status") or ""}',
+                   'order_status', f'订单 #{oid} 状态：{o.get("status") or "-"}', changed))
+        if o.get('tracking_no'):
+            ev.append(('orders', 'gear_orders', f'order:{oid}:tracking:{o["tracking_no"]}',
+                       'order_tracking', f'订单 #{oid} 有新物流单号', changed))
+    # PEAKTRACE 代发：同步给上游、履约状态、物流单号、结算清单新增行
+    for e in rows(c.execute("""SELECT id, order_id, push_status, fulfill_status, tracking_no,
+                                      created_at, updated_at, fulfilled_at
+                               FROM external_fulfillment_orders""")):
+        eid, oid = int(e['id']), int(e['order_id'])
+        at = e.get('updated_at') or e.get('created_at') or ''
+        ev.append(('orders', 'external_fulfillment_orders', f'efo:{eid}:new',
+                   'fulfillment_new', f'代发订单 #{oid} 已同步 PEAKTRACE', e.get('created_at') or at))
+        ev.append(('orders', 'external_fulfillment_orders',
+                   f'efo:{eid}:fulfill:{e.get("fulfill_status") or ""}',
+                   'fulfillment_status', f'代发订单 #{oid} 履约：{e.get("fulfill_status") or "-"}', at))
+        if e.get('tracking_no'):
+            ev.append(('orders', 'external_fulfillment_orders',
+                       f'efo:{eid}:tracking:{e["tracking_no"]}',
+                       'fulfillment_tracking', f'代发订单 #{oid} 物流已更新', at))
+        ev.append(('pksettle', 'external_fulfillment_orders',
+                   f'efo:{eid}:settlement:{e.get("push_status") or ""}',
+                   'settlement_line', f'结算清单新增：代发订单 #{oid}', e.get('created_at') or at))
+        if e.get('fulfilled_at'):
+            ev.append(('pksettle', 'external_fulfillment_orders', f'efo:{eid}:settled',
+                       'settlement_settled', f'代发订单 #{oid} 已妥投，可结算', e.get('fulfilled_at')))
+    # 售后：新申请 / 状态推进 / PEAKTRACE 退换货回传
+    for x in rows(c.execute("""SELECT id, order_id, status, created_at, updated_at, external_sync_status
+                               FROM after_sales_cases
+                               WHERE created_at >= datetime('now','-30 day')""")):
+        cid = str(x['id'])
+        at = x.get('updated_at') or x.get('created_at') or ''
+        ev.append(('aftersales', 'after_sales_cases', f'as:{cid}:new',
+                   'aftersales_new', f'新的售后申请 {cid}（订单 #{x["order_id"]}）', x.get('created_at') or at))
+        ev.append(('aftersales', 'after_sales_cases', f'as:{cid}:status:{x.get("status") or ""}',
+                   'aftersales_status', f'售后单 {cid} 状态：{x.get("status") or "-"}', at))
+        if x.get('external_sync_status'):
+            ev.append(('aftersales', 'after_sales_cases',
+                       f'as:{cid}:b2b:{x["external_sync_status"]}',
+                       'aftersales_b2b', f'售后单 {cid} 的 PEAKTRACE 同步状态：{x["external_sync_status"]}', at))
+    return ev
+
+
+def _materialize_platform_notices(c):
+    """补登事件 + 给首次访问的栏目设基线（历史数据不当成「新」）。"""
+    evs = _platform_notice_candidates(c)
+    if evs:
+        c.executemany("""INSERT OR IGNORE INTO platform_notice_events
+                         (channel,source,event_key,kind,title,created_at)
+                         VALUES(?,?,?,?,?,COALESCE(NULLIF(?,''),CURRENT_TIMESTAMP))""",
+                      [(ch, src, key, kind, title, at or '') for ch, src, key, kind, title, at in evs])
+    mx = int(c.execute('SELECT COALESCE(MAX(id),0) FROM platform_notice_events').fetchone()[0])
+    c.executemany("""INSERT OR IGNORE INTO platform_notice_reads(channel,last_event_id,read_at)
+                     VALUES(?,?,CURRENT_TIMESTAMP)""",
+                  [(ch, mx) for ch in PLATFORM_NOTICE_CHANNELS])
+    return mx
+
+
+def _platform_notice_counts(c):
+    out = {ch: 0 for ch in PLATFORM_NOTICE_CHANNELS}
+    for r in rows(c.execute("""SELECT e.channel AS channel, COUNT(*) AS n
+                               FROM platform_notice_events e
+                               LEFT JOIN platform_notice_reads r ON r.channel=e.channel
+                               WHERE e.id > COALESCE(r.last_event_id,0)
+                               GROUP BY e.channel""")):
+        if r['channel'] in out:
+            out[r['channel']] = int(r['n'] or 0)
+    return out
+
+
+@app.get('/api/platform/notices/summary')
+def platform_notices_summary():
+    """侧栏角标 60 秒轮询的轻量计数。只补登事件 + COUNT，不拉订单/售后明细。"""
+    with conn() as c:
+        _materialize_platform_notices(c)
+        counts = _platform_notice_counts(c)
+        latest = rows(c.execute("""SELECT channel,kind,title,created_at FROM platform_notice_events
+                                   ORDER BY id DESC LIMIT 5"""))
+    return {'channels': counts, 'total': sum(counts.values()), 'latest': latest,
+            'channelsLabel': {'orders': '订单履约', 'aftersales': '售后管理', 'pksettle': 'PEAKTRACE 结算'}}
+
+
+@app.post('/api/platform/notices/read')
+def platform_notices_read(payload: dict = Body(default={})):
+    """点开栏目即已读：只推进该栏目水位，不删事件、不清别人的未读。"""
+    ch = str(payload.get('channel') or '').strip()
+    if ch != 'all' and ch not in PLATFORM_NOTICE_CHANNELS:
+        raise HTTPException(400, '未知栏目')
+    targets = PLATFORM_NOTICE_CHANNELS if ch == 'all' else (ch,)
+    with conn() as c:
+        _materialize_platform_notices(c)
+        mx = int(c.execute('SELECT COALESCE(MAX(id),0) FROM platform_notice_events').fetchone()[0])
+        c.executemany("""INSERT INTO platform_notice_reads(channel,last_event_id,read_at)
+                         VALUES(?,?,CURRENT_TIMESTAMP)
+                         ON CONFLICT(channel) DO UPDATE SET
+                           last_event_id=excluded.last_event_id, read_at=CURRENT_TIMESTAMP""",
+                      [(x, mx) for x in targets])
+        counts = _platform_notice_counts(c)
+    return {'ok': True, 'channel': ch, 'lastEventId': mx,
+            'channels': counts, 'total': sum(counts.values())}
+
+
 @app.post('/api/webhooks/external-fulfillment')
 async def external_fulfillment_webhook(request:Request):
     """供应商（PEAKTRACE）发货/签收回调入口（无会话，凭 token 校验）。
