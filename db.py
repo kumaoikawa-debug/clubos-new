@@ -474,6 +474,11 @@ def _run_compat_migrations(c):
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(order_id) REFERENCES gear_orders(id) ON DELETE CASCADE)''')
     c.execute('CREATE INDEX IF NOT EXISTS idx_effo_push ON external_fulfillment_orders(push_status,fulfill_status,id)')
+    # 结算清单需要供应商「妥投时间」（2026-11-06）：单独记账，避免与订单确认收货时间混淆。
+    _ensure_column(c, 'external_fulfillment_orders', 'fulfilled_at', 'fulfilled_at TEXT')
+    # 售后单 ↔ PEAKTRACE 退换货同步状态（#618）
+    _ensure_column(c, 'after_sales_cases', 'external_sync_status', 'external_sync_status TEXT')
+    _ensure_column(c, 'after_sales_cases', 'external_sync_error', 'external_sync_error TEXT')
     # 进销存 V1.1（2026-10-31）：采购拒收/异常登记（任务书 4.2③）。
     # 未到货量公式 = ordered - received - rejected：异常量不参与未到货，采购单才能正常收完。
     c.execute('''CREATE TABLE IF NOT EXISTS purchase_order_exceptions (

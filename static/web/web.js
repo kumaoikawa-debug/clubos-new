@@ -2845,16 +2845,27 @@ async function loadOrders(){
     if(x.status!=='refunded') action+=`<button class="w-act" type="button" onclick='requestGearAfterSales(${JSON.stringify(x).replace(/'/g,"&#39;")})'>申请售后</button>`;
     const cases=(x.afterSalesCases||[]).map(a=>`<div class="w-case">
       <div class="w-case__hd">${badge(asType(a.case_type),'info')}${badge(asSt(a.status),stTone(a.status))}</div>
-      ${a.return_tracking_no?`<div class="w-case__meta">退货物流 ${esc(a.return_tracking_no)}</div>`:''}
-      ${a.exchange_tracking_no?`<div class="w-case__meta">换货物流 ${esc(a.exchange_tracking_no)}</div>`:''}
+      ${a.return_tracking_no?`<div class="w-case__meta">退回 PEAKTRACE 物流 ${esc(a.return_tracking_no)}</div>`:''}
+      ${a.exchange_tracking_no?`<div class="w-case__meta">PEAKTRACE 换货重发 ${esc(a.exchange_carrier||'')} ${esc(a.exchange_tracking_no)}</div>`:''}
+      ${a.external_sync_status==='failed'?`<div class="w-case__meta">售后单同步供应商失败，请稍后联系客服重试</div>`:''}
       ${a.status==='awaiting_return'?`<button class="w-act w-act--sm" type="button" onclick="submitReturn('${a.id}')">填写退货物流</button>`:''}
     </div>`).join('');
+    /* 外部（PEAKTRACE 代发）订单：上游物流「已妥投」(fulfillStatus=delivered) 只是待确认，
+       订单主状态仍是 shipped —— 这里把状态标签显示为「待确认收货」并提示用户去点确认收货，
+       避免与真正的「已签收」(status=delivered) 混淆。 */
+    const efFul=(x.externalFulfillment&&x.externalFulfillment.fulfillStatus)||'';
+    const gearDeliveredPending=(x.status==='shipped'&&efFul==='delivered');
+    const gearStText=gearDeliveredPending?'待确认收货':ordSt(x.status);
+    const gearStTone=gearDeliveredPending?'wait':stTone(x.status);
     return `<div class="w-ord">
-      <div class="w-ord__hd"><b>装备订单 #${x.id}</b>${badge(ordSt(x.status),stTone(x.status))}</div>
+      <div class="w-ord__hd"><b>装备订单 #${x.id}</b>${badge(gearStText,gearStTone)}</div>
       <div class="w-ord__items">${items||'<div class="w-item"><span>商品</span></div>'}</div>
       ${x.shipping_consignee?`<div class="w-ord__meta"><span>${esc(x.shipping_consignee)} ${esc(x.shipping_phone||'')}</span></div><div class="w-ord__meta"><span>${esc(x.shipping_address||'')}</span></div>`:''}
       <div class="w-ord__amt"><span>实付</span><b>${money(x.total)}</b></div>
       <div class="w-ord__meta"><span>${esc(x.carrier||'待发货')}${x.tracking_no?' '+esc(x.tracking_no):''}</span></div>
+      ${gearDeliveredPending?`<div class="w-ord__note w-ord__note--ok">物流已妥投，请确认收货</div>`:''}
+      ${x.returnWindowDays!=null&&x.returnWindowDays>0?`<div class="w-ord__note">签收后 ${x.returnWindowLimitDays} 天内可申请退换货，剩余约 ${x.returnWindowDays} 天</div>`:''}
+      ${x.returnWindowDays===0?`<div class="w-ord__note">已超过 ${x.returnWindowLimitDays} 天退换货申请期限</div>`:''}
       <div class="w-ord__refund">退款：${esc(refundStateText(x))}</div>
       ${cases}${action?`<div class="w-ord__ops">${action}</div>`:''}
     </div>`

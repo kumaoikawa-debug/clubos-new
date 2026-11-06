@@ -6602,6 +6602,27 @@ def _refund_progress(kind:str,status:str|None):
     if st=='rejected': return {'step':'rejected','label':'退款未通过','detail':'可查看审核说明'}
     return {'step':'none','label':'无退款申请','detail':''}
 
+def _return_window_state(order: dict, ef: dict | None):
+    """C 端「7 天内可申请退换货」提示：返回 (窗口天数, 剩余天数)。
+
+    基准与 after_sales._assert_within_return_window 完全一致（确认收货时间优先，
+    外部代发订单取物流妥投时间）。无基准 / 关闭窗口时返回 (0, None)。
+    """
+    try: limit=int(os.environ.get('AFTER_SALES_WINDOW_DAYS','7'))
+    except Exception: limit=7
+    if limit<=0: return (0,None)
+    base=str(order.get('delivered_at') or '').strip() or str((ef or {}).get('fulfilled_at') or '').strip()
+    if not base: return (limit,None)
+    from datetime import datetime, timezone
+    try:
+        dt=datetime.fromisoformat(base.replace('Z','+00:00'))
+        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+        left=limit-(datetime.now(timezone.utc)-dt).total_seconds()/86400.0
+        return (limit,max(0,int(left+0.999)))
+    except Exception:
+        return (limit,None)
+
+
 @app.get('/api/public/users/{user_id}/order-center')
 def user_order_center(user_id:int,club_id:int=1):
     with conn() as c:
@@ -6658,6 +6679,13 @@ def user_order_center(user_id:int,club_id:int=1):
             x['afterSalesCases']=after_sales_engine.list_for_order(c,int(x['id']))
             x['refundProgress']=_refund_progress('gear',x.get('refund_status'))
             x['orderKind']='gear'
+            # 外部履约桥随行：让 C 端区分「物流已妥投·待确认收货」与「已签收」
+            ef=row(c.execute('SELECT push_status,fulfill_status,carrier,tracking_no,external_order_id,fulfilled_at FROM external_fulfillment_orders WHERE order_id=?',(x['id'],)))
+            x['externalFulfillment']=({'pushStatus':ef['push_status'],'fulfillStatus':ef['fulfill_status'],
+                'carrier':ef['carrier'],'trackingNo':ef['tracking_no'],'externalOrderId':ef['external_order_id'],
+                'fulfilledAt':ef['fulfilled_at']} if ef else None)
+            # 退换货申请窗口（默认签收/妥投后 7 天）：后端算好剩余天数下发，C 端只展示
+            x['returnWindowLimitDays'],x['returnWindowDays']=_return_window_state(x,ef)
         # 待支付单在 confirming 之前不会落一行 registrations / gear_orders，所以它不会出现在
         # 上面两个列表里 —— 这正是它会卡死的根因。直接从结算单解析，不能挂在订单行下（那样必然查不到）。
         pending_orders=[]
@@ -6689,6 +6717,30 @@ def user_orders(user_id:int):
     # Backward-compatible gear-only endpoint. New C-end should use /order-center.
     with conn() as c:return rows(c.execute('SELECT id,source_club_id,total,cash_paid,status,tracking_no,carrier,after_sales_status,payment_status,refund_status,created_at FROM gear_orders WHERE user_id=? ORDER BY id DESC',(user_id,)))
 
+def _complete_receipt(c, order_id: int) -> dict:
+    """订单「确认收货」统一收口：shipped → delivered + 冻结佣金 + 对齐外部履约表。
+
+    被三处复用：C 端 confirm-receipt 端点、平台 PATCH delivered、10 天自动确认循环
+    (_auto_confirm_loop)。幂等：已是 delivered 原样返回，不重复冻结。
+    """
+    o = row(c.execute('SELECT * FROM gear_orders WHERE id=?', (int(order_id),)))
+    if not o:
+        raise LookupError('装备订单不存在')
+    if o['status'] == 'delivered':
+        return {'ok': True, 'orderId': order_id, 'status': 'delivered', 'idempotent': True}
+    if o['status'] != 'shipped':
+        raise ValueError(f"当前订单状态({o['status']})不能确认收货")
+    c.execute("UPDATE gear_orders SET status='delivered',delivered_at=COALESCE(delivered_at,CURRENT_TIMESTAMP) WHERE id=?",(order_id,))
+    commission = commission_engine.freeze_order(c, order_id=order_id)
+    # 外部履约表对齐：用户确认收货后，供应商侧物流也已妥投，统一标记 delivered。
+    try:
+        c.execute("UPDATE external_fulfillment_orders SET fulfill_status=?,updated_at=CURRENT_TIMESTAMP WHERE order_id=? AND fulfill_status!='delivered'",
+                  (external_fulfillment.FUL_DELIVERED, int(order_id)))
+    except Exception:
+        pass
+    return {'ok': True, 'orderId': order_id, 'status': 'delivered', 'commission': commission}
+
+
 @app.post('/api/public/orders/{order_id}/confirm-receipt')
 def confirm_receipt(order_id:int,payload:dict=Body(default={})):
     # C 端「确认收货」：仅会员本人可操作，且仅在已发货(shipped)时允许签收 → delivered，
@@ -6697,16 +6749,14 @@ def confirm_receipt(order_id:int,payload:dict=Body(default={})):
     user_id=int(payload.get('userId') or 0)
     if not user_id: raise HTTPException(400,'userId required')
     with conn() as c:
-        o=row(c.execute('SELECT * FROM gear_orders WHERE id=?',(order_id,)))
+        o=row(c.execute('SELECT user_id,status FROM gear_orders WHERE id=?',(order_id,)))
         if not o: raise HTTPException(404,'装备订单不存在')
         if int(o.get('user_id') or 0)!=user_id: raise HTTPException(403,'该订单不属于当前用户')
-        if o['status']=='delivered':
-            return {'ok':True,'orderId':order_id,'status':'delivered','idempotent':True}
-        if o['status']!='shipped':
-            raise HTTPException(409,f"当前订单状态({o['status']})不能确认收货")
-        c.execute("UPDATE gear_orders SET status='delivered',delivered_at=CURRENT_TIMESTAMP WHERE id=?",(order_id,))
-        commission=commission_engine.freeze_order(c,order_id=order_id)
-    return {'ok':True,'orderId':order_id,'status':'delivered','commission':commission}
+        try:
+            res=_complete_receipt(c, order_id)
+        except ValueError as e:
+            raise HTTPException(409,str(e))
+    return res
 
 @app.post('/api/public/orders/{order_id}/after-sales')
 def after_sales(order_id:int,payload:dict=Body(default={})):
@@ -6730,10 +6780,13 @@ def public_after_sales_detail(case_id:str):
 
 @app.post('/api/public/after-sales/{case_id}/return-shipment')
 def public_after_sales_return(case_id:str,payload:dict=Body(...)):
+    carrier=str(payload.get('carrier') or ''); tracking=str(payload.get('trackingNo') or '')
     with conn() as c:
-        try:return after_sales_engine.submit_return(c,case_id=case_id,carrier=str(payload.get('carrier') or ''),tracking_no=str(payload.get('trackingNo') or ''))
+        try:out=after_sales_engine.submit_return(c,case_id=case_id,carrier=carrier,tracking_no=tracking)
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
+    out['externalReturnSync']=_push_external_return(case_id,out,action='return_shipped',carrier=carrier,tracking=tracking)
+    return out
 
 @app.post('/api/public/orders/{order_id}/refund-request')
 def request_gear_refund(order_id:int,payload:dict=Body(default={})):
@@ -7784,6 +7837,58 @@ if _peaktrace_auto_sync_enabled():
     threading.Thread(target=_peaktrace_auto_loop,name='peaktrace-mirror-sync',daemon=True).start()
 
 
+def _auto_confirm_enabled() -> bool:
+    """默认开启 10 天自动确认；AUTO_CONFIRM_RECEIPT_DAYS=0 关闭。"""
+    try:
+        return int(os.environ.get('AUTO_CONFIRM_RECEIPT_DAYS', '10')) > 0
+    except ValueError:
+        return True
+
+
+def _auto_confirm_loop():
+    """自动确认收货（默认开，AUTO_CONFIRM_RECEIPT_DAYS 天；设 0 关闭）。
+
+    与 PEAKTRACE 自动同步 (_peaktrace_auto_loop) 解耦：后者受 PEAKTRACE_AUTO_SYNC
+    门控且生产环境关闭，不能依赖它推进订单终态。本循环独立常驻，扫描所有
+    status='shipped' 且 shipped_at 超过阈值的订单（自营与 PEAKTRACE 代发一视同仁），
+    调用 _complete_receipt 完成签收 + 冻结佣金。
+
+    注意：PEAKTRACE 代发的「物流妥投」(fulfill_status=delivered) 只是待确认，订单主
+    状态仍是 shipped，同样会落入本扫描；这样即便用户忘了点「确认收货」，10 天后系统
+    也会自动确认，交易闭环不会卡死。
+    """
+    import time
+    time.sleep(30)  # 启动缓冲
+    while True:
+        try:
+            if _auto_confirm_enabled():
+                days = max(1, int(os.environ.get('AUTO_CONFIRM_RECEIPT_DAYS', '10')))
+                mod = f'-{days} days'
+                with conn() as c:
+                    due = rows(c.execute(
+                        """SELECT id FROM gear_orders
+                           WHERE status='shipped' AND shipped_at IS NOT NULL
+                             AND shipped_at <= datetime('now', ?)""", (mod,)))
+                for r in due:
+                    try:
+                        with conn() as c2:
+                            _complete_receipt(c2, int(r['id']))
+                        print(f'[auto-confirm] order {r["id"]} -> delivered (auto)')
+                    except Exception as e:
+                        print('[auto-confirm] skipped', r['id'], type(e).__name__, str(e)[:120])
+        except Exception as e:
+            print('[auto-confirm] loop error:', type(e).__name__, str(e)[:160])
+        try:
+            time.sleep(max(300, int(os.environ.get('AUTO_CONFIRM_INTERVAL', '3600'))))
+        except Exception:
+            time.sleep(3600)
+
+
+if _auto_confirm_enabled():
+    import threading
+    threading.Thread(target=_auto_confirm_loop, name='auto-confirm-receipt', daemon=True).start()
+
+
 @app.get('/api/platform/brands/peaktrace/status')
 def platform_peaktrace_status():
     """给平台端显示「上次同步时间 / 已接通商品数」，不需要访问上游。"""
@@ -8778,6 +8883,10 @@ def platform_update_order(order_id:int,payload:dict=Body(...)):
             if payload.get('status')=='delivered':
                 c.execute('UPDATE gear_orders SET delivered_at=COALESCE(delivered_at,CURRENT_TIMESTAMP) WHERE id=?',(order_id,))
                 commission=commission_engine.freeze_order(c,order_id=order_id)
+                # 外部履约表对齐：平台确认签收后，供应商侧物流统一标记已妥投。
+                try: c.execute("UPDATE external_fulfillment_orders SET fulfill_status=? WHERE order_id=? AND fulfill_status!='delivered'",
+                               (external_fulfillment.FUL_DELIVERED, order_id))
+                except Exception: pass
     return {'ok':True,'commission':commission}
 
 
@@ -8861,8 +8970,17 @@ def _apply_order_progress(c, order_id: int, shipment: dict):
     """运单「已签收」时把订单推到 delivered 并冻结佣金，与手工「标记签收」等价。
 
     发货时不在这里写订单：创建运单的端点已经把 status/carrier/tracking_no 写好了。
+
+    ★ 外部（PEAKTRACE 代发）订单例外：物流妥投 ≠ 用户确认收货。供应商回传的「已签收」
+    只推进外部履约表的 fulfill_status（在 external_fulfillment.apply_upstream 内处理），
+    绝不能在这里把 gear_orders 直接置 delivered —— 否则会越过 C 端「确认收货」按钮、
+    绕过 10 天自动确认，让订单提前终态。外部订单的完成一律走 _complete_receipt
+    （confirm-receipt 端点 / 平台 PATCH delivered / 自动确认循环）。
     """
     if (shipment or {}).get('status') != 'delivered':
+        return None
+    # 外部代发（纯外部 / 混合）：物流妥投不自动终结本地订单，等用户确认或自动确认。
+    if external_fulfillment.order_external_mode(c, order_id) in ('pure', 'mixed'):
         return None
     o = row(c.execute('SELECT status FROM gear_orders WHERE id=?', (order_id,)))
     if not o or o['status'] in ('delivered', 'refunded'):
@@ -9197,6 +9315,64 @@ def platform_external_fulfillment_sync():
     return {'ok':True,'push':push,'pull':pull}
 
 
+@app.get('/api/platform/external-fulfillment/settlement')
+def platform_external_settlement():
+    """PEAKTRACE 结算清单（clubos ↔ PEAKTRACE 货品结算）。
+
+    用户付款付到 clubos，PEAKTRACE 的款由 clubos 结算过来 —— 这份清单就是两边之间的
+    货品结算凭据：每一行 = 一笔已推给 PEAKTRACE 的代发订单，列出 clubos 订单号、上游
+    外部订单号、品牌、商品(SKU+名称+数量)、外部零售小计、推送/履约状态、发货与妥投时间，
+    以及按结算比例算出的「应付 PEAKTRACE」。结算比例优先取品牌 product_brands.settlement_ratio
+    （settlement_mode='sales_ratio' 且 >0 时生效），否则用全局 PEAKTRACE_SETTLEMENT_RATE
+    （默认 1.0）。
+    """
+    rate = float(os.environ.get('PEAKTRACE_SETTLEMENT_RATE', '1.0') or '1.0')
+    with conn() as c:
+        rows_eff = rows(c.execute("""SELECT e.*, b.name brand_name, b.settlement_mode, b.settlement_ratio,
+                                           g.user_id, g.total, g.created_at order_created, u.name buyer, cl.name club_name
+                                    FROM external_fulfillment_orders e
+                                    LEFT JOIN product_brands b ON b.id=e.brand_id
+                                    LEFT JOIN gear_orders g ON g.id=e.order_id
+                                    LEFT JOIN users u ON u.id=g.user_id
+                                    LEFT JOIN clubs cl ON cl.id=g.source_club_id
+                                    ORDER BY e.id DESC"""))
+        out=[]; total_sub=0.0; total_pay=0.0
+        for e in rows_eff:
+            payload=jload(e.get('payload_json') or '{}', {})
+            items=payload.get('items') or []
+            # 外部零售小计：订单里属外部镜像商品的明细合计（clubos 实际代收金额）
+            ext_sub=0.0
+            for it in rows(c.execute("""SELECT i.unit_price, i.quantity, p.source, p.inventory_mode
+                                        FROM gear_order_items i JOIN products p ON p.id=i.product_id
+                                        WHERE i.order_id=?""", (int(e['order_id']),))):
+                is_ext = (it['source']=='external_api' or (it['inventory_mode'] or '') not in ('','platform_owned'))
+                if is_ext: ext_sub += float(it['unit_price'] or 0)*int(it['quantity'] or 0)
+            br = float(e.get('settlement_ratio') or 0)
+            use_ratio = (br if (e.get('settlement_mode')=='sales_ratio' and br>0) else rate)
+            payable = round(ext_sub*use_ratio, 2)
+            total_sub += ext_sub; total_pay += payable
+            out.append({
+                'orderId': e['order_id'],
+                'externalOrderId': e.get('external_order_id'),
+                'brand': e.get('brand_name') or 'PEAKTRACE',
+                'buyer': e.get('buyer') or '',
+                'club': e.get('club_name') or '',
+                'items': [{'sku': it.get('sku'), 'name': it.get('name'), 'quantity': it.get('quantity')} for it in items],
+                'externalSubtotal': round(ext_sub, 2),
+                'pushStatus': e.get('push_status'),
+                'fulfillStatus': e.get('fulfill_status'),
+                'pushError': e.get('push_error'),
+                'pushedAt': e.get('pushed_at'),
+                'fulfilledAt': e.get('fulfilled_at'),
+                'updatedAt': e.get('updated_at'),
+                'orderCreated': e.get('order_created'),
+                'settlementRate': use_ratio,
+                'payable': payable,
+            })
+    return {'rate': rate, 'orders': out,
+            'totals': {'count': len(out), 'externalSubtotal': round(total_sub,2), 'payable': round(total_pay,2)}}
+
+
 @app.post('/api/webhooks/external-fulfillment')
 async def external_fulfillment_webhook(request:Request):
     """供应商（PEAKTRACE）发货/签收回调入口（无会话，凭 token 校验）。
@@ -9215,6 +9391,79 @@ async def external_fulfillment_webhook(request:Request):
         try: return external_fulfillment.handle_webhook(c,body)
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
+
+def _push_external_return(case_id:str, case:dict, *, action:str,
+                          carrier:str='', tracking:str='') -> dict | None:
+    """ClubOS → PEAKTRACE：审核同意 / 用户填退货运单时同步售后单。
+
+    仅「退货退款 / 换货」且订单是 PEAKTRACE 代发时才推。HTTP 在 DB 事务外发，
+    结果落 after_sales_cases.external_sync_status 供平台端查看与重试。
+    """
+    if case.get('case_type') not in ('return_refund','exchange'):
+        return None
+    with conn() as c:
+        if not external_fulfillment.is_external_order(c,int(case['order_id'])):
+            return None
+        payload=external_fulfillment.build_return_payload(
+            c,case,action=action,return_carrier=carrier,return_tracking_no=tracking)
+    res=external_fulfillment.push_return(payload)
+    with conn() as c:
+        external_fulfillment.mark_return_sync(c,case_id,res)
+    return {'ok':bool(res.get('ok')),'error':res.get('error')}
+
+
+@app.post('/api/webhooks/external-fulfillment/after-sales')
+async def external_fulfillment_after_sales_webhook(request:Request):
+    """PEAKTRACE → ClubOS：确认收到退货 / 换货重新发货。
+
+    上游确认顾客退货后重新发货，回调把换货运单写回售后单；C 端订单卡随即
+    显示「换货物流」。纯外部订单跳过本地入库/出库（两端共享库存，不单独建仓）。
+    """
+    try: body=await request.json()
+    except Exception: raise HTTPException(400,'invalid JSON')
+    if not isinstance(body,dict): raise HTTPException(400,'invalid JSON')
+    expected=external_fulfillment.webhook_token()
+    got=str(body.get('token') or '').strip()
+    if not expected or not got or not secrets.compare_digest(got,expected):
+        raise HTTPException(401,'token 校验失败')
+    case_id=str(body.get('clubosCaseId') or '').strip()
+    action=str(body.get('action') or '').strip()
+    if not case_id: raise HTTPException(400,'缺少 clubosCaseId')
+    if action not in ('return_received','exchange_shipped'):
+        raise HTTPException(400,'未知 action')
+    carrier=str(body.get('carrier') or '').strip()
+    tracking=str(body.get('trackingNo') or body.get('tracking_no') or '').strip()
+    if action=='exchange_shipped' and not tracking:
+        raise HTTPException(400,'重发回调缺少运单号')
+    with conn() as c:
+        try: case=after_sales_engine.get(c,case_id)
+        except LookupError as e: raise HTTPException(404,str(e))
+        if not external_fulfillment.is_external_order(c,int(case['order_id'])):
+            raise HTTPException(409,'该售后单不是 PEAKTRACE 代发订单')
+        if case['status']=='completed':
+            return {'ok':True,'caseId':case_id,'status':'completed','action':action,'idempotent':True}
+        if action=='exchange_shipped' and case['case_type']!='exchange':
+            raise HTTPException(409,'该售后单不是换货单')
+        if case['status'] not in ('awaiting_return','return_in_transit','exchange_pending_shipment'):
+            raise HTTPException(409,f"当前售后状态({case['status']})不能同步退换货进展")
+        try:
+            # 上游已确认收到退货：先推进到 exchange_pending_shipment（本地不入库）
+            if case['status']=='return_in_transit':
+                after_sales_engine.receive_return(c,case_id=case_id,restock=False,
+                                                  note='PEAKTRACE 已确认收到退货')
+                case=after_sales_engine.get(c,case_id)
+            if action=='exchange_shipped':
+                out=after_sales_engine.ship_exchange(
+                    c,case_id=case_id,carrier=carrier or external_fulfillment.PROVIDER,
+                    tracking_no=tracking)
+            else:
+                out=case
+            c.execute("""UPDATE after_sales_cases SET external_sync_status=?,external_sync_error=NULL,
+                         updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+                      ('return_received' if action=='return_received' else 'reshipped',case_id))
+        except ValueError as e: raise HTTPException(409,str(e))
+    return {'ok':True,'caseId':case_id,'status':out.get('status'),'action':action}
+
 
 @app.post('/api/platform/orders/{order_id}/shipment/sync-commerce')
 def platform_retry_shipment_commerce(order_id:int):
@@ -9278,9 +9527,12 @@ def platform_after_sales_detail(case_id:str):
 @app.post('/api/platform/after-sales/{case_id}/approve')
 def platform_after_sales_approve(case_id:str,payload:dict=Body(default={})):
     with conn() as c:
-        try:return after_sales_engine.approve(c,case_id=case_id,reviewer='platform',approved_refund_amount=payload.get('refundAmount'),note=str(payload.get('note') or ''))
+        try:out=after_sales_engine.approve(c,case_id=case_id,reviewer='platform',approved_refund_amount=payload.get('refundAmount'),note=str(payload.get('note') or ''))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
+    # ClubOS 同意退换 → 订单/售后单同步给 PEAKTRACE（HTTP 在事务外，失败不回滚审核）
+    out['externalReturnSync']=_push_external_return(case_id,out,action='approved')
+    return out
 
 @app.post('/api/platform/after-sales/{case_id}/reject')
 def platform_after_sales_reject(case_id:str,payload:dict=Body(default={})):

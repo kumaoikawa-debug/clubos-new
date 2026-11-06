@@ -288,15 +288,26 @@ def apply_pull_results(c, results: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 # 状态回写（webhook 与 pull 共用）
 # ---------------------------------------------------------------------------
-# 「已签收 → 冻结佣金」由宿主注入（commission_engine 实例在 app.py，域模块不能反向 import）。
-# app.py 启动时：external_fulfillment.on_delivered = lambda c, order_id: commission_engine.freeze_order(c, order_id=order_id)
+# 佣金冻结不再挂在「上游物流妥投」上（那样会越过 C 端「确认收货」、绕过 10 天自动确认）。
+# 现改为仅在订单**被确认收货**时冻结 —— 由宿主 app.py 通过 _complete_receipt 统一收口
+# （C 端 confirm-receipt 端点 / 平台 PATCH delivered / 自动确认循环三处复用）。
+# on_delivered 钩子保留向后兼容，但当前上游妥投路径不再调用它。
 on_delivered = None  # type: ignore[assignment]
 
 
 def apply_upstream(c, order_id: int, *, carrier: str, tracking_no: str,
                    status: str = 'shipped', events: list[dict] | None = None,
                    external_order_id: str | None = None) -> dict:
-    """把上游发货/签收结果写回本地：运单 + gear_orders + 履约记录。
+    """把上游发货/妥投结果写回本地：运单 + gear_orders + 履约记录。
+
+    ★ 关键语义（2026-11-06 修订）：**物流妥投 ≠ 用户确认收货**。
+    * status='shipped'（上游发货）：订单主状态推进到 shipped（待确认收货），
+      履约表 fulfill_status=shipped，并写 gear_orders.carrier/tracking_no。
+    * status='delivered'（上游物流妥投）：**只**把履约表 fulfill_status 置为 delivered
+      （已妥投），订单主状态保持 shipped（待用户确认收货）—— 绝不冻结佣金、绝不写
+      delivered_at。佣金与终态在用户「确认收货」(app.confirm_receipt) 或 10 天自动确认
+      (app._auto_confirm_loop) 时才落。否则会出现「货刚到、系统就显示已完成订单」的错乱，
+      且 C 端「确认收货」按钮会被终态吞掉。
 
     carrier/tracking_no 写 gear_orders 两列是刻意的：平台列表、C 端 me.js 读的
     就是这两列（logistics_engine 的运单表只是轨迹明细）。
@@ -306,49 +317,48 @@ def apply_upstream(c, order_id: int, *, carrier: str, tracking_no: str,
     o = c.execute('SELECT * FROM gear_orders WHERE id=?', (int(order_id),)).fetchone()
     if not o:
         raise LookupError('订单不存在')
-    status = 'delivered' if str(status or '').strip().lower() == 'delivered' else 'shipped'
+    is_delivered = str(status or '').strip().lower() == 'delivered'
     carrier = str(carrier or PROVIDER).strip() or PROVIDER
     tracking_no = str(tracking_no or '').strip()
-    if status == 'shipped' and not tracking_no:
+    if (not is_delivered) and not tracking_no:
         raise ValueError('缺少运单号')
-    # 已是终态的幂等保护：delivered 不回退，refunded 不覆盖
+    # 已是终态的幂等保护：用户已确认收货(delivered) / 已退款 不覆盖主状态
     if o['status'] == 'refunded':
         raise ValueError('订单已退款，不再同步供应商物流')
-    events = events or [{'time': None, 'desc': ('供应商已发货，等待物流更新' if status == 'shipped'
-                                                else '买家已签收（供应商回传）')}]
+    # —— 上游物流妥投：只推进履约表的「物流妥投」态，不触碰订单主状态 ——
+    if is_delivered:
+        events = events or [{'time': None, 'desc': '物流已送达，待您确认收货'}]
+        logistics_engine.upsert_shipment(
+            c, order_id=int(order_id), provider=PROVIDER, carrier=carrier, carrier_code='',
+            tracking_no=tracking_no or (o['tracking_no'] or ''),
+            status='delivered', events=events)
+        if tracking_no:
+            c.execute('UPDATE gear_orders SET carrier=?,tracking_no=? WHERE id=?',
+                      (carrier, tracking_no, int(order_id)))
+        # 若用户已先行确认收货或退款，不回退主状态；仍记下供应商物流已妥投。
+        c.execute("""UPDATE external_fulfillment_orders SET fulfill_status=?,carrier=?,tracking_no=?,
+                       external_order_id=COALESCE(?,external_order_id),fulfilled_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+                       WHERE order_id=?""", (FUL_DELIVERED, carrier, tracking_no, external_order_id, int(order_id)))
+        return {'ok': True, 'orderId': int(order_id), 'fulfillStatus': FUL_DELIVERED,
+                'orderStatus': (o['status'] or 'shipped')}
+    # —— 上游发货：推进订单到 shipped + 履约表 shipped ——
+    events = events or [{'time': None, 'desc': '供应商已发货，等待物流更新'}]
     logistics_engine.upsert_shipment(
         c, order_id=int(order_id), provider=PROVIDER, carrier=carrier, carrier_code='',
         tracking_no=tracking_no or (o['tracking_no'] or ''),
-        status=('delivered' if status == 'delivered' else 'in_transit'), events=events)
-    if tracking_no and status == 'delivered':
+        status='in_transit', events=events)
+    if tracking_no and o['status'] not in ('delivered', 'refunded'):
         c.execute('UPDATE gear_orders SET carrier=?,tracking_no=? WHERE id=?',
                   (carrier, tracking_no, int(order_id)))
-    elif tracking_no and o['status'] not in ('delivered', 'refunded'):
-        # 迟到的 shipped 回调不得改写已签收/已退款订单的运单号
-        c.execute('UPDATE gear_orders SET carrier=?,tracking_no=? WHERE id=?',
-                  (carrier, tracking_no, int(order_id)))
-    if status == 'delivered':
-        c.execute("""UPDATE gear_orders SET status='delivered',
-                     delivered_at=COALESCE(delivered_at,CURRENT_TIMESTAMP) WHERE id=?""",
-                  (int(order_id),))
-        c.execute("""UPDATE external_fulfillment_orders SET fulfill_status=?,carrier=?,tracking_no=?,
-                     external_order_id=COALESCE(?,external_order_id),updated_at=CURRENT_TIMESTAMP
-                     WHERE order_id=?""", (FUL_DELIVERED, carrier, tracking_no, external_order_id, int(order_id)))
-        if on_delivered:
-            try:
-                on_delivered(c, int(order_id))
-            except Exception:
-                pass
-    else:
-        c.execute("""UPDATE gear_orders SET status=CASE WHEN status IN ('paid','processing')
+    c.execute("""UPDATE gear_orders SET status=CASE WHEN status IN ('paid','processing')
                      THEN 'shipped' ELSE status END,
                      shipped_at=COALESCE(shipped_at,CURRENT_TIMESTAMP) WHERE id=?""", (int(order_id),))
-        # 迟到的 shipped 回调不得把已 delivered 的履约记录降级回去
-        c.execute("""UPDATE external_fulfillment_orders SET fulfill_status=?,carrier=?,tracking_no=?,
+    # 迟到的 shipped 回调不得把已 delivered 的履约记录降级回去
+    c.execute("""UPDATE external_fulfillment_orders SET fulfill_status=?,carrier=?,tracking_no=?,
                      external_order_id=COALESCE(?,external_order_id),updated_at=CURRENT_TIMESTAMP
                      WHERE order_id=? AND fulfill_status!='delivered'""",
-                  (FUL_SHIPPED, carrier, tracking_no, external_order_id, int(order_id)))
-    return {'ok': True, 'orderId': int(order_id), 'fulfillStatus': status}
+              (FUL_SHIPPED, carrier, tracking_no, external_order_id, int(order_id)))
+    return {'ok': True, 'orderId': int(order_id), 'fulfillStatus': FUL_SHIPPED}
 
 
 def handle_webhook(c, payload: dict) -> dict:
@@ -381,3 +391,87 @@ def sync_once(c, *, origin: str | None = None) -> dict:
     pulls = due_pulls(c)
     pulled = apply_pull_results(c, pull_orders(pulls, origin=origin)) if pulls else {'polled': 0, 'updated': 0}
     return {'push': pushed, 'pull': pulled}
+
+# ---------------------------------------------------------------------------
+# 退换货 B2B 同步（2026-11-06）
+# ---------------------------------------------------------------------------
+# 业务闭环：C 端 7 天内申请 → ClubOS 审核同意 / 用户填退货运单 → 推给 PEAKTRACE
+# → 顾客把货退回 PEAKTRACE → 上游确认收货并重新发货 → 回调 ClubOS 售后 webhook。
+# 与订单推送一样：token 放 JSON body，HTTP 阶段绝不碰 DB、绝不抛错。
+AFTER_SALES_PATH = '/api/b2b/returns'
+
+
+def is_external_order(c, order_id: int) -> bool:
+    """该订单是否由 PEAKTRACE 代发（有外部履约记录 = 货在供应商仓）。"""
+    try:
+        return c.execute('SELECT 1 FROM external_fulfillment_orders WHERE order_id=?',
+                         (int(order_id),)).fetchone() is not None
+    except Exception:
+        return False
+
+
+def build_return_payload(c, case: dict, *, action: str,
+                         return_carrier: str = '', return_tracking_no: str = '') -> dict:
+    """把 ClubOS 售后单翻译成上游 B2B 退换货单（sku 口径与订单推送一致）。"""
+    order_id = int(case['order_id'])
+    rec = c.execute('SELECT external_order_id FROM external_fulfillment_orders WHERE order_id=?',
+                    (order_id,)).fetchone()
+    items = []
+    for it in (case.get('items') or []):
+        m = None
+        if it.get('variant_id'):
+            try:
+                m = c.execute("""SELECT external_inventory_id,external_sku_id
+                                 FROM external_product_mappings
+                                 WHERE variant_id=? AND external_sku_id<>'' LIMIT 1""",
+                              (it['variant_id'],)).fetchone()
+            except Exception:
+                m = None
+        sku = ((m['external_inventory_id'] if m else None)
+               or (m['external_sku_id'] if m else None)
+               or it.get('sku') or '')
+        items.append({'sku': sku, 'name': it.get('product_name') or '',
+                      'quantity': int(it.get('quantity') or 1)})
+    return {
+        'clubosCaseId': str(case['id']),
+        'clubosOrderId': order_id,
+        'externalOrderId': (rec['external_order_id'] if rec else None),
+        'caseType': case.get('case_type'),
+        'reason': case.get('reason') or '',
+        'action': action,  # approved | return_shipped
+        'items': items,
+        'returnCarrier': return_carrier,
+        'returnTrackingNo': return_tracking_no,
+        'token': _token(),
+    }
+
+
+def push_return(payload: dict, *, origin: str | None = None, timeout: float = 10.0) -> dict:
+    """纯 HTTP：把售后单同步给 PEAKTRACE /api/b2b/returns。绝不抛错。"""
+    base = (origin or ORIGIN).rstrip('/')
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            r = client.post(base + AFTER_SALES_PATH, json=payload)
+            if r.status_code == 200:
+                data = r.json()
+                return {'ok': True, 'response': data if isinstance(data, dict) else {}}
+            detail = ''
+            try:
+                detail = str((r.json() or {}).get('error') or '')
+            except Exception:
+                pass
+            return {'ok': False, 'error': f'HTTP {r.status_code} {detail}'.strip()}
+    except Exception as e:
+        return {'ok': False, 'error': type(e).__name__ + ' ' + str(e)[:120]}
+
+
+def mark_return_sync(c, case_id: str, result: dict) -> None:
+    """把同步结果落到售后单上（平台端可看到「已同步 / 同步失败」并重试）。"""
+    try:
+        c.execute("""UPDATE after_sales_cases SET external_sync_status=?,external_sync_error=?,
+                     updated_at=CURRENT_TIMESTAMP WHERE id=?""",
+                  ('synced' if result.get('ok') else 'failed',
+                   None if result.get('ok') else str(result.get('error') or '')[:300],
+                   str(case_id)))
+    except Exception:
+        pass

@@ -530,10 +530,15 @@ function orderLogCell(x){
   const trace=x.tracking_no?`<button class="btn ghost sm" style="margin-top:4px" onclick="openShipmentTimeline(${x.id})">轨迹</button>`:'';
   return `<div class="plat-ordlog"><b>${esc(x.carrier||'承运商')}</b><span class="sub">${esc(x.tracking_no||'')}</span>${trace}</div>`;
 }
-/* 外部履约桥（2026-11-06）：PEAKTRACE 代发订单的行内状态 chip。 */
+/* 外部履约桥（2026-11-06）：PEAKTRACE 代发订单的行内状态 chip。
+   ★ 区分「物流已妥投·待确认收货」与「已签收」：上游回传 delivered 只代表物流妥投，
+   订单主状态仍是 shipped（待用户确认/自动确认），只有 gear_orders.status='delivered'
+   才是真正交易完成。两者不能混为一谈，否则会误导运营认为订单已终结。 */
 function externalChip(x){
   const f=x.externalFulfillment; if(!f)return '';
-  const st=f.fulfillStatus==='delivered'?'已签收':f.fulfillStatus==='shipped'?'已发货':'待供应商发货';
+  const confirmed=x.status==='delivered';
+  const st=f.fulfillStatus==='delivered'?(confirmed?'已签收':'已妥投·待确认收货')
+           :f.fulfillStatus==='shipped'?'已发货':'待供应商发货';
   const cls=f.fulfillStatus==='awaiting_shipment'?'orange':'';
   return `<span class="tag ${cls}">PEAKTRACE 代发 · ${st}</span>`
     +(f.pushStatus==='failed'?`<span class="tag orange">推送失败<div class="sub" style="font-weight:400;max-width:260px;white-space:normal">${esc(f.pushError||'原因未知，请点「同步供应商状态」重试')}</div></span>`:'');
@@ -546,6 +551,33 @@ async function syncExternalFulfillment(){
     toast(`同步完成：推送成功 ${p.pushed||0} / 失败 ${p.failed||0}，状态更新 ${l.updated||0}`);
     loadOrders();
   }catch(e){showAlert({title:'同步失败',message:e.message})}
+}
+/* PEAKTRACE 结算清单（2026-11-06）：clubos ↔ PEAKTRACE 货品结算凭据。 */
+async function loadPeaktraceSettlement(){
+  try{
+    const r=await api('/api/platform/external-fulfillment/settlement');
+    const orders=(r&&r.orders)||[];
+    const t=(r&&r.totals)||{count:0,externalSubtotal:0,payable:0};
+    $('#pksettleMetrics').innerHTML=`
+      <div class="stat"><div class="stat__v">${orders.length}</div><div class="stat__k">代发订单数</div></div>
+      <div class="stat"><div class="stat__v">¥${Number(t.externalSubtotal||0).toFixed(2)}</div><div class="stat__k">外部零售小计</div></div>
+      <div class="stat"><div class="stat__v">¥${Number(t.payable||0).toFixed(2)}</div><div class="stat__k">应付 PEAKTRACE</div></div>
+      <div class="stat"><div class="stat__v">${(r&&r.rate!=null)?Number(r.rate).toFixed(2):'1.00'}</div><div class="stat__k">当前结算比例</div></div>`;
+    $('#pksettleRows').innerHTML=orders.map(x=>{
+      const items=(x.items||[]).map(i=>`<div class="sub">${(i.sku||'-')} · ${esc(i.name||'')} × ${i.quantity||0}</div>`).join('')||'<span class="sub">—</span>';
+      const pushSt=x.pushStatus==='failed'?'<span class="tag orange">失败</span>':x.pushStatus==='pushed'?'已推送':'待推送';
+      const fulSt=x.fulfillStatus==='delivered'?'<span class="tag">已妥投</span>':x.fulfillStatus==='shipped'?'已发货':'待发货';
+      const time=`${x.pushedAt?esc(x.pushedAt.slice(0,10)):'-'} / ${x.fulfilledAt?esc(x.fulfilledAt.slice(0,10)):'-'}`;
+      return `<tr><td>#${x.orderId}${x.club?`<div class="sub">${esc(x.club)}</div>`:''}</td>
+        <td>${x.externalOrderId?esc(x.externalOrderId):'<span class="sub">未回写</span>'}</td>
+        <td>${esc(x.brand||'PEAKTRACE')}</td>
+        <td>${items}</td>
+        <td>¥${Number(x.externalSubtotal||0).toFixed(2)}</td>
+        <td>${Number(x.settlementRate||1).toFixed(2)}</td>
+        <td><b>¥${Number(x.payable||0).toFixed(2)}</b></td>
+        <td>${pushSt}</td><td>${fulSt}</td><td>${time}</td></tr>`;
+    }).join('')||'<tr><td colspan="10" class="sub" style="text-align:center;padding:18px">暂无 PEAKTRACE 代发订单</td></tr>';
+  }catch(e){showAlert({title:'加载失败',message:e.message})}
 }
 function orderRowHtml(x){
   const pure=x.externalMode==='pure';

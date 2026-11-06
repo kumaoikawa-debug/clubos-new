@@ -1,7 +1,58 @@
 from __future__ import annotations
-import json, uuid
+import json, os, uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from clubos_domain.product_stock import variant_of, write_variant_stock
+
+def _external_order(c, order_id: int) -> bool:
+    """订单是否由 PEAKTRACE 代发：货在供应商仓，退回/重发都不进本地仓库。
+
+    用户明确「ClubOS 与 PEAKTRACE 库存共享、不需要单独建仓」——外部订单的
+    after_sales_restock / warehouse.outbound_available 会把货错误地记到本地
+    镜像仓，必须整体跳过。表不存在（老库）时安全返回 False。
+    """
+    try:
+        return c.execute('SELECT 1 FROM external_fulfillment_orders WHERE order_id=?',
+                         (int(order_id),)).fetchone() is not None
+    except Exception:
+        return False
+
+
+def _assert_within_return_window(c, order: dict) -> None:
+    """签收/妥投后 7 天内可申请退换货（AFTER_SALES_WINDOW_DAYS，0 关闭）。
+
+    时间基准优先「用户确认收货 delivered_at」；外部代发订单妥投后主状态仍是
+    shipped、没有 delivered_at，改取履约表 fulfilled_at（物流妥投时间）。
+    没有可信基准的存量订单一律放行，避免误伤。
+    """
+    try:
+        days = int(os.environ.get('AFTER_SALES_WINDOW_DAYS', '7'))
+    except Exception:
+        days = 7
+    if days <= 0:
+        return
+    base = str(order.get('delivered_at') or '').strip()
+    if not base:
+        try:
+            r = c.execute("""SELECT fulfilled_at FROM external_fulfillment_orders
+                             WHERE order_id=? AND fulfill_status='delivered'""",
+                          (int(order['id']),)).fetchone()
+            base = str((r['fulfilled_at'] if r else '') or '').strip()
+        except Exception:
+            base = ''
+    if not base:
+        return
+    try:
+        dt = datetime.fromisoformat(base.replace('Z', '+00:00'))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) - dt > timedelta(days=days):
+            raise ValueError(f'已超过 {days} 天退换货申请期限')
+    except ValueError:
+        raise
+    except Exception:
+        return
+
 
 ACTIVE_STATUSES={
     'requested','pending_review','awaiting_return','return_in_transit',
@@ -60,6 +111,7 @@ class AfterSalesEngine:
         if int(order['user_id'])!=int(user_id): raise ValueError('只能为自己的订单申请售后')
         if order['status'] not in ('paid','processing','shipped','delivered','completed','after_sales'):
             raise ValueError(f"当前订单状态不能申请售后: {order['status']}")
+        _assert_within_return_window(c, order)
         if not items: raise ValueError('至少选择一个售后商品')
         normalized=[]; gross=0.0
         for it in items:
@@ -127,8 +179,10 @@ class AfterSalesEngine:
         next_status='approved_pending_refund' if case['case_type']=='return_refund' else 'exchange_pending_shipment'
         c.execute('''UPDATE after_sales_cases SET status=?,received_at=CURRENT_TIMESTAMP,decision_note=CASE WHEN ?!='' THEN ? ELSE decision_note END,
                      updated_at=CURRENT_TIMESTAMP WHERE id=?''',(next_status,note,note,case_id))
+        external = _external_order(c, int(case['order_id']))
         restocked_products=[]
-        if restock:
+        # 外部代发：货退回 PEAKTRACE，本地镜像仓不入库（两边共享库存，不单独建仓）
+        if restock and not external:
             for it in case['items']:
                 if not int(it.get('restocked') or 0):
                     if self.inventory:
@@ -139,13 +193,14 @@ class AfterSalesEngine:
                         else: c.execute('UPDATE products SET stock=stock+? WHERE id=?',(int(it['quantity']),int(it['product_id'])))
                     restocked_products.append(int(it['product_id']))
                     c.execute('UPDATE after_sales_items SET restocked=1 WHERE id=?',(it['id'],))
-        if not restock and self.inventory and self.inventory.warehouse:
+        if not restock and not external and self.inventory and self.inventory.warehouse:
             wh=self.inventory.warehouse;lid=wh.ensure_defaults(c)['returnLocation']['id']
             for it in case['items']:
                 wh.inbound(c,product_id=int(it['product_id']),variant_id=it.get('variant_id'),quantity=int(it['quantity']),location_id=lid,reference_type='after_sales_quarantine',reference_id=f'{case_id}:{it["id"]}',note='退回待检，不计可售')
         c.execute("UPDATE gear_orders SET after_sales_status=? WHERE id=?",(next_status,case['order_id']))
         out=self._case(c,case_id)
         out['restockedProductIds']=sorted(set(restocked_products))
+        out['externalFulfillment']=external
         return out
 
     def ship_exchange(self,c,*,case_id:str,carrier:str,tracking_no:str):
@@ -153,13 +208,17 @@ class AfterSalesEngine:
         if case['status']=='completed': return {**case,'idempotent':True}
         if case['case_type']!='exchange' or case['status']!='exchange_pending_shipment': raise ValueError('当前售后单不能执行换货发货')
         if not str(tracking_no or '').strip(): raise ValueError('trackingNo required')
-        for it in case['items']:
+        external = _external_order(c, int(case['order_id']))
+        # 外部代发：换货由 PEAKTRACE 直接重发给顾客，不从本地仓出库
+        for it in ([] if external else case['items']):
             if self.inventory and self.inventory.warehouse:
                 self.inventory.warehouse.outbound_available(c,product_id=int(it['product_id']),variant_id=it.get('variant_id'),quantity=int(it['quantity']),reference_type='exchange',reference_id=case_id,idempotency_key=f'exchange:{case_id}:{it["id"]}',note='换货实物出库')
         c.execute('''UPDATE after_sales_cases SET status='completed',exchange_carrier=?,exchange_tracking_no=?,exchange_shipped_at=CURRENT_TIMESTAMP,
                      completed_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?''',(str(carrier or ''),str(tracking_no),case_id))
         self._refresh_order(c,int(case['order_id']))
-        return self._case(c,case_id)
+        out=self._case(c,case_id)
+        out['externalFulfillment']=external
+        return out
 
     def attach_refund(self,c,*,case_id:str,refund_request_id:str):
         case=self._case(c,case_id)
