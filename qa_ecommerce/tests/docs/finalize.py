@@ -146,7 +146,7 @@ rows = [
      ENV, 'TEST-RESULTS.json / TC-GP-017',
      'club_refunds 合并 activity + gear 两类查询并统一打归属标记、按时间倒序；'
      '新增 _club_activity_refund_or_404 闸门，approve/reject/retry-provider 遇装备退款 409；'
-     'club.js 新增 gearRefundRow() 只读行（无审核按钮），index.html 缓存版本 bump 20261107e。',
+     'club.js 新增 gearRefundRow() 只读行（无审核按钮），index.html 缓存版本 bump 20261108a。',
      DATE, 'Horizon (QA)', DATE],
 ]
 with bug.open('w', encoding='utf-8-sig', newline='') as f:

@@ -109,3 +109,38 @@ body.admin-workspace{background:linear-gradient(125deg,#d4ebdd 0%,#c7e6da 26%,#d
 .info-reply__ta{width:100%;min-height:78px;resize:vertical;padding:10px 12px;border:1px solid var(--line,#dfe9e2);
   border-radius:11px;font:inherit;font-size:13.5px;line-height:1.6;outline:none;background:#fff}
 .info-reply__ta:focus{border-color:#8fbc9f}
+
+
+/* ── 活动中心详情页：压缩头部元信息，把首屏还给编辑工作区（2026-11-08） ──────
+   原来 tab 之下依次是「标题+7按钮(两行) → 两块长说明 → 200px 分类大卡」，
+   首屏几乎看不到 #sec-cover。这里只收紧密度，不删任何功能入口。 */
+.act-shell{grid-template-columns:minmax(0,300px) minmax(0,1fr)}
+.act-pane .detail-nav{padding:6px 2px;margin:8px 0 2px}
+.act-pane .detail-nav__item{min-height:32px;padding:0 13px;font-size:12px}
+/* 头部：标题一行、元信息一行、操作一行 */
+.act-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin:6px 0 4px;flex-wrap:wrap}
+.act-head__id{min-width:0;flex:1 1 320px}
+.act-head__id h2{font-size:19px;line-height:1.3;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.act-head__id .sub{margin-top:3px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.act-head__id .tag{font-size:10px;padding:2px 7px;vertical-align:1px}
+.act-head__ops{display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:0 1 auto;justify-content:flex-end}
+.act-head__ops .btn{padding:6px 10px;font-size:11.5px;border-radius:9px;line-height:1.2;white-space:nowrap}
+/* 资料来源 + 版本状态压成一行；空内容不占位 */
+.act-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:7px 0 2px;font-size:11.5px;color:var(--muted)}
+.act-meta:empty{display:none}
+.act-meta>.sub{margin:0!important;flex:1 1 auto;min-width:0}
+.act-meta>.notice:not(.warn){padding:0;background:none;color:var(--muted);font-size:11.5px;margin:0!important}
+.act-meta>.notice.warn{padding:6px 10px;margin:0!important;font-size:11.5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.act-meta__hint{color:var(--muted);font-size:11.5px}
+.act-meta__btn{padding:4px 9px!important;font-size:11px!important}
+/* 工作区卡片：收紧默认间距，让封面编辑区尽早进入首屏 */
+.act-pane>.card.section{margin-top:14px;padding:15px 17px}
+/* 活动分类：由大卡压成一条，chips 与「保存分类」同行，帮助文字收进 title */
+.act-pane>.act-cats{padding:11px 14px!important;margin-top:12px!important}
+.act-cats__row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.act-cats__label{font-size:12.5px;font-weight:800;color:var(--text);flex:0 0 auto;white-space:nowrap}
+.act-cats__chips{display:flex;gap:6px;flex-wrap:wrap;flex:1 1 auto;min-width:0}
+.act-cats__chips .sub{font-size:11.5px;margin:0}
+.act-cats__save{padding:6px 12px!important;font-size:11.5px!important;border-radius:9px;flex:0 0 auto}
+.act-cats .actcat-pick{padding:4px 10px!important;font-size:11.5px!important;border-radius:999px}
+.act-cats .actcat-pick input{width:13px;height:13px}
