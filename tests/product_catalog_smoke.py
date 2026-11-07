@@ -268,7 +268,9 @@ def main():
     # finance 的「订单真实利润」list-row 模板曾少一个 </div>：导致列宽塌成竖排单字、
     # 页面横向溢出 2118px（2026-10-24 巡检抓到，与页头改动无关的既有 bug）。
     pjs = (ROOT / 'static/platform/platform.js').read_text(encoding='utf-8')
-    ok("%</span></div></div></div>`).join" in pjs, 'finance 订单利润 list-row 闭合完整（防竖排单字）')
+    # 模板改为 .map(x=>{ ... return `...` }).join 后，闭合串本身不变；
+    # 旧断言把 `` `).join `` 写死会误判。守住「三个 </div> 闭合齐全」即可。
+    ok("%</span></div></div></div>`" in pjs, 'finance 订单利润 list-row 闭合完整（防竖排单字）')
 
     import re
     def ver(asset, html):

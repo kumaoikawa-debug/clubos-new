@@ -283,8 +283,11 @@ check('提交文案写明查看路径', '我的 → 我的咨询' in web_js)
 check('提醒条样式存在', '.w-iq-alert' in web_css and '.wme-li__badge' in web_css)
 check('后端注册批量未读端点', "@app.post('/api/public/inquiries/unread')" in read('app.py'))
 for f in ['static/web/index.html', 'static/club/index.html', 'static/platform/index.html', 'static/leader/index.html']:
-    m = re.search(r'20261105([a-z])', read(f))
-    check(f'{f} 缓存版本不低于 20261105d', bool(m) and m.group(1) >= 'd', m.group(0) if m else 'NONE')
+    # 旧写法用 re.search 取「第一个 20261105x」，升到 20261107x 后会误判为「无版本」。
+    # 改为取文件内最新缓存版本串参与比较，语义仍是「不低于上线版 20261105d」。
+    vers = re.findall(r'\?v=(2026[0-9]{4}[a-z])', read(f))
+    newest = max(vers) if vers else ''
+    check(f'{f} 缓存版本不低于 20261105d', bool(newest) and newest >= '20261105d', newest or 'NONE')
 
 print('\n' + ('ALL PASS' if not FAILS else f'FAILED: {len(FAILS)} -> ' + ', '.join(FAILS)))
 sys.exit(1 if FAILS else 0)

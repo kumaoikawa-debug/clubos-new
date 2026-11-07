@@ -369,15 +369,23 @@ class ClubOSPointsEngine:
         """
         oid=int(order['id']); user_id=int(order['user_id'])
         # Return Gear Points previously redeemed on this order.
+        # BUG-001 fix: the order-level idempotency check used to live *inside* the
+        # redemption loop. The first refund ledger written by that loop made the
+        # next iteration break, so every remaining redemption on the same order
+        # was silently skipped, while the return value still summed ALL of them.
+        # Result: users were short-changed and the API over-reported the refund.
+        # Now we diff (total redeemed) against (total already returned) and refund
+        # exactly the outstanding balance in one ledger row. This is correct for
+        # any number of redemptions and stays idempotent on re-entry.
         reds=c.execute('SELECT * FROM point_redemptions WHERE order_kind="gear" AND order_id=? AND point_type="gear"',(oid,)).fetchall()
-        for r0 in reds:
-            r=dict(r0); pts=int(r['points_used'] or 0)
-            already=c.execute('SELECT 1 FROM gear_point_ledger WHERE type="refund_redeem_return" AND source_type="gear_refund" AND source_id=? LIMIT 1',(str(oid),)).fetchone()
-            if already: break
-            if pts:
-                c.execute('UPDATE gear_point_accounts SET balance=balance+? WHERE user_id=?',(pts,user_id))
-                c.execute('INSERT INTO gear_point_ledger(user_id,type,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?)',
-                          (user_id,'refund_redeem_return',pts,'gear_refund',str(oid),'装备退款返还原订单使用的装备积分'))
+        total_redeemed=sum(int(dict(r)['points_used'] or 0) for r in reds)
+        returned_row=c.execute('SELECT COALESCE(SUM(amount),0) FROM gear_point_ledger WHERE type="refund_redeem_return" AND source_type="gear_refund" AND source_id=?',(str(oid),)).fetchone()
+        already_returned=int(returned_row[0] or 0)
+        outstanding=max(0,total_redeemed-already_returned)
+        if outstanding:
+            c.execute('UPDATE gear_point_accounts SET balance=balance+? WHERE user_id=?',(outstanding,user_id))
+            c.execute('INSERT INTO gear_point_ledger(user_id,type,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?)',
+                      (user_id,'refund_redeem_return',outstanding,'gear_refund',str(oid),'装备退款返还原订单使用的装备积分'))
 
         # Reverse Gear Points earned from this order.
         earned_row=c.execute('SELECT COALESCE(SUM(amount),0) FROM gear_point_ledger WHERE source_type="gear_order" AND source_id=? AND type="earn"',(str(oid),)).fetchone()
@@ -395,7 +403,8 @@ class ClubOSPointsEngine:
             if shortfall:
                 c.execute('INSERT INTO point_adjustment_debt(user_id,club_id,point_type,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?,?)',
                           (user_id,None,'gear',shortfall,'gear_refund',str(oid),'退款时用户已消费部分装备积分，记录积分欠账'))
-        return {'returnedRedeemedGearPoints':sum(int(dict(r)['points_used'] or 0) for r in reds), 'earnedGearPointsToReverse':earned}
+        # I2 invariant: the reported figure must equal the ledger actually written.
+        return {'returnedRedeemedGearPoints':already_returned+outstanding, 'earnedGearPointsToReverse':earned}
 
 points_domain_rules = {
     'CLUB_POINTS': 'club-scoped; earned by activity consumption; club-funded; redeemable only inside the same club',

@@ -1,0 +1,182 @@
+{
+  "runAt": "2026-11-07T22:43:27",
+  "version": "0873e01 + BUG-001 fixed",
+  "env": {
+    "CLUBOS_TEST_OPEN": "1",
+    "CLUBOS_SECURITY_MODE": "demo",
+    "COMMERCE_PROVIDER": "local",
+    "MOCK_AI": "1",
+    "DB": "/var/folders/r4/_sp9s2g5475b26xq2nd71hnh0000gn/T/clubos-ecom-points-p31x7ir0/test.db"
+  },
+  "invariants": [
+    "I1 余额守恒",
+    "I2 返回值↔流水一致",
+    "I3 幂等",
+    "I4 非负",
+    "I5 欠账"
+  ],
+  "summary": {
+    "total": 22,
+    "passed": 22,
+    "failed": 0,
+    "passRate": 100.0,
+    "p0Failures": 0,
+    "gate": "PASS"
+  },
+  "cases": [
+    {
+      "id": "TC-ECOM-001",
+      "priority": "P0",
+      "name": "采购收货幂等，不重复入库/应付",
+      "result": "PASS",
+      "detail": "重复收货 stock=60 且不重复应付"
+    },
+    {
+      "id": "TC-ECOM-002",
+      "priority": "P1",
+      "name": "收货不自动发布商品",
+      "result": "PASS",
+      "detail": "收货后 pending_listing，未自动发布"
+    },
+    {
+      "id": "TC-ECOM-003",
+      "priority": "P1",
+      "name": "上架前置校验（缺字段 400）",
+      "result": "PASS",
+      "detail": "缺字段 400；补全三要素后 active"
+    },
+    {
+      "id": "TC-GP-001",
+      "priority": "P0",
+      "name": "购买自动发放装备积分",
+      "result": "PASS",
+      "detail": "earn=190 (cashPaid=190.0 × rate=1.0)"
+    },
+    {
+      "id": "TC-GP-002/003",
+      "priority": "P0",
+      "name": "积分抵扣即时扣减 + 支付转正式抵扣",
+      "result": "PASS",
+      "detail": "hold -1470 → redeem_commit；cashValue=14.7"
+    },
+    {
+      "id": "TC-GP-004/005/006",
+      "priority": "P0",
+      "name": "全额退款返还已用积分/冲回已赚积分/净额守恒",
+      "result": "PASS",
+      "detail": "+1470(返还) / -175(冲回)，余额回到下单前"
+    },
+    {
+      "id": "TC-GP-007",
+      "priority": "P0",
+      "name": "全额退款幂等（防重复加减分）",
+      "result": "PASS",
+      "detail": "重复退款 idempotent=true，余额与流水均不变"
+    },
+    {
+      "id": "TC-GP-014",
+      "priority": "P1",
+      "name": "退款联动冲回库存/佣金/AI Credits",
+      "result": "PASS",
+      "detail": "佣金1条负向 / AI冲回 / refund_restock 库存回补"
+    },
+    {
+      "id": "TC-GP-008",
+      "priority": "P1",
+      "name": "标准退款链路同样冲正积分",
+      "result": "PASS",
+      "detail": "标准链路冲回 95 分，refund_requests=succeeded"
+    },
+    {
+      "id": "TC-GP-009",
+      "priority": "P1",
+      "name": "售后部分退款按现金比例冲回已赚积分",
+      "result": "PASS",
+      "detail": "部分退款 ¥100.0/285.0 → 冲回 100/285 分"
+    },
+    {
+      "id": "TC-GP-010",
+      "priority": "P1",
+      "name": "售后部分退款按商品占比返还已抵扣积分",
+      "result": "PASS",
+      "detail": "部分售后返还已抵扣积分 +581/1655（按商品占比）"
+    },
+    {
+      "id": "TC-GP-011",
+      "priority": "P1",
+      "name": "售后退款幂等",
+      "result": "PASS",
+      "detail": "重复售后退款 status=409（状态机拒绝），余额与冲正流水零变化"
+    },
+    {
+      "id": "TC-GP-013",
+      "priority": "P2",
+      "name": "退货(return_refund)全链路积分口径与实物回库",
+      "result": "PASS",
+      "detail": "退货链路冲回积分，实物回库 1 件（earned=190）"
+    },
+    {
+      "id": "TC-GP-018",
+      "priority": "P1",
+      "name": "同单两次部分售后累计冲正不超额（资金上限保护）",
+      "result": "PASS",
+      "detail": "两次部分售后：累计返还 593/845、冲回 194/276，marker=2，均未超额"
+    },
+    {
+      "id": "TC-GP-019",
+      "priority": "P1",
+      "name": "同订单多条抵扣流水全额返还且返回值=账实（BUG-001）",
+      "result": "PASS",
+      "detail": "1175 分抵扣（含注入 500）全额返还，返回值/流水/余额三方一致且重入幂等"
+    },
+    {
+      "id": "TC-ECOM-004/005",
+      "priority": "P0",
+      "name": "结算锁库存 + 支付冻结单价",
+      "result": "PASS",
+      "detail": "锁库存 48→46；改价后订单单价仍 100"
+    },
+    {
+      "id": "TC-ECOM-006",
+      "priority": "P1",
+      "name": "取消订单释放库存与锁定积分",
+      "result": "PASS",
+      "detail": "取消释放库存与 hold 500 分，余额不变"
+    },
+    {
+      "id": "TC-GP-015",
+      "priority": "P2",
+      "name": "重复支付不重复发积分",
+      "result": "PASS",
+      "detail": "重复支付 idempotent，earn(95) 未重复"
+    },
+    {
+      "id": "TC-GP-016",
+      "priority": "P2",
+      "name": "拒绝退款不冲正积分",
+      "result": "PASS",
+      "detail": "拒绝退款后积分与流水不变，订单 refund_status=rejected"
+    },
+    {
+      "id": "TC-GP-017",
+      "priority": "P3",
+      "name": "装备退款归平台不串入俱乐部接口",
+      "result": "PASS",
+      "detail": "装备退款仅在 /api/platform/refunds（共 9 条）"
+    },
+    {
+      "id": "TC-GP-012",
+      "priority": "P1",
+      "name": "余额不足形成积分欠账且不透支",
+      "result": "PASS",
+      "detail": "应冲回 95，余额 0 不透支，落 gear 欠账 95"
+    },
+    {
+      "id": "TC-ECOM-007",
+      "priority": "P2",
+      "name": "采购退货不影响 C 端积分",
+      "result": "PASS",
+      "detail": "采购退货只扣 B 端库存，C 端积分零变化"
+    }
+  ]
+}

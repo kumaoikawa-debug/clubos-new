@@ -305,12 +305,24 @@ check('platform.js 与 workflows-platform-more.js 都带缓存版本号（v= 参
       bool(_v_platform) and bool(_v_more))
 check('平台端仍引用共享样式（未被误删）', '/static/shared.css' in INDEX_HTML)
 # 套餐区必须占整行：挤在 g2 半栏里时 3 个档位只能纵向排 3 行，正是「操作不方便」的观感来源
+# 导航分组重构后套餐区改为独立 <section class="view"> + 全宽 plat-plan-grid，
+# 旧断言写死 <div class="card section">...<h3> 会误判；改为守「独立整行视图 + 横排网格」。
 check('订阅套餐区占整行（不挤在半栏）',
-      '<div class="card section"><div class="panel-title"><div><h3>订阅套餐</h3>' in INDEX_HTML)
-check('充值包区占整行', '<h3>充值包</h3>' in INDEX_HTML)
+      'id="credits-plans" class="view"' in INDEX_HTML
+      and '<h2>订阅套餐</h2>' in INDEX_HTML
+      and 'id="aiPlanList" class="plat-plan-grid"' in INDEX_HTML)
+# 同为导航分组重构后的独立 view + 全宽网格，旧 <h3> 断言已过时。
+check('充值包区占整行',
+      'id="credits-topup" class="view"' in INDEX_HTML
+      and '<h2>充值包</h2>' in INDEX_HTML
+      and 'id="aiTopupList" class="plat-plan-grid"' in INDEX_HTML)
+# 旧断言按「前 1200 字符」扫，导航重构后会把上一个 section 的半栏 grid 误算进来。
+# 改为只检查 aiPlanList 所属 section（最近一个 <section> 起点到列表之间）。
+_plan_at = INDEX_HTML.index('id="aiPlanList"')
+_plan_sec = INDEX_HTML.rfind('<section', 0, _plan_at)
 check('套餐区不再被 grid g2 包裹',
-      'grid g2' not in INDEX_HTML[INDEX_HTML.index('id="aiPlanList"') - 1200:INDEX_HTML.index('id="aiPlanList"')],
-      'aiPlanList 前 1200 字符内仍有 grid g2')
+      'grid g2' not in INDEX_HTML[_plan_sec:_plan_at],
+      'aiPlanList 所属 section 内仍有 grid g2')
 
 # ---------------------------------------------------------------------------
 # ⑤ 佣金流水（2026-10-24 用户截图）：整块文字压成竖排单字。
