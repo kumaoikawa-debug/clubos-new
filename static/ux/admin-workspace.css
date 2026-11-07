@@ -187,3 +187,71 @@ body.admin-workspace {
 }
 .actcat-pick input{accent-color:var(--brand);margin:0}
 .actcat-pick.on{border-color:var(--brand);background:#edf5f2;color:var(--brand);font-weight:700}
+
+/* ── 后台紧凑工作区（2026-11-08）：把首屏从「元信息」还给「数据」 ─────────
+   实测背景（1440×900）：两端 45 个板块里 42 个页头带说明、26 个说明折 2 行以上；
+   面包屑条占 96px，页头 3 行说明 81px，卡片 22px padding、section 22px 间距，
+   PEAKTRACE 结账单的结算明细表原本顶在 y=874 —— 首屏一行数据都看不到。
+   这里只压密度：不删任何功能入口、不删文案（完整说明进 title 且可点开）、
+   不改 DOM 结构。initViewFeedback() 靠 .panel-title 定位状态行，选择器必须保留。
+   本文件只被 club / platform 两个后台端加载，C 端与领队端完全不受影响。 */
+
+/* ① 面包屑工作条：96px → 约 46px */
+.admin-workspace .main{padding-top:10px;padding-bottom:30px}
+.admin-workspace .workspace-bar{min-height:40px;margin:0 0 8px;padding:5px 0}
+.admin-workspace .workspace-crumb{font-size:11.5px}
+.admin-workspace .workspace-search{padding:5px 9px;width:210px}
+.admin-workspace .workspace-search input{font-size:12px}
+
+/* ② 页头：标题收一档、说明只占一行。完整文案由 admin-compact.js 写入 title
+      （浏览器原生 tooltip），点击可就地展开；hover 不撑开布局，避免跳动。 */
+.admin-workspace .view>.panel-title{margin-bottom:8px;gap:10px;align-items:center}
+.admin-workspace .panel-title h2,.admin-workspace .view>h2{font-size:18px;line-height:1.25}
+.admin-workspace .view .panel-title>div:first-child>.sub{
+  font-size:11.5px;line-height:1.35;max-width:none;margin-top:3px;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden;
+  cursor:pointer;
+}
+.admin-workspace .view .panel-title>div:first-child>.sub.is-expanded{
+  display:block;-webkit-line-clamp:unset;overflow:visible;cursor:default;
+}
+.admin-workspace .view .panel-title>div:first-child>.sub.is-clamped{cursor:pointer}
+
+/* ③ 页头按钮组压紧：7 个按钮仍能单行放下，命中区保持 >=30px */
+.admin-workspace .view>.panel-title>div:has(.btn){gap:6px}
+.admin-workspace .view>.panel-title .btn{min-height:30px;padding:5px 10px;font-size:11.5px;line-height:1.3}
+
+/* ④ 卡片间距 / 状态行 / 表格行高：首屏多放 2~3 行数据 */
+.admin-workspace .section{margin-top:14px}
+.admin-workspace .ux-view-feedback{margin:0 0 8px;min-height:16px;font-size:11px}
+.admin-workspace .table th{padding:8px 12px}
+.admin-workspace .table td{padding:9px 12px}
+.admin-workspace .stat-tile,.admin-workspace .metric{padding:16px 18px}
+.admin-workspace .stat-tile .v,.admin-workspace .metric .v{font-size:26px;margin-top:6px}
+
+/* ⑤ 俱乐部工作台 hero：标题与说明压成两行，按钮不再散成三行 */
+.admin-workspace .hero-action{padding:12px 0;gap:14px}
+.admin-workspace .hero-action h2{font-size:23px;line-height:1.3;margin-bottom:4px}
+.admin-workspace .hero-action p{font-size:12.5px;line-height:1.4;margin:0;
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow:hidden;cursor:pointer}
+.admin-workspace .hero-action p.is-expanded{display:block;-webkit-line-clamp:unset;overflow:visible;cursor:default}
+.admin-workspace .hero-action .btn{min-height:32px;padding:6px 12px;font-size:12px}
+
+/* ⑥ 侧栏密度：同高度多显示 3~4 个入口 */
+.admin-workspace .nav button{min-height:34px;padding:6px 12px;font-size:12.5px}
+.admin-workspace .nav-group__head{padding:8px 12px 4px}
+.admin-workspace .nav-group__items{gap:2px}
+.admin-workspace .nav-group-label{margin:14px 10px 5px}
+
+/* ⑦ 窄屏兜底：触屏命中区与说明可读性优先，不追求极限压缩 */
+@media (max-width:900px){
+  .admin-workspace .workspace-bar{min-height:52px;margin-bottom:10px}
+  .admin-workspace .view>.panel-title{margin-bottom:10px}
+  .admin-workspace .nav button{min-height:40px}
+}
+@media (max-width:650px){
+  .admin-workspace .view .panel-title>div:first-child>.sub{-webkit-line-clamp:2}
+  .admin-workspace .nav button{min-height:44px}
+  .admin-workspace .btn,.admin-workspace .view>.panel-title .btn{min-height:42px}
+  .admin-workspace .stat-tile,.admin-workspace .metric{padding:14px}
+}

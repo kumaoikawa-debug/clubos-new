@@ -855,3 +855,43 @@
 .tag.muted{background:#f1f1f4;color:#8a8a93;border-color:#e3e3e8}
 .switch{display:inline-flex;align-items:center;gap:7px;cursor:pointer;user-select:none;font-size:14px;font-weight:600}
 .switch input{width:16px;height:16px;accent-color:#1a7f43}
+
+/* ── PEAKTRACE 结账单：把「账单抬头 + 筛选区」压成紧凑工作区（2026-11-08） ──
+   改前 1440×900 实测：页头 81px（说明 3 行）、账单信息卡 222.6px、
+   筛选与账期卡 305.1px → 结算明细表顶在 y=873.9，首屏一行数据都看不到。
+   这里只压密度与排布：5 个操作按钮、13 个筛选控件、所有 id 一个不少
+   （pkRender / pkFilterParams / pkSyncOptions 依赖这些 id，删了直接报错）。
+   注意 admin-workspace.css 在平台端晚于本文件加载，.admin-workspace .card
+   的 padding 会盖掉 .plat-pk-statement{padding:0}；下面用更高特异性收回来。 */
+
+/* 账单抬头：顶部行 + 4 宫格 + 口径行 → 标题行 + 同行字段 + 口径行 */
+.admin-workspace .card.plat-pk-statement{padding:0}
+.plat-pk-statement__top{padding:8px 14px 5px;gap:10px;align-items:center;border-bottom:0;flex-wrap:wrap}
+.plat-pk-statement__no{font-size:14px;display:inline-block}
+.plat-pk-statement__title{display:inline-block;margin:0 0 0 8px;font-size:11px}
+.plat-pk-statement__stamp{font-size:10.5px;line-height:1.4;text-align:right}
+.plat-pk-statement__grid{display:flex;flex-wrap:wrap;gap:4px 18px;padding:2px 14px 7px}
+.plat-pk-statement__grid>div{display:flex;align-items:baseline;gap:6px;font-size:11.5px;line-height:1.35}
+.plat-pk-statement__grid b{display:inline;margin:0;font-size:10.5px}
+.plat-pk-statement__desc{padding:0 14px 9px;font-size:11px;line-height:1.4}
+
+/* 筛选与账期：13 字段由 6 列 3 行压成 7 列 2 行 */
+.admin-workspace .card.plat-pk-filters{padding:11px 14px 9px}
+.plat-pk-filters__title{font-size:12px;margin-bottom:7px}
+.plat-pk-filters__grid{grid-template-columns:repeat(auto-fit,minmax(148px,1fr));gap:7px 10px}
+.plat-pk-filters__grid label{gap:3px;font-size:10.5px}
+.plat-pk-filters__grid input,.plat-pk-filters__grid select{min-height:27px;padding:3px 7px;font-size:12px;border-radius:7px}
+.plat-pk-filters__grid label.plat-pk-check{min-height:27px;font-size:11.5px}
+.plat-pk-filters__foot{margin-top:8px;padding-top:8px;gap:8px}
+.plat-pk-quick .btn{min-height:24px;padding:2px 8px;font-size:11px}
+.plat-pk-quick .sub{font-size:11px}
+
+/* 指标卡、工具栏、明细表外壳 */
+.admin-workspace #pksettleMetrics.section{margin-top:10px;gap:10px}
+.admin-workspace #pksettleMetrics .stat-tile{padding:11px 14px}
+.admin-workspace #pksettleMetrics .stat-tile .v{font-size:22px;margin-top:4px}
+.admin-workspace #pksettleMetrics .stat-tile .k{font-size:11.5px}
+.admin-workspace #pksettleMetrics .stat-tile .hint{font-size:11px}
+.admin-workspace .plat-pk-toolbar{margin:0 0 8px}
+.admin-workspace .card.plat-pk-tablewrap{padding:0}
+.admin-workspace .card.plat-pk-audit{padding:0}
