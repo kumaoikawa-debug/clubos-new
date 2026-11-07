@@ -1,12 +1,12 @@
 {
-  "runAt": "2026-11-07T22:43:27",
-  "version": "0873e01 + BUG-001 fixed",
+  "runAt": "2026-11-07T23:38:39",
+  "version": "91185e5 + BUG-001 fixed + OBS-02/03/04 fixed",
   "env": {
     "CLUBOS_TEST_OPEN": "1",
     "CLUBOS_SECURITY_MODE": "demo",
     "COMMERCE_PROVIDER": "local",
     "MOCK_AI": "1",
-    "DB": "/var/folders/r4/_sp9s2g5475b26xq2nd71hnh0000gn/T/clubos-ecom-points-p31x7ir0/test.db"
+    "DB": "/var/folders/r4/_sp9s2g5475b26xq2nd71hnh0000gn/T/clubos-ecom-points-x45u4djq/test.db"
   },
   "invariants": [
     "I1 余额守恒",
@@ -16,8 +16,8 @@
     "I5 欠账"
   ],
   "summary": {
-    "total": 22,
-    "passed": 22,
+    "total": 27,
+    "passed": 27,
     "failed": 0,
     "passRate": 100.0,
     "p0Failures": 0,
@@ -92,21 +92,21 @@
       "priority": "P1",
       "name": "售后部分退款按现金比例冲回已赚积分",
       "result": "PASS",
-      "detail": "部分退款 ¥100.0/285.0 → 冲回 100/285 分"
+      "detail": "部分退款 ¥95.0/285.0 → 冲回 95/285 分"
     },
     {
       "id": "TC-GP-010",
       "priority": "P1",
       "name": "售后部分退款按商品占比返还已抵扣积分",
       "result": "PASS",
-      "detail": "部分售后返还已抵扣积分 +581/1655（按商品占比）"
+      "detail": "部分售后返还已抵扣积分 +553/1660（按商品占比）"
     },
     {
       "id": "TC-GP-011",
       "priority": "P1",
-      "name": "售后退款幂等",
+      "name": "售后退款幂等（OBS-03：200 + idempotent，零重复副作用）",
       "result": "PASS",
-      "detail": "重复售后退款 status=409（状态机拒绝），余额与冲正流水零变化"
+      "detail": "重复售后退款 200 + idempotent:true（原单 rfd_c9770132445643a4927d），余额与冲正流水零变化"
     },
     {
       "id": "TC-GP-013",
@@ -120,21 +120,56 @@
       "priority": "P1",
       "name": "同单两次部分售后累计冲正不超额（资金上限保护）",
       "result": "PASS",
-      "detail": "两次部分售后：累计返还 593/845、冲回 194/276，marker=2，均未超额"
+      "detail": "两次部分售后：累计返还 551/827、冲回 184/276，marker=2，均未超额"
     },
     {
       "id": "TC-GP-019",
       "priority": "P1",
       "name": "同订单多条抵扣流水全额返还且返回值=账实（BUG-001）",
       "result": "PASS",
-      "detail": "1175 分抵扣（含注入 500）全额返还，返回值/流水/余额三方一致且重入幂等"
+      "detail": "1143 分抵扣（含注入 500）全额返还，返回值/流水/余额三方一致且重入幂等"
+    },
+    {
+      "id": "TC-GP-020",
+      "priority": "P1",
+      "name": "售后金额口径同源：折扣订单不多退现金/不放大占比（OBS-02）",
+      "result": "PASS",
+      "detail": "gross=200.0 → total=190.0（0.95 折后口径）：退 1 件现金 ¥95.0（旧口径 ¥100.0）、商品额 ¥95.0，占比 1/2"
+    },
+    {
+      "id": "TC-GP-021",
+      "priority": "P2",
+      "name": "非法状态发起售后退款仍 409（OBS-03 守卫）",
+      "result": "PASS",
+      "detail": "pending_review / exchange 仍 409；幂等 200 仅覆盖已完成冲正的终态"
+    },
+    {
+      "id": "TC-GP-022",
+      "priority": "P2",
+      "name": "俱乐部端不得审核装备退款（OBS-04 只读闸门）",
+      "result": "PASS",
+      "detail": "装备退款 rfd_6fd4fea6562b4deba3b85c42db13bcdf：俱乐部 approve/reject/retry 全 409，平台列表可查"
+    },
+    {
+      "id": "TC-GP-023",
+      "priority": "P1",
+      "name": "电商积分回归已挂进 regression_v025.sh 固定门禁",
+      "result": "PASS",
+      "detail": "regression_v025.sh 已挂载本套件（set -euo pipefail 下失败即挡发版）"
+    },
+    {
+      "id": "TC-GP-024",
+      "priority": "P2",
+      "name": "俱乐部端装备退款只读行与缓存版本护栏",
+      "result": "PASS",
+      "detail": "club.js 只读行 + 页面副标题 + index.html?v=20261107e 已生效（node --check 通过）"
     },
     {
       "id": "TC-ECOM-004/005",
       "priority": "P0",
       "name": "结算锁库存 + 支付冻结单价",
       "result": "PASS",
-      "detail": "锁库存 48→46；改价后订单单价仍 100"
+      "detail": "锁库存 44→42；改价后订单单价仍 100"
     },
     {
       "id": "TC-ECOM-006",
@@ -160,9 +195,9 @@
     {
       "id": "TC-GP-017",
       "priority": "P3",
-      "name": "装备退款归平台不串入俱乐部接口",
+      "name": "装备退款俱乐部端只读可见、平台仍统管（OBS-04）",
       "result": "PASS",
-      "detail": "装备退款仅在 /api/platform/refunds（共 9 条）"
+      "detail": "俱乐部端可见 10 条（装备只读 10 条），平台仍统管"
     },
     {
       "id": "TC-GP-012",

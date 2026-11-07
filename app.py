@@ -6249,9 +6249,16 @@ def cancel_registration(registration_id:int):
 
 @app.get('/api/club/{club_id}/refunds')
 def club_refunds(club_id:int):
+    """俱乐部端退款收件箱（活动退款可审核 + 装备退款只读可见）。
+
+    OBS-04：实物电商的退款审核权仍归总平台 `/api/platform/refunds`，但同一俱乐部
+    产生的装备退款必须能在本端查到进度，否则客服面对顾客无从回答。装备行统一打
+    `managed_by='platform'` / `can_review=False`，前端不给审核按钮；俱乐部端三个写
+    操作路由由 `_club_activity_refund_or_404` 守住，装备退款一律 409 拒写。
+    """
     club_or_404(club_id)
     with conn() as c:
-        return rows(c.execute('''SELECT rr.*,r.original_amount registration_original_amount,r.amount paid_cash,
+        activity=rows(c.execute('''SELECT rr.*,r.original_amount registration_original_amount,r.amount paid_cash,
             a.title activity_title,u.name user_name,u.phone,o.label occurrence_label,o.start_at,
             p.name participant_name,p.phone participant_phone
             FROM refund_requests rr
@@ -6261,6 +6268,23 @@ def club_refunds(club_id:int):
             LEFT JOIN activity_occurrences o ON o.id=r.occurrence_id
             LEFT JOIN registration_participants p ON p.id=rr.participant_id
             WHERE rr.club_id=? AND rr.kind='activity' ORDER BY rr.created_at DESC''',(club_id,)))
+        gear=rows(c.execute('''SELECT rr.*,go.total order_total,go.cash_paid paid_cash,
+            go.status gear_order_status,go.refund_status gear_refund_status,
+            u.name user_name,u.phone,
+            (SELECT GROUP_CONCAT(p.name,'、') FROM gear_order_items goi
+               JOIN products p ON p.id=goi.product_id WHERE goi.order_id=rr.gear_order_id) gear_titles
+            FROM refund_requests rr
+            LEFT JOIN gear_orders go ON go.id=rr.gear_order_id
+            LEFT JOIN users u ON u.id=rr.user_id
+            WHERE rr.club_id=? AND rr.kind='gear' ORDER BY rr.created_at DESC''',(club_id,)))
+    for r in activity:
+        r['managed_by']='club'; r['can_review']=True
+    for r in gear:
+        r['activity_title']=f"装备订单 #{r.get('gear_order_id') or '—'}"
+        r['managed_by']='platform'; r['can_review']=False; r['readonly']=True
+    out=activity+gear
+    out.sort(key=lambda x:(str(x.get('created_at') or ''),str(x.get('id') or '')),reverse=True)
+    return out
 
 def _mirror_refund_to_commerce(refund_id:str) -> dict:
     """Mirror a provider-confirmed Gear cash refund into Medusa bookkeeping.
@@ -6366,12 +6390,19 @@ def _submit_refund_to_provider(refund_id:str):
     return {'ok':True,'refundRequestId':refund_id,'status':'processing','providerStatus':provider_status,'providerRefundNo':refund_no,'providerRefundId':provider_refund_id,'provider':provider_name}
 
 
+def _club_activity_refund_or_404(c,club_id:int,refund_id:str):
+    """俱乐部端写操作闸门：装备退款归总平台审核，本端只读（OBS-04）。"""
+    rr=row(c.execute('SELECT * FROM refund_requests WHERE id=? AND club_id=?',(refund_id,club_id)))
+    if not rr: raise HTTPException(404,'退款申请不存在')
+    if rr.get('kind')!='activity': raise HTTPException(409,'装备退款由总平台审核，俱乐部端仅可查看')
+    return rr
+
+
 @app.post('/api/club/{club_id}/refunds/{refund_id}/approve')
 def club_approve_refund(club_id:int,refund_id:str):
     club_or_404(club_id)
     with conn() as c:
-        rr=row(c.execute("SELECT * FROM refund_requests WHERE id=? AND kind='activity' AND club_id=?",(refund_id,club_id)))
-        if not rr: raise HTTPException(404,'活动退款申请不存在')
+        _club_activity_refund_or_404(c,club_id,refund_id)
         try: refund_lifecycle.approve(c,refund_id=refund_id,approver=f'club:{club_id}')
         except ValueError as e: raise HTTPException(409,str(e))
     return _submit_refund_to_provider(refund_id)
@@ -6380,16 +6411,14 @@ def club_approve_refund(club_id:int,refund_id:str):
 def club_retry_refund_provider(club_id:int,refund_id:str):
     club_or_404(club_id)
     with conn() as c:
-        rr=row(c.execute("SELECT * FROM refund_requests WHERE id=? AND kind='activity' AND club_id=?",(refund_id,club_id)))
-        if not rr: raise HTTPException(404,'活动退款申请不存在')
+        _club_activity_refund_or_404(c,club_id,refund_id)
     return _submit_refund_to_provider(refund_id)
 
 @app.post('/api/club/{club_id}/refunds/{refund_id}/reject')
 def club_reject_refund(club_id:int,refund_id:str,payload:dict=Body(default={})):
     club_or_404(club_id)
     with conn() as c:
-        rr=row(c.execute("SELECT * FROM refund_requests WHERE id=? AND kind='activity' AND club_id=?",(refund_id,club_id)))
-        if not rr: raise HTTPException(404,'活动退款申请不存在')
+        _club_activity_refund_or_404(c,club_id,refund_id)
         try:return refund_lifecycle.reject(c,refund_id=refund_id,approver=f'club:{club_id}',note=str(payload.get('note') or ''))
         except ValueError as e: raise HTTPException(409,str(e))
 
@@ -10040,6 +10069,20 @@ def _start_after_sales_refund(case_id:str):
         try: case=after_sales_engine.get(c,case_id)
         except LookupError as e: raise HTTPException(404,str(e))
         if case['case_type']=='exchange': raise HTTPException(409,'换货售后不执行退款')
+        # OBS-03：重复点击 / 网络重试对同一售后单发起退款属于幂等重放，不应报 409。
+        # 仅「确实完成过资产冲正」的终态短路；pending_review / awaiting_return /
+        # rejected / cancelled 等非法状态仍按状态机 409 拒绝。
+        if case['status'] in ('completed','refunded'):
+            rid0=str(case.get('refund_request_id') or '')
+            rr0=row(c.execute('SELECT * FROM refund_requests WHERE id=?',(rid0,))) if rid0 else None
+            marker=c.execute("SELECT 1 FROM gear_point_ledger WHERE type='after_sales_marker' "
+                             "AND source_type='gear_after_sales' AND source_id=? LIMIT 1",(case_id,)).fetchone()
+            if rid0 or marker:
+                return {'ok':True,'caseId':case_id,'status':case['status'],'idempotent':True,
+                        'alreadyRefunded':True,'refundRequestId':rid0 or None,
+                        'refundStatus':rr0.get('status') if rr0 else None,
+                        'cashAmount':float(rr0.get('cash_amount') or 0) if rr0 else 0.0,
+                        'message':'该售后单已完成退款，未重复发起'}
         if case['status'] not in ('approved_pending_refund','refund_processing'):
             raise HTTPException(409,f"当前售后状态不能发起退款: {case['status']}")
         if case.get('refund_request_id'):

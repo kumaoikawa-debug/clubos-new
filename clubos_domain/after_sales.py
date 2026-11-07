@@ -3,6 +3,7 @@ import json, os, uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from clubos_domain.product_stock import variant_of, write_variant_stock
+from clubos_domain.order_amounts import amount_basis
 
 def _external_order(c, order_id: int) -> bool:
     """订单是否由 PEAKTRACE 代发：货在供应商仓，退回/重发都不进本地仓库。
@@ -127,8 +128,13 @@ class AfterSalesEngine:
             line=round(float(oi['unit_price'])*qty,2); gross+=line
             normalized.append((item_id,qty,line))
         gross=round(gross,2)
-        cash_ratio=(float(order.get('cash_paid') or 0)/float(order.get('total') or 1)) if float(order.get('total') or 0)>0 else 0
-        requested_cash=0.0 if case_type=='exchange' else round(gross*cash_ratio,2)
+        # OBS-02：售后金额与订单成交口径同源。after_sales_items 存商品原价，
+        # gear_orders.total/cash_paid 却是会员装备折扣 + 积分抵扣之后的金额；
+        # 旧式 gross*(cash_paid/total) 在 9.5 折订单上会把退款现金多算一个折扣差。
+        # 改为按原价占比分摊「实付现金」，并夹在剩余可退现金内。
+        basis=amount_basis(c,int(order_id),total=order.get('total'),cash_paid=order.get('cash_paid'))
+        cash_left=max(0.0,float(order.get('cash_paid') or 0)-float(order.get('refunded_cash_total') or 0))
+        requested_cash=0.0 if case_type=='exchange' else round(min(gross*basis['cashFactor'],cash_left),2)
         cid=self._id()
         c.execute('''INSERT INTO after_sales_cases(id,order_id,user_id,source_club_id,case_type,status,reason,evidence_json,note,
                      requested_goods_amount,requested_refund_amount,approved_refund_amount)

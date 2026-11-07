@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any
 from clubos_domain.product_stock import variant_of, write_variant_stock
+from clubos_domain.order_amounts import amount_basis
 
 
 class CommerceRefundEngine:
@@ -35,15 +36,30 @@ class CommerceRefundEngine:
                    goi.commission_rate_snapshot,p.commission_rate
                    FROM after_sales_items ai JOIN gear_order_items goi ON goi.id=ai.order_item_id
                    JOIN products p ON p.id=goi.product_id WHERE ai.case_id=?''',(case_id,)).fetchall()]
-        goods=round(sum(float(x.get('requested_amount') or 0) for x in items),2)
+        goods_raw=round(sum(float(x.get('requested_amount') or 0) for x in items),2)
         refund_cash=round(float(case.get('approved_refund_amount') or case.get('requested_refund_amount') or 0),2)
         total=max(0.0,float(order.get('total') or 0)); cash_paid=max(0.0,float(order.get('cash_paid') or 0))
-        goods_ratio=min(1.0, goods/total) if total else 0.0
         user_id=int(order['user_id']); club_id=int(order['source_club_id']); oid=int(order['id'])
+        # OBS-02：分子（after_sales_items 原价）与分母（gear_orders.total 折后金额）
+        # 必须同源，否则商品占比被系统性放大，甚至把部分退款误判成全单退完。
+        # 累计已退商品额也按同一系数从「已完成冲正的售后单」重算，避免历史库里
+        # 按原价写入的 refunded_goods_total 与新口径混用。
+        basis=amount_basis(c,oid,total=total,cash_paid=cash_paid)
+        goods_factor=basis['goodsFactor']
+        goods=round(goods_raw*goods_factor,2)
+        goods_ratio=min(1.0, goods/total) if total else 0.0
+        prev=c.execute('''SELECT COALESCE(SUM(ai.requested_amount),0) FROM after_sales_cases ac
+            JOIN after_sales_items ai ON ai.case_id=ac.id
+            WHERE ac.order_id=? AND ac.id<>?
+              AND EXISTS(SELECT 1 FROM gear_point_ledger l
+                         WHERE l.type='after_sales_marker' AND l.source_type='gear_after_sales'
+                           AND l.source_id=ac.id)''',(oid,case_id)).fetchone()
+        prev_raw=float(prev[0] or 0) if prev else 0.0
+        prev_goods=round(prev_raw*goods_factor,2)
 
         redeemed=int(c.execute('SELECT COALESCE(SUM(points_used),0) FROM point_redemptions WHERE order_kind="gear" AND order_id=? AND point_type="gear"',(oid,)).fetchone()[0] or 0)
         already_returned=int(c.execute("SELECT COALESCE(SUM(amount),0) FROM gear_point_ledger WHERE type='after_sales_redeem_return' AND source_type='gear_after_sales' AND source_id IN (SELECT id FROM after_sales_cases WHERE order_id=?)",(oid,)).fetchone()[0] or 0)
-        target_return=min(redeemed, int(round(redeemed*min(1.0,(float(order.get('refunded_goods_total') or 0)+goods)/total))) if total else 0)
+        target_return=min(redeemed, int(round(redeemed*min(1.0,(prev_goods+goods)/total))) if total else 0)
         return_pts=max(0,target_return-already_returned)
         if return_pts:
             c.execute('UPDATE gear_point_accounts SET balance=balance+? WHERE user_id=?',(return_pts,user_id))
@@ -87,7 +103,7 @@ class CommerceRefundEngine:
 
         reward=int(c.execute("SELECT COALESCE(SUM(amount),0) FROM ai_credit_ledger WHERE club_id=? AND source_type='gear_order' AND source_id=? AND type='mall_reward'",(club_id,str(oid))).fetchone()[0] or 0)
         already_ai=abs(int(c.execute("SELECT COALESCE(SUM(amount),0) FROM ai_credit_ledger WHERE club_id=? AND source_type='gear_after_sales' AND type='mall_reward_reverse' AND source_id IN (SELECT id FROM after_sales_cases WHERE order_id=?)",(club_id,oid)).fetchone()[0] or 0))
-        target_ai=min(reward,int(round(reward*min(1.0,(float(order.get('refunded_goods_total') or 0)+goods)/total))) if total else 0)
+        target_ai=min(reward,int(round(reward*min(1.0,(prev_goods+goods)/total))) if total else 0)
         ai_reverse=max(0,target_ai-already_ai); ai_debt=0
         if ai_reverse:
             balrow=c.execute('SELECT balance FROM ai_credit_accounts WHERE club_id=?',(club_id,)).fetchone()
@@ -103,7 +119,7 @@ class CommerceRefundEngine:
                           (club_id,ai_debt,'gear_after_sales',case_id,'部分装备退款时商城奖励已使用，形成AI Credits欠账'))
 
         new_cash=round(float(order.get('refunded_cash_total') or 0)+refund_cash,2)
-        new_goods=round(float(order.get('refunded_goods_total') or 0)+goods,2)
+        new_goods=round(prev_goods+goods,2)
         fully=(new_goods>=total-0.005)
         restored=0
         if fully and self.benefits:
@@ -121,7 +137,9 @@ class CommerceRefundEngine:
                 'cashRefundAmount':refund_cash,'goodsRefundAmount':goods,'orderFullyRefunded':fully,
                 'gearPointsReturned':return_pts,'gearPointsEarnedReversed':earn_rev,'gearPointsDebt':gear_debt,
                 'commissionReversed':round(comm,2),'commissionFutureOffset':round(future_offset,2),
-                'aiCreditsRewardReversed':ai_reverse-ai_debt,'aiCreditsDebt':ai_debt,'benefitVouchersRestored':restored}
+                'aiCreditsRewardReversed':ai_reverse-ai_debt,'aiCreditsDebt':ai_debt,'benefitVouchersRestored':restored,
+                'amountBasis':{'gross':basis['gross'],'goodsFactor':goods_factor,'cashFactor':basis['cashFactor'],
+                               'goodsRaw':goods_raw,'goods':goods,'prevGoods':prev_goods}}
 
     def refund_gear_order(self, c, *, order_id:int, reason:str='full_refund') -> dict[str,Any]:
         r=c.execute('SELECT * FROM gear_orders WHERE id=?',(order_id,)).fetchone()

@@ -8,17 +8,22 @@ TC-GP-004/005/006,全额退款冲正,P0,全额退款返还已用积分/冲回已
 TC-GP-007,幂等,P0,全额退款幂等（防重复加减分）,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),重复退款 idempotent=true，余额与流水均不变,TEST-RESULTS.json
 TC-GP-014,退款联动,P1,退款联动冲回库存/佣金/AI Credits,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),佣金1条负向 / AI冲回 / refund_restock 库存回补,TEST-RESULTS.json
 TC-GP-008,全额退款冲正,P1,标准退款链路同样冲正积分,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),标准链路冲回 95 分，refund_requests=succeeded,TEST-RESULTS.json
-TC-GP-009,售后部分退款,P1,售后部分退款按现金比例冲回已赚积分,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),部分退款 ¥100.0/285.0 → 冲回 100/285 分,TEST-RESULTS.json
-TC-GP-010,售后部分退款,P1,售后部分退款按商品占比返还已抵扣积分,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),部分售后返还已抵扣积分 +581/1655（按商品占比）,TEST-RESULTS.json
-TC-GP-011,幂等,P1,售后退款幂等,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),重复售后退款 status=409（状态机拒绝），余额与冲正流水零变化,TEST-RESULTS.json
+TC-GP-009,售后部分退款,P1,售后部分退款按现金比例冲回已赚积分,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),部分退款 ¥95.0/285.0 → 冲回 95/285 分,TEST-RESULTS.json
+TC-GP-010,售后部分退款,P1,售后部分退款按商品占比返还已抵扣积分,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),部分售后返还已抵扣积分 +553/1660（按商品占比）,TEST-RESULTS.json
+TC-GP-011,幂等/API 语义(OBS-03),P1,售后退款幂等（OBS-03：200 + idempotent，零重复副作用）,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,BUG-003,2026-11-07,Horizon (QA),重复售后退款 200 + idempotent:true（原单 rfd_c9770132445643a4927d），余额与冲正流水零变化,TEST-RESULTS.json
 TC-GP-013,退货全链路,P2,退货(return_refund)全链路积分口径与实物回库,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),退货链路冲回积分，实物回库 1 件（earned=190）,TEST-RESULTS.json
-TC-GP-018,资金安全边界,P1,同单两次部分售后累计冲正不超额（资金上限保护）,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),两次部分售后：累计返还 593/845、冲回 194/276，marker=2，均未超额,TEST-RESULTS.json
-TC-GP-019,资金安全边界(异常数据),P1,同订单多条抵扣流水全额返还且返回值=账实（BUG-001）,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,BUG-001,2026-11-07,Horizon (QA),1175 分抵扣（含注入 500）全额返还，返回值/流水/余额三方一致且重入幂等,TEST-RESULTS.json
-TC-ECOM-004/005,电商采购/入库/库存,P0,结算锁库存 + 支付冻结单价,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),锁库存 48→46；改价后订单单价仍 100,TEST-RESULTS.json
+TC-GP-018,资金安全边界,P1,同单两次部分售后累计冲正不超额（资金上限保护）,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),两次部分售后：累计返还 551/827、冲回 184/276，marker=2，均未超额,TEST-RESULTS.json
+TC-GP-019,资金安全边界(异常数据),P1,同订单多条抵扣流水全额返还且返回值=账实（BUG-001）,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,BUG-001,2026-11-07,Horizon (QA),1143 分抵扣（含注入 500）全额返还，返回值/流水/余额三方一致且重入幂等,TEST-RESULTS.json
+TC-GP-020,售后金额口径(OBS-02),P1,售后金额口径同源：折扣订单不多退现金/不放大占比（OBS-02）,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,BUG-002,2026-11-07,Horizon (QA),gross=200.0 → total=190.0（0.95 折后口径）：退 1 件现金 ¥95.0（旧口径 ¥100.0）、商品额 ¥95.0，占比 1/2,TEST-RESULTS.json
+TC-GP-021,售后状态机守卫(OBS-03),P2,非法状态发起售后退款仍 409（OBS-03 守卫）,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,BUG-003,2026-11-07,Horizon (QA),pending_review / exchange 仍 409；幂等 200 仅覆盖已完成冲正的终态,TEST-RESULTS.json
+TC-GP-022,权限/归属(OBS-04),P2,俱乐部端不得审核装备退款（OBS-04 只读闸门）,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,BUG-004,2026-11-07,Horizon (QA),装备退款 rfd_6fd4fea6562b4deba3b85c42db13bcdf：俱乐部 approve/reject/retry 全 409，平台列表可查,TEST-RESULTS.json
+TC-GP-023,固定发版门禁,P1,电商积分回归已挂进 regression_v025.sh 固定门禁,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),regression_v025.sh 已挂载本套件（set -euo pipefail 下失败即挡发版）,TEST-RESULTS.json
+TC-GP-024,前端只读护栏(OBS-04),P2,俱乐部端装备退款只读行与缓存版本护栏,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,BUG-004,2026-11-07,Horizon (QA),club.js 只读行 + 页面副标题 + index.html?v=20261107e 已生效（node --check 通过）,TEST-RESULTS.json
+TC-ECOM-004/005,电商采购/入库/库存,P0,结算锁库存 + 支付冻结单价,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),锁库存 44→42；改价后订单单价仍 100,TEST-RESULTS.json
 TC-ECOM-006,电商采购/入库/库存,P1,取消订单释放库存与锁定积分,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),取消释放库存与 hold 500 分，余额不变,TEST-RESULTS.json
 TC-GP-015,幂等,P2,重复支付不重复发积分,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),重复支付 idempotent，earn(95) 未重复,TEST-RESULTS.json
 TC-GP-016,退款状态机,P2,拒绝退款不冲正积分,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),拒绝退款后积分与流水不变，订单 refund_status=rejected,TEST-RESULTS.json
-TC-GP-017,权限/归属,P3,装备退款归平台不串入俱乐部接口,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),装备退款仅在 /api/platform/refunds（共 9 条）,TEST-RESULTS.json
+TC-GP-017,权限/归属(OBS-04),P3,装备退款俱乐部端只读可见、平台仍统管（OBS-04）,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,BUG-004,2026-11-07,Horizon (QA),俱乐部端可见 10 条（装备只读 10 条），平台仍统管,TEST-RESULTS.json
 TC-GP-012,资金安全边界,P1,余额不足形成积分欠账且不透支,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),应冲回 95，余额 0 不透支，落 gear 欠账 95,TEST-RESULTS.json
 TC-ECOM-007,电商采购/入库/库存,P2,采购退货不影响 C 端积分,3,隔离DB + 供应商/商品/采购入库/上架 + 收货地址,Completed,PASS,,2026-11-07,Horizon (QA),采购退货只扣 B 端库存，C 端积分零变化,TEST-RESULTS.json
 TC-ECOM-REG,电商全链路交叉验证,P0,inventory_flow_regression.py（采购→入库→结算→发货→盘点→采购退回→权限）,5,隔离DB；既有回归脚本,Completed,PASS,,2026-11-07,Horizon (QA),29/29 全绿：页发货恰好一次/并发最后一件一胜/隔离库存不可售/过期结账释放/迁移外键完好,tests/inventory_flow_regression.py

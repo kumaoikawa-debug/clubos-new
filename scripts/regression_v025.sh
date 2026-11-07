@@ -187,3 +187,10 @@ python tests/inquiry_thread_smoke.py
 # 不计入本期可结算；另验合计拆分、分组守恒、账单号稳定性与人民币大写。
 # 自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/pk_settlement_smoke.py
+
+# 电商购物全链路 + 装备积分冲正固定发版门禁（2026-11-07 / BUG-001 + OBS-02/03/04）：
+# 采购→入库→上架→结算→支付→履约→盘点→采购退回，加「退款/退货后积分自动增加与
+# 自动扣减」五大不变量（I1 余额守恒 / I2 返回值↔流水 / I3 幂等 / I4 非负 / I5 欠账）。
+# 同时守住 BUG-001（多抵扣流水全额返还）、售后金额同源口径、重复售后退款幂等 200、
+# 俱乐部端只读可见装备退款，并自检本门禁未被摘除。自带临时库隔离，不需要 CLUBOS_DB_PATH。
+python tests/ecommerce_gear_points_regression.py
