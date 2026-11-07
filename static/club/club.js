@@ -3946,17 +3946,20 @@ async function actCatImage(id,input){
   input.value='';
 }
 /* 活动详情注入「活动分类」卡：不改动 openActivity 的巨型模板，包一层在渲染完成后插入。 */
-function injectActivityCats(){
-  const pane=document.getElementById('activityDetail');if(!pane||!currentActivity)return;
-  const anchor=pane.querySelector('#sec-occ');if(!anchor)return;
+function injectActivityCats(a){
+  const pane=document.getElementById('activityDetail');if(!pane)return;
   const old=pane.querySelector('#sec-cats');if(old)old.remove();
-  const sel=new Set((currentActivity.categoryIds||[]).map(Number));
+  a=a||currentActivity; if(!a)return;
+  const sel=new Set((a.categoryIds||[]).map(Number));
   const card=document.createElement('div');
   card.className='card section';card.id='sec-cats';
   card.innerHTML=`<div class="panel-title"><div><h3>活动分类</h3><div class="sub">勾选这场活动归属的分类（可多选），C 端活动页点分类磁贴即按此过滤。分类的增删改名换图在左侧「活动分类」里维护。</div></div></div>
     ${ACT_CATS_MGR.length?`<div style="display:flex;gap:8px;flex-wrap:wrap">${ACT_CATS_MGR.map(c=>`<label class="actcat-pick${sel.has(c.id)?' on':''}"><input type="checkbox" value="${c.id}" ${sel.has(c.id)?'checked':''} onchange="this.closest('label').classList.toggle('on',this.checked)"> ${esc(c.name)}${c.active?'':'<span class="sub">（已停用）</span>'}</label>`).join('')}</div>`:'<div class="sub">还没有分类，先去左侧「活动分类」创建，再回来勾选。</div>'}
-    <div style="margin-top:12px"><button class="btn secondary" onclick="saveActivityCats(${currentActivity.id})">保存分类</button></div>`;
-  anchor.parentNode.insertBefore(card,anchor);
+    <div style="margin-top:12px"><button class="btn secondary" onclick="saveActivityCats(${a.id})">保存分类</button></div>`;
+  /* 稳健插入：放在详情里第一个 .card.section 之前（没有则追加末尾），不再依赖可能不存在的 #sec-occ 锚点。 */
+  const firstSec=pane.querySelector('.card.section');
+  if(firstSec&&firstSec.parentNode) firstSec.parentNode.insertBefore(card,firstSec);
+  else pane.appendChild(card);
 }
 async function saveActivityCats(id){
   const pane=document.getElementById('activityDetail');if(!pane)return;
@@ -3973,8 +3976,10 @@ const _openActivityOri=openActivity;
 openActivity=async function(id){
   const r=await _openActivityOri(id);
   try{
+    let a=currentActivity;
+    if(!a||Number(a.id)!==Number(id)){try{a=await api(`/api/club/${CLUB}/activities/${id}`)}catch(e){a=null}}
     if(!ACT_CATS_MGR.length){try{ACT_CATS_MGR=await api(`/api/club/${CLUB}/activity-categories`)||[]}catch(e){ACT_CATS_MGR=[]}}
-    injectActivityCats();
+    injectActivityCats(a);
   }catch(e){}
   return r;
 };
