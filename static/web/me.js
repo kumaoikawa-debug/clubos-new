@@ -43,8 +43,20 @@ const ME_ST={
 function meStLabel(s){return (ME_ST[s]&&ME_ST[s].t)||s;}
 function meStTone(s){return (ME_ST[s]&&ME_ST[s].k)||'def';}
 function meIsRefund(o){return /refund/i.test(o.status||'')||(o.afterSalesCases&&o.afterSalesCases.length)||(o.refund_status&&!['none','rejected'].includes(o.refund_status));}
-function meAsType(t){return ({refund:'仅退款',return:'退货退款',exchange:'换货'}[t]||t||'退款');}
-function meAsSt(s){return ({open:'处理中',awaiting_return:'待退货',returned:'已退货',refunding:'退款中',refunded:'已退款',done:'已完成',rejected:'已驳回',processing:'处理中'}[s]||s||'处理中');}
+/* 售后类型 / 状态的中文映射，键必须覆盖 clubos_domain/after_sales.py 的
+   CASE_TYPES 与 ACTIVE/FINAL_STATUSES。键写错（如写成 refund/return 而非
+   refund_only/return_refund）或漏写状态，会回退把英文枚举原样显示给顾客。 */
+function meAsType(t){return ({refund_only:'仅退款',return_refund:'退货退款',exchange:'换货'}[t]||t||'退款');}
+function meAsSt(s){return ({
+  requested:'已提交', pending_review:'待审核', reviewing:'审核中',
+  awaiting_return:'待退货', return_in_transit:'退回途中', returned:'已退货',
+  approved_pending_refund:'待退款', refund_processing:'退款中', refund_pending:'待退款',
+  refunded:'已退款', exchange_pending_shipment:'待换货发出', exchanged:'已换货',
+  completed:'已完成', rejected:'已驳回', cancelled:'已取消', closed:'已关闭',
+  open:'处理中', processing:'处理中', refunding:'退款中', done:'已完成',
+  partial_requested:'部分退款申请中', partial_processing:'部分退款处理中',
+  partial:'部分退款', succeeded:'退款完成'
+}[s]||s||'处理中');}
 
 /* ── 数据获取 ─────────────────────────────────────────────────────────── */
 async function meLoadAll(force){

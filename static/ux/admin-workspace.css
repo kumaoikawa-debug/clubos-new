@@ -33,6 +33,14 @@ body.admin-workspace {
 .admin-workspace .brand-symbol {background: var(--brand); color: #fff; width: 32px; height: 32px; flex-basis: 32px; border-radius: var(--radius-ctl); box-shadow: var(--shadow-rest);}
 .admin-workspace .nav-group-label {color: #6a7a6c; font-size: 10px; letter-spacing: 1px; margin: 24px 10px 8px; font-weight: 500;}
 .admin-workspace .nav-group {gap: 3px;}
+.admin-workspace .nav-group{display:block;margin:3px 0}
+.admin-workspace .nav-group__head{display:flex;align-items:center;justify-content:space-between;width:100%;border:0;background:transparent;color:#6a7a6c;font-size:11px;font-weight:600;letter-spacing:.6px;text-align:left;padding:13px 12px 7px;cursor:pointer;border-radius:var(--radius-ctl)}
+.admin-workspace .nav-group__head:hover{background:#e9f1ec;color:var(--brand-deep)}
+.admin-workspace .nav-group__head .nav-caret{display:inline-block;transition:transform .15s;opacity:.7;font-size:10px;transform:rotate(90deg)}
+.admin-workspace .nav-group.is-collapsed .nav-caret{transform:rotate(0)}
+.admin-workspace .nav-group__items{display:flex;flex-direction:column;gap:3px;padding-left:9px;margin-left:8px;border-left:1px solid var(--line)}
+.admin-workspace .nav-group.is-collapsed .nav-group__items{display:none}
+.admin-workspace .nav-group__items .nav-leaf{font-size:13px;padding-left:14px}
 .admin-workspace .nav button {border-radius: var(--radius-ctl); padding: 9px 12px; min-height: 40px; font-size: 13px; font-weight: 500; color: #3d5044; transition: background .15s, color .15s, box-shadow .15s;}
 .admin-workspace .nav button.active {color: #fff; background: var(--brand); box-shadow: 0 2px 8px rgba(46, 107, 78, .28); font-weight: 600;}
 .admin-workspace .nav button:hover {background: #eff4ec; border-color: transparent; color: var(--brand-deep);}

@@ -101,7 +101,7 @@
  });
 
  function injectProviderCard(){
-   const host=document.getElementById('pcredits');if(!host||document.getElementById('aiProviderPanel'))return;
+   const host=document.getElementById('ai-config');if(!host||document.getElementById('aiProviderPanel'))return;
    const card=document.createElement('div');card.className='card section';
    card.innerHTML='<div class="panel-title"><div><h3>模型接入（总平台独占）</h3><div class="sub">总平台统一接入 DeepSeek / 通义千问并控制运行模式，折算为积分后供各俱乐部按任务消耗。</div></div></div><div id="aiProviderPanel"></div>';
    const handoff=document.createElement('div');handoff.className='card section';

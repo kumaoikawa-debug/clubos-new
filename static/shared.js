@@ -278,7 +278,7 @@ function priceHtml(p,opts){opts=opts||{};
   if(pricePending(p,opts))return '<span class="price-pending">价格待定</span>';
   const unit=opts.unit||'';return money(p)+(unit?`<em>${unit}</em>`:'');}
 function dateText(s){return s||'待定'}
-function navInit(){$$('.nav button[data-view]').forEach(b=>b.onclick=()=>{$$('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');$$('.view').forEach(v=>v.classList.remove('active'));$('#'+b.dataset.view)?.classList.add('active');if(window.onView)window.onView(b.dataset.view)});}
+function navInit(){$$('.nav button[data-view]').forEach(b=>b.onclick=()=>{$$('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');$$('.view').forEach(v=>v.classList.remove('active'));$('#'+b.dataset.view)?.classList.add('active');if(window.onView)window.onView(b.dataset.view)});$$('.nav-group__head').forEach(h=>h.onclick=()=>h.closest('.nav-group')?.classList.toggle('is-collapsed'));}
 /* 页面内 .modal（如 club 端 AI 发活动）也接同一套会话：Esc 关闭、焦点进入并圈闭、
    关闭后归还焦点、锁背景滚动。之前 modal() 只是 classList.toggle，键盘用户打开后
    焦点仍留在页面上、Esc 也关不掉。 */
@@ -1513,10 +1513,14 @@ const ENUM_CN={
   /* 售后流程的六个态此前没进来，中文界面会直接漏出 pending_review / awaiting_return 这类原始枚举。
      放在 shared 里而不是某一端，是为了让四端显示同一个名字。 */
   pending_review:'待审核',reviewing:'审核中',awaiting_return:'待寄回',returned:'已寄回',
-  exchanging:'换货中',exchanged:'已换货',
+  return_in_transit:'退回途中',approved_pending_refund:'待退款',refund_processing:'退款中',
+  exchange_pending_shipment:'待换货发出',exchanging:'换货中',exchanged:'已换货',
   /* 进销存 V1 商品状态机（与库存状态分离）：草稿 / 待入库 / 部分入库 / 待上架 / 已上架 / 已下架 / 停用 */
   pending_inbound:'待入库',partially_received:'部分入库',pending_listing:'待上架',
-  discontinued:'已停用',in_stock:'有货',low_stock:'库存偏低',out_of_stock:'售罄',restocking:'补货中'
+  discontinued:'已停用',in_stock:'有货',low_stock:'库存偏低',out_of_stock:'售罄',restocking:'补货中',
+  /* 退款 / 券 / 售后补充：避免退款中、部分退款、已过期等枚举漏成英文 */
+  refunding:'退款中',partial_requested:'部分退款申请中',partial_processing:'部分退款处理中',
+  partial:'部分退款',succeeded:'退款完成',issued:'可用',expired:'已过期',redeemed:'已核销',held:'占用中',used:'已使用'
 };
 function enumCn(v,fallback){
   const k=String(v==null?'':v).trim();
