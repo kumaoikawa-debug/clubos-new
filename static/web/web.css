@@ -384,6 +384,25 @@
   display:grid;place-items:center;transition:transform .35s,filter .35s;
 }
 .w-product__media svg{width:44px;height:44px;stroke:#b5bfb7;fill:none;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
+/* 无封面商品（BUG-CUX-005）：品牌渐变 + 山脊 + 商品首字，替代「白底 + 一个小袋」的
+   大片空白；媒体区从 1:1 收到 4:3，名称与价格提前进入首屏。有真实图时不受影响。 */
+.w-product__media.is-fallback{
+  aspect-ratio:4/3;
+  background:linear-gradient(155deg,#eef5ef 0%,#d3e5d8 52%,#a9c8b3 100%);
+}
+.w-product__media.is-fallback::before{
+  content:"";position:absolute;left:0;right:0;bottom:0;height:48%;
+  background:linear-gradient(180deg,rgba(31,74,52,0),rgba(31,74,52,.22));
+  clip-path:polygon(0 100%,0 58%,16% 40%,32% 64%,50% 22%,68% 58%,84% 38%,100% 62%,100% 100%);
+}
+.w-product__media.is-fallback .w-product__mono{
+  position:relative;z-index:1;font-size:40px;font-weight:700;line-height:1;
+  color:rgba(26,58,40,.42);letter-spacing:-.04em;
+}
+.w-product__media.is-fallback svg{
+  position:absolute;right:10px;bottom:9px;z-index:1;
+  width:20px;height:20px;stroke:rgba(26,58,40,.45);
+}
 .w-product__media img{width:100%;height:100%;object-fit:cover;display:block}
 /* PEAKTRACE 合成图头图裁切（shared.js prodImgHtml）的容器限定规则统一放文件末尾
    （w-cropimg 段）—— 各容器散落的裸 svg 规则是占位袋图标的（44px/26px 描边），
@@ -749,6 +768,12 @@
 
 /* ── 装备页搜索框：外边距归零，留白交给 .w-shop__top 统一管 ─────────────── */
 .w-field--shop{margin:0}
+/* 活动页搜索（BUG-CUX-003）：顶栏放大镜切到本页并聚焦这个框。整宽、与商城搜索
+   同一套 .w-field 笔画，放在分类磁贴上方，不新增导航层级。 */
+.w-field--acts{margin:0 0 10px}
+/* 搜索结果摘要：只在有内容时占位，保持活动页首屏紧凑 */
+.w-actcount{margin:0 0 8px;font-size:11.5px;line-height:1.4;color:#7a8b80}
+.w-actcount:empty{display:none}
 
 /* ── 报名区 ────────────────────────────────────────────────────────────── */
 .web-shell .booking-card{
@@ -2187,7 +2212,9 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 
 .web-shell .me-card2{background:#fff;border:1px solid var(--w-line);border-radius:16px;padding:14px;margin-bottom:12px}
 .web-shell .me-card2__hd{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
-.web-shell .me-card2__hd b{font-size:14px;font-weight:700}
+.web-shell .me-card2__hd b{font-size:14px;font-weight:700;min-width:0}
+/* 状态短语折成两行很难读（「已报名 · 待 / 出行」）：徽标不折行，长标题让位。 */
+.web-shell .me-card2__hd .me-badge{white-space:nowrap;flex:none}
 .web-shell .me-card2__meta{font-size:12.5px;color:var(--w-muted);margin:3px 0}
 .web-shell .me-card2__amt{font-size:13px;color:var(--w-ink2);margin:6px 0}
 .web-shell .me-card2__amt b{font-size:16px;color:var(--w-ink);margin-left:4px}

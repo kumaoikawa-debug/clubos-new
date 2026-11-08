@@ -42,6 +42,15 @@ const ME_ST={
 };
 function meStLabel(s){return (ME_ST[s]&&ME_ST[s].t)||s;}
 function meStTone(s){return (ME_ST[s]&&ME_ST[s].k)||'def';}
+/* 活动报名不是快递：已付款的报名单过去复用装备的「待发货」，顾客会以为漏发了装备、
+   反复找客服。活动用出行语义，装备才用电商五态（BUG-CUX-002 / 2026-11-08）。 */
+const ACT_ST={
+  pending:{t:'待付款',k:'wait'}, paid:{t:'已报名 · 待出行',k:'ok'}, shipped:{t:'待出行',k:'ok'},
+  completed:{t:'已出行',k:'ok'}, refunded:{t:'已退款',k:'off'}, refunding:{t:'退款中',k:'warn'},
+  cancelled:{t:'已取消',k:'off'}, processing:{t:'处理中',k:'warn'}
+};
+function meOrderSt(s,kind){const m=(kind==='activity'?ACT_ST:ME_ST)[s];return m?m.t:(s||'');}
+function meOrderTone(s,kind){const m=(kind==='activity'?ACT_ST:ME_ST)[s];return m?m.k:'def';}
 function meIsRefund(o){return /refund/i.test(o.status||'')||(o.afterSalesCases&&o.afterSalesCases.length)||(o.refund_status&&!['none','rejected'].includes(o.refund_status));}
 /* 售后类型 / 状态的中文映射，键必须覆盖 clubos_domain/after_sales.py 的
    CASE_TYPES 与 ACTIVE/FINAL_STATUSES。键写错（如写成 refund/return 而非
@@ -599,7 +608,7 @@ function meOrderCard(o){
     ? ((o.items&&o.items[0]&&o.items[0].product_name)||'装备订单')
     : (o.activity_title||'活动报名');
   return `<div class="me-card2">
-    <div class="me-card2__hd"><b>${esc(head)}</b>${meBadge(meStLabel(o.status),meStTone(o.status))}</div>
+    <div class="me-card2__hd"><b>${esc(head)}</b>${meBadge(meOrderSt(o.status,kind),meOrderTone(o.status,kind))}</div>
     ${inner}
     <div class="me-card2__ref">退款：${esc((typeof refundStateText==='function')?refundStateText(o):'')}</div>
     ${acts?`<div class="me-card2__ops">${acts}</div>`:''}
@@ -659,7 +668,7 @@ SUB_ME.myregs=function(){
     }
     const pax=ps.map(p=>`<div class="me-pax"><b>${esc(p.name)}</b>${p.status==='refunded'?meBadge('已退出','off'):''}<span>${esc(p.phone||'')}</span></div>`).join('');
     return `<div class="me-card2">
-      <div class="me-card2__hd"><b>${esc(o.activity_title||'活动')}</b>${meBadge(meStLabel(o.status),meStTone(o.status))}</div>
+      <div class="me-card2__hd"><b>${esc(o.activity_title||'活动')}</b>${meBadge(meOrderSt(o.status,'activity'),meOrderTone(o.status,'activity'))}</div>
       <div class="me-card2__meta">${esc(o.occurrence_label||o.start_at||'团期待定')} · ${o.participantCount||ps.length} 人</div>
       <div class="me-card2__amt">实付 <b>${money(o.amount||0)}</b></div>
       ${meTrip(o)}
@@ -828,10 +837,11 @@ async function meSetCity(){
 };
 SUB_ME.orders=function(st){
   const tab=st||'all';
-  const tabs=[['all','全部'],['pending','待付款'],['paid','待发货'],['shipped','待收货'],['completed','待评价'],['refund','退款']];
+  const tabs=[['all','全部'],['activity','活动报名'],['pending','待付款'],['paid','待发货'],['shipped','待收货'],['completed','待评价'],['refund','退款']];
   const tabHtml=tabs.map(([k,t])=>`<button class="me-tab${k===tab?' on':''}" onclick="meSetTab('${k}')">${esc(t)}</button>`).join('');
   let items=[];
   if(tab==='all') items=meAll().map(x=>(Object.assign({},x.order,{_kind:x.kind})));
+  else if(tab==='activity') items=meActivity().map(o=>Object.assign({},o,{_kind:'activity'}));
   else if(tab==='pending') items=mePending();
   else if(tab==='refund') items=meGear().filter(meIsRefund).concat(meActivity().filter(meIsRefund));
   else items=meGear().filter(o=>o.status===tab);
@@ -1093,6 +1103,12 @@ window.meLogout=meLogout;
 /* 积分商城 / 购买会员 / 拉新邀请（inline onclick 引用，必须挂 window —— me.js 整体是 IIFE，裸 function 不上 window） */
 window.meBuyTier=meBuyTier; window.meRedeemMall=meRedeemMall; window.meMallFilter=meMallFilter;
 window.meClaimByCode=meClaimByCode; window.meFillInviteCode=meFillInviteCode;
+/* BUG-CUX-001（2026-11-08）：下面 4 个函数被模板字符串的 inline onclick 调用，
+   me.js 整体是 IIFE，裸 function 不会挂到 window —— 漏导出会让「签到码放大 /
+   城市去设置 / 立即领取 / 送好友」点了静默抛 ReferenceError。新增任何 inline
+   入口必须同时补一行导出，tests/web_inline_handlers_guard.py 会在发版门禁里卡住。 */
+window.meZoomQr=meZoomQr; window.meSetCity=meSetCity;
+window.meClaimCoupon=meClaimCoupon; window.meShareCoupon=meShareCoupon;
 
 /* ── 头像（2026-10-31）：两种方案 —— 自定义上传 / 自动同步微信头像 ──────────────
    显示优先级：自定义 avatar_url > 微信 wechat_avatar_url > 首字母。

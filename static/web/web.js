@@ -1,4 +1,4 @@
-let CLUB=Number(new URLSearchParams(location.search).get('club_id')||1),USER=1,PAYER_NAME='林野',PAYER_PHONE='13800000001';let currentAct=null,currentOcc=null,activityVouchers=[],bookingParticipants=[];let ACT_ALL=[],ACT_CAT='all',ACT_REGION='all',ACT_CITY='all',ACT_CITY_LOCATED='',MALL_ALL=[],MALL_CAT='全部',MALL_SORT='rec';
+let CLUB=Number(new URLSearchParams(location.search).get('club_id')||1),USER=1,PAYER_NAME='林野',PAYER_PHONE='13800000001';let currentAct=null,currentOcc=null,activityVouchers=[],bookingParticipants=[];let ACT_ALL=[],ACT_CAT='all',ACT_REGION='all',ACT_CITY='all',ACT_CITY_LOCATED='',ACT_Q='',MALL_ALL=[],MALL_CAT='全部',MALL_SORT='rec';
 /* ══════════════════════════════════════════════════════════════════════════
    C 端视觉层（配合 static/web/web.css）
    ══════════════════════════════════════════════════════════════════════════ */
@@ -291,7 +291,7 @@ function renderActivityRegions(){
   if(other>0)html+=`<button class="w-chip${ACT_CITY==='other'?' on':''}" type="button" data-city="other">其它地区<i>${other}</i></button>`;
   box.innerHTML=html;
 }
-function resetActFilters(){ACT_CAT='all';ACT_CITY='all';renderActivityList()}
+function resetActFilters(){ACT_CAT='all';ACT_CITY='all';ACT_Q='';const s=$('#actSearch');if(s)s.value='';renderActivityList()}
 function renderActivityList(){
   const box=$('#publicActivities');if(!box)return;
   /* 进入活动页主动按浏览器定位的城市预筛（仅一次）：命中且该市有活动就默认跳到该市；
@@ -303,6 +303,11 @@ function renderActivityList(){
      （2026-09-29 同一个模式连踩三次：活动 chips、装备 cats/tabs、消费端 toolbar。） */
   renderActivityCats();renderActivityRegions();
   let list=ACT_ALL.slice();
+  /* 顶栏放大镜落到这里：按标题 / 地点 / 简介做包含匹配（BUG-CUX-003）。
+     活动表没有全文索引，在已加载的 ACT_ALL 上过滤即可，不改后端契约。 */
+  const aq=String(ACT_Q||'').trim().toLowerCase();
+  if(aq)list=list.filter(x=>[x.title,x.name,x.location,x.summary,x.subtitle,x.description]
+    .some(v=>String(v||'').toLowerCase().includes(aq)));
   if(ACT_CAT!=='all'){
     if(actCatsCustom())list=list.filter(x=>(x.categoryIds||[]).includes(Number(ACT_CAT)));
     else list=list.filter(x=>actThemesOf(x).includes(ACT_CAT));
@@ -313,14 +318,14 @@ function renderActivityList(){
   box.innerHTML=list.map(feedCard).join('');
   const cnt=$('#actCount');
   if(cnt){
-    const flt=[ACT_CAT!=='all'?actCatLabel(ACT_CAT):'',ACT_CITY!=='all'?actCityLabel(ACT_CITY):''].filter(Boolean);
+    const flt=[ACT_CAT!=='all'?actCatLabel(ACT_CAT):'',ACT_CITY!=='all'?actCityLabel(ACT_CITY):'',ACT_Q?('搜索「'+ACT_Q+'」'):''].filter(Boolean);
     const located=ACT_CITY_LOCATED&&ACT_CITY===ACT_CITY_LOCATED?'（已在 '+ACT_CITY_LOCATED+' 附近）':'';
     cnt.textContent=ACT_ALL.length
       ?(flt.length?flt.join(' · ')+' · 共 '+list.length+' 场'+located:'共 '+list.length+' 场可报名'+located)
       :'暂时没有已发布的活动';
   }
   const emp=$('#activityEmpty');
-  if(emp)emp.innerHTML=list.length?'':`<div class="w-empty">${WI.empty}<div>没有符合条件的活动</div><div style="margin-top:6px">${ACT_CITY!=='all'?'当前城市暂无活动，':'换个分类或'}试试其它城市。</div><button class="w-retry" type="button" onclick="resetActFilters()">清除筛选</button></div>`;
+  if(emp)emp.innerHTML=list.length?'':`<div class="w-empty">${WI.empty}<div>没有找到匹配的活动</div><div style="margin-top:6px">${ACT_Q?'换个关键词，或':(ACT_CITY!=='all'?'当前城市暂无活动，':'换个分类或')}清除筛选看看全部。</div><button class="w-retry" type="button" onclick="resetActFilters()">清除筛选</button></div>`;
 }
 
 /* ── 装备商城 ─────────────────────────────────────────────────────────────── */
@@ -556,12 +561,18 @@ function renderMall(){
      真的售罄时靠角标「缺货」+ 加购钮消失表达，不需要把数量写在卡上。 */
 function productCard(x){
   const displayOnly=x.displayOnly===true,out=displayOnly||Number(x.stock||0)<=0,cat=x.category||'装备',unavailable=displayOnly?'暂不可购买':'暂时缺货';
+  /* 无封面时不要留一块白底空方图：品牌渐变 + 商品首字 + 小袋图标（BUG-CUX-005）。
+     媒体区从 1:1 收到 4:3，名称与价格提前进入首屏；有真实图时完全不受影响。 */
+  const cover=x.coverUrl||x.image_url;
+  const mediaInner=cover
+    ? prodImgHtml(cover,x.catalogView,'',x.name)
+    : ('<span class="w-product__mono">'+esc(String(x.name||'装')[0]||'装')+'</span>'+WI.bag);
   /* 参考图的卡片没有按钮，整张卡就是入口。去掉按钮后必须补 aria-label ——
      读屏用户看不到图，只剩名字和价格能说明这是一件什么商品。
      键盘通路（Enter/空格）由 bindWebEvents 的 keydown 委托补齐（on 属性只绑 click）。 */
   return `<div class="web-card w-product${out?' is-out':''}" role="button" tabindex="0"
     aria-label="${esc(x.name)}，${money(x.price)}${out?'，'+unavailable:''}" onclick="openProduct(${x.id})">
-    <div class="w-product__media">${(x.coverUrl||x.image_url)?prodImgHtml(x.coverUrl||x.image_url,x.catalogView,'',x.name):WI.bag}${out?'<span class="w-product__flag">'+(displayOnly?'商品展示':'缺货')+'</span>':''}
+    <div class="w-product__media${cover?'':' is-fallback'}">${mediaInner}${out?'<span class="w-product__flag">'+(displayOnly?'商品展示':'缺货')+'</span>':''}
       ${out?'':`<button class="w-product__add" type="button" aria-label="把${esc(x.name)}加入购物车" onclick="event.stopPropagation();quickAdd(${x.id})"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/><path d="M12 12.9v4.2M9.9 15h4.2"/></svg></button>`}
     </div>
     <div class="w-product__inner">
@@ -1375,6 +1386,10 @@ async function coSaveAddr(ev){
     CO_ADDRS=await api(`/api/public/users/${USER}/addresses`)||[];
     CO_ADDR_ID=a.id;
     coRenderAddr();
+    /* 地址簿整块重绘后表单本身已重建，但浏览器可能保留表单状态 —— 显式 reset
+       并逐框清空，避免顾客再点「添加」时看到旧值、误以为没保存成功（BUG-CUX-007）。 */
+    const af=document.querySelector('#coAbook .w-co__form');
+    if(af){af.reset();af.querySelectorAll('input').forEach(i=>{i.value=''})}
     toast('地址已保存');
   }catch(e){if(err){err.textContent=e.message||'保存失败，请稍后再试';err.hidden=false}}
   finally{uxBusyOff(st)}
@@ -1600,6 +1615,10 @@ function bindWebEvents(){
      点击后只重画「选项自身 + 列表」，不重新拉数据（ACT_ALL 已在内存里）。 */
   $('#actCats')?.addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b||b.disabled)return;ACT_CAT=b.dataset.c;renderActivityCats();renderActivityList()});
   $('#activityChips')?.addEventListener('click',e=>{const b=e.target.closest('[data-city]');if(!b||b.disabled)return;const c=b.dataset.city;if(c==='locate'){locateCity(true);return;}ACT_CITY=c;renderActivityRegions();renderActivityList()});
+  /* 顶栏放大镜切到活动页并聚焦这个框（index.html 的 inline onclick 负责聚焦）。
+     输入即时过滤，不重拉数据；容器是静态 HTML，监听只绑一次（BUG-CUX-003）。 */
+  const actQ=$('#actSearch');
+  if(actQ)actQ.addEventListener('input',e=>{ACT_Q=e.target.value||'';renderActivityList()});
   $('#mallCats')?.addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b)return;MALL_CAT=b.dataset.c;renderMallCats();renderMall()});
   $('#mallTabs')?.addEventListener('click',e=>{const b=e.target.closest('[data-s]');if(!b)return;MALL_SORT=b.dataset.s;renderMallTabs();renderMall()});
   /* 品牌 / 人群 chip：同一个容器里两种 data-*，按点的那个改对应状态，然后整行重画
@@ -2500,7 +2519,11 @@ function removeParticipant(i){
   bookingParticipants.splice(i,1);
   setParticipantCount(bookingParticipants.length);
 }
-function participantField(i,key,val){bookingParticipants[i][key]=val}
+function participantField(i,key,val){bookingParticipants[i][key]=val;
+  /* BUG-CUX-004 收尾：顾客改正字段后立刻撤掉红框 / 内联错误 / aria-invalid。
+     否则填对了还挂着「无效」，读屏持续播报，要等下一次点提交才清。 */
+  if(typeof paxClearError==='function')paxClearError(i,key);
+}
 /* 参加人资料：每位参加人一张卡、字段各自带标签。
    早前是 6 个裸 input 挤在一条 .notice 里、只有 placeholder 没有标签 —— 填到第 6 个框
    就记不清这行到底是「证件号码」还是「紧急联系人电话」。
@@ -2545,27 +2568,27 @@ function participantIdType(i,v){
   const sel=document.querySelector(`#paxForms [data-pax="${i}"][data-key="idType"] select`);
   if(sel)sel.dataset.empty=v?'0':'1';
   const inp=document.querySelector(`#paxForms [data-pax="${i}"][data-key="idNumber"] input`);
-  if(inp){inp.placeholder=idTypePlaceholder(v);inp.classList.remove('is-bad')}
-  paxClearError(i,'idType');
+  if(inp){inp.placeholder=idTypePlaceholder(v);inp.classList.remove('is-bad');inp.removeAttribute('aria-invalid')}
+  paxClearError(i,'idType');paxClearError(i,'idNumber');
 }
 /* 报名校验的反馈落在字段里，而不只是 toast：手机上 toast 一闪就没了，
    顾客不知道红的是哪个框。paxShowError 定位字段 → 红框 + 内联文案 + 聚焦。 */
 function paxClearError(i,key){
   const fld=document.querySelector(`#paxForms [data-pax="${i}"][data-key="${key}"]`);if(!fld)return;
   fld.querySelector('.fld-err')?.remove();
-  fld.querySelector('.is-bad')?.classList.remove('is-bad');
+  const bad=fld.querySelector('.is-bad');if(bad){bad.classList.remove('is-bad');bad.removeAttribute('aria-invalid')}
 }
 function paxShowError(i,key,msg){
   const fld=document.querySelector(`#paxForms [data-pax="${i}"][data-key="${key}"]`);if(!fld)return;
   const ctl=fld.querySelector('input,select');
-  if(ctl){ctl.classList.add('is-bad');if(ctl.focus)ctl.focus({preventScroll:false})}
+  if(ctl){ctl.classList.add('is-bad');ctl.setAttribute('aria-invalid','true');if(ctl.focus)ctl.focus({preventScroll:false})}
   let err=fld.querySelector('.fld-err');
   if(!err){err=document.createElement('span');err.className='fld-err';err.setAttribute('role','alert');fld.append(err)}
   err.textContent=msg;
 }
 function paxClearAllErrors(){
   document.querySelectorAll('#paxForms .fld-err').forEach(e=>e.remove());
-  document.querySelectorAll('#paxForms .is-bad').forEach(e=>e.classList.remove('is-bad'));
+  document.querySelectorAll('#paxForms .is-bad').forEach(e=>{e.classList.remove('is-bad');e.removeAttribute('aria-invalid')});
 }
 async function loadActivityVouchers(){
   if(!currentAct||!$('#activityBenefitArea'))return;

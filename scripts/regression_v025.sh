@@ -194,3 +194,9 @@ python tests/pk_settlement_smoke.py
 # 同时守住 BUG-001（多抵扣流水全额返还）、售后金额同源口径、重复售后退款幂等 200、
 # 俱乐部端只读可见装备退款，并自检本门禁未被摘除。自带临时库隔离，不需要 CLUBOS_DB_PATH。
 python tests/ecommerce_gear_points_regression.py
+
+# C 端 UX 修复护栏（2026-11-08 / BUG-CUX-001~007）：me.js 是 IIFE，模板字符串里的
+# inline onclick 引用必须显式挂 window，否则用户点击静默抛 ReferenceError。
+# 同时锁住活动订单出行语义 / 活动搜索 / 字段级校验 / 无封面占位 / 地址清空 / 版本 bump。
+# 纯静态扫描，不 import app、不建库、不碰真库。
+python tests/web_inline_handlers_guard.py
