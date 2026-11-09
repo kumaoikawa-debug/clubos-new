@@ -26,6 +26,7 @@ JS = read('static/web/web.js')
 CSS = read('static/web/web.css')
 HTML = read('static/web/index.html')
 PAY = read('static/ux/payment-experience.js')
+SHEET = read('static/web/address-sheet.js')
 
 OK = True
 
@@ -95,15 +96,26 @@ ck('无封面样式存在（渐变 + 首字 + 降高度）',
 ck('收据弹层 body 限高且可滚动（打印按钮不被裁）',
    "rbody.style.maxHeight='68vh'" in PAY and "rbody.style.overflowY='auto'" in PAY)
 
-# ── 5. P4：地址保存后清空表单 ──────────────────────────────────────────────
-ck('地址保存成功后 reset 并逐框清空',
-   "af.reset();af.querySelectorAll('input')" in JS and "toast('地址已保存')" in JS)
+# ── 5. P4：地址保存后不留旧值（2026-11-09 改为共用抽屉） ──────────────────
+# 结算页内联 3×2 表单已废除，「保存后清空」这一不变量改由「每次打开都是全新
+# DOM」保证：抽屉成功/取消都走 closeSheet() 把节点 remove()，不存在残留状态。
+ck('旧内联地址表单已移除', 'coSaveAddr' not in JS and 'w-co__form"' not in JS)
+ck('结算页地址入口改为共用抽屉', 'window.coOpenAddrSheet=coOpenAddrSheet;' in JS
+   and 'openAddressSheet({userId:USER' in JS)
+ck('我的页地址入口改为同一抽屉', 'window.openAddressSheet({userId:USER' in ME)
+ck('抽屉保存成功后关闭并提示', 'closeSheet();' in SHEET and "地址已保存'" in SHEET)
+ck('抽屉关闭时销毁 DOM（不残留旧表单值）', '_root.remove();' in SHEET)
+ck('地址抽屉复用全站弹层会话（Esc/焦点/滚动锁）', 'uxDialogSession(root' in SHEET)
+ck('优惠券所在城市默认系统定位', 'SUB_ME_AFTER.coupons=' in ME and 'meLocateCity(false)' in ME)
+ck('手动设置的城市不被自动定位覆盖', "meCitySource()==='manual'" in ME)
+ck('meLocateCity 已导出（inline onclick）', 'window.meLocateCity=meLocateCity;' in ME)
 
 # ── 6. 缓存护栏：改动文件必须 bump 版本，否则浏览器仍吃旧代码 ────────────────
 for rel, token in (
-    ('web.css', '/static/web/web.css?v=20261108f'),
-    ('web.js', '/static/web/web.js?v=20261108f'),
-    ('me.js', '/static/web/me.js?v=20261108f'),
+    ('web.css', '/static/web/web.css?v=20261109a'),
+    ('web.js', '/static/web/web.js?v=20261109a'),
+    ('me.js', '/static/web/me.js?v=20261109a'),
+    ('address-sheet.js', '/static/web/address-sheet.js?v=20261109a'),
     ('payment-experience.js', '/static/ux/payment-experience.js?v=20261108f'),
 ):
     ck('%s 静态资源版本已 bump' % rel, token in HTML)

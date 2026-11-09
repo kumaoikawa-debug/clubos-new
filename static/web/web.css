@@ -2774,3 +2774,115 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 .w-sh__iqgo{flex:0 0 auto;color:#90a398;font-size:17px}
 .w-sh__iqall{width:100%;border:0;background:none;padding:6px 2px;font-size:12px;
   font-weight:700;color:#2f7d52;text-align:left;cursor:pointer}
+
+/* ── 收货地址抽屉（2026-11-09，JD 式）──────────────────────────────────
+   确认订单页与「我的 › 收货地址」共用 #addrSheet（address-sheet.js）。
+   ★ 抽屉 append 到 document.body，在 .web-shell 之外：这里一律写字面色值，
+     不写 var(--w-*)、也不加 .web-shell 前缀（技能 §18 / §29 同源的两个坑）。
+   ★ 用 .w-sheet.w-addr-sheet .w-sheet__panel 的三类选择器覆盖基础抽屉的
+     max-height:90vh + overflow:auto，改成整屏 flex 列（头/滚动区/固定底栏）。 */
+.w-sheet.w-addr-sheet .w-sheet__panel{
+  height:min(92dvh,860px);max-height:none;overflow:hidden;padding-bottom:0;
+  display:flex;flex-direction:column;border-radius:22px 22px 0 0;background:#fff;
+  animation:w-addr-up .26s cubic-bezier(.2,.8,.3,1)}
+/* 基础抽屉的 w-sheet-up 带 opacity:.55 淡入；整屏表单会透出背后的订单文字，
+   看起来像面板半透明。地址抽屉只做位移，不透字（不改共用 keyframes）。 */
+@keyframes w-addr-up{from{transform:translateY(26px)}to{transform:none}}
+.w-sheet.w-addr-sheet .w-sheet__panel::before{display:none}
+.w-sheet.w-addr-sheet .w-sheet__x{top:11px;right:12px}
+.w-addr__hd{position:relative;flex:0 0 auto;height:56px;display:flex;align-items:center;
+  justify-content:center;border-bottom:1px solid #eef1ed;background:#fff}
+.w-addr__hd strong{font-size:16px;font-weight:700;color:#121714;letter-spacing:.01em}
+.w-addr__back{position:absolute;left:8px;top:8px;width:40px;height:40px;border:0;
+  background:none;color:#121714;font-size:30px;line-height:1;cursor:pointer;
+  display:grid;place-items:center;padding-bottom:4px}
+.w-addr__scroll{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  padding:14px 16px 18px;background:#f7f9f6}
+/* 智能识别：粘贴一整段地址自动拆字段（纯前端解析，不调外部地理服务） */
+.w-addr__smart{background:#eaf3ec;border:1px solid #d9e9dd;border-radius:14px;
+  padding:12px 12px 10px;margin-bottom:14px}
+.w-addr__smart textarea{display:block;width:100%;box-sizing:border-box;resize:none;
+  border:0;outline:0;background:transparent;color:#121714;font-size:14px;line-height:1.5;
+  font-family:inherit;padding:0;min-height:42px}
+.w-addr__smart textarea::placeholder{color:#7f9285}
+.w-addr__smart__bar{display:flex;align-items:center;justify-content:space-between;
+  gap:10px;margin-top:8px}
+.w-addr__smart__bar span{font-size:11px;color:#6f8576;line-height:1.4}
+.w-addr__smart__bar button{flex:0 0 auto;min-height:32px;padding:0 15px;border:0;
+  border-radius:999px;background:#156243;color:#fff;font-size:12.5px;font-weight:650;cursor:pointer}
+.w-addr__smart__bar button:active{background:#0f4b33}
+/* 表单：左标签 + 右输入，每行一条细分隔线；16px 字号防 iOS 聚焦整页缩放 */
+.w-addr__form{background:#fff;border-radius:14px;overflow:hidden;padding:0 14px}
+.w-addr__row{display:flex;align-items:center;gap:10px;min-height:54px;
+  border-bottom:1px solid #eef1ed;padding:6px 0}
+.w-addr__row:last-child{border-bottom:0}
+.w-addr__lb{flex:0 0 72px;font-size:14px;font-weight:600;color:#2b382f}
+.w-addr__field{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:8px}
+.w-addr__cc{font-style:normal;font-size:14px;font-weight:650;color:#121714;
+  padding-right:9px;border-right:1px solid #e6e9e4;white-space:nowrap}
+.w-addr__inp{flex:1 1 auto;min-width:0;border:0;outline:0;background:transparent;
+  color:#121714;font-size:16px;font-family:inherit;line-height:1.45;padding:8px 0;
+  -webkit-appearance:none;appearance:none}
+.w-addr__inp::placeholder{color:#a3aea6;font-size:14px}
+/* ★ 四端共用层 clubos-ux.css:3 有
+   :focus-visible{outline:3px solid var(--focus)!important}（--focus=#c5a166 金色），
+   实测地址抽屉首个输入框聚焦会出现一圈金框，很像校验报错。只在抽屉作用域用
+   !important 压回去，改以「整行淡绿底」作键盘焦点提示；共用层一个字节不动。 */
+.w-addr__inp:focus,.w-addr__inp:focus-visible,
+.w-addr__smart textarea:focus,.w-addr__smart textarea:focus-visible,
+.w-addr__cb:focus-visible{outline:none!important;outline-offset:0!important;box-shadow:none}
+.w-addr__row:focus-within{background:#f4faf6}
+.w-addr__row--area{align-items:flex-start}
+.w-addr__row--area .w-addr__lb{padding-top:12px}
+.w-addr__row--area textarea{resize:none;min-height:52px}
+.w-addr__region{margin:0 -14px;padding:0 14px;background:#fbfcfa;
+  border-top:1px solid #eef1ed;border-bottom:1px solid #eef1ed}
+.w-addr__region__hd{display:flex;align-items:center;justify-content:space-between;
+  gap:10px;padding:11px 0 4px}
+.w-addr__region__hd span{font-size:12px;font-weight:700;color:#6f7f74;letter-spacing:.04em}
+.w-addr__locate{border:0;background:none;padding:4px 0;font-size:12.5px;
+  font-weight:650;color:#156243;cursor:pointer;text-decoration:underline;
+  text-underline-offset:3px}
+.w-addr__locate:disabled{color:#9aa8a0;cursor:default}
+.w-addr__switch{display:flex;align-items:center;gap:12px;min-height:62px;
+  border-top:1px solid #eef1ed;padding:8px 0;cursor:pointer}
+.w-addr__switch__tx{flex:1 1 auto;min-width:0;display:grid;gap:2px}
+.w-addr__switch__tx b{font-size:14px;font-weight:650;color:#2b382f}
+.w-addr__switch__tx em{font-style:normal;font-size:11.5px;color:#8b988f}
+.w-addr__cb{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.w-addr__track{position:relative;flex:0 0 auto;width:46px;height:27px;border-radius:999px;
+  background:#d9dfda;transition:background .18s ease}
+.w-addr__track::after{content:"";position:absolute;left:3px;top:3px;width:21px;height:21px;
+  border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.16);
+  transition:transform .18s ease}
+.w-addr__cb:checked+.w-addr__track{background:#156243}
+.w-addr__cb:checked+.w-addr__track::after{transform:translateX(19px)}
+.w-addr__cb:focus-visible+.w-addr__track{outline:2px solid #156243;outline-offset:2px}
+.w-addr__err{margin:10px 2px 0;font-size:12.5px;line-height:1.5;color:#c0392b}
+.w-addr__foot{flex:0 0 auto;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));
+  border-top:1px solid #eef1ed;background:#fff}
+.w-addr__save{width:100%;min-height:48px;border:0;border-radius:999px;
+  background:#121714;color:#fff;font-size:15.5px;font-weight:700;letter-spacing:.02em;
+  cursor:pointer;box-shadow:0 6px 16px rgba(18,23,20,.16)}
+.w-addr__save:active{background:#2b382f}
+.w-addr__save.is-busy,.w-addr__save:disabled{background:#a8b3ac;box-shadow:none;cursor:not-allowed}
+/* 结算页地址簿：新增 / 编辑入口改成整行按钮，不再内联 3×2 表单 */
+.w-co__abook__add{display:flex;align-items:center;justify-content:center;gap:6px;
+  width:100%;min-height:44px;margin:8px 0 4px;border:1.5px dashed #c8d8cc;
+  border-radius:12px;background:#f7fbf8;color:#156243;font-size:13.5px;
+  font-weight:650;cursor:pointer}
+.w-co__abook__add:active{background:#eaf3ec}
+.w-co__aopt__ops .w-co__aedit{color:#156243;text-decoration:none;font-weight:650}
+/* 优惠券城市条：默认系统定位，其次才手动调整 */
+.me-cpn__city{display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:12px 14px;margin-bottom:12px;border-radius:14px;background:#fff;
+  border:1px solid #e6e9e4;font-size:12.5px;color:#5b6b60}
+.me-cpn__city b{color:#121714;font-weight:750;font-size:14px}
+.me-cpn__src{font-size:10.5px;font-weight:650;color:#156243;background:#eaf3ec;
+  border-radius:999px;padding:2px 7px;line-height:1.4}
+.me-cpn__src--manual{color:#8a6a2f;background:#f7f0df}
+.me-cpn__ops{display:flex;gap:8px;margin-left:auto}
+.me-cpn__ops button{border:1px solid #d9e2da;background:#fff;color:#156243;
+  border-radius:999px;padding:6px 12px;font-size:12px;font-weight:650;cursor:pointer}
+.me-cpn__ops button:active{background:#eaf3ec}
+.me-cpn__tip{flex:0 0 100%;font-size:11px;color:#8b988f;line-height:1.5;margin-top:2px}

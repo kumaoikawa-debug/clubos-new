@@ -320,7 +320,11 @@ def _member_owns_path(path: str, request: Request, identity: dict, payload: dict
     if re.search(r'^/api/public/activities/\d+/checkout$', path):
         with conn() as c:
             user = row(c.execute('SELECT phone FROM users WHERE id=?',(uid,)))
-        if not user or not user['phone'] or str(payload.get('phone','')) != str(user['phone']): _forbidden('payer identity mismatch')
+        # uid 取自会话 token（create_activity_checkout 经 _member_uid_from_request），
+        # 已不可被请求体伪造；此处 phone 仅作联系/出行用途。仅当用户档案已有手机号时，
+        # 才强制 body.phone 与档案一致（防误填他人号码）；微信原生会员（无 phone）允许自填。
+        if not user: _forbidden('payer identity mismatch')
+        if user['phone'] and str(payload.get('phone','')) != str(user['phone']): _forbidden('payer identity mismatch')
     if re.search(r'^/api/public/club-applications',path): _forbidden('application details are not public')
     if request.method in ('POST','PATCH','PUT','DELETE'):
         club_match=re.match(r'^/api/public/clubs/(\d+)/',path)
@@ -413,6 +417,12 @@ async def _authorize_shared(request: Request, strict: bool) -> dict | None:
         if strict:
             public_rate_limit(request,'club-application',3,3600)
             return None
+        return None
+    # 2026-11-09 微信小程序 jscode2session 登录：它是「发会话」的入口，本身无需先验会话。
+    # strict 模式下仍做频率限制防滥用；demo 模式已在下方 /api/public/* 全放行分支覆盖。
+    if path=='/api/public/wechat/login' and method=='POST':
+        if strict:
+            public_rate_limit(request,'wechat-login',20,3600)
         return None
     if strict and any(rx.fullmatch(path) for rx in _DEMO_ONLY): _forbidden('demo-only endpoint disabled')
     if method == 'GET' and any(rx.fullmatch(path) for rx in _PUBLIC_READ): return None

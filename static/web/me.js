@@ -745,9 +745,16 @@ SUB_ME.coupons=function(){
   const mine=ME.mineCoupons||[];
   const usable=mine.filter(v=>v.status==='issued'&&!v.expired);
   const spent=mine.filter(v=>v.status!=='issued'||v.expired);
-  const head=`<div class="me-cpn__city">所在城市：<b>${esc(ME.city||'未设置')}</b>
-      <button class="me-btn me-btn--sm" onclick="meSetCity()">${ME.city?'修改':'去设置'}</button>
-      <span class="me-cpn__hint">按城市定向的优惠券按这里圈人</span></div>`;
+  const manual=meCitySource()==='manual';
+  const head=`<div class="me-cpn__city">
+      <span>所在城市</span><b>${esc(ME.city||'未设置')}</b>
+      ${ME.city?`<i class="me-cpn__src${manual?' me-cpn__src--manual':''}">${manual?'手动设置':'系统定位'}</i>`:''}
+      <span class="me-cpn__ops">
+        <button type="button" id="meCpnLocate" onclick="meLocateCity(true)">重新定位</button>
+        <button type="button" onclick="meSetCity()">手动调整</button>
+      </span>
+      <span class="me-cpn__tip">优先按系统定位的本地城市发放城市定向优惠券；手动调整后会固定使用所选城市，不再被自动定位覆盖。</span>
+    </div>`;
   const parts=[];
   if(claimable.length) parts.push(`<div class="me-cpn__grp"><h4>可领取</h4><div class="me-cpn__list">${claimable.map(v=>meCouponFace(v,true)).join('')}</div></div>`);
   if(usable.length) parts.push(`<div class="me-cpn__grp"><h4>我的优惠券（${usable.length}）</h4><div class="me-cpn__list">${usable.map(v=>meCouponFace(v,false)).join('')}</div></div>`);
@@ -755,6 +762,9 @@ SUB_ME.coupons=function(){
   if(!parts.length) return head+empty('还没有优惠券，去活动页或商城领一张');
   return head+parts.join('');
 };
+/* 进入优惠券子页即尝试一次系统定位（renderMeSub 会跑 SUB_ME_AFTER）。
+   _meGeoTried 保证重渲染不会再触发，手动设过城市也会被 meCitySource 拦下。 */
+SUB_ME_AFTER.coupons=function(){ meLocateCity(false); };
 async function meClaimCoupon(id){
   try{
     const r=await api(`/api/public/coupons/${id}/claim`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({userId:USER,clubId:CLUB})});
@@ -824,17 +834,53 @@ SUB_ME_AFTER.invite=async function(){
       ${invited||'<div class="empty">还没有好友用你的邀请码注册，快去分享吧</div>'}`;
   }catch(e){ box.innerHTML=empty('邀请卡加载失败',(e&&e.message)||'请稍后再试'); }
 };
+/* ── 所在城市：默认系统定位，其次才手动调整（2026-11-09） ─────────────────
+   city 只有一份真源（users.city / public_set_user_city）。「是不是用户手动选的」
+   后端没有字段，用 localStorage 记来源：manual 的城市不再被自动定位覆盖；
+   点「重新定位」是显式的 force 操作，允许把来源改回 geo。 */
+function meCitySourceKey(){return 'clubos_city_src_'+String(USER||0);}
+function meCitySource(){try{return localStorage.getItem(meCitySourceKey())||''}catch(e){return ''}}
+function meCitySourceSet(v){try{if(v)localStorage.setItem(meCitySourceKey(),v);else localStorage.removeItem(meCitySourceKey())}catch(e){}}
+let _meGeoTried=false;
+function meLocateCity(force){
+  if(!force&&_meGeoTried)return;
+  if(!force&&ME.city&&meCitySource()==='manual')return;
+  _meGeoTried=true;
+  if(!navigator.geolocation||!window.clubosNearestCity){
+    if(force)toast('当前浏览器不支持定位，请手动选择城市');
+    return;
+  }
+  const btn=document.getElementById('meCpnLocate');
+  if(btn){btn.disabled=true;btn.textContent='定位中…';}
+  const restore=()=>{const b=document.getElementById('meCpnLocate');if(b){b.disabled=false;b.textContent='重新定位'}};
+  try{
+    navigator.geolocation.getCurrentPosition(async pos=>{
+      const c=window.clubosNearestCity(pos.coords.latitude,pos.coords.longitude);
+      restore();
+      if(!c){if(force)toast('附近暂无可选城市，请手动选择');return;}
+      if(c===ME.city){if(force)toast('已在 '+c);return;}
+      try{
+        await api(`/api/public/users/${USER}/city`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({city:c})});
+        ME.city=c;meCitySourceSet('geo');ME.ts=0;
+        await meLoadAll(true);renderMeSub();
+        if(force)toast('已定位到 '+c);
+      }catch(e){if(force)toast((e&&e.message)||'定位城市保存失败')}
+    },()=>{restore();if(force)toast('定位未开启或已拒绝，可手动选择城市')},
+      {timeout:8000,maximumAge:600000});
+  }catch(e){restore();if(force)toast('定位失败，请手动选择城市')}
+}
 async function meSetCity(){
   const cities=(window.CLUBOS_CITIES||[]);
   const opts=[{value:'',label:'不设置'}].concat(cities.map(c=>({value:c,label:c})));
-  const v=await showForm({title:'设置所在城市',subtitle:'城市定向的优惠券按注册城市发放（例：成都区域的用户可领专属券）。',fields:[{name:'city',label:'所在城市',type:'select',options:opts,value:ME.city||''}],submitText:'保存'});
+  const v=await showForm({title:'手动调整所在城市',desc:'默认是系统定位的本地城市；手动选择后会固定使用这个城市，不再被自动定位覆盖。',fields:[{name:'city',label:'所在城市',type:'select',options:opts,value:ME.city||''}],submitText:'保存'});
   if(!v) return;
   try{
     await api(`/api/public/users/${USER}/city`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({city:v.city})});
-    ME.city=v.city; ME.ts=0; toast('已保存');
+    ME.city=v.city||'';meCitySourceSet(v.city?'manual':'');_meGeoTried=true;ME.ts=0;
+    toast('已保存');
     await meLoadAll(true); renderMeSub();
   }catch(e){ toast((e&&e.message)||e); }
-};
+}
 SUB_ME.orders=function(st){
   const tab=st||'all';
   const tabs=[['all','全部'],['activity','活动报名'],['pending','待付款'],['paid','待发货'],['shipped','待收货'],['completed','待评价'],['refund','退款']];
@@ -1056,17 +1102,19 @@ async function meRedeemMall(id,title,points){
   }catch(e){ toast((e&&e.message)||e); }
 }
 
-/* ── 地址 CRUD ─────────────────────────────────────────────────────────── */
-async function meAddAddr(){
-  const v=await addrForm(); if(!v)return;
-  try{ await api(`/api/public/users/${USER}/addresses`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)}); toast('地址已保存'); await meLoadAll(true); renderMeSub(); }
-  catch(e){ showAlert({title:'保存失败',message:e.message}); }
+/* ── 地址 CRUD（2026-11-09：与确认订单页共用 #addrSheet 抽屉） ─────────────
+   之前这里用 showForm 的通用弹窗、结算页用内联 3×2 表单，两套字段两套校验。
+   现在统一调 window.openAddressSheet()，后端接口与字段一字未改。 */
+function meOpenAddrSheet(a){
+  if(!window.openAddressSheet){toast('地址功能加载失败，请刷新页面重试');return;}
+  window.openAddressSheet({userId:USER,addr:a||null,onSaved:async function(){
+    ME.ts=0; await meLoadAll(true); renderMeSub();
+  }});
 }
-async function meEditAddr(id){
+function meAddAddr(){ meOpenAddrSheet(null); }
+function meEditAddr(id){
   const a=(ME.addr||[]).find(x=>String(x.id)===String(id)); if(!a)return;
-  const v=await addrForm(a); if(!v)return;
-  try{ await api(`/api/public/users/${USER}/addresses/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)}); toast('已更新'); await meLoadAll(true); renderMeSub(); }
-  catch(e){ showAlert({title:'更新失败',message:e.message}); }
+  meOpenAddrSheet(a);
 }
 async function meDelAddr(id){
   if(!(await showConfirm({title:'删除地址',message:'确认删除这个收货地址？'})))return;
@@ -1076,17 +1124,6 @@ async function meDelAddr(id){
 async function meDefaultAddr(id){
   try{ await api(`/api/public/users/${USER}/addresses/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_default:true})}); toast('已设为默认'); await meLoadAll(true); renderMeSub(); }
   catch(e){ showAlert({title:'操作失败',message:e.message}); }
-}
-function addrForm(a){
-  a=a||{};
-  return showForm({title:a.id?'编辑地址':'新增地址',fields:[
-    {name:'consignee',label:'收货人',required:true,value:a.consignee||''},
-    {name:'phone',label:'手机号',required:true,value:a.phone||''},
-    {name:'province',label:'省',required:true,value:a.province||''},
-    {name:'city',label:'市',required:true,value:a.city||''},
-    {name:'district',label:'区/县',value:a.district||''},
-    {name:'detail',label:'详细地址',required:true,value:a.detail||''}
-  ],submitText:'保存'});
 }
 
 /* ── 退出登录 ─────────────────────────────────────────────────────────── */
@@ -1107,7 +1144,7 @@ window.meClaimByCode=meClaimByCode; window.meFillInviteCode=meFillInviteCode;
    me.js 整体是 IIFE，裸 function 不会挂到 window —— 漏导出会让「签到码放大 /
    城市去设置 / 立即领取 / 送好友」点了静默抛 ReferenceError。新增任何 inline
    入口必须同时补一行导出，tests/web_inline_handlers_guard.py 会在发版门禁里卡住。 */
-window.meZoomQr=meZoomQr; window.meSetCity=meSetCity;
+window.meZoomQr=meZoomQr; window.meSetCity=meSetCity; window.meLocateCity=meLocateCity;
 window.meClaimCoupon=meClaimCoupon; window.meShareCoupon=meShareCoupon;
 
 /* ── 头像（2026-10-31）：两种方案 —— 自定义上传 / 自动同步微信头像 ──────────────

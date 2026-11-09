@@ -1279,7 +1279,7 @@ function backToProduct(){
    不动商品与价格明细 —— 用户正在填的积分/券不能被一次地址操作抹掉。 */
 function coAddrCardHtml(){
   const a=coAddr();
-  if(!a)return `<div class="w-co__card"><button class="w-co__noaddr" type="button" onclick="coToggleAbook(true)">
+  if(!a)return `<div class="w-co__card"><button class="w-co__noaddr" type="button" onclick="coOpenAddrSheet()">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>添加收货地址</button></div>`;
   return `<div class="w-co__card" id="coAddrCard"><button class="w-co__addr" type="button" onclick="coToggleAbook()">
     <span class="w-co__addric"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s6.2-5.5 6.2-10.4a6.2 6.2 0 1 0-12.4 0C5.8 15.5 12 21 12 21z"/><circle cx="12" cy="10.4" r="2.3"/></svg></span>
@@ -1298,6 +1298,7 @@ function coAbookHtml(){
       <div class="w-co__aopt__who">${esc(a.consignee)}<span>${esc(a.phone)}</span></div>
       <div class="w-co__aopt__full">${esc(a.full||coFull(a))}</div>
       <div class="w-co__aopt__ops">
+        <button type="button" class="w-co__aedit" onclick="coEditAddr(event,${a.id})">编辑</button>
         ${Number(a.is_default)?'':`<button type="button" onclick="coDefaultAddr(event,${a.id})">设为默认</button>`}
         <button type="button" onclick="coDelAddr(event,${a.id})">删除</button>
       </div>
@@ -1307,25 +1308,8 @@ function coAbookHtml(){
   return `<div class="w-co__abook" id="coAbook">
     <div class="w-co__abook__hd">收货地址<em>点地址即可切换，提交后按选中地址发货</em></div>
     ${list}
-    <form class="w-co__form" onsubmit="return coSaveAddr(event)">
-      <div class="w-co__form__row">
-        <input class="w-co__inp" id="coAfName" placeholder="收货人姓名" maxlength="20" autocomplete="name">
-        <input class="w-co__inp" id="coAfPhone" placeholder="手机号（11 位）" inputmode="numeric" maxlength="11" autocomplete="tel">
-      </div>
-      <div class="w-co__form__row">
-        <input class="w-co__inp" id="coAfProv" placeholder="省 / 直辖市" maxlength="20">
-        <input class="w-co__inp" id="coAfCity" placeholder="城市" maxlength="20">
-      </div>
-      <div class="w-co__form__row">
-        <input class="w-co__inp" id="coAfDist" placeholder="区 / 县（选填）" maxlength="20">
-        <input class="w-co__inp" id="coAfDetail" placeholder="详细地址：街道、门牌号、楼层" maxlength="80" autocomplete="street-address">
-      </div>
-      <div class="w-co__form__err" id="coAfErr" hidden></div>
-      <div style="display:flex;align-items:center;gap:16px">
-        <button class="w-co__form__save" type="submit">保存地址</button>
-        <button class="w-co__form__cancel" type="button" onclick="coToggleAbook(false)">收起</button>
-      </div>
-    </form>
+    <button class="w-co__abook__add" type="button" onclick="coOpenAddrSheet()">+ 新增收货地址</button>
+    <button class="w-co__form__cancel" type="button" onclick="coToggleAbook(false)" style="margin-top:8px">收起</button>
   </div>`;
 }
 function coRenderAddr(){
@@ -1366,35 +1350,20 @@ async function coDelAddr(e,id){
     coRenderAddr();
   }catch(err){showAlert({title:'删除失败',message:err.message})}
 }
-async function coSaveAddr(ev){
-  ev.preventDefault();
-  const err=$('#coAfErr');
-  const v={consignee:($('#coAfName').value||'').trim(),phone:($('#coAfPhone').value||'').trim(),
-           province:($('#coAfProv').value||'').trim(),city:($('#coAfCity').value||'').trim(),
-           district:($('#coAfDist').value||'').trim(),detail:($('#coAfDetail').value||'').trim()};
-  let msg='';
-  if(!v.consignee)msg='请填写收货人姓名';
-  else if(!/^1\d{10}$/.test(v.phone))msg='请填写 11 位手机号';
-  else if(!v.province||!v.city)msg='请填写省份与城市';
-  else if(!v.detail)msg='请填写详细地址';
-  if(msg){if(err){err.textContent=msg;err.hidden=false}toast(msg);return false}
-  if(err)err.hidden=true;
-  const btn=document.querySelector('#coAbook .w-co__form__save');
-  const st=uxBusyOn(btn);
-  try{
-    const a=await api(`/api/public/users/${USER}/addresses`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});
-    CO_ADDRS=await api(`/api/public/users/${USER}/addresses`)||[];
-    CO_ADDR_ID=a.id;
+/* 地址填写统一走 #addrSheet 抽屉（static/web/address-sheet.js）：
+   确认订单页与「我的 › 收货地址」共用同一份表单、同一套校验与同一个保存接口。
+   保存成功后只重绘地址卡与地址簿，不动商品 / 积分 / 福利券 —— 顾客填到一半的
+   结算信息不能被一次地址操作抹掉（原 BUG-CUX-007 的约束继续成立）。 */
+function coOpenAddrSheet(id){
+  if(!window.openAddressSheet){toast('地址功能加载失败，请刷新页面重试');return;}
+  const cur=id?((CO_ADDRS||[]).find(a=>String(a.id)===String(id))||null):null;
+  window.openAddressSheet({userId:USER,addr:cur,onSaved:async function(a){
+    try{CO_ADDRS=await api(`/api/public/users/${USER}/addresses`)||[]}catch(e){}
+    CO_ADDR_ID=(a&&a.id)||CO_ADDR_ID;
     coRenderAddr();
-    /* 地址簿整块重绘后表单本身已重建，但浏览器可能保留表单状态 —— 显式 reset
-       并逐框清空，避免顾客再点「添加」时看到旧值、误以为没保存成功（BUG-CUX-007）。 */
-    const af=document.querySelector('#coAbook .w-co__form');
-    if(af){af.reset();af.querySelectorAll('input').forEach(i=>{i.value=''})}
-    toast('地址已保存');
-  }catch(e){if(err){err.textContent=e.message||'保存失败，请稍后再试';err.hidden=false}}
-  finally{uxBusyOff(st)}
-  return false;
+  }});
 }
+function coEditAddr(e,id){e.stopPropagation();coOpenAddrSheet(id);}
 function coOnPoints(){
   const inp=$('#coPtsInp');if(!inp)return;
   let n=Math.floor(Number(inp.value||0));
@@ -1502,7 +1471,8 @@ window.openGearCheckout=openGearCheckout;
 window.coPickAddr=coPickAddr;
 window.coDefaultAddr=coDefaultAddr;
 window.coDelAddr=coDelAddr;
-window.coSaveAddr=coSaveAddr;
+window.coOpenAddrSheet=coOpenAddrSheet;
+window.coEditAddr=coEditAddr;
 window.coToggleAbook=coToggleAbook;
 window.coOnPoints=coOnPoints;
 window.coOnVoucher=coOnVoucher;

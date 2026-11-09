@@ -1,5 +1,5 @@
 from __future__ import annotations
-import uuid, os, io, csv, re, json, zipfile, shutil, asyncio, secrets, hmac, hashlib, base64, subprocess
+import uuid, os, io, csv, re, json, zipfile, shutil, asyncio, secrets, hmac, hashlib, base64, subprocess, time
 from sqlite3 import IntegrityError
 from datetime import datetime, timedelta, date
 from pathlib import Path
@@ -176,6 +176,46 @@ def user_or_create(c,name:str,phone:str):
     u=row(c.execute('SELECT * FROM users WHERE phone=?',(phone,))) if phone else None
     if u:return u['id']
     c.execute('INSERT INTO users(name,phone) VALUES(?,?)',(name or '访客',phone)); return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+
+
+def _wechat_jscode2session(appid:str, secret:str, code:str) -> dict:
+    """调用微信 jscode2session 换取 openid（含 unionid）。失败抛可读 ValueError。
+
+    注意：appid 来自 club_miniprogram 登记，secret 不入库、从环境变量取
+    （WECHAT_MINIPROGRAM_SECRET 或 WECHAT_MINIPROGRAM_SECRET_<club_id>），避免密钥落库。
+    """
+    url=('https://api.weixin.qq.com/sns/jscode2session?appid=%s&secret=%s'
+         '&js_code=%s&grant_type=authorization_code') % (quote(appid),quote(secret),quote(code))
+    try:
+        req=urllib.request.Request(url, headers={'User-Agent':'ClubOS/1.0'})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data=json.loads(resp.read().decode('utf-8'))
+    except urllib.error.URLError:
+        raise ValueError('微信登录服务暂时不可用（网络异常）')
+    except Exception:
+        raise ValueError('微信登录服务返回异常')
+    if data.get('errcode'):
+        raise ValueError('微信登录失败：%s' % data.get('errmsg','errcode=%s'%data.get('errcode')))
+    if not data.get('openid'):
+        raise ValueError('微信登录未返回 openid')
+    return data
+
+
+def _member_uid_from_request(request) -> int | None:
+    """仅信任经 get_identity 验过的会员会话 token（X-ClubOS-Token 等穿透网关的载体），
+    绝不读请求体里的 userId —— 否则可被越权把订单挂到他人账户。
+
+    用于「微信登录用户下单归属同一会员」：有合法会员 token 时用其 user_id，
+    否则回落到手机号 user_or_create（匿名/手机号流程不变）。
+    """
+    try:
+        identity,_=get_identity(request)
+    except Exception:
+        return None
+    if identity and identity.get('role')=='member' and identity.get('user_id'):
+        try: return int(identity['user_id'])
+        except (TypeError,ValueError): return None
+    return None
 
 
 def wallet_snapshot(c,user_id:int,club_id:int):
@@ -5671,7 +5711,7 @@ def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_
     return out
 
 @app.post('/api/public/activities/{activity_id}/checkout')
-def create_activity_checkout(activity_id:int,payload:dict=Body(...)):
+def create_activity_checkout(request:Request,activity_id:int,payload:dict=Body(...)):
     name=payload.get('name','访客'); phone=payload.get('phone',''); occurrence_id=int(payload.get('occurrenceId') or 0)
     req_cp=max(0,int(payload.get('clubPoints',0))); req_gp=max(0,int(payload.get('gearPoints',0))); voucher_codes=payload.get('voucherCodes') or []
     participant_input=payload.get('participants') if isinstance(payload.get('participants'),list) else None
@@ -5684,7 +5724,8 @@ def create_activity_checkout(activity_id:int,payload:dict=Body(...)):
             raise HTTPException(409,'该活动价格待定，请联系俱乐部咨询')
         occ=row(c.execute('SELECT * FROM activity_occurrences WHERE id=? AND activity_id=? AND status="open"',(occurrence_id,activity_id))) if occurrence_id else None
         if not occ: raise HTTPException(400,'请选择有效团期')
-        uid=user_or_create(c,name,phone)
+        # 微信登录用户（带会员 token）下单归属同一会员；否则回落手机号建号（匿名/手机号流程不变）。
+        uid=_member_uid_from_request(request) or user_or_create(c,name,phone)
         c.execute('INSERT OR IGNORE INTO club_members(club_id,user_id) VALUES(?,?)',(a['club_id'],uid))
         c.execute('INSERT OR IGNORE INTO gear_point_accounts(user_id,balance) VALUES(?,0)',(uid,))
         try:
@@ -5697,6 +5738,62 @@ def create_activity_checkout(activity_id:int,payload:dict=Body(...)):
             'memberDiscount':float(_mi['member_discount'] or 0),'memberDiscountRate':float(_mi['member_discount_rate'] or 0) if _mi else 0,
             'commerceProvider':'clubos-domain','commerceCartId':None,'commerceNote':None,'nextAction':'PAY',
             'participantCount':len(participants),'participantPolicy':participant_policy.as_dict()}
+
+
+@app.post('/api/public/wechat/login')
+def wechat_login(payload:dict=Body(...)):
+    """微信小程序一键登录：wx.login 的 code → 微信 jscode2session → openid → 会员会话。
+
+    返回 { token, userId, openid, unionid, clubId }，小程序用 token 走 X-ClubOS-Token 头
+    调用 /api/public/*（穿透托管网关剥离 Cookie/Authorization 的限制）。
+    密钥不入库：appid 来自 club_miniprogram 登记，secret 取环境变量
+    WECHAT_MINIPROGRAM_SECRET（或按俱乐部覆盖 WECHAT_MINIPROGRAM_SECRET_<club_id>）。
+    """
+    from security_v025 import _hash
+    club_id=int(payload.get('clubId') or 1)
+    code=(payload.get('code') or '').strip()
+    if not code: raise HTTPException(400,'缺少微信登录 code')
+    with conn() as c:
+        club=row(c.execute('SELECT id,status FROM clubs WHERE id=?',(club_id,)))
+        if not club or club['status']!='active': raise HTTPException(404,'俱乐部不存在或未启用')
+        mp=_mp_get(c,club_id) or {}
+        appid=mp.get('appid') or ''
+        if not appid: raise HTTPException(400,'该俱乐部未配置微信小程序 appid')
+        secret=os.getenv('WECHAT_MINIPROGRAM_SECRET_%d'%club_id) or os.getenv('WECHAT_MINIPROGRAM_SECRET','')
+        if not secret: raise HTTPException(400,'微信小程序登录密钥未配置（需设置 WECHAT_MINIPROGRAM_SECRET）')
+        try:
+            wx=_wechat_jscode2session(appid,secret,code)
+        except ValueError as e:
+            raise HTTPException(400,str(e))
+        openid=wx['openid']; unionid=wx.get('unionid') or ''
+        u=row(c.execute('SELECT id FROM users WHERE mp_openid=?',(openid,)))
+        if not u:
+            c.execute('INSERT INTO users(name,mp_openid) VALUES(?,?)',('微信用户',openid))
+            uid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        else:
+            uid=int(u['id'])
+        # 确保俱乐部会员关系与装备积分账户存在（解锁积分/等级等权益）。
+        c.execute('INSERT OR IGNORE INTO club_members(club_id,user_id) VALUES(?,?)',(club_id,uid))
+        c.execute('INSERT OR IGNORE INTO gear_point_accounts(user_id,balance) VALUES(?,0)',(uid,))
+        # 会员登录账号按 俱乐部+openid 唯一；复用既有或新建。
+        username='mp_%d_%s'%(club_id,openid)
+        acct=row(c.execute('SELECT * FROM auth_accounts WHERE username=? AND status="active"',(username,)))
+        now=int(time.time())
+        if not acct:
+            c.execute('INSERT INTO auth_accounts(username,password_hash,role,club_id,user_id,status) VALUES(?,?,?,?,?,?)',
+                      (username,'','member',club_id,uid,'active'))
+            acct_id=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        else:
+            acct_id=int(acct['id'])
+            c.execute('UPDATE auth_accounts SET user_id=? WHERE id=?',(uid,acct_id))
+        # 签发会员会话（30 天；小程序体验更顺，管理端是 1h）。
+        token=secrets.token_urlsafe(48); csrf=secrets.token_urlsafe(32)
+        c.execute('UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE account_id=? AND revoked_at IS NULL',(acct_id,))
+        c.execute('INSERT INTO auth_sessions(token_hash,account_id,csrf_hash,expires_at) VALUES(?,?,?,?)',
+                  (_hash(token),acct_id,_hash(csrf),now+86400*30))
+    return {'ok':True,'token':token,'userId':uid,'openid':openid,'unionid':unionid,
+            'clubId':club_id,'expiresAt':now+86400*30}
+
 
 def _gear_address_snapshot(c,*,user_id:int,address_id):
     """装备是实物、由平台统一发货：结算单必须落到一个真实存在的收货地址。

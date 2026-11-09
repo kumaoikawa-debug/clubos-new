@@ -195,6 +195,9 @@ def _run_compat_migrations(c):
     _ensure_column(c,'products','is_featured','is_featured INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'users','platform_member','platform_member INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'users','platform_member_since','platform_member_since TEXT')
+    # 2026-11-09 微信小程序一键登录：把微信 openid 落到 users，作为会员身份锚点
+    # （与手机号 user_or_create 并存；同一用户后续可按 openid 或手机号归并）。
+    _ensure_column(c,'users','mp_openid','mp_openid TEXT')
     # 「注册成为该俱乐部会员 → 自动成为总平台会员」用触发器兜住所有写入路径
     # （报名 / 邀请码 / 买会员卡 / 会员中心 refresh_member），不漏任何一个调用点。
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_club_member_platform
