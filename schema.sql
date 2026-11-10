@@ -1857,3 +1857,143 @@ CREATE TABLE IF NOT EXISTS pk_settlement_audit (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_pksa_created ON pk_settlement_audit(created_at,id);
+
+-- ==========================================================================
+-- 营地模块（ClubOS 营地经营 / 营位房态 / 装备租赁 / 营地小站 / 活动票）
+-- 2026-11-10 新增。所有表挂 clubs(club_id)，与平台商城(platform_owned)严格隔离：
+-- 营位/租赁/小站/活动票都是「俱乐部/营地」自己运营的业态，绝不进入 gear_orders / products。
+-- ==========================================================================
+
+-- 营地档案（一个俱乐部可有多营地，camp_id 区分；默认 0=主营地）
+CREATE TABLE IF NOT EXISTS camp_profiles (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  name TEXT,                          -- 营地名称
+  intro_text TEXT,                    -- 营地简介（富文本/纯文本）
+  gallery_json TEXT,                  -- 图廊 URL 列表
+  facilities_json TEXT,               -- 设施标签列表（通电/淋浴/停车场…）
+  rules_json TEXT,                    -- 营地规则 / 入住须知
+  contact_phone TEXT,
+  address TEXT,
+  geo_lat REAL,
+  geo_lng REAL,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_camp_profiles_club ON camp_profiles(club_id);
+
+-- 营位（固定资源，像酒店房间号）。pitch_type 区分 日间营 / 过夜营位 / 房车位 / 木屋。
+CREATE TABLE IF NOT EXISTS camp_pitches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  camp_id INTEGER NOT NULL DEFAULT 0,
+  code TEXT NOT NULL,                 -- 固定营位编号，如 A01（像房间号）
+  name TEXT,
+  pitch_type TEXT NOT NULL DEFAULT 'tent',   -- tent(帐篷位)/rv(房车位)/cabin(木屋)/day(日间营)
+  is_overnight INTEGER NOT NULL DEFAULT 1,   -- 1=过夜(跨日锁，像酒店) 0=日间(当天结束)
+  capacity INTEGER NOT NULL DEFAULT 1,       -- 可住/可停人数
+  attributes_json TEXT,               -- 通电/面积/可停房车等自定义属性
+  base_price REAL NOT NULL DEFAULT 0,        -- 平日基础价（过夜=每晚 / 日间=每日）
+  weekend_price REAL,                 -- 周末价
+  holiday_price REAL,                 -- 节假日价
+  status TEXT NOT NULL DEFAULT 'active',     -- active/maintenance(维护)/disabled
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_camp_pitches_club ON camp_pitches(club_id);
+
+-- 房态/可用：按 营位×日期 的手工覆盖（封锁/维护/价格覆盖）。
+-- 预订占用由 camp_pitch_bookings 实时推导，本表只存「人工覆盖」与「价目覆盖」，避免和真实预订混算。
+CREATE TABLE IF NOT EXISTS camp_pitch_status (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  camp_id INTEGER NOT NULL DEFAULT 0,  -- 所属营地（支持多营地各自房态）
+  pitch_id INTEGER NOT NULL,
+  day TEXT NOT NULL,                  -- 日期 YYYY-MM-DD
+  status TEXT NOT NULL DEFAULT 'available',  -- available/blocked(维护或封场)
+  price_override REAL,                -- 该日价格覆盖（可选）
+  note TEXT,
+  UNIQUE(club_id,camp_id,pitch_id,day),
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(pitch_id) REFERENCES camp_pitches(id)
+);
+CREATE INDEX IF NOT EXISTS idx_camp_status_pitch_day ON camp_pitch_status(camp_id,pitch_id,day);
+
+-- 营位预订（酒店式跨日锁：check_out-check_in=晚数；日间营 check_in==check_out）
+CREATE TABLE IF NOT EXISTS camp_pitch_bookings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  camp_id INTEGER NOT NULL DEFAULT 0,
+  pitch_id INTEGER NOT NULL,
+  check_in TEXT NOT NULL,             -- 入住日 YYYY-MM-DD
+  check_out TEXT NOT NULL,            -- 退房日 YYYY-MM-DD（过夜：晚数=check_out-check_in）
+  is_day_use INTEGER NOT NULL DEFAULT 0,    -- 1=日间营（仅单日，check_in==check_out）
+  guest_name TEXT,
+  guest_phone TEXT,
+  qty INTEGER NOT NULL DEFAULT 1,     -- 同号位一次订几顶/几间
+  nights INTEGER NOT NULL DEFAULT 1,  -- 晚数（日间=1）
+  payable REAL NOT NULL DEFAULT 0,    -- 营位费（不含押金）
+  deposit REAL NOT NULL DEFAULT 0,    -- 押金（暂扣，归还冲抵）
+  total REAL NOT NULL DEFAULT 0,      -- payable+deposit
+  status TEXT NOT NULL DEFAULT 'pending',   -- pending/paid/cancelled/checked_in/checked_out
+  order_id INTEGER,                   -- 关联统一结算订单（club 域）
+  user_id INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(pitch_id) REFERENCES camp_pitches(id)
+);
+CREATE INDEX IF NOT EXISTS idx_camp_book_pitch ON camp_pitch_bookings(pitch_id,check_in,check_out);
+
+-- 营地装备租赁（club 域，与平台商城 gear_orders 隔离；日租金×天数×数量+押金）
+CREATE TABLE IF NOT EXISTS camp_rental_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  camp_id INTEGER NOT NULL DEFAULT 0,
+  name TEXT NOT NULL,
+  cover_url TEXT,
+  description TEXT,
+  daily_price REAL NOT NULL DEFAULT 0,  -- 日租金
+  deposit REAL NOT NULL DEFAULT 0,       -- 押金
+  available_qty INTEGER NOT NULL DEFAULT 0,  -- 可租数量（按日期区间占用，非固定资源）
+  attributes_json TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_camp_rental_club ON camp_rental_items(club_id);
+
+-- 营地小站（club 自营零售，consumables；与平台商城 products 隔离）
+CREATE TABLE IF NOT EXISTS camp_store_products (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  camp_id INTEGER NOT NULL DEFAULT 0,
+  name TEXT NOT NULL,
+  cover_url TEXT,
+  price REAL NOT NULL DEFAULT 0,
+  stock INTEGER NOT NULL DEFAULT 0,
+  category TEXT,
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_camp_store_club ON camp_store_products(club_id);
+
+-- 营地活动票（电子票+核销；entry_type=single/multi）
+CREATE TABLE IF NOT EXISTS camp_activity_tickets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  camp_id INTEGER NOT NULL DEFAULT 0,
+  title TEXT NOT NULL,
+  event_date TEXT,
+  price REAL NOT NULL DEFAULT 0,
+  capacity INTEGER NOT NULL DEFAULT 0,
+  sold INTEGER NOT NULL DEFAULT 0,
+  entry_type TEXT NOT NULL DEFAULT 'single',  -- single(单次)/multi(多次)
+  valid_from TEXT,
+  valid_to TEXT,
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_camp_ticket_club ON camp_activity_tickets(club_id);

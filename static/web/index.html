@@ -2,7 +2,7 @@
 <!-- 内联 SVG 图标：省掉 /favicon.ico 的 404（浏览器默认会去请求它）。
      用山形描边，和底部导航的图标同一套笔画。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121714'/%3E%3Cpath d='M3.5 23.5 12 11l4.6 7.6 3-4.8 8.9 9.7z' fill='none' stroke='%237fd0a4' stroke-width='2.1' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/shared.css?v=20261107a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261101a"><link rel="stylesheet" href="/static/ux/coupon-faces.css?v=20261024c"><link rel="stylesheet" href="/static/web/web.css?v=20261109a"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
+<link rel="stylesheet" href="/static/shared.css?v=20261107a"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261101a"><link rel="stylesheet" href="/static/ux/coupon-faces.css?v=20261024c"><link rel="stylesheet" href="/static/web/web.css?v=20261110a"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
 
 <!-- C 端骨架：5 个导航视图（首页 / 活动 / 装备 / 户外能力 / 我的）
      + 1 个不导航的隐藏视图 #wleaders（领队团队专区，2026-10-28 按要求从首页导航移除）。
@@ -211,6 +211,11 @@
 
   </div>
 
+  <!-- 营地视图：仅在经营业态开关「营地」开启时显示（与「活动」互斥同槽）。默认 display:none，由 camp.js 的 applyModuleSwitches 按开关显隐。 -->
+  <section id="wcamp" class="wview" style="display:none">
+    <div id="campRoot"></div>
+  </section>
+
   <!-- 底部导航 5 格：首页 / 活动 / 装备 / 户外能力 / 我的。
        （领队专区 2026-10-28 从导航移除，恢复时加回一格 data-wv 指向 wleaders 的按钮即可。）
        图标做成内联 SVG —— 旧版是 clubos-ux.css 里 :nth-child(n):before 的字符图标，
@@ -218,6 +223,8 @@
   <nav class="web-nav" aria-label="主要导航">
     <button class="active" data-wv="whome" onclick="wv('whome',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.2 12 3l9 7.2"/><path d="M5.4 9.4V20h13.2V9.4"/><path d="M9.6 20v-5.6h4.8V20"/></svg><span>首页</span><i class="w-navdot" aria-hidden="true"></i></button>
     <button data-wv="wactivities" onclick="wv('wactivities',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 19.5 9.5 7l4 6.6 2.4-3.9 5.6 9.8z"/></svg><span>活动</span><i class="w-navdot" aria-hidden="true"></i></button>
+    <!-- 营地：与「活动」互斥同槽（经营业态开关二选一）；默认隐藏，由 camp.js 按 module_switches 显隐。 -->
+    <button data-wv="wcamp" onclick="wv('wcamp',this)" style="display:none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4 3 19h18z"/><path d="M12 9 7.6 19h8.8z"/></svg><span>营地</span><i class="w-navdot" aria-hidden="true"></i></button>
     <button data-wv="wmall" onclick="wv('wmall',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/></svg><span>装备</span><i class="w-navdot" aria-hidden="true"></i></button>
     <button data-wv="wability" onclick="wv('wability',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M15.6 8.4 10.8 10.8 8.4 15.6l4.8-2.4z"/></svg><span>户外能力</span><i class="w-navdot" aria-hidden="true"></i></button>
     <button data-wv="wme" onclick="wv('wme',this)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20.2a7.2 7.2 0 0 1 14.4 0"/></svg><span>我的</span><i class="w-navbadge" id="meNavDot" hidden></i><i class="w-navdot" aria-hidden="true"></i></button>
@@ -226,7 +233,7 @@
 
 <script src="/static/shared.js?v=20261107a"></script>
 <script src="/static/ux/clubos-cities.js?v=20261023a"></script>
-<script src="/static/ux/coupon-faces.js?v=20261027c"></script><script src="/static/web/web.js?v=20261109a"></script>
+<script src="/static/ux/coupon-faces.js?v=20261027c"></script><script src="/static/web/web.js?v=20261110a"></script>
 <script src="/static/web/address-sheet.js?v=20261109a"></script>
 <script src="/static/web/web-biz.js?v=20261106a"></script>
 <script src="/static/web/me.js?v=20261109a&rev=20261109a"></script>
@@ -237,4 +244,5 @@
 <script src="/static/ux/payment-experience.js?v=20261108f&rev=20261108f"></script>
 <script src="/static/ux/experience-consumer.js?v=20261016a"></script>
 <script src="/static/web/nav-history.js?v=20261031d"></script>
+<script src="/static/web/camp.js?v=20261110a"></script>
 </body></html>

@@ -1,6 +1,6 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
-window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='actcats')await loadActCats();if(v==='content'||v==='content-channel'||v==='content-recap'||v==='content-list')await loadContent();if(v==='regs'||v==='regs-list'||v==='regs-refund')await loadRegs();if(v==='execution')await loadExecution();if(v==='members'||v==='members-list'||v==='members-tiers'||v==='members-benefits'||v==='members-mall')await loadMembers();if(v==='mall'||v==='mall-overview'||v==='mall-products'||v==='mall-orders'||v==='mall-aftersales'||v==='mall-settle')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='info')await loadInfoCenter();if(v==='settings')await setTab(SETTINGS_TAB)}
+window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='actcats')await loadActCats();if(v==='content'||v==='content-channel'||v==='content-recap'||v==='content-list')await loadContent();if(v==='regs'||v==='regs-list'||v==='regs-refund')await loadRegs();if(v==='execution')await loadExecution();if(v==='members'||v==='members-list'||v==='members-tiers'||v==='members-benefits'||v==='members-mall')await loadMembers();if(v==='mall'||v==='mall-overview'||v==='mall-products'||v==='mall-orders'||v==='mall-aftersales'||v==='mall-settle')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='info')await loadInfoCenter();if(v==='camp')await loadCamp();if(v==='settings')await setTab(SETTINGS_TAB)}
 async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`智能 Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>';loadClubAttention()}
 /* 工作台「待处理事项」：C 端产生新报名 / 新订单后，俱乐部没有主动提醒，只能自己进
    报名管理 / 商城去翻。这里把各视图里「需要人跟进」的数字汇总到工作台一张卡上，
@@ -3317,12 +3317,12 @@ const SET_TAB_LOAD={brand:()=>loadSettings(),
   pay:async()=>{await loadPayAccount()},
   mpinfo:async()=>{await loadMpInfo()},
   mpstaff:async()=>{await loadMpStaffTab()},
-  mpset:async()=>{await loadMpSettings()}};
+  mpset:async()=>{await loadMpSettings()},modsw:async()=>{await loadModSw()}};
 window.setTab=async name=>{
   if(!SET_TAB_LOAD[name])name='brand';
   SETTINGS_TAB=name;
   document.querySelectorAll('#setTabs .set-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('onclick')===`setTab('${name}')`));
-  ['brand','leaders','biz','home','cprofile','credits','pay','mpinfo','mpstaff','mpset'].forEach(p=>{
+  ['brand','leaders','biz','modsw','home','cprofile','credits','pay','mpinfo','mpstaff','mpset'].forEach(p=>{
     const el=document.getElementById('pane-'+p);
     if(el)el.style.display=p===name?'':'none';
   });

@@ -1682,6 +1682,7 @@ function wv(id,b){
   if(id==='wme'){loadMemberCenter();loadOrders()}
   if(id==='wability')loadWability();
   if(id==='wleaders')loadLeaders();
+  if(id==='wcamp')loadCampPage();
 }
 /* C 端「领队团队专区」：列出资源库全部激活领队（录入即显示，无需逐个排班）。
    数据来自 /api/public/clubs/{CLUB}/leaders，卡片复用活动详情页的 leaderCard，

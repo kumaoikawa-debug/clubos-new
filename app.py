@@ -4801,6 +4801,9 @@ def public_club(club_id:int):
     # 业务介绍区：未配置或关闭 → None，C 端整节隐藏（空壳板块比没有板块更伤信任）。
     # 图片在这里就换成公开代理地址（生产 /static/uploads/* 是 404）。
     out.pop('biz_section_json',None)
+    # 经营业态开关（首页/活动/营地/业务介绍）：C 端 tab 显隐 + 后台「营地经营」栏目显隐的单一数据源。
+    out.pop('module_switches_json',None)
+    out['module_switches']=module_switches_public(x)
     # 首页运营轮播：未配置或关闭 → None，C 端回落默认活动轮播（不破坏旧行为）。
     # 图片同样在这里换成公开代理地址。
     out.pop('home_banners_json',None)
@@ -10918,3 +10921,501 @@ def platform_supplier_shipment(po_id:str,payload:dict=Body(...)):
             seen.add(vid)
         c.execute('INSERT INTO purchase_shipments(purchase_order_id,request_key,carrier,tracking_no,items_json,shipped_at) VALUES(?,?,?,?,?,?)',(po_id,key,str(payload.get('carrier') or ''),tracking,jdump(lineitems),str(payload.get('shippedAt') or datetime.utcnow().isoformat())))
     return {'ok':True}
+
+
+# ==========================================================================
+# 营地模块 API（ClubOS 营地经营 / 营位房态 / 装备租赁 / 营地小站 / 活动票）
+# 2026-11-10。全部 club 域：营位/租赁/小站/活动票都是俱乐部/营地自己运营的业态，
+# 与平台商城(products / gear_orders)严格隔离。支付/结算复用统一订单层（club 商户号）。
+# ==========================================================================
+
+# ---- 经营业态开关（首页 / 活动 / 营地 / 业务介绍）—— 单一数据源 ----
+_MODSW_DEFAULT={'home':True,'activity':True,'camp':False,'bizIntro':True}
+def module_switches_public(x):
+    """C 端读取：解析 clubs.module_switches_json；缺省按 _MODSW_DEFAULT（camp 默认关，老俱乐部不突变）。"""
+    raw=x.get('module_switches_json')
+    try: cfg=jload(raw) if raw else {}
+    except Exception: cfg={}
+    if not isinstance(cfg,dict): cfg={}
+    return {k:bool(cfg.get(k,_MODSW_DEFAULT[k])) for k in _MODSW_DEFAULT}
+
+@app.get('/api/club/{club_id}/module-switches')
+def get_club_module_switches(club_id:int):
+    return module_switches_public(club_or_404(club_id))
+
+@app.patch('/api/club/{club_id}/module-switches')
+def patch_club_module_switches(club_id:int,payload:dict=Body(...)):
+    x=club_or_404(club_id)
+    cur=module_switches_public(x)
+    for k in _MODSW_DEFAULT:
+        if k in payload: cur[k]=bool(payload[k])
+    with conn() as c:
+        c.execute('UPDATE clubs SET module_switches_json=? WHERE id=?',(jdump(cur),club_id))
+    return cur
+
+def _camp_profile_out(r):
+    if not r: return r
+    def _arr(k):
+        v=r.get(k)
+        if isinstance(v,str):
+            try: return json.loads(v)
+            except Exception: return []
+        return v if isinstance(v,list) else []
+    return {'id':r['id'],'clubId':r['club_id'],'name':r['name'],'introText':r.get('intro_text'),
+            'gallery':_arr('gallery_json'),'facilities':_arr('facilities_json'),'rules':_arr('rules_json'),
+            'contactPhone':r.get('contact_phone'),'address':r.get('address'),
+            'geoLat':r.get('geo_lat'),'geoLng':r.get('geo_lng'),'status':r.get('status'),
+            'createdAt':r.get('created_at')}
+
+# ---- 营地档案（camp_profiles）----
+@app.get('/api/club/{club_id}/camps')
+def club_camp_list(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return [_camp_profile_out(r) for r in rows(c.execute('SELECT * FROM camp_profiles WHERE club_id=? ORDER BY id',(club_id,)))]
+
+@app.get('/api/public/clubs/{club_id}/camps')
+def public_camp_list(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return [_camp_profile_out(r) for r in rows(c.execute('SELECT * FROM camp_profiles WHERE club_id=? AND status="active" ORDER BY id',(club_id,)))]
+
+@app.post('/api/club/{club_id}/camps')
+def club_camp_create(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        c.execute('''INSERT INTO camp_profiles(club_id,name,intro_text,gallery_json,facilities_json,rules_json,contact_phone,address,geo_lat,geo_lng,status)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                  (club_id,payload.get('name'),payload.get('introText'),jdump(payload.get('gallery')),
+                   jdump(payload.get('facilities')),jdump(payload.get('rules')),payload.get('contactPhone'),
+                   payload.get('address'),payload.get('geoLat'),payload.get('geoLng'),payload.get('status','active')))
+        nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        return _camp_profile_out(row(c.execute('SELECT * FROM camp_profiles WHERE id=?',(nid,))))
+
+@app.patch('/api/club/{club_id}/camps/{cid:int}')
+def club_camp_update(club_id:int,cid:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        if not row(c.execute('SELECT id FROM camp_profiles WHERE id=? AND club_id=?',(cid,club_id))): raise HTTPException(404,'camp not found')
+        flds={'name':'name','introText':'intro_text','gallery':'gallery_json','facilities':'facilities_json',
+              'rules':'rules_json','contactPhone':'contact_phone','address':'address','geoLat':'geo_lat','geoLng':'geo_lng','status':'status'}
+        sets=[];args=[]
+        for pk,fk in flds.items():
+            if pk in payload:
+                v=payload[pk]; 
+                if fk.endswith('_json'): v=jdump(v)
+                sets.append(f'{fk}=?'); args.append(v)
+        if sets:
+            args+= [cid,club_id]
+            c.execute(f"UPDATE camp_profiles SET {','.join(sets)} WHERE id=? AND club_id=?",args)
+        return _camp_profile_out(row(c.execute('SELECT * FROM camp_profiles WHERE id=?',(cid,))))
+
+# ---- 营位（camp_pitches）----
+@app.get('/api/club/{club_id}/pitches')
+def club_pitch_list(club_id:int,camp_id:int=0):
+    club_or_404(club_id)
+    with conn() as c:
+        return rows(c.execute('SELECT * FROM camp_pitches WHERE club_id=? AND camp_id=? ORDER BY code',(club_id,camp_id)))
+
+@app.get('/api/public/clubs/{club_id}/pitches')
+def public_pitch_list(club_id:int,camp_id:int=0):
+    """C 端只读在售营位（不暴露内部成本/备注字段）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        return rows(c.execute('''SELECT id,camp_id,code,name,pitch_type,is_overnight,capacity,
+                                        base_price,weekend_price,holiday_price,attributes_json
+                                 FROM camp_pitches
+                                 WHERE club_id=? AND camp_id=? AND status="active" ORDER BY code''',(club_id,camp_id)))
+
+@app.post('/api/club/{club_id}/pitches')
+def club_pitch_create(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        c.execute('''INSERT INTO camp_pitches(club_id,camp_id,code,name,pitch_type,is_overnight,capacity,attributes_json,base_price,weekend_price,holiday_price,status)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
+                  (club_id,payload.get('campId',0),payload.get('code'),payload.get('name'),payload.get('pitchType','tent'),
+                   int(bool(payload.get('isOvernight',1))),payload.get('capacity',1),jdump(payload.get('attributes')),
+                   payload.get('basePrice',0),payload.get('weekendPrice'),payload.get('holidayPrice'),payload.get('status','active')))
+        nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        return row(c.execute('SELECT * FROM camp_pitches WHERE id=?',(nid,)))
+
+@app.patch('/api/club/{club_id}/pitches/{pid:int}')
+def club_pitch_update(club_id:int,pid:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        if not row(c.execute('SELECT id FROM camp_pitches WHERE id=? AND club_id=?',(pid,club_id))): raise HTTPException(404,'pitch not found')
+        flds={'campId':'camp_id','code':'code','name':'name','pitchType':'pitch_type','isOvernight':'is_overnight',
+              'capacity':'capacity','attributes':'attributes_json','basePrice':'base_price','weekendPrice':'weekend_price',
+              'holidayPrice':'holiday_price','status':'status'}
+        sets=[];args=[]
+        for pk,fk in flds.items():
+            if pk in payload:
+                v=payload[pk]
+                if fk=='is_overnight': v=int(bool(v))
+                elif fk.endswith('_json'): v=jdump(v)
+                sets.append(f'{fk}=?'); args.append(v)
+        if sets:
+            args+=[pid,club_id]; c.execute(f"UPDATE camp_pitches SET {','.join(sets)} WHERE id=? AND club_id=?",args)
+        return row(c.execute('SELECT * FROM camp_pitches WHERE id=?',(pid,)))
+
+@app.delete('/api/club/{club_id}/pitches/{pid:int}')
+def club_pitch_delete(club_id:int,pid:int):
+    club_or_404(club_id)
+    with conn() as c:
+        c.execute('DELETE FROM camp_pitches WHERE id=? AND club_id=?',(pid,club_id))
+    return {'ok':True}
+
+# ---- 房态/可用（date-range）：营位 × 日期 —— 营位按日期管房态，过夜跨日锁 ----
+def _camp_day_price(pitch, day_str, override):
+    if override is not None: return override
+    import datetime as _dt
+    try: d=_dt.date.fromisoformat(day_str)
+    except Exception: return pitch['base_price'] or 0
+    if d.weekday()>=5:  # 周六/周日
+        return pitch['weekend_price'] if pitch['weekend_price'] is not None else (pitch['base_price'] or 0)
+    return pitch['base_price'] or 0
+
+@app.get('/api/public/clubs/{club_id}/camp-availability')
+def public_camp_availability(club_id:int,camp_id:int=0,start:str='',end:str='',days:int=30):
+    club_or_404(club_id)
+    import datetime as _dt
+    if not start: start=_dt.date.today().isoformat()
+    try: _s=_dt.date.fromisoformat(start)
+    except Exception: raise HTTPException(400,'start 格式应为 YYYY-MM-DD')
+    if not end: end=(_s+_dt.timedelta(days=max(days,1)-1)).isoformat()
+    try: _e=_dt.date.fromisoformat(end)
+    except Exception: raise HTTPException(400,'end 格式应为 YYYY-MM-DD')
+    rng=[(_s+_dt.timedelta(days=i)).isoformat() for i in range((_e-_s).days+1)]
+    with conn() as c:
+        pitches=rows(c.execute('SELECT * FROM camp_pitches WHERE club_id=? AND camp_id=? AND status="active"',(club_id,camp_id)))
+        # pending 订单只保留 30 分钟支付窗口，超时自动释放房态（酒店式防死锁）；
+        # 与 public_camp_booking_create 的占用判断必须保持完全一致的口径。
+        occ=rows(c.execute('''SELECT pitch_id,check_in,check_out,is_day_use FROM camp_pitch_bookings
+                              WHERE club_id=? AND camp_id=? AND (status IN ("paid","checked_in")
+                                    OR (status="pending" AND created_at>=datetime('now','-30 minutes')))''',(club_id,camp_id)))
+        blk={}
+        for r in rows(c.execute('SELECT pitch_id,day,status,price_override FROM camp_pitch_status WHERE club_id=? AND camp_id=?',(club_id,camp_id))):
+            blk[(r['pitch_id'],r['day'])]=r
+    out=[]
+    for p in pitches:
+        days_out=[]
+        for d in rng:
+            key=(p['id'],d)
+            ov=blk[key]['price_override'] if key in blk else None
+            if key in blk and blk[key]['status']=='blocked':
+                days_out.append({'day':d,'status':'blocked','price':_camp_day_price(p,d,ov)}); continue
+            booked=False
+            for o in occ:
+                if o['pitch_id']!=p['id']: continue
+                if o['is_day_use']:
+                    if o['check_in']==d: booked=True; break
+                elif o['check_in']<=d<o['check_out']: booked=True; break
+            days_out.append({'day':d,'status':'booked' if booked else 'available','price':_camp_day_price(p,d,ov)})
+        out.append({'pitchId':p['id'],'code':p['code'],'name':p['name'],'pitchType':p['pitch_type'],
+                    'isOvernight':p['is_overnight'],'capacity':p['capacity'],'days':days_out})
+    return {'clubId':club_id,'campId':camp_id,'start':start,'end':end,'pitches':out}
+
+# ---- 营位预订（酒店式跨日锁；防超售）----
+@app.post('/api/public/clubs/{club_id}/camp-bookings')
+def public_camp_booking_create(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    import datetime as _dt
+    pid=int(payload.get('pitchId') or 0); check_in=str(payload.get('checkIn') or ''); check_out=str(payload.get('checkOut') or '')
+    is_day=1 if payload.get('isDayUse') else 0
+    qty=int(payload.get('qty') or 1)
+    if not pid or not check_in: raise HTTPException(400,'缺少 pitchId / checkIn')
+    if is_day: check_out=check_in
+    try: _ci=_dt.date.fromisoformat(check_in); _co=_dt.date.fromisoformat(check_out)
+    except Exception: raise HTTPException(400,'日期格式应为 YYYY-MM-DD')
+    if (not is_day) and _co<=_ci: raise HTTPException(400,'checkOut 必须晚于 checkIn')
+    nights=1 if is_day else (_co-_ci).days
+    with conn() as c:
+        p=row(c.execute('SELECT * FROM camp_pitches WHERE id=? AND club_id=?',(pid,club_id)))
+        if not p: raise HTTPException(404,'营位不存在')
+        if p['status']!='active': raise HTTPException(409,'该营位暂停预订')
+        rng=[(_ci+_dt.timedelta(days=i)).isoformat() for i in range(nights)] if not is_day else [check_in]
+        blk=rows(c.execute('SELECT day,status,price_override FROM camp_pitch_status WHERE club_id=? AND pitch_id=?',(club_id,pid)))
+        blocked={b['day']:b['status'] for b in blk}
+        ovmap={b['day']:b['price_override'] for b in blk if b['price_override'] is not None}
+        occ=rows(c.execute('''SELECT check_in,check_out,is_day_use FROM camp_pitch_bookings
+                              WHERE club_id=? AND pitch_id=? AND (status IN ("paid","checked_in")
+                                    OR (status="pending" AND created_at>=datetime('now','-30 minutes')))''',(club_id,pid)))
+        for d in rng:
+            if blocked.get(d)=='blocked': raise HTTPException(409,f'{d} 该营位已封锁/维护')
+            for o in occ:
+                if o['is_day_use']:
+                    if o['check_in']==d: raise HTTPException(409,f'{d} 该营位已被预订')
+                elif o['check_in']<=d<o['check_out']: raise HTTPException(409,f'{d} 该营位已被预订')
+        payable=round(sum(_camp_day_price(p,d,ovmap.get(d)) for d in rng)*qty,2)
+        deposit=round(float(payload.get('deposit') or 0),2)
+        total=round(payable+deposit,2)
+        c.execute('''INSERT INTO camp_pitch_bookings(club_id,camp_id,pitch_id,check_in,check_out,is_day_use,guest_name,guest_phone,qty,nights,payable,deposit,total,status,user_id)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                  (club_id,p.get('camp_id',0),pid,check_in,check_out,is_day,payload.get('guestName'),payload.get('guestPhone'),
+                   qty,nights,payable,deposit,total,'pending',payload.get('userId')))
+        nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        return row(c.execute('SELECT * FROM camp_pitch_bookings WHERE id=?',(nid,)))
+
+@app.get('/api/club/{club_id}/camp-bookings')
+def club_camp_booking_list(club_id:int,camp_id:int=0,status:str=''):
+    club_or_404(club_id)
+    with conn() as c:
+        sql='SELECT * FROM camp_pitch_bookings WHERE club_id=? AND camp_id=?'; args=[club_id,camp_id]
+        if status: sql+=' AND status=?'; args.append(status)
+        return rows(c.execute(sql+' ORDER BY check_in DESC,id DESC',args))
+
+# ---- 营地档案删除（级联清掉其营位/房态/预订，避免孤儿 camp_id）----
+@app.delete('/api/club/{club_id}/camps/{cid:int}')
+def club_camp_delete(club_id:int,cid:int):
+    club_or_404(club_id)
+    with conn() as c:
+        if not row(c.execute('SELECT id FROM camp_profiles WHERE id=? AND club_id=?',(cid,club_id))): raise HTTPException(404,'camp not found')
+        c.execute('DELETE FROM camp_pitch_status WHERE club_id=? AND camp_id=?',(club_id,cid))
+        c.execute('DELETE FROM camp_pitch_bookings WHERE club_id=? AND camp_id=?',(club_id,cid))
+        c.execute('DELETE FROM camp_pitches WHERE club_id=? AND camp_id=?',(club_id,cid))
+        c.execute('DELETE FROM camp_profiles WHERE id=? AND club_id=?',(cid,club_id))
+    return {'ok':True}
+
+# ---- 营位房态手工覆盖（camp_pitch_status：封锁 / 解锁 / 价目覆盖）----
+# 与活动名额(remaining 计数)不同，营位是「固定资源 + 日期房态网格」：后台可针对某个营位
+# 某一天封锁（维护 / 满员）或临时改价；过夜跨日锁由 camp_pitch_bookings 实时推导。
+@app.get('/api/club/{club_id}/pitch-status')
+def club_pitch_status_list(club_id:int,camp_id:int=0,pitch_id:int=0):
+    club_or_404(club_id)
+    with conn() as c:
+        sql='SELECT * FROM camp_pitch_status WHERE club_id=?'; args=[club_id]
+        if camp_id: sql+=' AND camp_id=?'; args.append(camp_id)
+        if pitch_id: sql+=' AND pitch_id=?'; args.append(pitch_id)
+        return rows(c.execute(sql+' ORDER BY day,pitch_id',args))
+
+@app.post('/api/club/{club_id}/pitch-status')
+def club_pitch_status_upsert(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    import datetime as _dt
+    cid=int(payload.get('campId',0)); pid=int(payload.get('pitchId',0)); day=str(payload.get('day') or '')
+    status=str(payload.get('status') or 'available'); pov=payload.get('priceOverride',None)
+    if not pid or not day: raise HTTPException(400,'缺少 pitchId / day')
+    try: _dt.date.fromisoformat(day)
+    except Exception: raise HTTPException(400,'day 格式应为 YYYY-MM-DD')
+    with conn() as c:
+        if status=='clear' or (status=='available' and pov in (None,'',0)):
+            c.execute('DELETE FROM camp_pitch_status WHERE club_id=? AND camp_id=? AND pitch_id=? AND day=?',(club_id,cid,pid,day))
+            return {'ok':True,'deleted':True}
+        povv=None if pov in (None,'',0) else float(pov)
+        existing=row(c.execute('SELECT id FROM camp_pitch_status WHERE club_id=? AND camp_id=? AND pitch_id=? AND day=?',(club_id,cid,pid,day)))
+        if existing:
+            c.execute('UPDATE camp_pitch_status SET status=?,price_override=? WHERE club_id=? AND camp_id=? AND pitch_id=? AND day=?',(status,povv,club_id,cid,pid,day))
+        else:
+            c.execute('INSERT INTO camp_pitch_status(club_id,camp_id,pitch_id,day,status,price_override) VALUES(?,?,?,?,?,?)',(club_id,cid,pid,day,status,povv))
+        return row(c.execute('SELECT * FROM camp_pitch_status WHERE club_id=? AND camp_id=? AND pitch_id=? AND day=?',(club_id,cid,pid,day)))
+
+# ---- 营地装备租赁（camp_rental_items，club 域）----
+@app.get('/api/club/{club_id}/rental-items')
+def club_rental_list(club_id:int,camp_id:int=0):
+    club_or_404(club_id)
+    with conn() as c:
+        return rows(c.execute('SELECT * FROM camp_rental_items WHERE club_id=? AND camp_id=? ORDER BY id',(club_id,camp_id)))
+
+@app.get('/api/public/clubs/{club_id}/rental-items')
+def public_rental_list(club_id:int,camp_id:int=0):
+    club_or_404(club_id)
+    with conn() as c:
+        return rows(c.execute('SELECT * FROM camp_rental_items WHERE club_id=? AND camp_id=? AND status="active" ORDER BY id',(club_id,camp_id)))
+
+@app.post('/api/club/{club_id}/rental-items')
+def club_rental_create(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        c.execute('''INSERT INTO camp_rental_items(club_id,camp_id,name,cover_url,description,daily_price,deposit,available_qty,attributes_json,status)
+                     VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                  (club_id,payload.get('campId',0),payload.get('name'),payload.get('coverUrl'),payload.get('description'),
+                   payload.get('dailyPrice',0),payload.get('deposit',0),payload.get('availableQty',0),jdump(payload.get('attributes')),payload.get('status','active')))
+        nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        return row(c.execute('SELECT * FROM camp_rental_items WHERE id=?',(nid,)))
+
+@app.patch('/api/club/{club_id}/rental-items/{rid:int}')
+def club_rental_update(club_id:int,rid:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        if not row(c.execute('SELECT id FROM camp_rental_items WHERE id=? AND club_id=?',(rid,club_id))): raise HTTPException(404,'rental not found')
+        flds={'campId':'camp_id','name':'name','coverUrl':'cover_url','description':'description','dailyPrice':'daily_price',
+              'deposit':'deposit','availableQty':'available_qty','attributes':'attributes_json','status':'status'}
+        sets=[];args=[]
+        for pk,fk in flds.items():
+            if pk in payload:
+                v=payload[pk]
+                if fk.endswith('_json'): v=jdump(v)
+                sets.append(f'{fk}=?'); args.append(v)
+        if sets:
+            args+=[rid,club_id]; c.execute(f"UPDATE camp_rental_items SET {','.join(sets)} WHERE id=? AND club_id=?",args)
+        return row(c.execute('SELECT * FROM camp_rental_items WHERE id=?',(rid,)))
+
+@app.delete('/api/club/{club_id}/rental-items/{rid:int}')
+def club_rental_delete(club_id:int,rid:int):
+    club_or_404(club_id)
+    with conn() as c:
+        c.execute('DELETE FROM camp_rental_items WHERE id=? AND club_id=?',(rid,club_id))
+    return {'ok':True}
+
+# ---- 营地小站（camp_store_products，club 自营零售）----
+@app.get('/api/club/{club_id}/store-products')
+def club_store_list(club_id:int,camp_id:int=0):
+    club_or_404(club_id)
+    with conn() as c:
+        return rows(c.execute('SELECT * FROM camp_store_products WHERE club_id=? AND camp_id=? ORDER BY id',(club_id,camp_id)))
+
+@app.get('/api/public/clubs/{club_id}/store-products')
+def public_store_list(club_id:int,camp_id:int=0):
+    club_or_404(club_id)
+    with conn() as c:
+        return rows(c.execute('SELECT * FROM camp_store_products WHERE club_id=? AND camp_id=? AND status="active" ORDER BY id',(club_id,camp_id)))
+
+@app.post('/api/club/{club_id}/store-products')
+def club_store_create(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        c.execute('''INSERT INTO camp_store_products(club_id,camp_id,name,cover_url,price,stock,category,status)
+                     VALUES(?,?,?,?,?,?,?,?)''',
+                  (club_id,payload.get('campId',0),payload.get('name'),payload.get('coverUrl'),payload.get('price',0),payload.get('stock',0),payload.get('category'),payload.get('status','active')))
+        nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        return row(c.execute('SELECT * FROM camp_store_products WHERE id=?',(nid,)))
+
+@app.patch('/api/club/{club_id}/store-products/{sid:int}')
+def club_store_update(club_id:int,sid:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        if not row(c.execute('SELECT id FROM camp_store_products WHERE id=? AND club_id=?',(sid,club_id))): raise HTTPException(404,'product not found')
+        flds={'campId':'camp_id','name':'name','coverUrl':'cover_url','price':'price','stock':'stock','category':'category','status':'status'}
+        sets=[];args=[]
+        for pk,fk in flds.items():
+            if pk in payload:
+                sets.append(f'{fk}=?'); args.append(payload[pk])
+        if sets:
+            args+=[sid,club_id]; c.execute(f"UPDATE camp_store_products SET {','.join(sets)} WHERE id=? AND club_id=?",args)
+        return row(c.execute('SELECT * FROM camp_store_products WHERE id=?',(sid,)))
+
+@app.delete('/api/club/{club_id}/store-products/{sid:int}')
+def club_store_delete(club_id:int,sid:int):
+    club_or_404(club_id)
+    with conn() as c:
+        c.execute('DELETE FROM camp_store_products WHERE id=? AND club_id=?',(sid,club_id))
+    return {'ok':True}
+
+# ---- 营地活动票（camp_activity_tickets，电子票+核销）----
+@app.get('/api/club/{club_id}/tickets')
+def club_ticket_list(club_id:int,camp_id:int=0):
+    club_or_404(club_id)
+    with conn() as c:
+        return rows(c.execute('SELECT * FROM camp_activity_tickets WHERE club_id=? AND camp_id=? ORDER BY id',(club_id,camp_id)))
+
+@app.get('/api/public/clubs/{club_id}/tickets')
+def public_ticket_list(club_id:int,camp_id:int=0):
+    club_or_404(club_id)
+    with conn() as c:
+        return rows(c.execute('SELECT * FROM camp_activity_tickets WHERE club_id=? AND camp_id=? AND status="open" ORDER BY id',(club_id,camp_id)))
+
+@app.post('/api/club/{club_id}/tickets')
+def club_ticket_create(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        c.execute('''INSERT INTO camp_activity_tickets(club_id,camp_id,title,event_date,price,capacity,sold,entry_type,valid_from,valid_to,status)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                  (club_id,payload.get('campId',0),payload.get('title'),payload.get('eventDate'),payload.get('price',0),
+                   payload.get('capacity',0),0,payload.get('entryType','single'),payload.get('validFrom'),payload.get('validTo'),payload.get('status','open')))
+        nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
+        return row(c.execute('SELECT * FROM camp_activity_tickets WHERE id=?',(nid,)))
+
+@app.patch('/api/club/{club_id}/tickets/{tid:int}')
+def club_ticket_update(club_id:int,tid:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        if not row(c.execute('SELECT id FROM camp_activity_tickets WHERE id=? AND club_id=?',(tid,club_id))): raise HTTPException(404,'ticket not found')
+        flds={'campId':'camp_id','title':'title','eventDate':'event_date','price':'price','capacity':'capacity','entryType':'entry_type','validFrom':'valid_from','validTo':'valid_to','status':'status'}
+        sets=[];args=[]
+        for pk,fk in flds.items():
+            if pk in payload:
+                sets.append(f'{fk}=?'); args.append(payload[pk])
+        if sets:
+            args+=[tid,club_id]; c.execute(f"UPDATE camp_activity_tickets SET {','.join(sets)} WHERE id=? AND club_id=?",args)
+        return row(c.execute('SELECT * FROM camp_activity_tickets WHERE id=?',(tid,)))
+
+@app.delete('/api/club/{club_id}/tickets/{tid:int}')
+def club_ticket_delete(club_id:int,tid:int):
+    club_or_404(club_id)
+    with conn() as c:
+        c.execute('DELETE FROM camp_activity_tickets WHERE id=? AND club_id=?',(tid,club_id))
+    return {'ok':True}
+
+# ---- 营地结算骨架（复用统一结算层 checkout_intents，kind='camp_booking'）----
+# 设计：不修改 CheckoutEngine.confirm —— 那是活动报名 / 装备商城共用的支付核心，
+# 改动回归面过大。camp_booking 走独立确认端点，但用同一张 checkout_intents 存结算单，
+# 便于后续接支付渠道时沿用 /api/public/checkouts/{id} 的查询与对账视图。
+# 生产环境禁止前端直调 confirm，必须由已验证的支付渠道回调触发；
+# 本地 / 测试环境可直调做联调。真实微信支付接入后只需把触发点换成
+# /api/payments/{provider}/{account}/notify 的已验证回调，业务状态机无需改动。
+@app.post('/api/public/clubs/{club_id}/camp-checkout')
+def create_camp_checkout(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    bid=int(payload.get('bookingId') or 0)
+    if not bid: raise HTTPException(400,'缺少 bookingId')
+    with conn() as c:
+        # 只允许 30 分钟支付窗口内的 pending 预订创建结算单（与房态占用口径一致）
+        b=row(c.execute('''SELECT * FROM camp_pitch_bookings WHERE id=? AND club_id=?
+                           AND status="pending" AND created_at>=datetime('now','-30 minutes')''',(bid,club_id)))
+        if not b: raise HTTPException(409,'预订不存在、已支付或已超时释放，请重新预订')
+        if b.get('order_id'):
+            old=row(c.execute('SELECT * FROM checkout_intents WHERE id=?',(b['order_id'],)))
+            if old and old['status']=='pending_payment':
+                return {'ok':True,'checkoutId':old['id'],'status':'pending_payment',
+                        'amount':old['cash_amount'],'bookingId':bid,'idempotent':True,'nextAction':'PAY'}
+        iid='camp_'+uuid.uuid4().hex[:16]
+        total=round(float(b['total'] or 0),2)
+        c.execute('''INSERT INTO checkout_intents(id,kind,user_id,club_id,status,original_amount,
+                       cash_amount,payload_json,payment_status)
+                     VALUES(?,?,?,?,?,?,?,?,?)''',
+                  (iid,'camp_booking',b['user_id'] or 1,club_id,'pending_payment',total,total,
+                   jdump({'bookingId':bid,'campId':b['camp_id'],'pitchId':b['pitch_id'],
+                          'checkIn':b['check_in'],'checkOut':b['check_out'],
+                          'guestName':b['guest_name'],'total':total}),'pending'))
+        c.execute('UPDATE camp_pitch_bookings SET order_id=? WHERE id=? AND club_id=?',(iid,bid,club_id))
+        return {'ok':True,'checkoutId':iid,'status':'pending_payment','amount':total,
+                'bookingId':bid,'nextAction':'PAY'}
+
+@app.post('/api/public/camp-checkouts/{checkout_id}/confirm')
+def confirm_camp_checkout(checkout_id:str,payload:dict=Body(default={})):
+    if IS_PROD and not payload.get('providerVerified'):
+        raise HTTPException(403,'生产环境须由已验证的支付渠道回调确认')
+    with conn() as c:
+        it=row(c.execute('SELECT * FROM checkout_intents WHERE id=?',(checkout_id,)))
+        if not it or it['kind']!='camp_booking': raise HTTPException(404,'营地结算单不存在')
+        if it['status']=='paid':
+            return {'ok':True,'checkoutId':checkout_id,'status':'paid','amount':it['cash_amount'],'idempotent':True}
+        if it['status']!='pending_payment': raise HTTPException(409,'结算单已取消或已完成')
+        meta=jload(it.get('payload_json'),{}); bid=int(meta.get('bookingId') or 0)
+        b=row(c.execute('SELECT * FROM camp_pitch_bookings WHERE id=? AND club_id=?',(bid,it['club_id'])))
+        if not b: raise HTTPException(409,'对应营地预订不存在')
+        if b['status'] not in ('pending','paid'): raise HTTPException(409,'预订已取消，无法确认支付')
+        if b['status']=='pending' and row(c.execute('''SELECT 1 FROM camp_pitch_bookings
+                       WHERE id=? AND status="pending" AND created_at<datetime('now','-30 minutes')''',(bid,))):
+            raise HTTPException(409,'支付超时，房态已释放，请重新预订')
+        c.execute('''UPDATE checkout_intents SET status="paid",payment_status="succeeded",
+                     paid_at=CURRENT_TIMESTAMP,result_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?''',
+                  (str(bid),checkout_id))
+        c.execute('''UPDATE camp_pitch_bookings SET status="paid"
+                     WHERE id=? AND club_id=? AND status="pending"''',(bid,it['club_id']))
+        return {'ok':True,'checkoutId':checkout_id,'bookingId':bid,'status':'paid','amount':it['cash_amount']}
+
+@app.post('/api/public/camp-checkouts/{checkout_id}/cancel')
+def cancel_camp_checkout(checkout_id:str):
+    with conn() as c:
+        it=row(c.execute('SELECT * FROM checkout_intents WHERE id=?',(checkout_id,)))
+        if not it or it['kind']!='camp_booking': raise HTTPException(404,'营地结算单不存在')
+        if it['status']=='cancelled':
+            return {'ok':True,'checkoutId':checkout_id,'status':'cancelled','idempotent':True}
+        if it['status']=='paid': raise HTTPException(409,'已支付订单请走售后流程')
+        meta=jload(it.get('payload_json'),{}); bid=int(meta.get('bookingId') or 0)
+        c.execute('''UPDATE checkout_intents SET status="cancelled",cancelled_at=CURRENT_TIMESTAMP,
+                     updated_at=CURRENT_TIMESTAMP WHERE id=?''',(checkout_id,))
+        c.execute('''UPDATE camp_pitch_bookings SET status="cancelled"
+                     WHERE id=? AND club_id=? AND status="pending"''',(bid,it['club_id']))
+        return {'ok':True,'checkoutId':checkout_id,'bookingId':bid,'status':'cancelled'}

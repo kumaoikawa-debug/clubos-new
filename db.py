@@ -198,6 +198,11 @@ def _run_compat_migrations(c):
     # 2026-11-09 微信小程序一键登录：把微信 openid 落到 users，作为会员身份锚点
     # （与手机号 user_or_create 并存；同一用户后续可按 openid 或手机号归并）。
     _ensure_column(c,'users','mp_openid','mp_openid TEXT')
+    # 2026-11-10 营地模块：俱乐部「经营业态开关」（首页/活动/营地/业务介绍）。
+    # 4 个开关合一组，作为前端 tab 显隐 + 后台「营地经营」栏目显隐的单一数据源。
+    _ensure_column(c,'clubs','module_switches_json','module_switches_json TEXT')
+    # 营地房态覆盖表补 camp_id（多营地各自房态）；新库由 schema.sql 直接建，旧库靠这里补列。
+    _ensure_column(c,'camp_pitch_status','camp_id','camp_id INTEGER NOT NULL DEFAULT 0')
     # 「注册成为该俱乐部会员 → 自动成为总平台会员」用触发器兜住所有写入路径
     # （报名 / 邀请码 / 买会员卡 / 会员中心 refresh_member），不漏任何一个调用点。
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_club_member_platform
