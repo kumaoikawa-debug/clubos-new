@@ -1,0 +1,192 @@
+/* ===========================================================================
+ * ClubOS 营地业态 · C 端设计系统（cp- 前缀，仅作用于 #campRoot 内）
+ * 参考「迎曦露营」视觉：沉浸式营地头图 / 悬浮圆角信息卡 / 分区图标宫格 /
+ * 日期区间条 / 两列营位卡片 / 红色价格 + 黑色胶囊预订 / 底部抽屉。
+ * 独立文件，不修改 web.css 与四端共用样式，避免影响既有活动与商城业务。
+ * =========================================================================== */
+.cp-page{
+  --cp-ink:#141a17;--cp-ink2:#3b4740;--cp-muted:#8b9691;--cp-line:#edf1ee;
+  --cp-green:#1d6b48;--cp-green-d:#124a32;--cp-price:#e0412a;--cp-black:#171a19;
+  --cp-bg:#f3f7f4;--cp-card:#fff;
+  background:var(--cp-bg);color:var(--cp-ink);min-height:100vh;padding-bottom:18px;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.cp-page,.cp-page *,.cp-page *:before,.cp-page *:after{box-sizing:border-box}
+.cp-page button{font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.cp-page img{display:block}
+.cp-page svg{display:block}
+
+/* ── 沉浸式头图 ───────────────────────────────────────────────────────────── */
+.cp-hero{position:relative;height:238px;overflow:hidden;background:#1d3b2c}
+.cp-hero__img{width:100%;height:100%;object-fit:cover}
+/* 无图兜底：远山 + 草坡 + 帐篷剪影，纯 CSS，不依赖外链资源 */
+.cp-hero__fallback{position:absolute;inset:0;
+  background:
+    radial-gradient(120% 70% at 78% 8%,rgba(255,244,209,.42),transparent 60%),
+    linear-gradient(180deg,#8fc4d8 0%,#c7e2df 34%,#7ea878 62%,#3d6b47 100%);
+}
+.cp-hero__fallback:before{content:"";position:absolute;left:-8%;right:-8%;bottom:0;height:56%;
+  background:linear-gradient(180deg,#6f9c74,#2f5c3c);
+  clip-path:polygon(0 52%,14% 34%,26% 46%,40% 18%,55% 42%,68% 24%,82% 44%,100% 22%,100% 100%,0 100%);opacity:.85}
+.cp-hero__fallback:after{content:"";position:absolute;left:12%;bottom:12%;width:0;height:0;
+  border-left:46px solid transparent;border-right:46px solid transparent;border-bottom:64px solid rgba(248,246,232,.92);
+  filter:drop-shadow(0 6px 10px rgba(10,30,18,.25))}
+.cp-hero__shade{position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(180deg,rgba(6,24,15,.40) 0%,rgba(6,24,15,0) 40%,rgba(6,24,15,.52) 100%)}
+.cp-hero__rail{position:absolute;top:14px;left:16px;right:16px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.cp-hero__tag{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;border-radius:99px;
+  background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.34);color:#fff;
+  font-size:11px;font-weight:700;letter-spacing:.06em;-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
+.cp-hero__tag svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round}
+.cp-hero__count{color:rgba(255,255,255,.9);font-size:11px;font-weight:600;text-shadow:0 1px 8px rgba(0,0,0,.4)}
+.cp-hero__cap{position:absolute;left:18px;right:18px;bottom:56px;color:#fff}
+.cp-hero__name{margin:0;font-size:27px;font-weight:800;letter-spacing:-.02em;line-height:1.15;
+  text-shadow:0 2px 18px rgba(0,0,0,.4)}
+.cp-hero__slogan{margin:7px 0 0;font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.9);
+  max-width:82%;text-shadow:0 1px 10px rgba(0,0,0,.35)}
+.cp-hero__dots{position:absolute;left:0;right:0;bottom:50px;display:flex;justify-content:center;gap:5px}
+.cp-hero__dot{width:5px;height:5px;border-radius:99px;background:rgba(255,255,255,.45)}
+.cp-hero__dot.on{width:16px;background:#fff}
+
+/* ── 悬浮信息卡 ───────────────────────────────────────────────────────────── */
+.cp-info{position:relative;z-index:2;margin:-34px 14px 0;background:var(--cp-card);border-radius:18px;
+  padding:15px 15px 14px;box-shadow:0 12px 34px rgba(20,45,32,.11)}
+.cp-info__row{display:flex;align-items:center;gap:10px}
+.cp-info__main{flex:1;min-width:0}
+.cp-info__name{display:flex;align-items:center;gap:3px;font-size:17px;font-weight:800;letter-spacing:-.01em}
+.cp-info__name svg{width:15px;height:15px;stroke:var(--cp-muted);stroke-width:2;fill:none}
+.cp-info__addr{margin-top:5px;font-size:11.5px;color:var(--cp-muted);line-height:1.4;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-info__acts{display:flex;gap:8px;flex:0 0 auto}
+.cp-ibtn{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;
+  border:1px solid var(--cp-line);background:#f6faf7;color:var(--cp-green-d);padding:0}
+.cp-ibtn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.cp-ibtn:active{background:#e7f2ea}
+.cp-info__chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.cp-chip{padding:4px 9px;border-radius:99px;background:#f1f6f2;color:#4b6355;font-size:10.5px;font-weight:600}
+.cp-chip.green{background:#e4f2e9;color:var(--cp-green-d)}
+
+/* ── 通用区块 ─────────────────────────────────────────────────────────────── */
+.cp-sec{margin:22px 14px 0}
+.cp-sec__head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:11px}
+.cp-sec__title{font-size:16px;font-weight:800;letter-spacing:-.01em}
+.cp-sec__hint{font-size:11px;color:var(--cp-muted)}
+
+/* 分区图标宫格 */
+.cp-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:15px 4px;
+  background:var(--cp-card);border-radius:18px;padding:17px 8px 16px;box-shadow:0 6px 20px rgba(20,45,32,.05)}
+.cp-grid__item{border:0;background:none;padding:0;display:flex;flex-direction:column;align-items:center;gap:7px;
+  color:var(--cp-ink2);font-size:11.5px;font-weight:600;line-height:1.2;text-align:center}
+.cp-grid__ico{width:43px;height:43px;border-radius:15px;background:#f0f6f1;color:var(--cp-green-d);
+  display:grid;place-items:center;transition:background .2s,color .2s,transform .2s}
+.cp-grid__ico svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+.cp-grid__item.active .cp-grid__ico{background:var(--cp-green);color:#fff;transform:translateY(-2px)}
+.cp-grid__item.active{color:var(--cp-green-d);font-weight:800}
+
+/* 日期区间条 */
+.cp-dates{display:flex;align-items:center;gap:6px;margin:18px 14px 0;padding:14px 12px;
+  background:var(--cp-card);border-radius:18px;box-shadow:0 6px 20px rgba(20,45,32,.05)}
+.cp-dates__side{flex:1;min-width:0;text-align:center;border:0;background:none;padding:2px 0;color:inherit}
+.cp-dates__big{font-size:17px;font-weight:800;letter-spacing:-.02em;white-space:nowrap}
+.cp-dates__small{margin-top:3px;font-size:10.5px;color:var(--cp-muted);white-space:nowrap}
+.cp-dates__mid{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:4px;
+  padding:0 10px;border-left:1px solid var(--cp-line);border-right:1px solid var(--cp-line)}
+.cp-dates__nights{font-size:11px;font-weight:800;color:var(--cp-green-d);
+  background:#e8f3ec;border-radius:99px;padding:4px 10px;white-space:nowrap}
+.cp-dates__edit{font-size:10px;color:var(--cp-muted)}
+
+/* 分区标题 */
+.cp-zone{display:flex;align-items:center;justify-content:center;gap:12px;margin:24px 14px 13px}
+.cp-zone i{display:block;width:26px;height:1px;background:#cfd9d2}
+.cp-zone span{font-size:16px;font-weight:800;letter-spacing:.06em}
+
+/* ── 两列营位卡片 ─────────────────────────────────────────────────────────── */
+.cp-pitches{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:0 14px}
+.cp-card{background:var(--cp-card);border-radius:16px;overflow:hidden;display:flex;flex-direction:column;
+  box-shadow:0 6px 20px rgba(20,45,32,.07)}
+.cp-card.is-off{opacity:.62}
+.cp-card__media{position:relative;aspect-ratio:4/3;overflow:hidden;background:#dce9dc}
+.cp-card__img{width:100%;height:100%;object-fit:cover}
+.cp-card__ph{position:absolute;inset:0;
+  background:radial-gradient(90% 60% at 70% 12%,rgba(255,248,218,.55),transparent 62%),
+             linear-gradient(180deg,#a9d2dc 0%,#cde3d6 42%,#79a877 68%,#3f6a47 100%)}
+.cp-card__ph:after{content:"";position:absolute;left:26%;bottom:14%;width:0;height:0;
+  border-left:26px solid transparent;border-right:26px solid transparent;border-bottom:36px solid rgba(250,248,236,.94)}
+.cp-card__badge{position:absolute;left:8px;top:8px;padding:4px 8px;border-radius:7px;
+  background:rgba(12,32,22,.62);color:#fff;font-size:10px;font-weight:700;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.cp-card__badge.warn{background:rgba(224,65,42,.88)}
+.cp-card__body{padding:10px 10px 11px;display:flex;flex-direction:column;flex:1}
+.cp-card__title{font-size:14px;font-weight:800;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-card__spec{margin-top:4px;font-size:10.5px;color:var(--cp-muted);line-height:1.35;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-card__foot{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:auto;padding-top:10px}
+.cp-price{color:var(--cp-price);font-size:15px;font-weight:800;white-space:nowrap;letter-spacing:-.02em}
+.cp-price small{font-size:10px;font-weight:700;margin-right:1px}
+.cp-price em{font-style:normal;font-size:10px;color:var(--cp-muted);font-weight:600;margin-left:2px}
+.cp-book{border:0;background:var(--cp-black);color:#fff;border-radius:99px;
+  padding:7px 13px;font-size:11.5px;font-weight:700;white-space:nowrap;transition:transform .15s,background .2s}
+.cp-book:active{transform:scale(.94)}
+.cp-book:disabled{background:#c6cec8;cursor:not-allowed}
+.cp-empty{grid-column:1/-1;text-align:center;padding:36px 16px;color:var(--cp-muted);font-size:13px;
+  background:var(--cp-card);border-radius:16px}
+
+/* ── 租赁 / 小站 / 活动票 横滑卡 ──────────────────────────────────────────── */
+.cp-hscroll{display:flex;gap:10px;overflow-x:auto;padding:2px 14px 6px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.cp-hscroll::-webkit-scrollbar{display:none}
+.cp-gcard{flex:0 0 150px;background:var(--cp-card);border-radius:14px;overflow:hidden;
+  box-shadow:0 5px 16px rgba(20,45,32,.06)}
+.cp-gcard__media{height:88px;position:relative;background:#eaf1e9}
+.cp-gcard__img{width:100%;height:100%;object-fit:cover}
+.cp-gcard__ph{position:absolute;inset:0;background:linear-gradient(135deg,#dcebdc,#a9c9ad)}
+.cp-gcard__body{padding:9px 10px 11px}
+.cp-gcard__t{font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-gcard__s{font-size:10px;color:var(--cp-muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-gcard__p{font-size:13px;font-weight:800;color:var(--cp-price);margin-top:7px}
+
+/* ── 底部抽屉（日期 / 预订） ──────────────────────────────────────────────── */
+.cp-mask{position:fixed;inset:0;z-index:60;background:rgba(8,22,14,.46);opacity:0;pointer-events:none;transition:opacity .25s}
+.cp-mask.open{opacity:1;pointer-events:auto}
+.cp-sheet{position:fixed;left:50%;transform:translate(-50%,100%);bottom:0;z-index:61;
+  width:min(560px,100%);max-height:88dvh;overflow-y:auto;background:#fff;
+  border-radius:22px 22px 0 0;padding:8px 18px calc(20px + env(safe-area-inset-bottom));
+  transition:transform .3s cubic-bezier(.2,.85,.25,1);
+  box-shadow:0 -16px 50px rgba(8,22,14,.2);font-family:inherit;color:var(--cp-ink)}
+.cp-sheet.open{transform:translate(-50%,0)}
+.cp-sheet__bar{width:36px;height:4px;border-radius:99px;background:#dfe5e0;margin:6px auto 15px}
+.cp-sheet__head{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.cp-sheet__title{font-size:18px;font-weight:800;letter-spacing:-.01em}
+.cp-sheet__x{width:30px;height:30px;border:0;border-radius:50%;background:#f2f5f2;color:#5b6860;font-size:19px;line-height:1;padding:0}
+.cp-f{margin-bottom:13px}
+.cp-f>label{display:block;font-size:11.5px;color:var(--cp-muted);font-weight:600;margin-bottom:6px}
+.cp-f input,.cp-f select{width:100%;padding:11px 12px;border:1px solid #e4eae5;border-radius:11px;
+  background:#fbfdfb;font-size:14px;color:var(--cp-ink);font-family:inherit;outline:none}
+.cp-f input:focus,.cp-f select:focus{border-color:var(--cp-green);background:#fff}
+.cp-f__2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.cp-quick{display:flex;gap:8px;flex-wrap:wrap;margin:2px 0 14px}
+.cp-quick button{border:1px solid #dfe9e1;background:#f4faf5;color:var(--cp-green-d);
+  border-radius:99px;padding:7px 12px;font-size:11.5px;font-weight:700}
+.cp-quick button:active{background:#e3f1e7}
+.cp-sum{background:#f6f9f6;border-radius:14px;padding:13px 14px;margin:4px 0 16px}
+.cp-sum__row{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:4px 0;color:var(--cp-ink2)}
+.cp-sum__row b{color:var(--cp-ink);font-weight:700}
+.cp-sum__total{display:flex;justify-content:space-between;align-items:baseline;margin-top:8px;padding-top:10px;
+  border-top:1px solid #e3eae4;font-size:13px;font-weight:800}
+.cp-sum__total b{font-size:21px;color:var(--cp-price);letter-spacing:-.02em}
+.cp-sum__note{margin-top:9px;font-size:10.5px;color:var(--cp-muted);line-height:1.5}
+.cp-submit{width:100%;border:0;border-radius:13px;background:var(--cp-black);color:#fff;
+  padding:14px;font-size:15px;font-weight:800;letter-spacing:.02em}
+.cp-submit:disabled{background:#c6cec8}
+.cp-stepper{display:flex;align-items:center;gap:12px}
+.cp-stepper button{width:32px;height:32px;border:1px solid #dfe9e1;background:#f6faf6;border-radius:9px;
+  font-size:17px;line-height:1;color:var(--cp-green-d);padding:0}
+.cp-stepper span{min-width:26px;text-align:center;font-size:15px;font-weight:800}
+
+/* 提示与加载 */
+.cp-state{padding:60px 20px;text-align:center;color:var(--cp-muted);font-size:13px;line-height:1.7}
+.cp-toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);z-index:80;
+  background:rgba(20,28,23,.92);color:#fff;padding:10px 18px;border-radius:99px;
+  font-size:12.5px;font-weight:600;opacity:0;transition:opacity .25s;pointer-events:none;white-space:nowrap}
+.cp-toast.on{opacity:1}
+@media (min-width:680px){.cp-hero{height:300px}.cp-pitches{grid-template-columns:repeat(3,minmax(0,1fr))}}

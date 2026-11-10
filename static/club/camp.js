@@ -1,27 +1,52 @@
 /* ===========================================================================
- * ClubOS 营地经营 · 俱乐部后台（2026-11-10）
- * 依赖（shared.js / club.js 已先加载）：CLUB / api / esc / toast / showAlert /
- *       showConfirm / uxDialog / $ / $$ / go
- * 后端契约见 app.py 营地模块 API：
- *   /api/club/{CLUB}/module-switches        GET/PATCH {home,activity,camp,bizIntro}
- *   /api/club/{CLUB}/camps                  GET/POST/PATCH/DELETE（返回 camelCase）
- *   /api/club/{CLUB}/pitches?camp_id=        GET/POST/PATCH/DELETE（返回 snake_case）
- *   /api/public/clubs/{CLUB}/camp-availability  GET ?camp_id&start&end
- *   /api/club/{CLUB}/pitch-status           GET/POST（封锁 / 解锁 / 改价）
- * 设计：营位=酒店房态（固定资源 + 日期房态网格，过夜跨日锁）；营地/活动互斥同槽。
+ * ClubOS 营地经营 · 俱乐部后台（2026-11-10 PMS 化重构 v2）
+ * 借鉴酒店 PMS 的成熟交互（不引入任何第三方代码）：
+ *   Dashboard KPI → tape chart 房态带（营位为行 / 日期为列 / 状态图例 / 今日高亮）
+ *   → 弹层表单（不再把长表单塞在列表下面）→ 搜索筛选与空态 → 批量封锁/改价。
+ * 样式见 camp-admin.css（ca- 前缀），不修改任何共用 CSS。
+ *
+ * 后端契约（未改动）：
+ *   GET/PATCH /api/club/{CLUB}/module-switches
+ *   GET/POST/PATCH/DELETE /api/club/{CLUB}/camps[/{id}]
+ *   GET/POST/PATCH/DELETE /api/club/{CLUB}/pitches[/{id}]        ?camp_id= 必传真实营地 id
+ *   GET/POST /api/club/{CLUB}/pitch-status                       封锁 / 解锁 / 临时改价
+ *   GET /api/public/clubs/{CLUB}/camp-availability                ?camp_id&start&end
+ *   GET /api/club/{CLUB}/camp-bookings                           ?camp_id 必传真实营地 id
+ *   GET/POST/PATCH/DELETE /api/club/{CLUB}/rental-items|store-products|tickets
+ *
+ * ★ v2 修复：旧版所有后台列表一律传 camp_id=0，而后端是 `WHERE camp_id=?`，
+ *   导致关联了真实营地的营位/租赁/小站/票在后台「建完就消失」。v2 统一按
+ *   当前工作台营地（CA_CAMP_ID）查询，顶部下拉可切换营地。
  * ===========================================================================*/
 
-let MODSW=null;            // 经营业态开关缓存
-let CAMP_PROFILES=[];      // 营地档案列表
-let CAMP_PITCHES=[];       // 营位列表
-let CAMP_TAB='profiles';   // 营地经营当前子页
-let CAMP_RENTAL=[],CAMP_STORE=[],CAMP_TICKETS=[]; // 营地经营：租赁/小站/活动票缓存
+let MODSW=null;                 // 经营业态开关缓存
+let CAMP_PROFILES=[];           // 营地档案
+let CAMP_PITCHES=[];            // 当前营地营位
+let CAMP_TAB='overview';        // 当前子页
+let CAMP_RENTAL=[],CAMP_STORE=[],CAMP_TICKETS=[];
+let CA_CAMP_ID=0;               // 工作台当前营地（列表与房态共用）
+let CA_START='',CA_END='';      // tape chart 日期窗口
+let CA_AVAIL=null,CA_BOOKINGS=[];
+let CA_SEL=new Set(),CA_MULTI=false,CA_SEARCH='',CA_OV=null,CA_ROWS_FN=null;
 
+/* ── 小工具 ─────────────────────────────────────────────────────────────── */
 function _localDate(d){const z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate());}
+function _addDay(s,n){const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+n);return _localDate(d);}
+function _today(){return _localDate(new Date());}
 function _j(s,d){try{return JSON.parse(s)}catch(e){return d||[];}}
-function campName(id){const c=(CAMP_PROFILES||[]).find(x=>x.id==id);return c?c.name:'未关联营地';}
+function _money(n){return (Math.round((Number(n)||0)*100)/100).toFixed(2);}
+function _campName(id){const c=(CAMP_PROFILES||[]).find(x=>String(x.id)===String(id));return c?c.name:'未关联营地';}
+function _typeName(t){return {tent:'帐篷位',rv:'房车位',cabin:'木屋/舱房',day:'日间营位'}[t]||t||'营位';}
+function _icon(p){return '<svg viewBox="0 0 24 24" aria-hidden="true">'+p+'</svg>';}
+const CA_ICON={
+  pitch:_icon('<path d="M12 4 3 20h18z"/><path d="M12 9 7.5 20h9z"/>'),
+  check:_icon('<path d="M4 12h16"/><path d="M8 6v12M16 6v12"/><circle cx="12" cy="12" r="9"/>'),
+  rate:_icon('<path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/>'),
+  clock:_icon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>')
+};
+function _campOpts(sel){return (CAMP_PROFILES||[]).map(c=>`<option value="${c.id}" ${String(c.id)===String(sel)?'selected':''}>${esc(c.name||'')}</option>`).join('');}
 
-/* ===================== 经营业态开关 ===================== */
+/* ===================== 俱乐部设置 → 经营业态开关 ===================== */
 async function loadModSw(){
   let s;
   try{ s=await api(`/api/club/${CLUB}/module-switches`,{cache:'no-store'}) }
@@ -30,492 +55,538 @@ async function loadModSw(){
   renderModSw();
 }
 function renderModSw(){
-  const box=$('#modswForm'); if(!box) return;
+  const box=$('#modswForm'); if(!box)return;
   const c=MODSW||{home:true,activity:true,camp:false,bizIntro:true};
-  const row=(key,label,sub)=>`<label class="list-row" style="gap:10px;align-items:center;cursor:pointer">
-    <input type="checkbox" data-ms="${key}" ${c[key]?'checked':''} onchange="modSwToggle('${key}',this.checked)">
-    <div class="list-row__main"><div class="list-row__title">${label}</div><div class="list-row__sub">${sub}</div></div></label>`;
-  box.innerHTML=`
-    <div class="grid g2 section">
-      ${row('home','首页','关闭后 C 端不显示首页信息流')}
-      ${row('activity','活动','俱乐部发活动 / 报名；与「营地」互斥')}
-      ${row('camp','营地','场地预订 / 营位房态 / 装备租赁；与「活动」互斥')}
-      ${row('bizIntro','业务介绍','C 端「户外能力」板块开关')}
+  const sw=(k,t,s)=>`<label class="ca-sw ${c[k]?'on':''}" data-sw="${k}">
+    <input type="checkbox" data-ms="${k}" ${c[k]?'checked':''} onchange="modSwToggle('${k}',this.checked)">
+    <span class="ca-sw__main"><span class="ca-sw__t">${t}</span><span class="ca-sw__s">${s}</span></span>
+    <span class="ca-sw__track"></span></label>`;
+  box.innerHTML=`<div class="ca"><div class="ca-sw-grid">
+      ${sw('home','首页','关闭后 C 端不显示首页信息流')}
+      ${sw('activity','活动经营','俱乐部发布活动 / 报名，与营地互斥')}
+      ${sw('camp','营地经营','营位房态 / 场地预订 / 装备租赁，与活动互斥')}
+      ${sw('bizIntro','业务介绍','C 端「户外能力」板块')}
     </div>
+    <div class="ca-sw__mut">营地与活动共用 C 端同一个导航槽：开启其中一个会自动关闭另一个。切换后 C 端刷新即生效。</div>
     <div style="margin-top:14px;display:flex;gap:10px;align-items:center">
-      <button class="btn" type="button" onclick="saveModSw()">保存开关</button>
-      <span class="sub" id="modswTip"></span>
-    </div>`;
+      <button class="ca-btn" type="button" onclick="saveModSw()">保存开关</button>
+      <span style="font-size:11.5px;color:#8a9a90" id="modswTip"></span>
+    </div></div>`;
 }
 window.modSwToggle=function(key,on){
   if(!MODSW)MODSW={home:true,activity:true,camp:false,bizIntro:true};
   MODSW[key]=!!on;
-  // 营地与活动共用一个 tab 槽：开启其一自动关闭另一个
   if(key==='camp'&&on){MODSW.activity=false;refreshModSwChecks();toast('已开启营地，活动自动关闭（二者共用一个 tab）');}
   if(key==='activity'&&on){MODSW.camp=false;refreshModSwChecks();toast('已开启活动，营地自动关闭（二者共用一个 tab）');}
+  document.querySelectorAll('#modswForm .ca-sw').forEach(l=>l.classList.toggle('on',!!MODSW[l.getAttribute('data-sw')]));
 };
 function refreshModSwChecks(){
-  document.querySelectorAll('#modswForm input[data-ms]').forEach(i=>{i.checked=!!MODSW[i.getAttribute('data-ms')];});
+  document.querySelectorAll('#modswForm input[data-ms]').forEach(i=>{i.checked=!!MODSW[i.getAttribute('data-ms')];
+    const l=i.closest('.ca-sw');if(l)l.classList.toggle('on',i.checked);});
 }
 window.saveModSw=async function(){
   if(!MODSW)return;
-  const tip=$('#modswTip'); if(tip)tip.textContent='';
+  const tip=$('#modswTip');if(tip)tip.textContent='';
   try{
     const r=await api(`/api/club/${CLUB}/module-switches`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(MODSW)});
     MODSW=Object.assign({home:true,activity:true,camp:false,bizIntro:true},r||{});
-    renderModSw();
-    if(tip)tip.textContent='已保存 ✓';
+    renderModSw();if(tip)tip.textContent='已保存 ✓';
     toast('经营业态开关已保存，C 端刷新即生效');
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
 };
 
-/* ===================== 营地经营：入口与子页 ===================== */
+/* ===================== 主入口 ===================== */
+async function _loadCamps(){
+  try{ CAMP_PROFILES=await api(`/api/club/${CLUB}/camps`,{cache:'no-store'})||[]; }
+  catch(e){ CAMP_PROFILES=[]; }
+  if(!CAMP_PROFILES.some(c=>String(c.id)===String(CA_CAMP_ID)))CA_CAMP_ID=CAMP_PROFILES[0]?CAMP_PROFILES[0].id:0;
+}
 async function loadCamp(){
-  const root=$('#campRoot'); if(!root)return;
-  root.innerHTML='<div class="sub">加载中…</div>';
-  try{ MODSW=Object.assign({home:true,activity:true,camp:false,bizIntro:true}, await api(`/api/club/${CLUB}/module-switches`,{cache:'no-store'})||{}); }
+  const root=$('#campRoot');if(!root)return;
+  root.innerHTML='<div class="ca"><div class="ca-state" style="padding:40px;text-align:center;color:#8a9a90">加载中…</div></div>';
+  try{ MODSW=Object.assign({home:true,activity:true,camp:false,bizIntro:true},await api(`/api/club/${CLUB}/module-switches`,{cache:'no-store'})||{}); }
   catch(e){}
+  await _loadCamps();
   if(!MODSW||!MODSW.camp){
-    root.innerHTML=`<div class="grid section"><div class="card" style="grid-column:1/-1">
-      <div class="panel-title"><h3>营地经营</h3><span class="tag">未开启</span></div>
-      <div class="notice warn">本板块需在 <b>俱乐部设置 → 经营业态开关</b> 中开启「营地」后才能编辑。开启后这里可用于：营地档案、营位与房态（按日期管理，过夜跨日锁）、营地装备租赁、营地小站、营地活动票。</div>
-      <div style="margin-top:12px"><button class="btn" type="button" onclick="go('settings')">前往开启营地开关</button></div>
+    root.innerHTML=`<div class="ca"><div class="ca-card" style="border-left:3px solid #b67816">
+      <div class="ca-card__t">营地经营 · 未开启</div>
+      <div class="ca-card__s">本板块需在「俱乐部设置 → 经营业态开关」中开启「营地」后才能编辑。开启后可管理：营地档案、营位与按日期的房态（过夜跨日锁）、装备租赁、营地小站、活动票。</div>
+      <div style="margin-top:14px"><button class="ca-btn" type="button" onclick="go('settings')">前往开启营地开关 →</button></div>
     </div></div>`;
     return;
   }
-  root.innerHTML=`<div class="sub" style="margin:4px 0 10px">营地业态控制台：先建<b>营地档案</b>，再在「营位与房态」里维护营位与每日房态。营位按日期管房态，过夜营位像酒店一样跨日锁定。</div>
-    <div class="set-tabs" id="campTabs">
-      <button type="button" class="set-tab ${CAMP_TAB==='profiles'?'active':''}" onclick="campTab('profiles')">营地档案</button>
-      <button type="button" class="set-tab ${CAMP_TAB==='pitches'?'active':''}" onclick="campTab('pitches')">营位与房态</button>
-      <button type="button" class="set-tab ${CAMP_TAB==='rental'?'active':''}" onclick="campTab('rental')">装备租赁</button>
-      <button type="button" class="set-tab ${CAMP_TAB==='store'?'active':''}" onclick="campTab('store')">营地小站</button>
-      <button type="button" class="set-tab ${CAMP_TAB==='tickets'?'active':''}" onclick="campTab('tickets')">活动票</button>
+  if(!CA_START){CA_START=_today();CA_END=_addDay(CA_START,13);}
+  const tabs=[
+    ['overview','工作台 · 房态'],['pitches','营位管理'],['profiles','营地档案'],
+    ['rental','装备租赁'],['store','营地小站'],['tickets','活动票']
+  ];
+  root.innerHTML=`<div class="ca">
+    <div class="ca-bar">
+      <div><div class="ca-bar__t">营地经营</div>
+        <div class="ca-bar__s">营位是固定资源，按日期管理房态；过夜营位像酒店一样跨日锁定（如 11/10 → 11/11 一晚），日间营当天结束。</div></div>
+      <div class="ca-bar__acts">
+        <span style="font-size:11.5px;color:#8a9a90">当前营地</span>
+        <select class="ca-select" id="caCampSel" onchange="caSetCamp(this.value)" ${CAMP_PROFILES.length?'':'disabled'}>
+          ${CAMP_PROFILES.length?_campOpts(CA_CAMP_ID):'<option value="0">请先创建营地</option>'}
+        </select>
+        <button class="ca-btn ghost" type="button" onclick="caReload()">↻ 刷新</button>
+      </div>
     </div>
-    <div id="campPane"></div>`;
+    <div class="ca-tabs" id="campTabs">${tabs.map(([k,t])=>`<button type="button" class="ca-tab ${CAMP_TAB===k?'active':''}" data-t="${k}" onclick="campTab('${k}')">${t}</button>`).join('')}</div>
+    <div class="ca-pane" id="campPane"></div>
+  </div>`;
   await campTab(CAMP_TAB);
 }
 window.campTab=async function(t){
   CAMP_TAB=t;
-  document.querySelectorAll('#campTabs .set-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('onclick')===`campTab('${t}')`));
-  if(t==='profiles')await loadCampProfiles();
-  else if(t==='pitches')await loadCampPitches();
-  else if(t==='rental')await loadCampRental();
-  else if(t==='store')await loadCampStore();
-  else if(t==='tickets')await loadCampTickets();
+  document.querySelectorAll('#campTabs .ca-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('data-t')===t));
+  CA_SEARCH='';CA_ROWS_FN=null;
+  const fn={overview:loadOverview,pitches:loadCampPitches,profiles:loadCampProfiles,
+            rental:loadCampRental,store:loadCampStore,tickets:loadCampTickets}[t];
+  if(fn)await fn();
 };
+window.caSetCamp=async function(v){CA_CAMP_ID=Number(v)||0;CA_SEL.clear();await campTab(CAMP_TAB);};
+window.caReload=async function(){await _loadCamps();await campTab(CAMP_TAB);toast('已刷新');};
+
+/* ===================== 工作台：KPI + tape chart ===================== */
+async function _refreshChartData(){
+  if(!CA_CAMP_ID){CAMP_PITCHES=[];CA_AVAIL={pitches:[]};CA_BOOKINGS=[];return;}
+  const q=`camp_id=${CA_CAMP_ID}`;
+  const [p,a,b]=await Promise.all([
+    api(`/api/club/${CLUB}/pitches?${q}`,{cache:'no-store'}).catch(()=>[]),
+    api(`/api/public/clubs/${CLUB}/camp-availability?${q}&start=${encodeURIComponent(CA_START)}&end=${encodeURIComponent(CA_END)}`,{cache:'no-store'}).catch(()=>({pitches:[]})),
+    api(`/api/club/${CLUB}/camp-bookings?${q}`,{cache:'no-store'}).catch(()=>[])
+  ]);
+  CAMP_PITCHES=p||[];CA_AVAIL=a||{pitches:[]};CA_BOOKINGS=b||[];
+}
+function _kpiHtml(){
+  const today=_today(),active=CAMP_PITCHES.filter(p=>p.status==='active').length;
+  const live=b=>['paid','checked_in','pending'].includes(b.status)&&
+    (b.is_day_use?b.check_in===today:(b.check_in<=today&&today<b.check_out));
+  const arrivals=CA_BOOKINGS.filter(live).length;
+  const pending=CA_BOOKINGS.filter(b=>b.status==='pending').length;
+  const cells=(CA_AVAIL.pitches||[]).flatMap(p=>(p.days||[]).slice(0,7));
+  const booked=cells.filter(d=>d.status==='booked').length;
+  const rate=cells.length?Math.round(booked/cells.length*100):0;
+  const kpi=(cls,label,val,unit,hint,ico)=>`<div class="ca-kpi ${cls}"><div>
+      <div class="ca-kpi__l">${label}</div><div class="ca-kpi__v">${val}${unit?`<small>${unit}</small>`:''}</div>
+      <div class="ca-kpi__h">${hint}</div></div><div class="ca-kpi__i">${ico}</div></div>`;
+  return `<div class="ca-kpis">
+    ${kpi('','在营营位',active,'个','当前营地启用的固定营位',CA_ICON.pitch)}
+    ${kpi('cool','今日在营',arrivals,'单','已支付 / 待支付 / 已入住',CA_ICON.check)}
+    ${kpi('plain','未来 7 日占用率',rate,'%',`${booked} / ${cells.length} 个营位日`,CA_ICON.rate)}
+    ${kpi('warm','待支付',pending,'单','30 分钟后自动释放房态',CA_ICON.clock)}
+  </div>`;
+}
+function _chartHtml(){
+  const pitches=CA_AVAIL.pitches||[];
+  if(!pitches.length)return `<div class="ca-empty"><b>还没有可展示的房态</b>请先在「营位管理」里为当前营地新增营位。</div>`;
+  const days=(pitches[0].days||[]).map(d=>d.day);
+  const wk=['日','一','二','三','四','五','六'];
+  const today=_today();
+  const head=days.map(d=>{
+    const dt=new Date(d+'T00:00:00');
+    return `<th class="${d===today?'today':''}">${d.slice(5).replace('-','/')}<small>周${wk[dt.getDay()]}</small></th>`;
+  }).join('');
+  const rows=pitches.map(p=>{
+    const cells=(p.days||[]).map(dd=>{
+      const st=dd.status==='booked'?'bk':dd.status==='blocked'?'bl':'av';
+      const label=st==='bk'?'已订':st==='bl'?'封锁':'可订';
+      const key=p.pitchId+'|'+dd.day;
+      return `<td><button type="button" class="ca-cell ${st} ${dd.day===today?'today-col':''} ${CA_SEL.has(key)?'sel':''}"
+        data-key="${key}" title="${esc(p.name)} · ${dd.day} · ${label} · ¥${dd.price}"
+        onclick="caCell(${p.pitchId},'${dd.day}','${dd.status}')">¥${dd.price}<span>${label}</span></button></td>`;
+    }).join('');
+    return `<tr><td class="ca-rowh">${esc(p.name||'营位')}<small>${esc(p.code||'')} · ${_typeName(p.pitchType)}</small></td>${cells}</tr>`;
+  }).join('');
+  return `<div class="ca-legend">
+      <span><i class="av"></i>可订</span><span><i class="bk"></i>已订（预订自动占用）</span>
+      <span><i class="bl"></i>已封锁 / 维护</span><span><i class="tdy"></i>今日列</span>
+      <span style="margin-left:auto;color:#8a9a90">点格子可封锁 / 解锁 / 临时改价；开启批量模式可一次改多天</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+      <button class="ca-btn ghost sm" type="button" onclick="caShiftDays(-7)">← 前一周</button>
+      <input class="ca-input" type="date" id="caStart" value="${CA_START}" onchange="caSetDates()">
+      <span style="color:#8a9a90;font-size:12px">至</span>
+      <input class="ca-input" type="date" id="caEnd" value="${CA_END}" onchange="caSetDates()">
+      <button class="ca-btn ghost sm" type="button" onclick="caShiftDays(7)">后一周 →</button>
+      <button class="ca-btn ghost sm" type="button" onclick="caToday()">回到今天</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#4a5b51;cursor:pointer;margin-left:6px">
+        <input type="checkbox" id="caMulti" ${CA_MULTI?'checked':''} onchange="caToggleMulti(this.checked)"> 批量选择</label>
+    </div>
+    <div class="ca-chart-wrap"><table class="ca-chart"><thead><tr><th class="ca-rowh" style="position:sticky;left:0;z-index:4;min-width:132px;text-align:left">营位 / 日期</th>${head}</tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    ${CA_SEL.size?`<div class="ca-batchbar"><span>已选 ${CA_SEL.size} 个营位日</span><span class="sp"></span>
+      <button class="ca-btn sm" type="button" onclick="caBatch('blocked')">批量封锁</button>
+      <button class="ca-btn ghost sm" type="button" onclick="caBatch('clear')">批量解锁</button>
+      <button class="ca-btn ghost sm" type="button" onclick="caClearSel()">清除选择</button></div>`:''}`;
+}
+async function loadOverview(){
+  const pane=$('#campPane');if(!pane)return;
+  pane.innerHTML='<div class="ca-card"><div class="ca-card__s">正在读取房态…</div></div>';
+  if(!CAMP_PROFILES.length){
+    pane.innerHTML=`<div class="ca-empty"><b>先建一个营地</b>营地是整个工作台的入口：建好后才能维护营位、看房态带、接预订。
+      <div style="margin-top:14px"><button class="ca-btn" type="button" onclick="campTab('profiles')">去创建营地 →</button></div></div>`;
+    return;
+  }
+  await _refreshChartData();
+  const recent=CA_BOOKINGS.slice(0,5).map(b=>`<div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-bottom:1px solid #f0f4f1;font-size:12px">
+    <span><b>#${b.id}</b> ${esc(b.guest_name||'未填姓名')} · ${esc(b.check_in||'')}${b.check_out&&b.check_out!==b.check_in?' → '+esc(b.check_out):''}</span>
+    <span><span class="ca-tag ${b.status==='pending'?'amber':b.status==='cancelled'?'grey':''}">${({pending:'待支付',paid:'已支付',checked_in:'已入住',cancelled:'已取消',completed:'已完成'}[b.status]||b.status)}</span> ¥${_money(b.total)}</span></div>`).join('');
+  pane.innerHTML=`${_kpiHtml()}
+    <div class="ca-card"><div class="ca-card__head"><div><div class="ca-card__t">房态日历 · tape chart</div>
+      <div class="ca-card__s">营位为行、日期为列。预订产生「已订」，手工封锁产生「封锁」；两者都会阻止 C 端下单。价格是当日结算价（含周末价与临时改价）。</div></div></div>
+      <div id="caChartBox">${_chartHtml()}</div></div>
+    <div class="ca-card"><div class="ca-card__head"><div><div class="ca-card__t">最近预订</div>
+      <div class="ca-card__s">当前营地最近 5 条营位预订</div></div>
+      <button class="ca-btn ghost sm" type="button" onclick="caReload()">刷新</button></div>
+      ${recent||'<div class="ca-card__s" style="padding:16px 0">还没有预订记录。C 端开启营地业态后，用户下单会实时反映到上面的房态带。</div>'}
+    </div>`;
+}
+/* 兼容旧函数名：房态刷新 */
+async function loadAvailability(){await loadOverview();}
+window.loadAvailability=loadAvailability;
+
+window.caShiftDays=async function(n){CA_START=_addDay(CA_START,n);CA_END=_addDay(CA_END,n);await loadOverview();};
+window.caToday=async function(){CA_START=_today();CA_END=_addDay(CA_START,13);await loadOverview();};
+window.caSetDates=async function(){
+  const s=$('#caStart')?.value,e=$('#caEnd')?.value;
+  if(!s||!e||e<s){toast('日期范围不合法');return;}
+  CA_START=s;CA_END=e;await loadOverview();
+};
+window.caToggleMulti=function(on){CA_MULTI=!!on;if(!on)CA_SEL.clear();
+  const box=$('#caChartBox');if(box)box.innerHTML=_chartHtml();};
+window.caClearSel=function(){CA_SEL.clear();const box=$('#caChartBox');if(box)box.innerHTML=_chartHtml();};
+window.caCell=function(pitchId,day,status){
+  const key=pitchId+'|'+day;
+  if(CA_MULTI){
+    if(CA_SEL.has(key))CA_SEL.delete(key);else CA_SEL.add(key);
+    const box=$('#caChartBox');if(box)box.innerHTML=_chartHtml();
+    return;
+  }
+  openPitchDay(pitchId,day,status);
+};
+window.caBatch=async function(act){
+  if(!CA_SEL.size){toast('请先选择格子');return;}
+  const ok=await showConfirm({title:act==='blocked'?'批量封锁':'批量解锁',
+    message:`将对 ${CA_SEL.size} 个「营位 × 日期」执行${act==='blocked'?'封锁':'解锁'}，C 端立即生效。`,danger:act==='blocked'});
+  if(!ok)return;
+  const items=[...CA_SEL].map(k=>{const [pid,d]=k.split('|');return {pitchId:Number(pid),day:d};});
+  let done=0;
+  for(let i=0;i<items.length;i+=6){
+    await Promise.all(items.slice(i,i+6).map(it=>api(`/api/club/${CLUB}/pitch-status`,{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({campId:CA_CAMP_ID,pitchId:it.pitchId,day:it.day,
+        status:act==='blocked'?'blocked':'clear'})}).then(()=>done++).catch(()=>{})));
+  }
+  CA_SEL.clear();toast(`已更新 ${done} 个格子`);await loadOverview();
+};
+
+/* 单格操作弹层（保留原全局名 openPitchDay） */
+window.openPitchDay=function(pitchId,day,status){
+  const ov=uxDialog({title:'房态操作',desc:`营位 #${pitchId} · ${day}（当前：${status==='booked'?'已订':status==='blocked'?'已封锁':'可订'}）`,
+    body:`<div class="ca"><div class="ca-form">
+      <label class="ca-field"><span>操作</span><select id="f_act">
+        <option value="blocked">封锁此日（维护 / 满员）</option>
+        <option value="available">解锁（恢复可订）</option>
+        <option value="price">仅临时改价</option>
+      </select></label>
+      <label class="ca-field"><span>临时价（元，留空恢复默认）</span><input id="f_price" type="number" min="0" step="0.01" placeholder="覆盖当日价"></label>
+      <div class="ca-form__hint">已订格子来自真实预订，不能直接改成可订；如需释放请取消对应订单。临时改价只影响这一天，周末价 / 节假日价规则仍由营位配置决定。</div>
+    </div></div>`,
+    foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>确定</button>`});
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+  ov.querySelector('[data-ok]').onclick=async()=>{
+    const act=ov.querySelector('#f_act').value,price=ov.querySelector('#f_price').value;
+    try{
+      if(act==='price'){
+        if(price===''){toast('请填写临时价，或选择解锁');return;}
+        await api(`/api/club/${CLUB}/pitch-status`,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({campId:CA_CAMP_ID,pitchId,day,status:'available',priceOverride:Number(price)})});
+      }else{
+        await api(`/api/club/${CLUB}/pitch-status`,{method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({campId:CA_CAMP_ID,pitchId,day,status:act==='blocked'?'blocked':'clear'})});
+      }
+      toast('房态已更新');ov.uxClose();await loadOverview();
+    }catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
+  };
+};
+
+/* ===================== 通用：卡片列表 + 搜索 + 空态 + 弹层表单 ===================== */
+function _listCard({title,desc,newFn,newLabel,rowsFn,emptyTitle,emptySub}){
+  CA_ROWS_FN=rowsFn;
+  return `<div class="ca-card">
+    <div class="ca-card__head"><div><div class="ca-card__t">${title}</div><div class="ca-card__s">${desc}</div></div>
+      <div class="ca-tools"><div class="ca-search"><input class="ca-input" type="search" placeholder="搜索名称 / 编码" oninput="caSearch(this.value)"></div>
+        ${newFn?`<button class="ca-btn" type="button" onclick="${newFn}">＋ ${newLabel||'新建'}</button>`:''}</div></div>
+    <div class="ca-list" id="caList">${rowsFn()||`<div class="ca-empty"><b>${emptyTitle||'还没有内容'}</b>${emptySub||''}</div>`}</div>
+  </div>`;
+}
+window.caSearch=function(v){CA_SEARCH=String(v||'').trim().toLowerCase();const b=$('#caList');if(b&&CA_ROWS_FN)b.innerHTML=CA_ROWS_FN()||'<div class="ca-empty"><b>没有匹配项</b>换个关键词试试</div>';};
+function _match(txt){return !CA_SEARCH||String(txt||'').toLowerCase().includes(CA_SEARCH);}
+function _item(name,tags,meta,editFn,delFn){
+  return `<div class="ca-item"><div class="ca-item__top"><div class="ca-item__n">${esc(name)}</div></div>
+    <div class="ca-item__tags">${tags}</div><div class="ca-item__meta">${meta}</div>
+    <div class="ca-item__foot"><button class="ca-btn ghost sm" type="button" onclick="${editFn}">编辑</button>
+      <button class="ca-btn ghost sm" type="button" onclick="${delFn}">删除</button></div></div>`;
+}
+function _openForm(title,desc,fields,saveFn){
+  const html=fields.map(f=>{
+    const val=f.value==null?'':String(f.value);
+    let ctrl;
+    if(f.type==='textarea')ctrl=`<textarea id="f_${f.name}" rows="${f.rows||3}" placeholder="${esc(f.placeholder||'')}">${esc(val)}</textarea>`;
+    else if(f.type==='select')ctrl=`<select id="f_${f.name}" ${f.onchange?`onchange="${f.onchange}"`:''}>${(f.options||[]).map(o=>`<option value="${esc(o.value)}" ${String(o.value)===val?'selected':''}>${esc(o.label)}</option>`).join('')}</select>`;
+    else ctrl=`<input id="f_${f.name}" type="${f.type||'text'}" value="${esc(val)}" placeholder="${esc(f.placeholder||'')}" ${f.min!=null?`min="${f.min}"`:''} ${f.step!=null?`step="${f.step}"`:''}>`;
+    return `<label class="ca-field ${f.full?'full':''}"><span>${esc(f.label)}</span>${ctrl}</label>`;
+  }).join('');
+  const ov=uxDialog({title,desc,wide:true,
+    body:`<div class="ca"><div class="ca-form">${html}</div></div>`,
+    foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>保存</button>`,
+    onClose:()=>{CA_OV=null;}});
+  CA_OV=ov;
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+  ov.querySelector('[data-ok]').onclick=()=>saveFn(ov);
+  return ov;
+}
+function _fv(ov,n){const e=ov.querySelector('#f_'+n);return e?String(e.value).trim():'';}
+function _fn(ov,n){const v=_fv(ov,n);return v===''?null:Number(v);}
+function _lines(ov,n){return _fv(ov,n).split('\n').map(t=>t.trim()).filter(Boolean).slice(0,20);}
+function _campField(label='所属营地'){return {name:'campId',label,type:'select',value:CA_CAMP_ID,options:CAMP_PROFILES.map(c=>({value:c.id,label:c.name}))};}
 
 /* ===================== 营地档案 ===================== */
 async function loadCampProfiles(){
-  const box=$('#campPane'); if(!box)return;
-  box.innerHTML='<div class="sub">加载中…</div>';
-  let list;
-  try{ list=await api(`/api/club/${CLUB}/camps`,{cache:'no-store'}) }
-  catch(e){ box.innerHTML='<div class="sub">读取失败：'+(e.message||'')+'</div>'; return; }
-  CAMP_PROFILES=list||[];
-  const cards=(CAMP_PROFILES.length?CAMP_PROFILES:[]).map(c=>`
-    <div class="list-row" style="align-items:flex-start">
-      <div class="list-row__main">
-        <div class="list-row__title">${esc(c.name||'')} ${c.status==='active'?'':'<span class="tag">已停用</span>'}</div>
-        <div class="list-row__sub">${esc(c.address||'未填地址')} · ${((c.facilities||[]).length)?((c.facilities||[]).length+' 项设施'):'暂无设施'} · ${((c.gallery||[])||[]).length?'有图':'无图'}</div>
-      </div>
-      <div class="list-row__end">
-        <button class="btn ghost" type="button" onclick="editCamp(${c.id})">编辑</button>
-        <button class="btn ghost" type="button" onclick="deleteCamp(${c.id})">删除</button>
-      </div>
-    </div>`).join('');
-  box.innerHTML=`<div class="card section"><div class="panel-title"><div><h3>营地档案</h3><div class="sub">一个俱乐部可建多个营地（如山顶营、湖边营）。每个营地独立维护营位与房态。</div></div><button class="btn" type="button" onclick="editCamp(0)">＋ 新建营地</button></div>
-    <div id="campProfilesList">${cards||'<div class="empty">还没有营地，点「新建营地」开始。</div>'}</div>
-    <div id="campProfileForm"></div></div>`;
+  const box=$('#campPane');if(!box)return;
+  await _loadCamps();
+  box.innerHTML=_listCard({title:'营地档案',desc:'一个俱乐部可建多个营地（如山顶营、湖边营），顶部下拉切换工作台营地；每个营地独立维护营位与房态。',
+    newFn:'editCamp(0)',newLabel:'新建营地',
+    rowsFn:()=>CAMP_PROFILES.filter(c=>_match(c.name)||_match(c.address)).map(c=>_item(c.name,
+      [c.status==='active'?'<span class="ca-tag">启用中</span>':'<span class="ca-tag grey">已停用</span>',
+       (c.facilities||[]).length?`<span class="ca-tag grey">${(c.facilities||[]).length} 项设施</span>`:'',
+       (c.gallery||[]).length?'<span class="ca-tag grey">有头图</span>':''].join(''),
+      `地址：<b>${esc(c.address||'未填写')}</b><br>电话：${esc(c.contactPhone||'未填写')} · 简介：${esc((c.introText||'').slice(0,40)||'无')}`,
+      `editCamp(${c.id})`,`deleteCamp(${c.id})`)).join(''),
+    emptyTitle:'还没有营地',emptySub:'点右上角「新建营地」开始，建好后回到工作台就能看到房态带。'});
 }
 window.editCamp=function(id){
-  const c=(id&&CAMP_PROFILES.find(x=>x.id===id))||{name:'',introText:'',gallery:[],facilities:[],rules:[],contactPhone:'',address:'',geoLat:'',geoLng:'',status:'active'};
-  const form=$('#campProfileForm'); if(!form)return;
-  form.innerHTML=`<div class="card section" style="margin-top:14px"><div class="panel-title"><h3>${id?'编辑营地':'新建营地'}</h3></div>
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
-      <label style="display:block"><span class="sub">营地名称 *</span><input id="cpfName" maxlength="40" style="width:100%;margin-top:4px" value="${esc(c.name||'')}" placeholder="例如：云顶星空营地"></label>
-      <label style="display:block"><span class="sub">联系电话</span><input id="cpfPhone" maxlength="20" style="width:100%;margin-top:4px" value="${esc(c.contactPhone||'')}" placeholder="138 0000 0000"></label>
-      <label style="display:block"><span class="sub">地址</span><input id="cpfAddr" maxlength="120" style="width:100%;margin-top:4px" value="${esc(c.address||'')}" placeholder="成都市××区××路"></label>
-      <label style="display:block"><span class="sub">状态</span><select id="cpfStatus" style="width:100%;margin-top:4px"><option value="active" ${c.status!=='inactive'?'selected':''}>启用</option><option value="inactive" ${c.status==='inactive'?'selected':''}>停用</option></select></label>
-      <label style="display:block"><span class="sub">纬度 geoLat（可空）</span><input id="cpfLat" style="width:100%;margin-top:4px" value="${esc(c.geoLat==null?'':c.geoLat)}" placeholder="如 30.66"></label>
-      <label style="display:block"><span class="sub">经度 geoLng（可空）</span><input id="cpfLng" style="width:100%;margin-top:4px" value="${esc(c.geoLng==null?'':c.geoLng)}" placeholder="如 103.95"></label>
-    </div>
-    <div style="margin-top:12px"><div class="sub">一句话简介</div><textarea id="cpfIntro" rows="2" maxlength="300" style="width:100%;margin-top:6px" placeholder="营地的特色、适合人群">${esc(c.introText||'')}</textarea></div>
-    <div style="margin-top:12px"><div class="sub">设施（每行一项，最多 20 项）</div><textarea id="cpfFac" rows="3" style="width:100%;margin-top:6px" placeholder="水电桩&#10;公共卫生间&#10;篝火区">${((c.facilities||[]).join('\n'))}</textarea></div>
-    <div style="margin-top:12px"><div class="sub">规则须知（每行一条，最多 20 条）</div><textarea id="cpfRules" rows="3" style="width:100%;margin-top:6px" placeholder="22:00 后请安静&#10;宠物需牵绳">${((c.rules||[]).join('\n'))}</textarea></div>
-    <div style="margin-top:14px;display:flex;gap:10px">
-      <button class="btn" type="button" onclick="saveCamp(${id||0})">${id?'保存修改':'创建营地'}</button>
-      <button class="btn ghost" type="button" onclick="loadCampProfiles()">取消</button>
-      <span class="sub" id="cpfTip"></span>
-    </div></div>`;
+  const c=(id&&CAMP_PROFILES.find(x=>x.id===id))||{name:'',introText:'',facilities:[],rules:[],contactPhone:'',address:'',geoLat:'',geoLng:'',status:'active'};
+  _openForm(id?'编辑营地':'新建营地','营地档案会展示在 C 端头图、信息卡与导航按钮上。',[
+    {name:'name',label:'营地名称 *',value:c.name,placeholder:'例如：云顶星空营地'},
+    {name:'contactPhone',label:'联系电话',value:c.contactPhone,placeholder:'138 0000 0000'},
+    {name:'address',label:'地址',value:c.address,placeholder:'成都市××区××路',full:true},
+    {name:'introText',label:'一句话简介',type:'textarea',value:c.introText,placeholder:'营地特色、适合人群',full:true},
+    {name:'facilities',label:'设施（每行一项，最多 20 项）',type:'textarea',value:(c.facilities||[]).join('\n'),placeholder:'水电桩\n公共卫生间\n篝火区'},
+    {name:'rules',label:'规则须知（每行一条）',type:'textarea',value:(c.rules||[]).join('\n'),placeholder:'22:00 后请安静\n宠物需牵绳'},
+    {name:'geoLat',label:'纬度（可空）',value:c.geoLat==null?'':c.geoLat,placeholder:'30.66'},
+    {name:'geoLng',label:'经度（可空）',value:c.geoLng==null?'':c.geoLng,placeholder:'103.95'},
+    {name:'status',label:'状态',type:'select',value:c.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]}
+  ],ov=>saveCamp(id,ov));
 };
-window.saveCamp=async function(id){
-  const name=$('#cpfName')?.value.trim(); if(!name){showAlert({title:'请填写营地名称'});return;}
-  const payload={
-    name, introText:$('#cpfIntro')?.value.trim()||'',
-    facilities:($('#cpfFac')?.value||'').split('\n').map(t=>t.trim()).filter(Boolean).slice(0,20),
-    rules:($('#cpfRules')?.value||'').split('\n').map(t=>t.trim()).filter(Boolean).slice(0,20),
-    contactPhone:$('#cpfPhone')?.value.trim()||'',
-    address:$('#cpfAddr')?.value.trim()||'',
-    geoLat:($('#cpfLat')?.value.trim()||'')||null,
-    geoLng:($('#cpfLng')?.value.trim()||'')||null,
-    status:$('#cpfStatus')?.value||'active'
-  };
-  const tip=$('#cpfTip'); if(tip)tip.textContent='';
+window.saveCamp=async function(id,ov){
+  ov=ov||CA_OV;if(!ov)return;
+  const name=_fv(ov,'name');if(!name){toast('请填写营地名称');return;}
+  const payload={name,introText:_fv(ov,'introText'),facilities:_lines(ov,'facilities'),rules:_lines(ov,'rules'),
+    contactPhone:_fv(ov,'contactPhone'),address:_fv(ov,'address'),geoLat:_fn(ov,'geoLat'),geoLng:_fn(ov,'geoLng'),
+    status:_fv(ov,'status')||'active'};
   try{
-    if(id){ await api(`/api/club/${CLUB}/camps/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); toast('营地已更新'); }
-    else { await api(`/api/club/${CLUB}/camps`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); toast('营地已创建'); }
-    await loadCampProfiles();
+    if(id)await api(`/api/club/${CLUB}/camps/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    else await api(`/api/club/${CLUB}/camps`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    ov.uxClose();toast(id?'营地已更新':'营地已创建');await _loadCamps();await campTab('profiles');
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
 };
 window.deleteCamp=async function(id){
   const ok=await showConfirm({title:'删除营地',message:'确定删除这个营地？其下的营位、房态覆盖与历史预订会一并清除，且不可恢复。',danger:true});
   if(!ok)return;
-  try{ await api(`/api/club/${CLUB}/camps/${id}`,{method:'DELETE'}); toast('已删除'); await loadCampProfiles(); }
+  try{await api(`/api/club/${CLUB}/camps/${id}`,{method:'DELETE'});toast('已删除');await _loadCamps();await campTab('profiles');}
   catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}
 };
 
-/* ===================== 营位与房态 ===================== */
+/* ===================== 营位管理 ===================== */
 async function loadCampPitches(){
-  const box=$('#campPane'); if(!box)return;
-  box.innerHTML='<div class="sub">加载中…</div>';
-  let camps,pitches;
-  try{
-    camps=await api(`/api/club/${CLUB}/camps`,{cache:'no-store'});
-    pitches=await api(`/api/club/${CLUB}/pitches?camp_id=0`,{cache:'no-store'});
-  }catch(e){ box.innerHTML='<div class="sub">读取失败：'+(e.message||'')+'</div>'; return; }
-  CAMP_PROFILES=camps||[]; CAMP_PITCHES=pitches||[];
-  if(!CAMP_PROFILES.length){
-    box.innerHTML='<div class="notice warn">请先在「营地档案」里创建一个营地，再回来维护营位。</div>';
-    return;
-  }
-  const rows=(CAMP_PITCHES.length?CAMP_PITCHES:[]).map(p=>{
-    const typeName={tent:'帐篷位',rv:'房车位',cabin:'木屋/舱房',day:'日间营位'}[p.pitch_type]||p.pitch_type;
-    return `<div class="list-row">
-      <div class="list-row__main"><div class="list-row__title">${esc(p.name||'')} <span class="tag">${typeName}</span> ${p.is_overnight?'<span class="tag">过夜</span>':''}</div>
-      <div class="list-row__sub">编码 ${esc(p.code||'-')} · 容量 ${p.capacity||1} · 平日 ¥${p.base_price||0}${p.weekend_price!=null?' / 周末 ¥'+p.weekend_price:''} · ${p.status==='active'?'启用':'停用'}</div></div>
-      <div class="list-row__end"><button class="btn ghost" type="button" onclick="editPitch(${p.id})">编辑</button><button class="btn ghost" type="button" onclick="deletePitch(${p.id})">删除</button></div>
-    </div>`;
-  }).join('');
-  const campOpts=CAMP_PROFILES.map(c=>`<option value="${c.id}">${esc(c.name||'')}</option>`).join('');
-  box.innerHTML=`<div class="card section"><div class="panel-title"><div><h3>营位</h3><div class="sub">营位是<b>固定资源</b>，按日期管房态。日间营位当天结束，过夜营位像酒店一样跨日锁定（如 11/10–11/11 一晚）。</div></div><button class="btn" type="button" onclick="editPitch(0)">＋ 新增营位</button></div>
-    <div id="pitchRows">${rows||'<div class="empty">还没有营位，点「新增营位」开始。</div>'}</div>
-    <div id="pitchForm"></div></div>
-    <div class="card section" style="margin-top:14px"><div class="panel-title"><div><h3>房态日历</h3><div class="sub">选营地 + 日期范围，查看每个营位每天的房态（可订 / 已订 / 已封锁）与当日价；点格子可封锁或改价。</div></div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
-        <select id="avCamp" onchange="loadAvailability()">${campOpts}</select>
-        <input type="date" id="avStart" onchange="loadAvailability()">
-        <span class="sub">至</span>
-        <input type="date" id="avEnd" onchange="loadAvailability()">
-        <button class="btn secondary" type="button" onclick="loadAvailability()">刷新房态</button>
-      </div></div>
-    <div id="avBody"><div class="empty">选择日期范围后查看房态。</div></div></div>`;
-  const today=new Date();
-  const sEl=$('#avStart'),eEl=$('#avEnd');
-  if(sEl&&!sEl.value)sEl.value=_localDate(today);
-  if(eEl&&!eEl.value){const e=new Date(today);e.setDate(e.getDate()+13);eEl.value=_localDate(e);}
-  await loadAvailability();
+  const box=$('#campPane');if(!box)return;
+  if(!CA_CAMP_ID){box.innerHTML='<div class="ca-empty"><b>请先创建营地</b>营位必须归属某个营地。<div style="margin-top:12px"><button class="ca-btn" type="button" onclick="campTab(\'profiles\')">去创建营地 →</button></div></div>';return;}
+  try{CAMP_PITCHES=await api(`/api/club/${CLUB}/pitches?camp_id=${CA_CAMP_ID}`,{cache:'no-store'})||[];}
+  catch(e){box.innerHTML=`<div class="ca-empty">读取失败：${esc(e.message||'')}</div>`;return;}
+  box.innerHTML=_listCard({title:`营位管理 · ${esc(_campName(CA_CAMP_ID))}`,
+    desc:'营位是固定资源，按日期管房态。日间营当天结束；过夜营位像酒店一样跨日锁定。切换顶部「当前营地」查看其它营地。',
+    newFn:'editPitch(0)',newLabel:'新增营位',
+    rowsFn:()=>CAMP_PITCHES.filter(p=>_match(p.name)||_match(p.code)).map(p=>_item(p.name,
+      [`<span class="ca-tag">${_typeName(p.pitch_type)}</span>`,p.is_overnight?'<span class="ca-tag grey">过夜 · 跨日锁</span>':'<span class="ca-tag grey">日间当天</span>',
+       p.status==='active'?'':'<span class="ca-tag red">已停用</span>'].join(''),
+      `编码 <b>${esc(p.code||'-')}</b> · 适用 ${p.capacity||1} 人<br>平日 ¥${_money(p.base_price)} / 天${p.weekend_price!=null?' · 周末 ¥'+_money(p.weekend_price):''}${p.holiday_price!=null?' · 节假日 ¥'+_money(p.holiday_price):''}`,
+      `editPitch(${p.id})`,`deletePitch(${p.id})`)).join(''),
+    emptyTitle:'这个营地还没有营位',emptySub:'点「新增营位」建第一个营位，之后去「工作台 · 房态」就能看到 tape chart。'});
 }
 window.editPitch=function(id){
-  const p=(id&&CAMP_PITCHES.find(x=>x.id===id))||{camp_id:0,code:'',name:'',pitch_type:'tent',is_overnight:1,capacity:1,base_price:0,weekend_price:null,holiday_price:null,status:'active'};
-  const form=$('#pitchForm'); if(!form)return;
-  const typeOpt=(v,t)=>`<option value="${v}" ${p.pitch_type===v?'selected':''}>${t}</option>`;
-  const campOpt=CAMP_PROFILES.map(c=>`<option value="${c.id}" ${(p.camp_id||0)===c.id?'selected':''}>${esc(c.name||'')}</option>`).join('');
-  form.innerHTML=`<div class="card section" style="margin-top:14px"><div class="panel-title"><h3>${id?'编辑营位':'新增营位'}</h3></div>
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
-      <label style="display:block"><span class="sub">所属营地 *</span><select id="pfCamp" style="width:100%;margin-top:4px">${campOpt}</select></label>
-      <label style="display:block"><span class="sub">营位编码</span><input id="pfCode" maxlength="20" style="width:100%;margin-top:4px" value="${esc(p.code||'')}" placeholder="如 A01"></label>
-      <label style="display:block"><span class="sub">营位名称 *</span><input id="pfName" maxlength="40" style="width:100%;margin-top:4px" value="${esc(p.name||'')}" placeholder="如 湖景帐篷位 A01"></label>
-      <label style="display:block"><span class="sub">营位类型</span><select id="pfType" style="width:100%;margin-top:4px" onchange="pfTypeChange(this.value)">${typeOpt('tent','帐篷位')}${typeOpt('rv','房车位')}${typeOpt('cabin','木屋/舱房')}${typeOpt('day','日间营位')}</select></label>
-      <label style="display:block"><span class="sub">是否过夜</span><select id="pfOvn" style="width:100%;margin-top:4px"><option value="1" ${p.is_overnight?'selected':''}>过夜（跨日锁）</option><option value="0" ${!p.is_overnight?'selected':''}>日间（当天结束）</option></select></label>
-      <label style="display:block"><span class="sub">容量（可住人数/帐）</span><input id="pfCap" type="number" min="1" style="width:100%;margin-top:4px" value="${p.capacity||1}"></label>
-      <label style="display:block"><span class="sub">平日价（元/天）</span><input id="pfBase" type="number" min="0" step="0.01" style="width:100%;margin-top:4px" value="${p.base_price||0}"></label>
-      <label style="display:block"><span class="sub">周末价（可空）</span><input id="pfWeek" type="number" min="0" step="0.01" style="width:100%;margin-top:4px" value="${p.weekend_price==null?'':p.weekend_price}"></label>
-      <label style="display:block"><span class="sub">节假日价（可空）</span><input id="pfHol" type="number" min="0" step="0.01" style="width:100%;margin-top:4px" value="${p.holiday_price==null?'':p.holiday_price}"></label>
-      <label style="display:block"><span class="sub">状态</span><select id="pfStatus" style="width:100%;margin-top:4px"><option value="active" ${p.status!=='inactive'?'selected':''}>启用</option><option value="inactive" ${p.status==='inactive'?'selected':''}>停用</option></select></label>
-    </div>
-    <div style="margin-top:14px;display:flex;gap:10px">
-      <button class="btn" type="button" onclick="savePitch(${id||0})">${id?'保存修改':'创建营位'}</button>
-      <button class="btn ghost" type="button" onclick="loadCampPitches()">取消</button>
-      <span class="sub" id="pfTip"></span></div></div>`;
+  const p=(id&&CAMP_PITCHES.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,code:'',name:'',pitch_type:'tent',is_overnight:1,capacity:1,base_price:0,weekend_price:null,holiday_price:null,status:'active'};
+  _openForm(id?'编辑营位':'新增营位','价格按「营位 × 日期」结算：周六/周日自动取周末价，房态日历里还能对单日临时改价。',[
+    _campField(),{name:'code',label:'营位编码',value:p.code,placeholder:'如 A01'},
+    {name:'name',label:'营位名称 *',value:p.name,placeholder:'如 湖景帐篷位 A01'},
+    {name:'pitchType',label:'营位类型',type:'select',value:p.pitch_type||'tent',onchange:"pfTypeChange(this.value)",
+      options:[{value:'tent',label:'帐篷位'},{value:'rv',label:'房车位'},{value:'cabin',label:'木屋/舱房'},{value:'day',label:'日间营位'}]},
+    {name:'isOvernight',label:'住宿语义',type:'select',value:String(p.is_overnight?1:0),
+      options:[{value:'1',label:'过夜（跨日锁）'},{value:'0',label:'日间（当天结束）'}]},
+    {name:'capacity',label:'适用人数',type:'number',min:1,value:p.capacity||1},
+    {name:'basePrice',label:'平日价（元/天）',type:'number',min:0,step:0.01,value:p.base_price||0},
+    {name:'weekendPrice',label:'周末价（留空=同平日）',type:'number',min:0,step:0.01,value:p.weekend_price==null?'':p.weekend_price},
+    {name:'holidayPrice',label:'节假日价（留空=同平日）',type:'number',min:0,step:0.01,value:p.holiday_price==null?'':p.holiday_price},
+    {name:'status',label:'状态',type:'select',value:p.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]}
+  ],ov=>savePitch(id,ov));
 };
-window.pfTypeChange=function(v){
-  const ovn=$('#pfOvn'); if(!ovn)return;
-  ovn.value=(v==='day')?'0':'1';
-};
-window.savePitch=async function(id){
-  const name=$('#pfName')?.value.trim(); if(!name){showAlert({title:'请填写营位名称'});return;}
-  const payload={
-    campId:Number($('#pfCamp')?.value||0),
-    code:$('#pfCode')?.value.trim()||'',
-    name,
-    pitchType:$('#pfType')?.value||'tent',
-    isOvernight:Number($('#pfOvn')?.value||0),
-    capacity:Math.max(1,Number($('#pfCap')?.value||1)),
-    basePrice:Number($('#pfBase')?.value||0),
-    weekendPrice:$('#pfWeek')?.value===''?null:Number($('#pfWeek')?.value||0),
-    holidayPrice:$('#pfHol')?.value===''?null:Number($('#pfHol')?.value||0),
-    status:$('#pfStatus')?.value||'active'
-  };
-  const tip=$('#pfTip'); if(tip)tip.textContent='';
+window.pfTypeChange=function(v){const el=CA_OV&&CA_OV.querySelector('#f_isOvernight');if(el)el.value=(v==='day')?'0':'1';};
+window.savePitch=async function(id,ov){
+  ov=ov||CA_OV;if(!ov)return;
+  const name=_fv(ov,'name');if(!name){toast('请填写营位名称');return;}
+  const payload={campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,code:_fv(ov,'code'),name,
+    pitchType:_fv(ov,'pitchType')||'tent',isOvernight:Number(_fv(ov,'isOvernight')||0),
+    capacity:Math.max(1,Number(_fv(ov,'capacity')||1)),basePrice:Number(_fv(ov,'basePrice')||0),
+    weekendPrice:_fn(ov,'weekendPrice'),holidayPrice:_fn(ov,'holidayPrice'),status:_fv(ov,'status')||'active'};
   try{
-    if(id){ await api(`/api/club/${CLUB}/pitches/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); toast('营位已更新'); }
-    else { await api(`/api/club/${CLUB}/pitches`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); toast('营位已创建'); }
-    await loadCampPitches();
+    if(id)await api(`/api/club/${CLUB}/pitches/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    else await api(`/api/club/${CLUB}/pitches`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    ov.uxClose();toast(id?'营位已更新':'营位已创建');await campTab('pitches');
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
 };
 window.deletePitch=async function(id){
   const ok=await showConfirm({title:'删除营位',message:'确定删除这个营位？该营位的历史预订与房态覆盖会一并清除。',danger:true});
   if(!ok)return;
-  try{ await api(`/api/club/${CLUB}/pitches/${id}`,{method:'DELETE'}); toast('已删除'); await loadCampPitches(); }
+  try{await api(`/api/club/${CLUB}/pitches/${id}`,{method:'DELETE'});toast('已删除');await campTab('pitches');}
   catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}
 };
-async function loadAvailability(){
-  const box=$('#avBody'); if(!box)return;
-  const campId=Number($('#avCamp')?.value||0);
-  const start=$('#avStart')?.value, end=$('#avEnd')?.value;
-  if(!start||!end){box.innerHTML='<div class="empty">请选择起止日期。</div>';return;}
-  box.innerHTML='<div class="sub">加载房态…</div>';
-  let data;
-  try{ data=await api(`/api/public/clubs/${CLUB}/camp-availability?camp_id=${campId}&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`,{cache:'no-store'}) }
-  catch(e){ box.innerHTML='<div class="sub">读取失败：'+(e.message||'')+'</div>'; return; }
-  const pitches=data.pitches||[];
-  if(!pitches.length){box.innerHTML='<div class="empty">该营地还没有营位，请先新增营位。</div>';return;}
-  const days=(pitches[0].days||[]).map(d=>d.day);
-  const cellStyle=st=>st==='booked'?'background:#fbeae6;color:#c8452d' : st==='blocked'?'background:#eceeec;color:#88968f':'background:#eaf3ef;color:#1f7a52';
-  const dayHead=days.map(d=>`<th style="padding:4px 6px;font-weight:600;white-space:nowrap">${esc(d.slice(5))}</th>`).join('');
-  const body=pitches.map(p=>{
-    const cells=(p.days||[]).map(dd=>{
-      const st=dd.status;
-      return `<td style="text-align:center;cursor:pointer;padding:4px 6px;font-size:12px;${cellStyle(st)}" title="${esc(p.name)} · ${esc(dd.day)} · ${st==='booked'?'已订':st==='blocked'?'已封锁':'可订'} · ¥${dd.price}" onclick="openPitchDay(${p.pitchId},'${dd.day}','${st}')">¥${dd.price}<br>${st==='booked'?'已订':st==='blocked'?'锁':'空'}</td>`;
-    }).join('');
-    return `<tr><td style="white-space:nowrap;padding:4px 8px;font-weight:600">${esc(p.name||'')}</td>${cells}</tr>`;
-  }).join('');
-  box.innerHTML=`<div class="sub" style="margin-bottom:8px">绿=可订 · 红=已订 · 灰=已封锁。点任意格子可<b>封锁/解锁</b>或<b>临时改价</b>。</div>
-    <div style="overflow:auto"><table class="table" style="border-collapse:collapse;min-width:600px">
-      <thead><tr><th style="padding:4px 8px;text-align:left">营位</th>${dayHead}</tr></thead>
-      <tbody>${body}</tbody></table></div>`;
-}
-window.openPitchDay=function(pitchId,day,status){
-  let ov=null;
-  ov=uxDialog({
-    title:'房态操作',
-    desc:`营位 #${pitchId} · ${day}（当前：${status==='booked'?'已订（预订产生，不可直接改）':status==='blocked'?'已封锁':'可订'}）`,
-    body:`<div class="ux-field"><label for="pdAct">操作</label>
-      <select id="pdAct" style="width:100%">
-        <option value="blocked">封锁此日（维护 / 满员）</option>
-        <option value="available">解锁（恢复可订）</option>
-        <option value="price">仅临时改价</option>
-      </select></div>
-      <div class="ux-field"><label for="pdPrice">临时价（仅「临时改价」时填写，留空=恢复默认）</label><input id="pdPrice" type="number" min="0" step="0.01" style="width:100%" placeholder="覆盖当日价"></div>`,
-    foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>确定</button>`
-  });
-  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
-  ov.querySelector('[data-ok]').onclick=async()=>{
-    const act=ov.querySelector('#pdAct').value;
-    const price=ov.querySelector('#pdPrice').value;
-    try{
-      if(act==='price'){
-        await api(`/api/club/${CLUB}/pitch-status`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({campId:Number($('#avCamp')?.value||0),pitchId,day,status:'available',priceOverride:price===''?null:Number(price)})});
-      }else{
-        await api(`/api/club/${CLUB}/pitch-status`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({campId:Number($('#avCamp')?.value||0),pitchId,day,status:act==='blocked'?'blocked':'clear'})});
-      }
-      toast('房态已更新'); ov.uxClose(); await loadAvailability();
-    }catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
-  };
-};
 
-/* ===================== 装备租赁（camp_rental_items，club 域，与平台商城隔离）===================== */
+/* ===================== 装备租赁（club 域，与平台商城隔离） ===================== */
 async function loadCampRental(){
-  const box=$('#campPane'); if(!box)return;
-  box.innerHTML='<div class="sub">加载中…</div>';
-  let list;
-  try{ list=await api(`/api/club/${CLUB}/rental-items?camp_id=0`,{cache:'no-store'}) }
-  catch(e){ box.innerHTML='<div class="sub">读取失败：'+(e.message||'')+'</div>'; return; }
-  CAMP_RENTAL=list||[];
-  const cards=(CAMP_RENTAL.length?CAMP_RENTAL:[]).map(r=>{
-    const attrs=_j(r.attributes_json,[]);
-    return `<div class="list-row">
-      <div class="list-row__main"><div class="list-row__title">${esc(r.name||'')} <span class="tag">${campName(r.camp_id)}</span> ${r.status==='active'?'':'<span class="tag">停用</span>'}</div>
-      <div class="list-row__sub">日租 ¥${r.daily_price||0} · 押金 ¥${r.deposit||0} · 库存 ${r.available_qty||0}${attrs&&attrs.length?' · '+(attrs.length)+' 项规格':''}</div></div>
-      <div class="list-row__end"><button class="btn ghost" type="button" onclick="editRental(${r.id})">编辑</button><button class="btn ghost" type="button" onclick="deleteRental(${r.id})">删除</button></div>
-    </div>`;
-  }).join('');
-  box.innerHTML=`<div class="card section"><div class="panel-title"><div><h3>营地装备租赁</h3><div class="sub">营地自营装备按<b>日租</b>、带<b>押金</b>。与平台商城（公司统一售卖）严格隔离，属于俱乐部/营地域。</div></div><button class="btn" type="button" onclick="editRental(0)">＋ 新增租赁装备</button></div>
-    <div id="rentalRows">${cards||'<div class="empty">还没有租赁装备，点「新增」开始。</div>'}</div>
-    <div id="rentalForm"></div></div>`;
+  const box=$('#campPane');if(!box)return;
+  if(!CA_CAMP_ID){box.innerHTML='<div class="ca-empty"><b>请先创建营地</b>租赁装备需归属具体营地。</div>';return;}
+  try{CAMP_RENTAL=await api(`/api/club/${CLUB}/rental-items?camp_id=${CA_CAMP_ID}`,{cache:'no-store'})||[];}
+  catch(e){box.innerHTML=`<div class="ca-empty">读取失败：${esc(e.message||'')}</div>`;return;}
+  box.innerHTML=_listCard({title:`装备租赁 · ${esc(_campName(CA_CAMP_ID))}`,
+    desc:'营地自营装备按日租、带押金，属于俱乐部/营地域；与总平台公司的装备售卖（products / gear_orders）物理隔离。',
+    newFn:'editRental(0)',newLabel:'新增装备',
+    rowsFn:()=>CAMP_RENTAL.filter(r=>_match(r.name)).map(r=>_item(r.name,
+      [`<span class="ca-tag">${esc(_campName(r.camp_id))}</span>`,r.status==='active'?'':'<span class="ca-tag grey">已停用</span>'].join(''),
+      `日租 <b>¥${_money(r.daily_price)}</b> · 押金 ¥${_money(r.deposit)} · 可租 ${r.available_qty||0} 件<br>${esc((r.description||'').slice(0,48)||'暂无描述')}`,
+      `editRental(${r.id})`,`deleteRental(${r.id})`)).join(''),
+    emptyTitle:'还没有租赁装备',emptySub:'帐篷、天幕、防潮垫等按日出租的装备都放这里。'});
 }
 window.editRental=function(id){
-  const r=(id&&CAMP_RENTAL.find(x=>x.id===id))||{camp_id:0,name:'',cover_url:'',description:'',daily_price:0,deposit:0,available_qty:0,attributes_json:'',status:'active'};
-  const form=$('#rentalForm'); if(!form)return;
-  const attrs=_j(r.attributes_json,[]);
-  const campOpt=CAMP_PROFILES.map(c=>`<option value="${c.id}" ${(r.camp_id||0)===c.id?'selected':''}>${esc(c.name||'')}</option>`).join('');
-  form.innerHTML=`<div class="card section" style="margin-top:14px"><div class="panel-title"><h3>${id?'编辑租赁装备':'新增租赁装备'}</h3></div>
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
-      <label style="display:block"><span class="sub">所属营地 *</span><select id="rfCamp" style="width:100%;margin-top:4px">${campOpt}</select></label>
-      <label style="display:block"><span class="sub">装备名称 *</span><input id="rfName" maxlength="40" style="width:100%;margin-top:4px" value="${esc(r.name||'')}"></label>
-      <label style="display:block"><span class="sub">日租金（元/天）</span><input id="rfDaily" type="number" min="0" step="0.01" style="width:100%;margin-top:4px" value="${r.daily_price||0}"></label>
-      <label style="display:block"><span class="sub">押金（元）</span><input id="rfDep" type="number" min="0" step="0.01" style="width:100%;margin-top:4px" value="${r.deposit||0}"></label>
-      <label style="display:block"><span class="sub">可租数量</span><input id="rfQty" type="number" min="0" style="width:100%;margin-top:4px" value="${r.available_qty||0}"></label>
-      <label style="display:block"><span class="sub">封面图 URL（可空）</span><input id="rfCover" maxlength="300" style="width:100%;margin-top:4px" value="${esc(r.cover_url||'')}"></label>
-      <label style="display:block"><span class="sub">状态</span><select id="rfStatus" style="width:100%;margin-top:4px"><option value="active" ${r.status!=='inactive'?'selected':''}>启用</option><option value="inactive" ${r.status==='inactive'?'selected':''}>停用</option></select></label>
-    </div>
-    <div style="margin-top:12px"><div class="sub">描述</div><textarea id="rfDesc" rows="2" maxlength="300" style="width:100%;margin-top:6px">${esc(r.description||'')}</textarea></div>
-    <div style="margin-top:12px"><div class="sub">规格属性（每行一项，可选）</div><textarea id="rfAttr" rows="2" style="width:100%;margin-top:6px" placeholder="双人帐&#10;含防潮垫">${attrs.join('\n')}</textarea></div>
-    <div style="margin-top:14px;display:flex;gap:10px">
-      <button class="btn" type="button" onclick="saveRental(${id||0})">${id?'保存修改':'创建'}</button>
-      <button class="btn ghost" type="button" onclick="loadCampRental()">取消</button>
-      <span class="sub" id="rfTip"></span></div></div>`;
+  const r=(id&&CAMP_RENTAL.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,name:'',cover_url:'',description:'',daily_price:0,deposit:0,available_qty:0,attributes_json:'',status:'active'};
+  _openForm(id?'编辑租赁装备':'新增租赁装备','押金在离营时退还；租赁下单与营位预订共用 C 端营地页。',[
+    _campField(),{name:'name',label:'装备名称 *',value:r.name},
+    {name:'dailyPrice',label:'日租金（元/天）',type:'number',min:0,step:0.01,value:r.daily_price||0},
+    {name:'deposit',label:'押金（元）',type:'number',min:0,step:0.01,value:r.deposit||0},
+    {name:'availableQty',label:'可租数量',type:'number',min:0,value:r.available_qty||0},
+    {name:'status',label:'状态',type:'select',value:r.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
+    {name:'coverUrl',label:'封面图 URL（可空）',value:r.cover_url,full:true},
+    {name:'description',label:'描述',type:'textarea',value:r.description,full:true},
+    {name:'attributes',label:'规格属性（每行一项）',type:'textarea',value:_j(r.attributes_json,[]).join('\n'),full:true}
+  ],ov=>saveRental(id,ov));
 };
-window.saveRental=async function(id){
-  const name=$('#rfName')?.value.trim(); if(!name){showAlert({title:'请填写装备名称'});return;}
-  const payload={
-    campId:Number($('#rfCamp')?.value||0), name,
-    coverUrl:$('#rfCover')?.value.trim()||'',
-    description:$('#rfDesc')?.value.trim()||'',
-    dailyPrice:Number($('#rfDaily')?.value||0),
-    deposit:Number($('#rfDep')?.value||0),
-    availableQty:Math.max(0,Number($('#rfQty')?.value||0)),
-    attributes:($('#rfAttr')?.value||'').split('\n').map(t=>t.trim()).filter(Boolean).slice(0,20),
-    status:$('#rfStatus')?.value||'active'
-  };
-  const tip=$('#rfTip'); if(tip)tip.textContent='';
+window.saveRental=async function(id,ov){
+  ov=ov||CA_OV;if(!ov)return;
+  const name=_fv(ov,'name');if(!name){toast('请填写装备名称');return;}
+  const payload={campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name,coverUrl:_fv(ov,'coverUrl'),description:_fv(ov,'description'),
+    dailyPrice:Number(_fv(ov,'dailyPrice')||0),deposit:Number(_fv(ov,'deposit')||0),
+    availableQty:Math.max(0,Number(_fv(ov,'availableQty')||0)),attributes:_lines(ov,'attributes'),status:_fv(ov,'status')||'active'};
   try{
-    if(id){ await api(`/api/club/${CLUB}/rental-items/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); toast('租赁装备已更新'); }
-    else { await api(`/api/club/${CLUB}/rental-items`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); toast('租赁装备已创建'); }
-    await loadCampRental();
+    if(id)await api(`/api/club/${CLUB}/rental-items/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    else await api(`/api/club/${CLUB}/rental-items`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    ov.uxClose();toast(id?'装备已更新':'装备已创建');await campTab('rental');
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
 };
 window.deleteRental=async function(id){
-  const ok=await showConfirm({title:'删除租赁装备',message:'确定删除该租赁装备？',danger:true});
-  if(!ok)return;
-  try{ await api(`/api/club/${CLUB}/rental-items/${id}`,{method:'DELETE'}); toast('已删除'); await loadCampRental(); }
+  const ok=await showConfirm({title:'删除租赁装备',message:'确定删除该租赁装备？',danger:true});if(!ok)return;
+  try{await api(`/api/club/${CLUB}/rental-items/${id}`,{method:'DELETE'});toast('已删除');await campTab('rental');}
   catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}
 };
 
-/* ===================== 营地小站（camp_store_products，club 自营零售，与平台商城隔离）===================== */
+/* ===================== 营地小站（club 自营零售） ===================== */
 async function loadCampStore(){
-  const box=$('#campPane'); if(!box)return;
-  box.innerHTML='<div class="sub">加载中…</div>';
-  let list;
-  try{ list=await api(`/api/club/${CLUB}/store-products?camp_id=0`,{cache:'no-store'}) }
-  catch(e){ box.innerHTML='<div class="sub">读取失败：'+(e.message||'')+'</div>'; return; }
-  CAMP_STORE=list||[];
-  const cards=(CAMP_STORE.length?CAMP_STORE:[]).map(s=>`
-    <div class="list-row">
-      <div class="list-row__main"><div class="list-row__title">${esc(s.name||'')} <span class="tag">${campName(s.camp_id)}</span> ${s.status==='active'?'':'<span class="tag">停用</span>'}</div>
-      <div class="list-row__sub">¥${s.price||0} · 库存 ${s.stock||0} · ${esc(s.category||'未分类')}</div></div>
-      <div class="list-row__end"><button class="btn ghost" type="button" onclick="editStore(${s.id})">编辑</button><button class="btn ghost" type="button" onclick="deleteStore(${s.id})">删除</button></div>
-    </div>`).join('');
-  box.innerHTML=`<div class="card section"><div class="panel-title"><div><h3>营地小站</h3><div class="sub">营地自营零售（饮料、食材、配件等），club 域，与平台商城隔离。</div></div><button class="btn" type="button" onclick="editStore(0)">＋ 新增商品</button></div>
-    <div id="storeRows">${cards||'<div class="empty">还没有小站商品，点「新增」开始。</div>'}</div>
-    <div id="storeForm"></div></div>`;
+  const box=$('#campPane');if(!box)return;
+  if(!CA_CAMP_ID){box.innerHTML='<div class="ca-empty"><b>请先创建营地</b>小站商品需归属具体营地。</div>';return;}
+  try{CAMP_STORE=await api(`/api/club/${CLUB}/store-products?camp_id=${CA_CAMP_ID}`,{cache:'no-store'})||[];}
+  catch(e){box.innerHTML=`<div class="ca-empty">读取失败：${esc(e.message||'')}</div>`;return;}
+  box.innerHTML=_listCard({title:`营地小站 · ${esc(_campName(CA_CAMP_ID))}`,
+    desc:'营地自营零售（饮料、食材、配件等），属于 club 域，与平台商城的装备售卖隔离。',
+    newFn:'editStore(0)',newLabel:'新增商品',
+    rowsFn:()=>CAMP_STORE.filter(s=>_match(s.name)||_match(s.category)).map(s=>_item(s.name,
+      [`<span class="ca-tag">${esc(_campName(s.camp_id))}</span>`,`<span class="ca-tag grey">${esc(s.category||'未分类')}</span>`,
+       s.status==='active'?'':'<span class="ca-tag red">已停用</span>'].join(''),
+      `售价 <b>¥${_money(s.price)}</b> · 库存 ${s.stock||0} 件`,
+      `editStore(${s.id})`,`deleteStore(${s.id})`)).join(''),
+    emptyTitle:'还没有小站商品',emptySub:'饮料、烧烤食材、一次性用品等现场零售商品放这里。'});
 }
 window.editStore=function(id){
-  const s=(id&&CAMP_STORE.find(x=>x.id===id))||{camp_id:0,name:'',cover_url:'',price:0,stock:0,category:'',status:'active'};
-  const form=$('#storeForm'); if(!form)return;
-  const campOpt=CAMP_PROFILES.map(c=>`<option value="${c.id}" ${(s.camp_id||0)===c.id?'selected':''}>${esc(c.name||'')}</option>`).join('');
-  form.innerHTML=`<div class="card section" style="margin-top:14px"><div class="panel-title"><h3>${id?'编辑商品':'新增商品'}</h3></div>
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
-      <label style="display:block"><span class="sub">所属营地 *</span><select id="sfCamp" style="width:100%;margin-top:4px">${campOpt}</select></label>
-      <label style="display:block"><span class="sub">商品名称 *</span><input id="sfName" maxlength="40" style="width:100%;margin-top:4px" value="${esc(s.name||'')}"></label>
-      <label style="display:block"><span class="sub">售价（元）</span><input id="sfPrice" type="number" min="0" step="0.01" style="width:100%;margin-top:4px" value="${s.price||0}"></label>
-      <label style="display:block"><span class="sub">库存</span><input id="sfStock" type="number" min="0" style="width:100%;margin-top:4px" value="${s.stock||0}"></label>
-      <label style="display:block"><span class="sub">分类</span><input id="sfCat" maxlength="20" style="width:100%;margin-top:4px" value="${esc(s.category||'')}" placeholder="饮料 / 食材 / 配件"></label>
-      <label style="display:block"><span class="sub">封面图 URL（可空）</span><input id="sfCover" maxlength="300" style="width:100%;margin-top:4px" value="${esc(s.cover_url||'')}"></label>
-      <label style="display:block"><span class="sub">状态</span><select id="sfStatus" style="width:100%;margin-top:4px"><option value="active" ${s.status!=='inactive'?'selected':''}>启用</option><option value="inactive" ${s.status==='inactive'?'selected':''}>停用</option></select></label>
-    </div>
-    <div style="margin-top:14px;display:flex;gap:10px">
-      <button class="btn" type="button" onclick="saveStore(${id||0})">${id?'保存修改':'创建'}</button>
-      <button class="btn ghost" type="button" onclick="loadCampStore()">取消</button>
-      <span class="sub" id="sfTip"></span></div></div>`;
+  const s=(id&&CAMP_STORE.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,name:'',cover_url:'',price:0,stock:0,category:'',status:'active'};
+  _openForm(id?'编辑小站商品':'新增小站商品','小站商品按件售卖，不计入营位房态。',[
+    _campField(),{name:'name',label:'商品名称 *',value:s.name},
+    {name:'price',label:'售价（元）',type:'number',min:0,step:0.01,value:s.price||0},
+    {name:'stock',label:'库存（件）',type:'number',min:0,value:s.stock||0},
+    {name:'category',label:'分类',value:s.category,placeholder:'饮料 / 食材 / 配件'},
+    {name:'status',label:'状态',type:'select',value:s.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
+    {name:'coverUrl',label:'封面图 URL（可空）',value:s.cover_url,full:true}
+  ],ov=>saveStore(id,ov));
 };
-window.saveStore=async function(id){
-  const name=$('#sfName')?.value.trim(); if(!name){showAlert({title:'请填写商品名称'});return;}
-  const payload={
-    campId:Number($('#sfCamp')?.value||0), name,
-    coverUrl:$('#sfCover')?.value.trim()||'',
-    price:Number($('#sfPrice')?.value||0),
-    stock:Math.max(0,Number($('#sfStock')?.value||0)),
-    category:$('#sfCat')?.value.trim()||'',
-    status:$('#sfStatus')?.value||'active'
-  };
-  const tip=$('#sfTip'); if(tip)tip.textContent='';
+window.saveStore=async function(id,ov){
+  ov=ov||CA_OV;if(!ov)return;
+  const name=_fv(ov,'name');if(!name){toast('请填写商品名称');return;}
+  const payload={campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name,coverUrl:_fv(ov,'coverUrl'),
+    price:Number(_fv(ov,'price')||0),stock:Math.max(0,Number(_fv(ov,'stock')||0)),
+    category:_fv(ov,'category'),status:_fv(ov,'status')||'active'};
   try{
-    if(id){ await api(`/api/club/${CLUB}/store-products/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); toast('商品已更新'); }
-    else { await api(`/api/club/${CLUB}/store-products`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); toast('商品已创建'); }
-    await loadCampStore();
+    if(id)await api(`/api/club/${CLUB}/store-products/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    else await api(`/api/club/${CLUB}/store-products`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    ov.uxClose();toast(id?'商品已更新':'商品已创建');await campTab('store');
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
 };
 window.deleteStore=async function(id){
-  const ok=await showConfirm({title:'删除商品',message:'确定删除该小站商品？',danger:true});
-  if(!ok)return;
-  try{ await api(`/api/club/${CLUB}/store-products/${id}`,{method:'DELETE'}); toast('已删除'); await loadCampStore(); }
+  const ok=await showConfirm({title:'删除商品',message:'确定删除该小站商品？',danger:true});if(!ok)return;
+  try{await api(`/api/club/${CLUB}/store-products/${id}`,{method:'DELETE'});toast('已删除');await campTab('store');}
   catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}
 };
 
-/* ===================== 营地活动票（camp_activity_tickets，电子票+核销）===================== */
+/* ===================== 营地活动票 ===================== */
 async function loadCampTickets(){
-  const box=$('#campPane'); if(!box)return;
-  box.innerHTML='<div class="sub">加载中…</div>';
-  let list;
-  try{ list=await api(`/api/club/${CLUB}/tickets?camp_id=0`,{cache:'no-store'}) }
-  catch(e){ box.innerHTML='<div class="sub">读取失败：'+(e.message||'')+'</div>'; return; }
-  CAMP_TICKETS=list||[];
-  const cards=(CAMP_TICKETS.length?CAMP_TICKETS:[]).map(t=>{
-    const et={single:'单次入场',multi:'多次入场'}[t.entry_type]||t.entry_type;
-    return `<div class="list-row">
-      <div class="list-row__main"><div class="list-row__title">${esc(t.title||'')} <span class="tag">${campName(t.camp_id)}</span> <span class="tag">${et}</span> ${t.status==='open'?'':'<span class="tag">已关闭</span>'}</div>
-      <div class="list-row__sub">¥${t.price||0} · 活动日 ${esc(t.event_date||'-')} · 已售 ${t.sold||0}/${t.capacity||0}${t.valid_from?' · 有效 '+esc(t.valid_from)+'~'+esc(t.valid_to||''):''}</div></div>
-      <div class="list-row__end"><button class="btn ghost" type="button" onclick="editTicket(${t.id})">编辑</button><button class="btn ghost" type="button" onclick="deleteTicket(${t.id})">删除</button></div>
-    </div>`;
-  }).join('');
-  box.innerHTML=`<div class="card section"><div class="panel-title"><div><h3>营地活动票</h3><div class="sub">营地自营活动电子票，支持单次/多次入场，可设活动日与有效期限，售出门票可线下核销。与俱乐部普通活动（场次报名）分离。</div></div><button class="btn" type="button" onclick="editTicket(0)">＋ 新增活动票</button></div>
-    <div id="ticketRows">${cards||'<div class="empty">还没有活动票，点「新增」开始。</div>'}</div>
-    <div id="ticketForm"></div></div>`;
+  const box=$('#campPane');if(!box)return;
+  if(!CA_CAMP_ID){box.innerHTML='<div class="ca-empty"><b>请先创建营地</b>活动票需归属具体营地。</div>';return;}
+  try{CAMP_TICKETS=await api(`/api/club/${CLUB}/tickets?camp_id=${CA_CAMP_ID}`,{cache:'no-store'})||[];}
+  catch(e){box.innerHTML=`<div class="ca-empty">读取失败：${esc(e.message||'')}</div>`;return;}
+  box.innerHTML=_listCard({title:`活动票 · ${esc(_campName(CA_CAMP_ID))}`,
+    desc:'营地自营活动电子票，支持单次/多次入场；与普通俱乐部活动（场次报名）分离，售出门票可线下核销。',
+    newFn:'editTicket(0)',newLabel:'新增活动票',
+    rowsFn:()=>CAMP_TICKETS.filter(t=>_match(t.title)).map(t=>_item(t.title,
+      [`<span class="ca-tag">${esc(_campName(t.camp_id))}</span>`,`<span class="ca-tag grey">${t.entry_type==='multi'?'多次入场':'单次入场'}</span>`,
+       t.status==='open'?'':'<span class="ca-tag red">已关闭</span>'].join(''),
+      `票价 <b>¥${_money(t.price)}</b> · 活动日 ${esc(t.event_date||'-')} · 已售 ${t.sold||0}/${t.capacity||0}`,
+      `editTicket(${t.id})`,`deleteTicket(${t.id})`)).join(''),
+    emptyTitle:'还没有活动票',emptySub:'篝火晚会、亲子体验、景区联票等都可以这里上架。'});
 }
 window.editTicket=function(id){
-  const t=(id&&CAMP_TICKETS.find(x=>x.id===id))||{camp_id:0,title:'',event_date:'',price:0,capacity:0,entry_type:'single',valid_from:'',valid_to:'',status:'open'};
-  const form=$('#ticketForm'); if(!form)return;
-  const campOpt=CAMP_PROFILES.map(c=>`<option value="${c.id}" ${(t.camp_id||0)===c.id?'selected':''}>${esc(c.name||'')}</option>`).join('');
-  form.innerHTML=`<div class="card section" style="margin-top:14px"><div class="panel-title"><h3>${id?'编辑活动票':'新增活动票'}</h3></div>
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
-      <label style="display:block"><span class="sub">所属营地 *</span><select id="tfCamp" style="width:100%;margin-top:4px">${campOpt}</select></label>
-      <label style="display:block"><span class="sub">票名 *</span><input id="tfTitle" maxlength="40" style="width:100%;margin-top:4px" value="${esc(t.title||'')}"></label>
-      <label style="display:block"><span class="sub">活动日</span><input id="tfDate" type="date" style="width:100%;margin-top:4px" value="${esc(t.event_date||'')}"></label>
-      <label style="display:block"><span class="sub">票价（元）</span><input id="tfPrice" type="number" min="0" step="0.01" style="width:100%;margin-top:4px" value="${t.price||0}"></label>
-      <label style="display:block"><span class="sub">总票数（0=不限）</span><input id="tfCap" type="number" min="0" style="width:100%;margin-top:4px" value="${t.capacity||0}"></label>
-      <label style="display:block"><span class="sub">入场类型</span><select id="tfType" style="width:100%;margin-top:4px"><option value="single" ${t.entry_type!=='multi'?'selected':''}>单次入场</option><option value="multi" ${t.entry_type==='multi'?'selected':''}>多次入场</option></select></label>
-      <label style="display:block"><span class="sub">有效起（可空）</span><input id="tfFrom" type="date" style="width:100%;margin-top:4px" value="${esc(t.valid_from||'')}"></label>
-      <label style="display:block"><span class="sub">有效止（可空）</span><input id="tfTo" type="date" style="width:100%;margin-top:4px" value="${esc(t.valid_to||'')}"></label>
-      <label style="display:block"><span class="sub">状态</span><select id="tfStatus" style="width:100%;margin-top:4px"><option value="open" ${t.status!=='closed'?'selected':''}>售票中</option><option value="closed" ${t.status==='closed'?'selected':''}>已关闭</option></select></label>
-    </div>
-    <div style="margin-top:14px;display:flex;gap:10px">
-      <button class="btn" type="button" onclick="saveTicket(${id||0})">${id?'保存修改':'创建'}</button>
-      <button class="btn ghost" type="button" onclick="loadCampTickets()">取消</button>
-      <span class="sub" id="tfTip"></span></div></div>`;
+  const t=(id&&CAMP_TICKETS.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,title:'',event_date:'',price:0,capacity:0,entry_type:'single',valid_from:'',valid_to:'',status:'open'};
+  _openForm(id?'编辑活动票':'新增活动票','票不占用营位房态，可与营位预订同时购买。',[
+    _campField(),{name:'title',label:'票名 *',value:t.title},
+    {name:'eventDate',label:'活动日',type:'date',value:t.event_date},
+    {name:'price',label:'票价（元）',type:'number',min:0,step:0.01,value:t.price||0},
+    {name:'capacity',label:'总票数（0=不限）',type:'number',min:0,value:t.capacity||0},
+    {name:'entryType',label:'入场类型',type:'select',value:t.entry_type||'single',options:[{value:'single',label:'单次入场'},{value:'multi',label:'多次入场'}]},
+    {name:'validFrom',label:'有效起（可空）',type:'date',value:t.valid_from},
+    {name:'validTo',label:'有效止（可空）',type:'date',value:t.valid_to},
+    {name:'status',label:'状态',type:'select',value:t.status||'open',options:[{value:'open',label:'售票中'},{value:'closed',label:'已关闭'}]}
+  ],ov=>saveTicket(id,ov));
 };
-window.saveTicket=async function(id){
-  const title=$('#tfTitle')?.value.trim(); if(!title){showAlert({title:'请填写票名'});return;}
-  const payload={
-    campId:Number($('#tfCamp')?.value||0), title,
-    eventDate:$('#tfDate')?.value||'',
-    price:Number($('#tfPrice')?.value||0),
-    capacity:Math.max(0,Number($('#tfCap')?.value||0)),
-    entryType:$('#tfType')?.value||'single',
-    validFrom:$('#tfFrom')?.value||'',
-    validTo:$('#tfTo')?.value||'',
-    status:$('#tfStatus')?.value||'open'
-  };
-  const tip=$('#tfTip'); if(tip)tip.textContent='';
+window.saveTicket=async function(id,ov){
+  ov=ov||CA_OV;if(!ov)return;
+  const title=_fv(ov,'title');if(!title){toast('请填写票名');return;}
+  const payload={campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,title,eventDate:_fv(ov,'eventDate'),
+    price:Number(_fv(ov,'price')||0),capacity:Math.max(0,Number(_fv(ov,'capacity')||0)),
+    entryType:_fv(ov,'entryType')||'single',validFrom:_fv(ov,'validFrom'),validTo:_fv(ov,'validTo'),
+    status:_fv(ov,'status')||'open'};
   try{
-    if(id){ await api(`/api/club/${CLUB}/tickets/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); toast('活动票已更新'); }
-    else { await api(`/api/club/${CLUB}/tickets`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); toast('活动票已创建'); }
-    await loadCampTickets();
+    if(id)await api(`/api/club/${CLUB}/tickets/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    else await api(`/api/club/${CLUB}/tickets`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    ov.uxClose();toast(id?'活动票已更新':'活动票已创建');await campTab('tickets');
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
 };
 window.deleteTicket=async function(id){
-  const ok=await showConfirm({title:'删除活动票',message:'确定删除该活动票？已售出的记录不受影响。',danger:true});
-  if(!ok)return;
-  try{ await api(`/api/club/${CLUB}/tickets/${id}`,{method:'DELETE'}); toast('已删除'); await loadCampTickets(); }
+  const ok=await showConfirm({title:'删除活动票',message:'确定删除该活动票？已售出的记录不受影响。',danger:true});if(!ok)return;
+  try{await api(`/api/club/${CLUB}/tickets/${id}`,{method:'DELETE'});toast('已删除');await campTab('tickets');}
   catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}
 };
