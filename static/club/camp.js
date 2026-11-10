@@ -1,29 +1,35 @@
 /* ===========================================================================
- * ClubOS 营地经营 · 俱乐部后台（2026-11-10 PMS 化重构 v2）
+ * ClubOS 营地经营 · 俱乐部后台（2026-11-11 v3）
  * 借鉴酒店 PMS 的成熟交互（不引入任何第三方代码）：
  *   Dashboard KPI → tape chart 房态带（营位为行 / 日期为列 / 状态图例 / 今日高亮）
  *   → 弹层表单（不再把长表单塞在列表下面）→ 搜索筛选与空态 → 批量封锁/改价。
  * 样式见 camp-admin.css（ca- 前缀），不修改任何共用 CSS。
  *
- * 后端契约（未改动）：
+ * v3 变更：
+ *   - 移除「活动票」栏目（营地活动直接复用原活动模块；后端表与接口保留兼容）
+ *   - 新增「营地订单」「会员权益」栏目
+ *   - 营位 / 租赁装备 / 小站商品表单补齐 C 端高标准详情页所需的图文字段
+ *   - 三类商品统一复用原活动会员体系（等级折扣 / 积分 / 券 / 消费送积分）
+ *
+ * 后端契约：
  *   GET/PATCH /api/club/{CLUB}/module-switches
+ *   GET/PATCH /api/club/{CLUB}/camp-benefits        v3 会员权益开关
+ *   GET       /api/club/{CLUB}/camp-orders          v3 统一营地订单
  *   GET/POST/PATCH/DELETE /api/club/{CLUB}/camps[/{id}]
  *   GET/POST/PATCH/DELETE /api/club/{CLUB}/pitches[/{id}]        ?camp_id= 必传真实营地 id
  *   GET/POST /api/club/{CLUB}/pitch-status                       封锁 / 解锁 / 临时改价
  *   GET /api/public/clubs/{CLUB}/camp-availability                ?camp_id&start&end
- *   GET /api/club/{CLUB}/camp-bookings                           ?camp_id 必传真实营地 id
- *   GET/POST/PATCH/DELETE /api/club/{CLUB}/rental-items|store-products|tickets
+ *   GET/POST/PATCH/DELETE /api/club/{CLUB}/rental-items|store-products
  *
  * ★ v2 修复：旧版所有后台列表一律传 camp_id=0，而后端是 `WHERE camp_id=?`，
- *   导致关联了真实营地的营位/租赁/小站/票在后台「建完就消失」。v2 统一按
- *   当前工作台营地（CA_CAMP_ID）查询，顶部下拉可切换营地。
+ *   导致关联了真实营地的营位/租赁/小站在后台「建完就消失」。统一按 CA_CAMP_ID 查询。
  * ===========================================================================*/
 
 let MODSW=null;                 // 经营业态开关缓存
 let CAMP_PROFILES=[];           // 营地档案
 let CAMP_PITCHES=[];            // 当前营地营位
 let CAMP_TAB='overview';        // 当前子页
-let CAMP_RENTAL=[],CAMP_STORE=[],CAMP_TICKETS=[];
+let CAMP_RENTAL=[],CAMP_STORE=[],CAMP_ORDERS=[],CAMP_BENEFITS=null;
 let CA_CAMP_ID=0;               // 工作台当前营地（列表与房态共用）
 let CA_START='',CA_END='';      // tape chart 日期窗口
 let CA_AVAIL=null,CA_BOOKINGS=[];
@@ -110,7 +116,7 @@ async function loadCamp(){
   if(!MODSW||!MODSW.camp){
     root.innerHTML=`<div class="ca"><div class="ca-card" style="border-left:3px solid #b67816">
       <div class="ca-card__t">营地经营 · 未开启</div>
-      <div class="ca-card__s">本板块需在「俱乐部设置 → 经营业态开关」中开启「营地」后才能编辑。开启后可管理：营地档案、营位与按日期的房态（过夜跨日锁）、装备租赁、营地小站、活动票。</div>
+      <div class="ca-card__s">本板块需在「俱乐部设置 → 经营业态开关」中开启「营地」后才能编辑。开启后可管理：营地档案、营位与按日期的房态（过夜跨日锁）、装备租赁、营地小站，以及统一营地订单与会员权益配置。</div>
       <div style="margin-top:14px"><button class="ca-btn" type="button" onclick="go('settings')">前往开启营地开关 →</button></div>
     </div></div>`;
     return;
@@ -118,7 +124,8 @@ async function loadCamp(){
   if(!CA_START){CA_START=_today();CA_END=_addDay(CA_START,13);}
   const tabs=[
     ['overview','工作台 · 房态'],['pitches','营位管理'],['profiles','营地档案'],
-    ['rental','装备租赁'],['store','营地小站'],['tickets','活动票']
+    ['rental','装备租赁'],['store','营地小站'],
+    ['orders','营地订单'],['benefits','会员权益']
   ];
   root.innerHTML=`<div class="ca">
     <div class="ca-bar">
@@ -142,7 +149,8 @@ window.campTab=async function(t){
   document.querySelectorAll('#campTabs .ca-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('data-t')===t));
   CA_SEARCH='';CA_ROWS_FN=null;
   const fn={overview:loadOverview,pitches:loadCampPitches,profiles:loadCampProfiles,
-            rental:loadCampRental,store:loadCampStore,tickets:loadCampTickets}[t];
+            rental:loadCampRental,store:loadCampStore,
+            orders:loadCampOrders,benefits:loadCampBenefits}[t];
   if(fn)await fn();
 };
 window.caSetCamp=async function(v){CA_CAMP_ID=Number(v)||0;CA_SEL.clear();await campTab(CAMP_TAB);};
@@ -351,6 +359,34 @@ function _fv(ov,n){const e=ov.querySelector('#f_'+n);return e?String(e.value).tr
 function _fn(ov,n){const v=_fv(ov,n);return v===''?null:Number(v);}
 function _lines(ov,n){return _fv(ov,n).split('\n').map(t=>t.trim()).filter(Boolean).slice(0,20);}
 function _campField(label='所属营地'){return {name:'campId',label,type:'select',value:CA_CAMP_ID,options:CAMP_PROFILES.map(c=>({value:c.id,label:c.name}))};}
+/* v3：C 端高标准详情页所需字段，三类商品共用一套录入口径（后台列表返回 snake_case + json 字符串） */
+function _detailFields(x){
+  const arr=v=>Array.isArray(v)?v:_j(v,[]);
+  return [
+    {name:'coverUrl',label:'封面图 URL（留空显示营地山景兜底）',value:x.cover_url||'',full:true},
+    {name:'gallery',label:'图集 URL（每行一张，详情页可左右滑）',type:'textarea',rows:2,
+     value:arr(x.gallery_json).join('\n'),full:true},
+    {name:'subtitle',label:'副标题 / 一句话卖点',value:x.subtitle||''},
+    {name:'originalPrice',label:'划线原价（元，0=不显示）',type:'number',min:0,step:0.01,value:x.original_price||0},
+    {name:'unitLabel',label:'计价单位文案',value:x.unit_label||'',placeholder:'/晚 · /天 · /件'},
+    {name:'specs',label:'规格参数（每行 标签=值）',type:'textarea',rows:3,
+     value:arr(x.specs_json).map(v=>(v&&typeof v==='object')?((v.label||'')+'='+(v.value||'')):String(v)).join('\n'),full:true},
+    {name:'facilities',label:'设施与服务（每行一项）',type:'textarea',rows:2,
+     value:arr(x.facilities_json).map(v=>(v&&typeof v==='object')?(v.name||v.title||''):String(v)).join('\n'),full:true},
+    {name:'policies',label:'预订须知（每行 标题|说明）',type:'textarea',rows:3,
+     value:arr(x.policies_json).map(v=>(v&&typeof v==='object')?((v.title||'')+'|'+(v.text||'')):String(v)).join('\n'),full:true},
+    {name:'description',label:'简介 / 列表副文案',type:'textarea',rows:2,value:x.description||'',full:true},
+    {name:'detailText',label:'商品图文详情（可分段，每行一段）',type:'textarea',rows:4,value:x.detail_text||'',full:true}
+  ];
+}
+function _detailPayload(ov){
+  const specs=_lines(ov,'specs').map(t=>{const i=t.indexOf('=');return i>0?{label:t.slice(0,i).trim(),value:t.slice(i+1).trim()}:{label:'规格',value:t};});
+  const pol=_lines(ov,'policies').map(t=>{const i=t.indexOf('|');return i>0?{title:t.slice(0,i).trim(),text:t.slice(i+1).trim()}:{title:t,text:''};});
+  return {coverUrl:_fv(ov,'coverUrl'),gallery:_lines(ov,'gallery'),specs:specs,
+    facilities:_lines(ov,'facilities'),policies:pol,subtitle:_fv(ov,'subtitle'),
+    description:_fv(ov,'description'),detailText:_fv(ov,'detailText'),
+    originalPrice:Number(_fv(ov,'originalPrice')||0),unitLabel:_fv(ov,'unitLabel')};
+}
 
 /* ===================== 营地档案 ===================== */
 async function loadCampProfiles(){
@@ -428,7 +464,8 @@ window.editPitch=function(id){
     {name:'basePrice',label:'平日价（元/天）',type:'number',min:0,step:0.01,value:p.base_price||0},
     {name:'weekendPrice',label:'周末价（留空=同平日）',type:'number',min:0,step:0.01,value:p.weekend_price==null?'':p.weekend_price},
     {name:'holidayPrice',label:'节假日价（留空=同平日）',type:'number',min:0,step:0.01,value:p.holiday_price==null?'':p.holiday_price},
-    {name:'status',label:'状态',type:'select',value:p.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]}
+    {name:'status',label:'状态',type:'select',value:p.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
+    ..._detailFields(p)
   ],ov=>savePitch(id,ov));
 };
 window.pfTypeChange=function(v){const el=CA_OV&&CA_OV.querySelector('#f_isOvernight');if(el)el.value=(v==='day')?'0':'1';};
@@ -439,6 +476,7 @@ window.savePitch=async function(id,ov){
     pitchType:_fv(ov,'pitchType')||'tent',isOvernight:Number(_fv(ov,'isOvernight')||0),
     capacity:Math.max(1,Number(_fv(ov,'capacity')||1)),basePrice:Number(_fv(ov,'basePrice')||0),
     weekendPrice:_fn(ov,'weekendPrice'),holidayPrice:_fn(ov,'holidayPrice'),status:_fv(ov,'status')||'active'};
+  Object.assign(payload,_detailPayload(ov));
   try{
     if(id)await api(`/api/club/${CLUB}/pitches/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     else await api(`/api/club/${CLUB}/pitches`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -475,9 +513,8 @@ window.editRental=function(id){
     {name:'deposit',label:'押金（元）',type:'number',min:0,step:0.01,value:r.deposit||0},
     {name:'availableQty',label:'可租数量',type:'number',min:0,value:r.available_qty||0},
     {name:'status',label:'状态',type:'select',value:r.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
-    {name:'coverUrl',label:'封面图 URL（可空）',value:r.cover_url,full:true},
-    {name:'description',label:'描述',type:'textarea',value:r.description,full:true},
-    {name:'attributes',label:'规格属性（每行一项）',type:'textarea',value:_j(r.attributes_json,[]).join('\n'),full:true}
+    {name:'attributes',label:'规格属性（每行一项）',type:'textarea',value:_j(r.attributes_json,[]).join('\n'),full:true},
+    ..._detailFields(r)
   ],ov=>saveRental(id,ov));
 };
 window.saveRental=async function(id,ov){
@@ -486,6 +523,7 @@ window.saveRental=async function(id,ov){
   const payload={campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name,coverUrl:_fv(ov,'coverUrl'),description:_fv(ov,'description'),
     dailyPrice:Number(_fv(ov,'dailyPrice')||0),deposit:Number(_fv(ov,'deposit')||0),
     availableQty:Math.max(0,Number(_fv(ov,'availableQty')||0)),attributes:_lines(ov,'attributes'),status:_fv(ov,'status')||'active'};
+  Object.assign(payload,_detailPayload(ov));
   try{
     if(id)await api(`/api/club/${CLUB}/rental-items/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     else await api(`/api/club/${CLUB}/rental-items`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -522,7 +560,7 @@ window.editStore=function(id){
     {name:'stock',label:'库存（件）',type:'number',min:0,value:s.stock||0},
     {name:'category',label:'分类',value:s.category,placeholder:'饮料 / 食材 / 配件'},
     {name:'status',label:'状态',type:'select',value:s.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
-    {name:'coverUrl',label:'封面图 URL（可空）',value:s.cover_url,full:true}
+    ..._detailFields(s)
   ],ov=>saveStore(id,ov));
 };
 window.saveStore=async function(id,ov){
@@ -531,6 +569,7 @@ window.saveStore=async function(id,ov){
   const payload={campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name,coverUrl:_fv(ov,'coverUrl'),
     price:Number(_fv(ov,'price')||0),stock:Math.max(0,Number(_fv(ov,'stock')||0)),
     category:_fv(ov,'category'),status:_fv(ov,'status')||'active'};
+  Object.assign(payload,_detailPayload(ov));
   try{
     if(id)await api(`/api/club/${CLUB}/store-products/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     else await api(`/api/club/${CLUB}/store-products`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -543,50 +582,77 @@ window.deleteStore=async function(id){
   catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}
 };
 
-/* ===================== 营地活动票 ===================== */
-async function loadCampTickets(){
+/* ===================== 营地订单（v3 统一订单，只读） ===================== */
+const CA_ORDER_ST={pending_payment:'待支付',paid:'已支付',cancelled:'已取消',expired:'已超时'};
+async function loadCampOrders(){
   const box=$('#campPane');if(!box)return;
-  if(!CA_CAMP_ID){box.innerHTML='<div class="ca-empty"><b>请先创建营地</b>活动票需归属具体营地。</div>';return;}
-  try{CAMP_TICKETS=await api(`/api/club/${CLUB}/tickets?camp_id=${CA_CAMP_ID}`,{cache:'no-store'})||[];}
+  try{const d=await api(`/api/club/${CLUB}/camp-orders`,{cache:'no-store'})||{};CAMP_ORDERS=d.orders||[];}
   catch(e){box.innerHTML=`<div class="ca-empty">读取失败：${esc(e.message||'')}</div>`;return;}
-  box.innerHTML=_listCard({title:`活动票 · ${esc(_campName(CA_CAMP_ID))}`,
-    desc:'营地自营活动电子票，支持单次/多次入场；与普通俱乐部活动（场次报名）分离，售出门票可线下核销。',
-    newFn:'editTicket(0)',newLabel:'新增活动票',
-    rowsFn:()=>CAMP_TICKETS.filter(t=>_match(t.title)).map(t=>_item(t.title,
-      [`<span class="ca-tag">${esc(_campName(t.camp_id))}</span>`,`<span class="ca-tag grey">${t.entry_type==='multi'?'多次入场':'单次入场'}</span>`,
-       t.status==='open'?'':'<span class="ca-tag red">已关闭</span>'].join(''),
-      `票价 <b>¥${_money(t.price)}</b> · 活动日 ${esc(t.event_date||'-')} · 已售 ${t.sold||0}/${t.capacity||0}`,
-      `editTicket(${t.id})`,`deleteTicket(${t.id})`)).join(''),
-    emptyTitle:'还没有活动票',emptySub:'篝火晚会、亲子体验、景区联票等都可以这里上架。'});
+  const rows=CAMP_ORDERS.filter(o=>_match(o.orderNo)||_match(o.guestName)).map(o=>{
+    const st=o.status||'',items=(o.items||[]).map(x=>`${esc(x.title||'')} ×${x.qty}`).join('、');
+    return `<div class="ca-item"><div class="ca-item__top"><div class="ca-item__n">${esc(o.orderNo||'')}</div>
+      <span class="ca-tag ${st==='paid'?'':st==='pending_payment'?'amber':'grey'}">${esc(CA_ORDER_ST[st]||st)}</span></div>
+      <div class="ca-item__meta" style="margin-top:8px">
+        ${esc(o.createdAt||'')} · 联系人 ${esc(o.guestName||'')} ${esc(o.guestPhone||'')}<br>
+        ${items}<br>
+        商品 ¥${_money(o.goodsAmount)}${Number(o.memberDiscount)?' − 会员 ¥'+_money(o.memberDiscount):''}${Number(o.clubPointDiscount)?' − 积分 ¥'+_money(o.clubPointDiscount):''}${Number(o.voucherDiscount)?' − 券 ¥'+_money(o.voucherDiscount):''}${Number(o.depositAmount)?' + 押金 ¥'+_money(o.depositAmount):''}
+        · <b>合计 ¥${_money(o.total)}</b> · 送 ${Number(o.pointsEarned||0)} 积分
+      </div></div>`;
+  }).join('');
+  box.innerHTML=`<div class="ca-card"><div class="ca-card__head"><div>
+      <div class="ca-card__t">营地订单 · 共 ${CAMP_ORDERS.length} 笔</div>
+      <div class="ca-card__s">营位 / 租赁装备 / 小站商品统一进一张订单，金额与会员权益由系统重算。待支付订单 30 分钟未付款会自动释放房态与库存。</div></div>
+      <div class="ca-tools"><div class="ca-search"><input class="ca-input" type="search" placeholder="搜索订单号 / 联系人" oninput="caSearch(this.value)"></div>
+      <button class="ca-btn ghost sm" type="button" onclick="caReload()">↻ 刷新</button></div></div>
+    <div class="ca-list" id="caList">${rows||'<div class="ca-empty"><b>还没有营地订单</b>C 端下单后会显示在这里。</div>'}</div></div>`;
+  CA_ROWS_FN=()=>rows;
 }
-window.editTicket=function(id){
-  const t=(id&&CAMP_TICKETS.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,title:'',event_date:'',price:0,capacity:0,entry_type:'single',valid_from:'',valid_to:'',status:'open'};
-  _openForm(id?'编辑活动票':'新增活动票','票不占用营位房态，可与营位预订同时购买。',[
-    _campField(),{name:'title',label:'票名 *',value:t.title},
-    {name:'eventDate',label:'活动日',type:'date',value:t.event_date},
-    {name:'price',label:'票价（元）',type:'number',min:0,step:0.01,value:t.price||0},
-    {name:'capacity',label:'总票数（0=不限）',type:'number',min:0,value:t.capacity||0},
-    {name:'entryType',label:'入场类型',type:'select',value:t.entry_type||'single',options:[{value:'single',label:'单次入场'},{value:'multi',label:'多次入场'}]},
-    {name:'validFrom',label:'有效起（可空）',type:'date',value:t.valid_from},
-    {name:'validTo',label:'有效止（可空）',type:'date',value:t.valid_to},
-    {name:'status',label:'状态',type:'select',value:t.status||'open',options:[{value:'open',label:'售票中'},{value:'closed',label:'已关闭'}]}
-  ],ov=>saveTicket(id,ov));
+window.caOrderSearch=v=>caSearch(v);
+
+/* ===================== 营地会员权益（v3，复用原活动会员体系） ===================== */
+const CA_BENEFIT_ITEMS=[
+  ['memberDiscountEnabled','会员等级折扣','营位 / 租赁 / 商品按会员等级的活动折扣立减'],
+  ['pointsEnabled','积分抵用','允许使用活动积分按「X 分 = ¥1」抵扣营地商品'],
+  ['voucherEnabled','优惠券','营地商品可使用活动券池中的可用券'],
+  ['earnPointsEnabled','消费送积分','营地订单支付成功后按活动口径发放积分']
+];
+async function loadCampBenefits(){
+  const box=$('#campPane');if(!box)return;
+  try{CAMP_BENEFITS=await api(`/api/club/${CLUB}/camp-benefits`,{cache:'no-store'})||{};}
+  catch(e){box.innerHTML=`<div class="ca-empty">读取失败：${esc(e.message||'')}</div>`;return;}
+  const sw=CA_BENEFIT_ITEMS.map(([k,t,d])=>`<label class="ca-sw ${CAMP_BENEFITS[k]?'on':''}" data-cb="${k}">
+      <input type="checkbox" data-cb="${k}" ${CAMP_BENEFITS[k]?'checked':''} onchange="caBenefitToggle('${k}',this.checked)">
+      <span class="ca-sw__main"><span class="ca-sw__t">${t}</span><span class="ca-sw__s">${d}</span></span>
+      <span class="ca-sw__track"></span></label>`).join('');
+  box.innerHTML=`<div class="ca-card"><div class="ca-card__head"><div>
+      <div class="ca-card__t">营地会员权益</div>
+      <div class="ca-card__s">营地里的「房间 / 营位、租用装备、小站商品」全部适用原活动会员体系：会员等级折扣、积分抵用、优惠券与消费送积分共用同一套规则与账本，无需重复配置。</div></div></div>
+    <div class="ca-sw-grid" id="caBenefitGrid">${sw}</div>
+    <label class="ca-field" style="max-width:320px;margin-top:16px"><span>活动积分最多可抵扣订单比例（%）</span>
+      <input id="caBenefitPercent" type="number" min="0" max="100" step="1" value="${Number(CAMP_BENEFITS.clubPointsMaxDiscountPercent||100)}"></label>
+    <div class="ca-form__hint" style="margin-top:8px">设为 100 表示不额外限制；押金始终不参与折扣与积分抵扣。关闭某项后，C 端确认订单页会实时隐藏对应权益。</div>
+    <div style="margin-top:16px;display:flex;gap:10px;align-items:center">
+      <button class="ca-btn" type="button" onclick="saveCampBenefits()">保存会员权益</button>
+      <span id="caBenefitTip" style="font-size:11.5px;color:#8a9a90"></span></div></div>`;
+}
+window.caBenefitToggle=function(k,on){
+  if(!CAMP_BENEFITS)CAMP_BENEFITS={};
+  CAMP_BENEFITS[k]=!!on;
+  document.querySelectorAll('#caBenefitGrid .ca-sw').forEach(l=>{
+    const key=l.getAttribute('data-cb');l.classList.toggle('on',!!CAMP_BENEFITS[key]);
+    const i=l.querySelector('input');if(i&&key!==k)i.checked=!!CAMP_BENEFITS[key];
+  });
 };
-window.saveTicket=async function(id,ov){
-  ov=ov||CA_OV;if(!ov)return;
-  const title=_fv(ov,'title');if(!title){toast('请填写票名');return;}
-  const payload={campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,title,eventDate:_fv(ov,'eventDate'),
-    price:Number(_fv(ov,'price')||0),capacity:Math.max(0,Number(_fv(ov,'capacity')||0)),
-    entryType:_fv(ov,'entryType')||'single',validFrom:_fv(ov,'validFrom'),validTo:_fv(ov,'validTo'),
-    status:_fv(ov,'status')||'open'};
+window.saveCampBenefits=async function(){
+  if(!CAMP_BENEFITS)return;
+  const tip=$('#caBenefitTip');if(tip)tip.textContent='';
+  const body={};
+  CA_BENEFIT_ITEMS.forEach(([k])=>body[k]=!!CAMP_BENEFITS[k]);
+  body.clubPointsMaxDiscountPercent=Math.max(0,Math.min(100,Number(($('#caBenefitPercent')||{}).value||100)));
   try{
-    if(id)await api(`/api/club/${CLUB}/tickets/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    else await api(`/api/club/${CLUB}/tickets`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    ov.uxClose();toast(id?'活动票已更新':'活动票已创建');await campTab('tickets');
+    CAMP_BENEFITS=await api(`/api/club/${CLUB}/camp-benefits`,{method:'PATCH',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(tip)tip.textContent='已保存 ✓';toast('营地会员权益已保存，C 端报价即时生效');
+    await loadCampBenefits();
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
-};
-window.deleteTicket=async function(id){
-  const ok=await showConfirm({title:'删除活动票',message:'确定删除该活动票？已售出的记录不受影响。',danger:true});if(!ok)return;
-  try{await api(`/api/club/${CLUB}/tickets/${id}`,{method:'DELETE'});toast('已删除');await campTab('tickets');}
-  catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}
 };

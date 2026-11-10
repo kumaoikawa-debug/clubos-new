@@ -203,6 +203,20 @@ def _run_compat_migrations(c):
     _ensure_column(c,'clubs','module_switches_json','module_switches_json TEXT')
     # 营地房态覆盖表补 camp_id（多营地各自房态）；新库由 schema.sql 直接建，旧库靠这里补列。
     _ensure_column(c,'camp_pitch_status','camp_id','camp_id INTEGER NOT NULL DEFAULT 0')
+    # 2026-11-11 营地 v3：统一商品订单 + 会员权益打通 + 商品详情增强。
+    # ★ 这些补列必须排在所有写它们的 INSERT / UPDATE 之前（同文件 _run_compat_migrations 内顺序即装库顺序）。
+    _ensure_column(c,'clubs','camp_benefits_json','camp_benefits_json TEXT')
+    _ensure_column(c,'camp_pitch_bookings','camp_order_id','camp_order_id INTEGER')
+    for _t in ('camp_pitches','camp_rental_items','camp_store_products'):
+        for _col,_ddl in (
+            ('gallery_json','gallery_json TEXT'),('specs_json','specs_json TEXT'),
+            ('facilities_json','facilities_json TEXT'),('policies_json','policies_json TEXT'),
+            ('subtitle','subtitle TEXT'),('detail_text','detail_text TEXT'),
+            ('original_price','original_price REAL NOT NULL DEFAULT 0'),('unit_label','unit_label TEXT')):
+            _ensure_column(c,_t,_col,_ddl)
+    _ensure_column(c,'camp_pitches','cover_url','cover_url TEXT')
+    _ensure_column(c,'camp_pitches','description','description TEXT')
+    _ensure_column(c,'camp_store_products','description','description TEXT')
     # 「注册成为该俱乐部会员 → 自动成为总平台会员」用触发器兜住所有写入路径
     # （报名 / 邀请码 / 买会员卡 / 会员中心 refresh_member），不漏任何一个调用点。
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_club_member_platform

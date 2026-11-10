@@ -26,6 +26,9 @@ CREATE TABLE IF NOT EXISTS clubs (
   -- 故意不写 100：否则存量库升级后会把平台曾经改过的全局比例悄悄顶掉，
   -- 破坏「存量行为零变化」。正数 = 俱乐部单独设定，覆盖平台默认。
   points_redeem_rate INTEGER NOT NULL DEFAULT 0,
+  -- 2026-11-11 营地会员权益开关：营地「房间/营位、租用装备、小站商品」是否沿用原活动会员体系。
+  -- 存 JSON，缺省视为全开（memberDiscountEnabled/pointsEnabled/voucherEnabled/earnPointsEnabled）。
+  camp_benefits_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -1898,6 +1901,17 @@ CREATE TABLE IF NOT EXISTS camp_pitches (
   weekend_price REAL,                 -- 周末价
   holiday_price REAL,                 -- 节假日价
   status TEXT NOT NULL DEFAULT 'active',     -- active/maintenance(维护)/disabled
+  -- v3 商品详情增强：封面/图廊/规格/须知/图文详情/原价/单位（C 端高标准详情页数据源）
+  cover_url TEXT,
+  gallery_json TEXT,
+  specs_json TEXT,
+  facilities_json TEXT,
+  policies_json TEXT,
+  subtitle TEXT,
+  description TEXT,
+  detail_text TEXT,
+  original_price REAL NOT NULL DEFAULT 0,
+  unit_label TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(club_id) REFERENCES clubs(id)
 );
@@ -1938,6 +1952,7 @@ CREATE TABLE IF NOT EXISTS camp_pitch_bookings (
   total REAL NOT NULL DEFAULT 0,      -- payable+deposit
   status TEXT NOT NULL DEFAULT 'pending',   -- pending/paid/cancelled/checked_in/checked_out
   order_id INTEGER,                   -- 关联统一结算订单（club 域）
+  camp_order_id INTEGER,              -- v3：关联 camp_orders.id（统一商品订单）
   user_id INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(club_id) REFERENCES clubs(id),
@@ -1958,6 +1973,15 @@ CREATE TABLE IF NOT EXISTS camp_rental_items (
   available_qty INTEGER NOT NULL DEFAULT 0,  -- 可租数量（按日期区间占用，非固定资源）
   attributes_json TEXT,
   status TEXT NOT NULL DEFAULT 'active',
+  -- v3 商品详情增强（契约 §5）
+  gallery_json TEXT,
+  specs_json TEXT,
+  facilities_json TEXT,
+  policies_json TEXT,
+  subtitle TEXT,
+  detail_text TEXT,
+  original_price REAL NOT NULL DEFAULT 0,
+  unit_label TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(club_id) REFERENCES clubs(id)
 );
@@ -1974,6 +1998,16 @@ CREATE TABLE IF NOT EXISTS camp_store_products (
   stock INTEGER NOT NULL DEFAULT 0,
   category TEXT,
   status TEXT NOT NULL DEFAULT 'active',
+  -- v3 商品详情增强（契约 §5）
+  gallery_json TEXT,
+  specs_json TEXT,
+  facilities_json TEXT,
+  policies_json TEXT,
+  subtitle TEXT,
+  description TEXT,
+  detail_text TEXT,
+  original_price REAL NOT NULL DEFAULT 0,
+  unit_label TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(club_id) REFERENCES clubs(id)
 );
@@ -1997,3 +2031,63 @@ CREATE TABLE IF NOT EXISTS camp_activity_tickets (
   FOREIGN KEY(club_id) REFERENCES clubs(id)
 );
 CREATE INDEX IF NOT EXISTS idx_camp_ticket_club ON camp_activity_tickets(club_id);
+
+-- ==========================================================================
+-- 营地模块 v3（2026-11-11）：统一商品订单 + 会员权益打通 + 商品详情增强
+-- 设计原则：**全部新增**，不删改上面任何一张已有表/列；旧 camp_pitch_bookings /
+-- camp-checkout 链路完全保留，新前端统一走 camp_orders。活动票表保留但前端不再展示。
+-- ==========================================================================
+
+-- 营位/租赁/小站三个商品表的「详情增强」列：列表与详情接口统一按 §5 契约下发 camelCase 别名。
+-- 老库由 db.py::_run_compat_migrations 逐列补齐（_ensure_column），新库在这里直接建。
+CREATE TABLE IF NOT EXISTS camp_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  camp_id INTEGER NOT NULL DEFAULT 0,
+  user_id INTEGER,
+  order_no TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'pending_payment', -- pending_payment/paid/cancelled/expired
+  goods_amount REAL NOT NULL DEFAULT 0,          -- 商品原价合计（不含押金）
+  member_discount REAL NOT NULL DEFAULT 0,       -- 会员等级立减
+  member_discount_rate REAL NOT NULL DEFAULT 0,  -- 成交折扣率（90=9折，0=未享折扣）
+  club_points_used INTEGER NOT NULL DEFAULT 0,
+  gear_points_used INTEGER NOT NULL DEFAULT 0,
+  club_point_discount REAL NOT NULL DEFAULT 0,
+  gear_point_discount REAL NOT NULL DEFAULT 0,
+  voucher_discount REAL NOT NULL DEFAULT 0,
+  voucher_codes_json TEXT NOT NULL DEFAULT '[]',
+  payable REAL NOT NULL DEFAULT 0,               -- 折后商品现金应付
+  deposit_amount REAL NOT NULL DEFAULT 0,        -- 押金（不参与折扣/积分抵扣）
+  total REAL NOT NULL DEFAULT 0,                 -- payable + deposit_amount
+  points_earned INTEGER NOT NULL DEFAULT 0,
+  points_redeem_rate INTEGER NOT NULL DEFAULT 100,
+  guest_name TEXT, guest_phone TEXT,
+  checkout_id TEXT,                              -- 关联 checkout_intents（积分/券 hold 的载体）
+  quote_snapshot_json TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  paid_at TEXT, cancelled_at TEXT,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_camp_orders_club ON camp_orders(club_id,status,created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_camp_orders_user ON camp_orders(club_id,user_id,created_at DESC);
+
+CREATE TABLE IF NOT EXISTS camp_order_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  order_id INTEGER NOT NULL,
+  club_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,                  -- pitch(营位/房间) | rental(租用装备) | store(小站商品)
+  ref_id INTEGER NOT NULL,
+  title TEXT, cover_url TEXT, spec TEXT, unit_label TEXT,
+  unit_price REAL NOT NULL DEFAULT 0,
+  qty INTEGER NOT NULL DEFAULT 1,
+  days INTEGER NOT NULL DEFAULT 1,
+  check_in TEXT, check_out TEXT,
+  is_day_use INTEGER NOT NULL DEFAULT 0,
+  subtotal REAL NOT NULL DEFAULT 0,
+  deposit REAL NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending_payment',
+  FOREIGN KEY(order_id) REFERENCES camp_orders(id)
+);
+CREATE INDEX IF NOT EXISTS idx_camp_order_items_order ON camp_order_items(order_id);
+-- 租赁按日期区间占用数量：与营位房态同口径（pending 仅 30 分钟内占用）。
+CREATE INDEX IF NOT EXISTS idx_camp_order_items_rental ON camp_order_items(kind,ref_id,check_in,check_out);
