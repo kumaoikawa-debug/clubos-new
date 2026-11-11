@@ -197,7 +197,7 @@ function _render(){
 
   root.innerHTML='<div class="cp-page" id="cpPage">'
     + '<div class="cp-hero">'
-      + (hero?'<img class="cp-hero__img" src="'+esc(hero)+'" alt="'+esc(c.name||'营地')+'">':'<div class="cp-hero__fallback"></div>')
+      + (hero?'<img class="cp-hero__img" src="'+esc(hero)+'" alt="'+esc(c.name||'营地')+'"'+_focalStyle((c.focalPoints||[])[CAMP_HERO_IDX]||c.coverFocal)+'>':'<div class="cp-hero__fallback"></div>')
       + '<div class="cp-hero__shade"></div>'
       + '<div class="cp-hero__rail"><span class="cp-hero__tag">'+CP_ICON.tent+' CAMP · 营地预订</span>'
       + (CAMP_LIST.length>1?'<select id="campSel" onchange="campOnChange()" class="cp-hero__sel">'+selOpts+'</select>'
@@ -244,9 +244,23 @@ function _gridHtml(){
   }).join('');
 }
 
-function _mediaHtml(url,cls){
+/* #813 焦点对齐：后台裁剪算出的主体位置，C 端用它设置 object-position，
+   避免不同容器比例二次 cover 裁切后「天空占满 / 主体被切掉」。 */
+function _focalStyle(f){
+  if(!f)return '';
+  const x=Math.max(0,Math.min(100,(Number(f.x!=null?f.x:.5)||0)*100));
+  const y=Math.max(0,Math.min(100,(Number(f.y!=null?f.y:.5)||0)*100));
+  return ' style="object-position:'+x.toFixed(1)+'% '+y.toFixed(1)+'%"';
+}
+window._focalStyle=_focalStyle;   /* #813 暴露给其它视图/调试复用 */
+function _focalPairs(d){
+  const urls=[d&&d.coverUrl].concat((d&&d.gallery)||[]);
+  const foc=[d&&d.coverFocal].concat((d&&d.focalPoints)||[]);
+  return urls.map((u,i)=>({u:_safeUrl(u),f:foc[i]||null})).filter(p=>p.u);
+}
+function _mediaHtml(url,cls,focal){
   const u=_safeUrl(url);
-  return u?'<img class="'+cls+'" src="'+esc(u)+'" alt="">':'<div class="cp-card__ph"></div>';
+  return u?'<img class="'+cls+'" src="'+esc(u)+'" alt=""'+_focalStyle(focal)+'>':'<div class="cp-card__ph"></div>';
 }
 
 function _pitchesHtml(){
@@ -261,7 +275,7 @@ function _pitchesHtml(){
       .map(t=>'<span class="cp-chip" style="padding:2px 6px;font-size:9.5px">'+esc(t)+'</span>').join('');
     return '<div class="cp-card'+(off?' is-off':'')+'">'
       + '<div class="cp-card__media" onclick="campOpenDetail(\'pitch\','+p.id+')">'+_mediaHtml(p.coverUrl||p.cover_url,
-          'cp-card__img')+badge+'</div>'
+          'cp-card__img',p.coverFocal)+badge+'</div>'
       + '<div class="cp-card__body"><div class="cp-card__title" onclick="campOpenDetail(\'pitch\','+p.id+')">'+esc(p.name||'营位')+'</div>'
       + '<div class="cp-card__spec">'+esc(spec)+'</div>'
       + '<div class="cp-card__tags">'+tags+'</div>'
@@ -287,7 +301,7 @@ function _shopHtml(kind){
     const spec=(x.specs&&x.specs[0])?(x.specs[0].label+' '+x.specs[0].value):(x.description||x.subtitle||'');
     const off=isRental?!(Number(x.available_qty||0)>0):!(Number(x.stock||0)>0);
     return '<div class="cp-prod" onclick="campOpenDetail(\''+kind+'\','+x.id+')">'
-      + '<div class="cp-prod__media">'+_mediaHtml(x.coverUrl||x.cover_url,'cp-prod__img')
+      + '<div class="cp-prod__media">'+_mediaHtml(x.coverUrl||x.cover_url,'cp-prod__img',x.coverFocal)
       + (off?'<span class="cp-prod__off">已租罄</span>':'')+'</div>'
       + '<div class="cp-prod__body"><div class="cp-prod__t">'+esc(x.name||'商品')+'</div>'
       + '<div class="cp-prod__spec">'+esc(String(spec).slice(0,28))+'</div>'
@@ -343,7 +357,7 @@ function _shopCardHtml(x,kind){
   const spec=(x.specs&&x.specs[0])?(x.specs[0].label+' '+x.specs[0].value):(x.description||x.subtitle||'');
   const off=isR?!(Number(x.available_qty||0)>0):!(Number(x.stock||0)>0);
   return '<div class="cp-prod cp-prod--lv" onclick="campOpenDetail(\''+kind+'\','+x.id+')">'
-    + '<div class="cp-prod__media">'+_mediaHtml(x.coverUrl||x.cover_url,'cp-prod__img')
+    + '<div class="cp-prod__media">'+_mediaHtml(x.coverUrl||x.cover_url,'cp-prod__img',x.coverFocal)
     + (off?'<span class="cp-prod__off">已租罄</span>':'')+'</div>'
     + '<div class="cp-prod__body"><div class="cp-prod__t">'+esc(x.name||'商品')+'</div>'
     + '<div class="cp-prod__spec">'+esc(String(spec).slice(0,28))+'</div>'
@@ -372,7 +386,7 @@ function _paintShopList(kind,cat){
     + '<div class="cp-lv__bar"><button class="cp-lv__back" type="button" onclick="_closeShopList()">'+CP_ICON.back+'</button>'
     + '<span class="cp-lv__title">'+title+'</span>'
     + '<button class="cp-lv__cart'+(cnt?' has':'')+'" type="button" onclick="campOpenCheckout()">'+CP_ICON.cart+(cnt?'<i>'+cnt+'</i>':'')+'</button></div>'
-    + (heroUrl?'<div class="cp-lv__hero"><img src="'+esc(heroUrl)+'" alt=""></div>':'')
+    + (heroUrl?'<div class="cp-lv__hero"><img src="'+esc(heroUrl)+'" alt=""'+_focalStyle(hero.coverFocal)+'></div>':'')
     + catChips
     + '<div class="cp-lv__meta">共 '+list.length+' 项 · '+(isR?'按天计价 · 押金离营退还':'营地自营 · 现场取货')+'</div>'
     + '<div class="cp-shop cp-lv__grid">'+cards+'</div>'
@@ -463,6 +477,7 @@ function _listFallback(kind,id){
   const isP=kind==='pitch',isR=kind==='rental';
   return {ok:true,kind:kind,id:id,name:x.name||'',subtitle:x.subtitle||'',
     coverUrl:_safeUrl(x.coverUrl||x.cover_url),gallery:(x.gallery||[]).map(_safeUrl).filter(Boolean),
+    focalPoints:x.focalPoints||[],coverFocal:x.coverFocal||null,
     price:isP?Number(x.base_price||0):(isR?Number(x.daily_price||0):Number(x.price||0)),
     originalPrice:Number(x.originalPrice||0),unitLabel:x.unitLabel||(isP?'/晚':(isR?'/天':'/件')),
     specs:x.specs||[],facilities:x.facilities||[],policies:x.policies||[],
@@ -511,11 +526,11 @@ function _paintHighlights(d){
 function _paintAiSections(d){
   const ai=d.aiDetail;
   if(!ai||!Array.isArray(ai.sections)||!ai.sections.length)return '';
-  const gal=[d.coverUrl].concat(d.gallery||[]).map(_safeUrl).filter(Boolean);
+  const pairs=_focalPairs(d);
   const blocks=(ai.sections||[]).map(s=>{
     const refs=Array.isArray(s.mediaRefs)?s.mediaRefs:[];
-    const imgs=refs.map(i=>gal[Number(i)]).filter(Boolean)
-      .map(u=>'<img src="'+esc(u)+'" alt="" loading="lazy">').join('');
+    const imgs=refs.map(i=>pairs[Number(i)]).filter(Boolean)
+      .map(x=>'<img src="'+esc(x.u)+'" alt="" loading="lazy"'+_focalStyle(x.f)+'>').join('');
     return '<div class="cp-dt__sec">'
       + (s.headline?'<h4>'+esc(String(s.headline))+'</h4>':'')
       + (s.body?'<p>'+esc(String(s.body))+'</p>':'')
@@ -526,8 +541,8 @@ function _paintAiSections(d){
 }
 function _paintDetail(){
   const d=CAMP_DETAIL;if(!d)return;
-  const gal=[d.coverUrl].concat(d.gallery||[]).map(_safeUrl).filter(Boolean);
-  const imgs=gal.length?gal.map(u=>'<img src="'+esc(u)+'" alt="">').join('')
+  const pairs=_focalPairs(d);
+  const imgs=pairs.length?pairs.map(x=>'<img src="'+esc(x.u)+'" alt=""'+_focalStyle(x.f)+'>').join('')
     :'<div class="cp-dt__ph"></div>';
   const fac=(d.facilities||[]).map(f=>'<span class="cp-chip">'+esc(String(f))+'</span>').join('');
   const hasAi=!!(d.aiDetail&&Array.isArray(d.aiDetail.sections)&&d.aiDetail.sections.length);
@@ -590,7 +605,7 @@ function _addToCart(kind,id,qty){
     if(exist){_cpToast('该营位已在清单中');return true;}
     const p=CAMP_PITCHES.find(x=>String(x.id)===String(id))||{};
     const day=_isDayUse()||!p.is_overnight;
-    CAMP_CART.push({kind:'pitch',id:id,title:p.name||'营位',coverUrl:_safeUrl(p.coverUrl||p.cover_url),
+    CAMP_CART.push({kind:'pitch',id:id,title:p.name||'营位',coverUrl:_safeUrl(p.coverUrl||p.cover_url),coverFocal:p.coverFocal||null,
       spec:_pitchTypeLabel(p.pitch_type),unitLabel:p.is_overnight?'/晚':'/天',unitPrice:q.payable,
       qty:1,days:day?1:Math.max(1,_nights()),checkIn:CAMP_IN,checkOut:day?CAMP_IN:CAMP_OUT,
       isDayUse:day?1:0,deposit:0});
@@ -604,7 +619,7 @@ function _addToCart(kind,id,qty){
     const newQty=(exist?Number(exist.qty):0)+qty;
     if(newQty>cap){_cpToast('库存仅剩 '+cap+' 件');return false;}
     if(exist){exist.qty=newQty;exist.deposit=isR?Number(x.deposit||0)*newQty:0;}
-    else CAMP_CART.push({kind:kind,id:id,title:x.name||'商品',coverUrl:_safeUrl(x.coverUrl||x.cover_url),
+    else CAMP_CART.push({kind:kind,id:id,title:x.name||'商品',coverUrl:_safeUrl(x.coverUrl||x.cover_url),coverFocal:x.coverFocal||null,
       spec:x.description||x.subtitle||'',unitLabel:isR?'/天':'/件',unitPrice:unit,qty:qty,
       days:Math.max(1,_nights()),checkIn:isR?CAMP_IN:'',checkOut:isR?(_isDayUse()?_add(CAMP_IN,1):CAMP_OUT):'',
       isDayUse:0,deposit:isR?Number(x.deposit||0)*qty:0});
@@ -658,7 +673,7 @@ function _checkoutHtml(){
   if(!CAMP_CART.length)return '<div class="cp-state">清单是空的，先挑一个营位或商品吧。</div>';
   const g=_guest();
   const items=CAMP_CART.map((x,i)=>'<div class="cp-ck__item">'
-    + '<div class="cp-ck__img">'+_mediaHtml(x.coverUrl,'cp-ck__imgfile')+'</div>'
+    + '<div class="cp-ck__img">'+_mediaHtml(x.coverUrl,'cp-ck__imgfile',x.coverFocal)+'</div>'
     + '<div class="cp-ck__meta"><div class="cp-ck__t">'+esc(x.title)+'</div>'
     + '<div class="cp-ck__s">'+esc(x.spec||'')+' · ¥'+_money(x.unitPrice)+esc(x.unitLabel||'')+'</div>'
     + '<div class="cp-ck__s">'+(x.checkIn?(_cnDate(x.checkIn)+' → '+_cnDate(x.checkOut||x.checkIn)+' · '+(x.days||1)+(x.kind==='pitch'?' 晚':' 天')):'现场取货')+'</div></div>'

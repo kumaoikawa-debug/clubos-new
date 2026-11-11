@@ -258,6 +258,20 @@ def _run_compat_migrations(c):
             if not c.execute('SELECT 1 FROM camp_orders WHERE redeem_code=?',(_code,)).fetchone():
                 c.execute('UPDATE camp_orders SET redeem_code=? WHERE id=?',(_code,_r['id']))
                 break
+    # 2026-11-11 营地 v4.2 #813：图片手动裁剪 + 焦点自动适配。
+    # 素材表保留原图 src_url 与归一化裁剪框 crop_json / 焦点 focal_x,focal_y；
+    # 四张目标表按 gallery 同序下发 media_focal_json，供 C 端 object-position 对准主体。
+    # ★ 必须排在所有写它们的 INSERT / UPDATE 之前。
+    for _col, _ddl in (
+            ('src_url', 'src_url TEXT'),
+            ('crop_json', 'crop_json TEXT'),
+            ('focal_x', 'focal_x REAL NOT NULL DEFAULT 0.5'),
+            ('focal_y', 'focal_y REAL NOT NULL DEFAULT 0.5'),
+            ('auto_fit', 'auto_fit INTEGER NOT NULL DEFAULT 0'),
+            ('rev', 'rev INTEGER NOT NULL DEFAULT 1')):
+        _ensure_column(c, 'camp_media_assets', _col, _ddl)
+    for _t in ('camp_profiles', 'camp_pitches', 'camp_rental_items', 'camp_store_products'):
+        _ensure_column(c, _t, 'media_focal_json', 'media_focal_json TEXT')
     # 「注册成为该俱乐部会员 → 自动成为总平台会员」用触发器兜住所有写入路径
     # （报名 / 邀请码 / 买会员卡 / 会员中心 refresh_member），不漏任何一个调用点。
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_club_member_platform

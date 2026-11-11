@@ -10984,8 +10984,14 @@ def _camp_profile_out(r):
             try: return json.loads(v)
             except Exception: return []
         return v if isinstance(v,list) else []
+    raw_gal=_arr('gallery_json')
+    gal=[x for x in (_camp_safe_url(u) for u in raw_gal) if x]
+    cover=_camp_safe_url(r.get('cover_url')) or (gal[0] if gal else '')
+    foc=_camp_focal_list(r.get('media_focal_json'),len(gal))
     return {'id':r['id'],'clubId':r['club_id'],'name':r['name'],'introText':r.get('intro_text'),
-            'gallery':_arr('gallery_json'),'facilities':_arr('facilities_json'),'rules':_arr('rules_json'),
+            'gallery':raw_gal,'coverUrl':cover,'focalPoints':foc,
+            'coverFocal':_camp_cover_focal(cover,gal,foc),
+            'facilities':_arr('facilities_json'),'rules':_arr('rules_json'),
             'contactPhone':r.get('contact_phone'),'address':r.get('address'),
             'geoLat':r.get('geo_lat'),'geoLng':r.get('geo_lng'),'status':r.get('status'),
             'createdAt':r.get('created_at')}
@@ -11048,7 +11054,8 @@ def public_pitch_list(club_id:int,camp_id:int=0):
         return [_camp_goods_out(r,'pitch') for r in rows(c.execute('''SELECT id,camp_id,code,name,pitch_type,is_overnight,capacity,
                                         base_price,weekend_price,holiday_price,attributes_json,
                                         cover_url,gallery_json,specs_json,facilities_json,policies_json,
-                                        subtitle,description,detail_text,original_price,unit_label
+                                        subtitle,description,detail_text,original_price,unit_label,
+                                        media_focal_json
                                  FROM camp_pitches
                                  WHERE club_id=? AND camp_id=? AND status="active" ORDER BY code''',(club_id,camp_id)))]
 
@@ -11535,8 +11542,11 @@ def _camp_goods_out(r,kind=None):
     gal=[x for x in gal if x]
     cover=_camp_safe_url(r.get('cover_url')) or (gal[0] if gal else '')
     spec=_camp_arr(r.get('specs_json')); fac=_camp_arr(r.get('facilities_json')); pol=_camp_arr(r.get('policies_json'))
+    # #813：与 gallery 同序的焦点数组 + 封面焦点，C 端据此设置 object-position
+    foc=_camp_focal_list(r.get('media_focal_json'),len(gal))
     d.update({
         'coverUrl':cover,'gallery':gal,
+        'focalPoints':foc,'coverFocal':_camp_cover_focal(cover,gal,foc),
         'specs':spec,'facilities':fac,'policies':pol,
         'subtitle':r.get('subtitle') or '',
         'description':r.get('description') or '',
@@ -12063,6 +12073,7 @@ def public_camp_product_detail(club_id:int,kind:str,pid:int):
             daily=0.0; dep=0.0; unit=d['unitLabel'] or '/件'
         return {'ok':True,'kind':kind,'id':pid,'name':r['name'] or '',
                 'subtitle':d['subtitle'],'coverUrl':d['coverUrl'],'gallery':d['gallery'],
+                'focalPoints':d['focalPoints'],'coverFocal':d['coverFocal'],
                 'price':price,'originalPrice':d['originalPrice'],'unitLabel':unit,
                 'specs':d['specs'],'facilities':d['facilities'],'policies':d['policies'],
                 'description':d['description'],'detailText':d['detailText'],
@@ -12094,23 +12105,127 @@ def _camp_media_public(club_id: int, url: str) -> str:
     return f'/api/public/clubs/{club_id}/camp-media-file/uploads/{club_id}/camp/{name}'
 
 
+# ---- #813 图片手动裁剪 + 焦点自动适配 --------------------------------------
+def _camp_focal_clamp(v, lo=0.05, hi=0.95):
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return 0.5
+    if x != x:  # NaN
+        return 0.5
+    return max(lo, min(hi, x))
+
+
+def _camp_parse_crop(raw):
+    """归一化裁剪框 [x,y,w,h]（0~1）；非法一律返回 None，回落到「按焦点 cover 裁」。"""
+    try:
+        arr = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(arr, (list, tuple)) or len(arr) != 4:
+            return None
+        x, y, w, h = [float(v) for v in arr]
+        if not (0.0 < w <= 1.0 and 0.0 < h <= 1.0 and 0.0 <= x < 1.0 and 0.0 <= y < 1.0):
+            return None
+        if x + w > 1.0001 or y + h > 1.0001:
+            return None
+        return [x, y, min(1.0 - x, w), min(1.0 - y, h)]
+    except Exception:
+        return None
+
+
+def _camp_auto_focal(im):
+    """自动适配最佳显示范围：低分辨率梯度能量找主体，避开大片平滑天空/白墙。
+
+    天空是低纹理区（梯度小），地景/建筑/人物纹理丰富（梯度大）。按行求能量质心并
+    对下半区加权（户外照片主体通常在下 2/3），输出可直接给 object-position 的焦点。
+    """
+    try:
+        small = im.convert('L').resize((64, 64), Image.LANCZOS)
+        px = list(small.getdata())
+        row_e, col_e = [], []
+        for y in range(64):
+            row_e.append(sum(abs(px[y * 64 + x] - px[y * 64 + x + 1]) for x in range(63)) + 1.0)
+        for x in range(64):
+            col_e.append(sum(abs(px[y * 64 + x] - px[(y + 1) * 64 + x]) for y in range(63)) + 1.0)
+        rw = [row_e[i] ** 2 * (1.0 + 0.55 * (i / 63.0)) for i in range(64)]
+        cw = [col_e[i] ** 2 for i in range(64)]
+        fy = sum(rw[i] * (i + 0.5) for i in range(64)) / sum(rw) / 64.0
+        fx = sum(cw[i] * (i + 0.5) for i in range(64)) / sum(cw) / 64.0
+        return (_camp_focal_clamp(fx, 0.2, 0.8), _camp_focal_clamp(fy, 0.2, 0.82))
+    except Exception:
+        return (0.5, 0.5)
+
+
+def _camp_render_crop(im, ratio, crop, fx, fy):
+    """先按手动裁剪框取景（或按焦点 cover 裁），再统一输出到目标尺寸。"""
+    from PIL import ImageOps
+    w, h = _CAMP_MEDIA_RATIOS[ratio]
+    box = _camp_parse_crop(crop)
+    used_manual = False
+    if box:
+        x, y, bw, bh = box
+        iw, ih = im.size
+        left, top = int(round(x * iw)), int(round(y * ih))
+        right, bottom = int(round((x + bw) * iw)), int(round((y + bh) * ih))
+        if right - left >= 8 and bottom - top >= 8:
+            im = im.crop((left, top, right, bottom))
+            used_manual = True
+    # 手动取景后居中收口；否则用焦点控制 cover 裁的位置
+    im = ImageOps.fit(im, (w, h), method=Image.LANCZOS,
+                      centering=(0.5, 0.5) if used_manual else (fx, fy))
+    buf = io.BytesIO()
+    im.save(buf, 'JPEG', quality=86, optimize=True)
+    return buf.getvalue(), w, h
+
+
+def _camp_source_bytes(im):
+    """保留一份压缩后的原图，供事后重新手动裁剪（不改变构图）。"""
+    cp = im.copy()
+    cp.thumbnail((2000, 2000), Image.LANCZOS)
+    buf = io.BytesIO()
+    cp.save(buf, 'JPEG', quality=88, optimize=True)
+    return buf.getvalue()
+
+
+def _camp_focal_list(raw, n):
+    """与 gallery 同序的焦点数组；老数据缺列时全部回落 0.5/0.5。"""
+    arr = _camp_arr(raw)
+    out = []
+    for i in range(max(0, n)):
+        v = arr[i] if i < len(arr) and isinstance(arr[i], dict) else {}
+        out.append({'x': _camp_focal_clamp(v.get('x', 0.5)), 'y': _camp_focal_clamp(v.get('y', 0.5))})
+    return out
+
+
+def _camp_cover_focal(cover, gal, foc):
+    if not foc:
+        return {'x': 0.5, 'y': 0.5}
+    try:
+        i = gal.index(cover) if cover else 0
+    except ValueError:
+        i = 0
+    return foc[i] if 0 <= i < len(foc) else foc[0]
+
+
 def _camp_media_sync(c, club_id: int, kind: str, tid: int):
-    """素材表是上传真源，gallery_json / cover_url 是 C 端渲染真源；每次增删后同步一次。"""
+    """素材表是上传真源，gallery_json / cover_url / media_focal_json 是 C 端渲染真源。"""
     tbl = _CAMP_TARGET_TABLE[kind]
     assets = rows(c.execute('''SELECT * FROM camp_media_assets
                                WHERE club_id=? AND target_kind=? AND target_id=?
                                ORDER BY sort_no,id''', (club_id, kind, tid)))
     urls = [_camp_media_public(club_id, a['url']) for a in assets]
     cover = next((_camp_media_public(club_id, a['url']) for a in assets if a['is_cover']), urls[0] if urls else '')
-    c.execute(f'UPDATE {tbl} SET gallery_json=?, cover_url=? WHERE id=? AND club_id=?',
-              (jdump(urls), cover, tid, club_id))
+    foc = jdump([{'x': _camp_focal_clamp(a['focal_x']), 'y': _camp_focal_clamp(a['focal_y'])} for a in assets])
+    c.execute(f'UPDATE {tbl} SET gallery_json=?, cover_url=?, media_focal_json=? WHERE id=? AND club_id=?',
+              (jdump(urls), cover, foc, tid, club_id))
     return urls, cover
 
 
 @app.post('/api/club/{club_id}/camp-media')
 async def upload_camp_media(club_id: int, target_kind: str = Form(...), target_id: int = Form(0),
-                            ratio: str = Form('4:3'), file: UploadFile = File(...)):
-    """本地图片上传：服务端统一裁剪到目标比例并压到固定尺寸，保证 C 端视觉一致。"""
+                            ratio: str = Form('4:3'), file: UploadFile = File(...),
+                            crop: str = Form(''), focal_x: float = Form(0.5),
+                            focal_y: float = Form(0.5), auto_fit: int = Form(0)):
+    """#813 本地图片上传：手动裁剪框 / 焦点 / 一键自动适配；保留原图供事后重裁。"""
     from PIL import ImageOps
     club_or_404(club_id)
     if target_kind not in _CAMP_TARGET_TABLE:
@@ -12123,22 +12238,27 @@ async def upload_camp_media(club_id: int, target_kind: str = Form(...), target_i
     data = await file.read()
     if len(data) > 10 * 1024 * 1024:
         raise HTTPException(413, '图片过大（上限 10MB）')
+    fx, fy = _camp_focal_clamp(focal_x), _camp_focal_clamp(focal_y)
+    box = _camp_parse_crop(crop)
     try:
         with Image.open(io.BytesIO(data)) as im:
             im.load()
             im = ImageOps.exif_transpose(im).convert('RGB')
-            w, h = _CAMP_MEDIA_RATIOS[ratio]
-            fitted = ImageOps.fit(im, (w, h), method=Image.LANCZOS, centering=(0.5, 0.5))
-            buf = io.BytesIO()
-            fitted.save(buf, 'JPEG', quality=86, optimize=True)
-        out = buf.getvalue()
+            if auto_fit:
+                fx, fy = _camp_auto_focal(im)
+                box = None
+            out, w, h = _camp_render_crop(im, ratio, box, fx, fy)
+            src = _camp_source_bytes(im)
     except Exception:
         raise HTTPException(400, '图片文件损坏或格式不受支持')
     dest = UPLOAD / str(club_id) / 'camp'
     dest.mkdir(parents=True, exist_ok=True)
     name = uuid.uuid4().hex + '.jpg'
+    src_name = uuid.uuid4().hex + '_src.jpg'
     (dest / name).write_bytes(out)
+    (dest / src_name).write_bytes(src)
     url = f'/static/uploads/{club_id}/camp/{name}'
+    src_url = f'/static/uploads/{club_id}/camp/{src_name}'
     preview = f'/api/club/{club_id}/camp-media-file/uploads/{club_id}/camp/{name}'
     with conn() as c:
         cnt = int(c.execute('''SELECT COUNT(*) FROM camp_media_assets
@@ -12147,15 +12267,18 @@ async def upload_camp_media(club_id: int, target_kind: str = Form(...), target_i
         if cnt >= _CAMP_MEDIA_MAX:
             raise HTTPException(409, f'每个对象最多上传 {_CAMP_MEDIA_MAX} 张图片，请先删除后再上传')
         c.execute('''INSERT INTO camp_media_assets(club_id,target_kind,target_id,url,preview,ratio,
-                       width,height,bytes,sort_no,is_cover)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
-                  (club_id, target_kind, target_id, url, preview, ratio, w, h, len(out), cnt, 1 if cnt == 0 else 0))
+                       width,height,bytes,sort_no,is_cover,src_url,crop_json,focal_x,focal_y,auto_fit,rev)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)''',
+                  (club_id, target_kind, target_id, url, preview, ratio, w, h, len(out), cnt,
+                   1 if cnt == 0 else 0, src_url, jdump(box) if box else None,
+                   fx, fy, 1 if auto_fit else 0))
         asset_id = int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         urls, cover = _camp_media_sync(c, club_id, target_kind, target_id)
     return {'ok': True, 'id': asset_id, 'url': url, 'preview': preview,
             'publicUrl': _camp_media_public(club_id, url), 'ratio': ratio,
             'width': w, 'height': h, 'bytes': len(out), 'count': len(urls),
-            'gallery': urls, 'cover': cover}
+            'gallery': urls, 'cover': cover,
+            'focalX': fx, 'focalY': fy, 'autoFit': bool(auto_fit), 'crop': box or []}
 
 
 @app.get('/api/club/{club_id}/camp-media-list')
@@ -12170,8 +12293,83 @@ def club_camp_media_list(club_id: int, target_kind: str, target_id: int = 0):
         return {'ok': True, 'max': _CAMP_MEDIA_MAX, 'ratios': list(_CAMP_MEDIA_RATIOS),
                 'items': [{'id': x['id'], 'url': x['url'], 'preview': x['preview'],
                            'publicUrl': _camp_media_public(club_id, x['url']),
+                           'srcPreview': f'/api/club/{club_id}/camp-media/{x["id"]}/source',
                            'ratio': x['ratio'], 'width': x['width'], 'height': x['height'],
+                           'focalX': _camp_focal_clamp(x['focal_x']),
+                           'focalY': _camp_focal_clamp(x['focal_y']),
+                           'crop': _camp_parse_crop(x['crop_json']) or [],
+                           'autoFit': bool(x['auto_fit']), 'rev': int(x['rev'] or 1),
                            'sortNo': x['sort_no'], 'isCover': bool(x['is_cover'])} for x in a]}
+
+
+@app.get('/api/club/{club_id}/camp-media/{asset_id}/source')
+def club_camp_media_source(club_id: int, asset_id: int):
+    """#813 读取保留的原图，供后台裁剪弹层拖拽取景（成品已裁过，不能拿来重裁）。"""
+    from fastapi.responses import FileResponse
+    with conn() as c:
+        a = row(c.execute('SELECT * FROM camp_media_assets WHERE id=? AND club_id=?', (asset_id, club_id)))
+    if not a:
+        raise HTTPException(404, '素材不存在')
+    p = _safe_media_path(a['src_url'] or a['url'])
+    if not p or not p.is_file():
+        raise HTTPException(404, '原图不存在')
+    r = FileResponse(p)
+    r.headers['Cache-Control'] = 'private, max-age=300'
+    return r
+
+
+@app.post('/api/club/{club_id}/camp-media/{asset_id}/crop')
+def club_camp_media_crop(club_id: int, asset_id: int, payload: dict = Body(default={})):
+    """#813 事后重新手动裁剪 / 一键自动适配：从原图重出成品，URL 换新以破浏览器缓存。"""
+    from PIL import ImageOps
+    p = payload or {}
+    ratio = str(p.get('ratio') or '4:3')
+    if ratio not in _CAMP_MEDIA_RATIOS:
+        raise HTTPException(400, '比例必须是 4:3 / 1:1 / 16:9')
+    box = _camp_parse_crop(p.get('crop'))
+    fx, fy = _camp_focal_clamp(p.get('focalX', 0.5)), _camp_focal_clamp(p.get('focalY', 0.5))
+    auto = bool(p.get('autoFit'))
+    with conn() as c:
+        a = row(c.execute('SELECT * FROM camp_media_assets WHERE id=? AND club_id=?', (asset_id, club_id)))
+    if not a:
+        raise HTTPException(404, '素材不存在')
+    src = _safe_media_path(a['src_url'] or a['url'])
+    if not src or not src.is_file():
+        raise HTTPException(404, '原图不存在，请删除后重新上传')
+    try:
+        with Image.open(src) as im:
+            im.load()
+            im = ImageOps.exif_transpose(im).convert('RGB')
+            if auto:
+                fx, fy = _camp_auto_focal(im)
+                box = None
+            out, w, h = _camp_render_crop(im, ratio, box, fx, fy)
+    except Exception:
+        raise HTTPException(400, '原图损坏，无法重新裁剪')
+    dest = UPLOAD / str(club_id) / 'camp'
+    dest.mkdir(parents=True, exist_ok=True)
+    name = uuid.uuid4().hex + '.jpg'
+    (dest / name).write_bytes(out)
+    url = f'/static/uploads/{club_id}/camp/{name}'
+    preview = f'/api/club/{club_id}/camp-media-file/uploads/{club_id}/camp/{name}'
+    with conn() as c:
+        c.execute('''UPDATE camp_media_assets SET url=?,preview=?,ratio=?,width=?,height=?,bytes=?,
+                     crop_json=?,focal_x=?,focal_y=?,auto_fit=?,rev=rev+1 WHERE id=? AND club_id=?''',
+                  (url, preview, ratio, w, h, len(out), jdump(box) if box else None,
+                   fx, fy, 1 if auto else 0, asset_id, club_id))
+        rev = int(row(c.execute('SELECT rev FROM camp_media_assets WHERE id=?', (asset_id,)))['rev'] or 1)
+        urls, cover = _camp_media_sync(c, club_id, a['target_kind'], a['target_id'])
+    # 旧成品不再被任何地方引用，清掉；原图必须保留供再次裁剪
+    try:
+        old = _safe_media_path(a['url'])
+        if old and old.is_file() and old != src:
+            old.unlink()
+    except Exception:
+        pass
+    return {'ok': True, 'id': asset_id, 'url': url, 'preview': preview,
+            'publicUrl': _camp_media_public(club_id, url), 'ratio': ratio,
+            'focalX': fx, 'focalY': fy, 'autoFit': auto, 'crop': box or [],
+            'rev': rev, 'gallery': urls, 'cover': cover}
 
 
 @app.post('/api/club/{club_id}/camp-media/{asset_id}/move')

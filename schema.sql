@@ -2126,6 +2126,14 @@ CREATE TABLE IF NOT EXISTS camp_media_assets (
   width INTEGER NOT NULL DEFAULT 0,
   height INTEGER NOT NULL DEFAULT 0,
   bytes INTEGER NOT NULL DEFAULT 0,
+  -- #813 手动裁剪 / 自动适配：url 是裁剪成品，src_url 保留原图供二次重裁；
+  -- crop_json = 归一化裁剪框 [x,y,w,h]（0~1），focal_x/y 是 C 端 object-position 焦点。
+  src_url TEXT,
+  crop_json TEXT,
+  focal_x REAL NOT NULL DEFAULT 0.5,
+  focal_y REAL NOT NULL DEFAULT 0.5,
+  auto_fit INTEGER NOT NULL DEFAULT 0,
+  rev INTEGER NOT NULL DEFAULT 1,     -- 每次重裁 +1，用于给 URL 加 ?r= 破缓存
   sort_no INTEGER NOT NULL DEFAULT 0,
   is_cover INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

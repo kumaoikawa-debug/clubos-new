@@ -488,3 +488,8 @@ body.cp-lock{overflow:hidden}
 .cp-dt__secimgs{display:grid;grid-template-columns:1fr;gap:8px}
 .cp-dt__secimgs img{width:100%;border-radius:12px;object-fit:cover;background:#eef2ef;max-height:520px}
 @media(min-width:480px){.cp-dt__secimgs{grid-template-columns:1fr 1fr}}
+
+/* #813 焦点对齐：object-position 由后台裁剪算出的主体坐标以 inline style 下发，
+   这里统一给出默认值，保证老数据（无焦点）仍是原来的居中裁切，且二次 cover 时主体不跳位。 */
+.cp-hero__img,.cp-card__img,.cp-prod__img,.cp-dt__gallery img,.cp-lv__hero img,
+.cp-dt__secimgs img,.cp-ck__imgfile{object-position:50% 50%}

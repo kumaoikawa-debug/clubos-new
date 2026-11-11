@@ -438,31 +438,103 @@ function _detailPayload(ov){
     originalPrice:Number(_fv(ov,'originalPrice')||0),unitLabel:_fv(ov,'unitLabel')};
 }
 
-/* ===================== 营地 v4：素材工作台（本地上传 ≤5 + 比例 + AI 图文详情） ===================== */
+/* ===================== 营地 v4.2 #813：素材工作台（本地上传 ≤5 + 手动裁剪 / 自动适配 + AI 图文详情）
+   四类对象（营地档案 / 营位 / 装备租赁 / 小站商品）完全共用；新建态不再是一句锁定提示，
+   而是可见可操作的完整表单：先选图裁剪、写说明，保存基础信息后照片自动上传。
+   =============================================================================== */
+let CAMP_MWB_QUEUE=[];                       // 新建态待上传：[{qid,file,url,params}]
+let CAMP_MWB_SEQ=1;
+let CAMP_MWB_DRAFT={prompt:'',docs:[]};      // 重绘时保留用户已写的说明与已选资料
 function _campMediaSectionHtml(kind,id){return `<div class="ca-mwb" id="caMwb" data-kind="${kind}" data-id="${id}"></div>`;}
+function _mwbCaptureDraft(){
+  const p=document.getElementById('caMwbPrompt'); if(p)CAMP_MWB_DRAFT.prompt=p.value;
+  const d=document.getElementById('caMwbDocs');
+  if(d&&d.files&&d.files.length)CAMP_MWB_DRAFT.docs=[...d.files];
+}
+function _mwbRestoreDraft(){
+  const p=document.getElementById('caMwbPrompt'); if(p)p.value=CAMP_MWB_DRAFT.prompt||'';
+  const d=document.getElementById('caMwbDocs');
+  if(d&&CAMP_MWB_DRAFT.docs.length){
+    try{const dt=new DataTransfer();CAMP_MWB_DRAFT.docs.forEach(f=>dt.items.add(f));d.files=dt.files;}catch(e){}
+    const tip=document.getElementById('caMwbDocsName');
+    if(tip)tip.textContent='已选 '+CAMP_MWB_DRAFT.docs.length+' 个资料：'+CAMP_MWB_DRAFT.docs.map(f=>f.name).join('、').slice(0,60);
+  }
+}
+function _mwbQueueHtml(){
+  if(!CAMP_MWB_QUEUE.length)return '';
+  return CAMP_MWB_QUEUE.map(q=>`<div class="ca-mwb__qitem"><img src="${esc(q.url)}" alt="">
+    <button type="button" title="移除" onclick="caMwbRemoveQueued(${q.qid})">×</button></div>`).join('');
+}
+function _mwbFormData(kind,id,ratio,file,params){
+  const fd=new FormData();
+  fd.append('target_kind',kind); fd.append('target_id',id);
+  fd.append('ratio',(params&&params.ratio)||ratio||'4:3');
+  if(params&&params.autoFit)fd.append('auto_fit','1');
+  else{
+    fd.append('crop',JSON.stringify((params&&params.crop)||[]));
+    fd.append('focal_x',String(params&&params.focalX!=null?params.focalX:.5));
+    fd.append('focal_y',String(params&&params.focalY!=null?params.focalY:.5));
+  }
+  fd.append('file',file);
+  return fd;
+}
+async function _mwbPost(kind,id,item){
+  const r=await fetch(`/api/club/${CLUB}/camp-media`,{method:'POST',body:_mwbFormData(kind,id,item.ratio,item.file,item.params)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(j.detail||'上传失败');
+  return j;
+}
+async function _campFlushQueue(kind,id){
+  if(!id||!CAMP_MWB_QUEUE.length)return;
+  const q=CAMP_MWB_QUEUE.slice(); CAMP_MWB_QUEUE=[];
+  let done=0,err='';
+  for(const it of q){
+    try{await _mwbPost(kind,id,it);done++;}
+    catch(e){err=e.message||'上传失败';break;}
+  }
+  q.forEach(it=>{try{URL.revokeObjectURL(it.url);}catch(e){}});
+  await _campRenderMwb(kind,id);
+  if(done)toast(`已自动上传 ${done} 张照片`);
+  if(err)showAlert({title:'部分照片上传失败',message:err});
+}
+window.caMwbRemoveQueued=function(qid){
+  const it=CAMP_MWB_QUEUE.find(x=>x.qid===qid);
+  if(it){try{URL.revokeObjectURL(it.url);}catch(e){}}
+  CAMP_MWB_QUEUE=CAMP_MWB_QUEUE.filter(x=>x.qid!==qid);
+  const q=document.getElementById('caMwbQueue');if(q)q.innerHTML=_mwbQueueHtml();
+};
 async function _campRenderMwb(kind,id){
   const box=document.getElementById('caMwb'); if(!box)return;
-  box.setAttribute('data-kind',kind); box.setAttribute('data-id',id);
-  if(!id){ box.innerHTML='<div class="ca-mwb__lock">保存基础信息后即可上传本地照片、用 AI 生成图文详情。</div>'; return; }
+  _mwbCaptureDraft();
+  box.setAttribute('data-kind',kind); box.setAttribute('data-id',id||0);
+  const pending=!id;
   let res={max:5,ratios:['4:3','1:1','16:9'],items:[]};
-  try{ res=await api(`/api/club/${CLUB}/camp-media-list?target_kind=${encodeURIComponent(kind)}&target_id=${id}`,{cache:'no-store'})||res; }catch(e){}
+  if(!pending){
+    try{ res=await api(`/api/club/${CLUB}/camp-media-list?target_kind=${encodeURIComponent(kind)}&target_id=${id}`,{cache:'no-store'})||res; }catch(e){}
+  }
   const arr=res.items||[];
   const items=arr.map((a,idx)=>`<div class="ca-mwb__img ${a.isCover?'on':''}">
       <img src="${esc(a.preview)}" alt="">
+      <div class="ca-mwb__crop"><button type="button" class="ca-btn ghost xs" onclick="caMwbCrop(${a.id})">裁剪</button></div>
       <div class="ca-mwb__ov">${a.isCover?'<span class="ca-tag">封面</span>':`<button type="button" class="ca-btn ghost xs" onclick="caMwbCover(${a.id})">设封面</button>`}
       <button type="button" class="ca-btn ghost xs" onclick="caMwbDel(${a.id})">删除</button></div>
       <div class="ca-mwb__ord"><button type="button" class="ca-btn ghost xs" title="前移" ${idx===0?'disabled':''} onclick="caMwbMove(${a.id},'left')">←</button>
       <button type="button" class="ca-btn ghost xs" title="后移" ${idx===arr.length-1?'disabled':''} onclick="caMwbMove(${a.id},'right')">→</button></div></div>`).join('');
-  const full=arr.length>=res.max;
+  const full=(arr.length+CAMP_MWB_QUEUE.length)>=res.max;
   box.setAttribute('data-max',res.max||5);
-  box.innerHTML=`<div class="ca-mwb__hint">本地照片（最多 ${res.max} 张，可一次多选；服务端按所选比例统一裁剪，保证 C 端视觉一致；首张默认封面，可改设，← → 可调整顺序）</div>
+  box.innerHTML=`${pending?`<div class="ca-mwb__pending">新建对象也能直接选照片、手动裁剪并填写详情说明：点底部「保存基础信息」后，照片会自动上传、可用 AI 一键生成图文详情，无需二次打开。</div>`:''}
+    <div class="ca-mwb__hint">本地照片（最多 ${res.max} 张，可一次多选；支持手动拖拽裁剪 / 自动识别主体避开大片天空；首张默认封面，← → 可调顺序）</div>
     <div class="ca-mwb__bar">
       <label class="ca-mwb__file ${full?'disabled':''}">${full?'已达上限':`<input type="file" id="caMwbFile" accept="image/*" multiple>`}</label>
       <select id="caMwbRatio"><option value="4:3">4:3</option><option value="1:1">1:1</option><option value="16:9">16:9</option></select>
-      <button type="button" class="ca-btn sm" onclick="caMwbUpload()" ${full?'disabled':''}>上传照片</button>
-      <span class="ca-mwb__cnt">${arr.length}/${res.max}</span>
+      <button type="button" class="ca-btn sm" onclick="caMwbUpload()" ${full?'disabled':''}>选图并裁剪</button>
+      <button type="button" class="ca-btn ghost sm" onclick="caMwbUploadAuto()" ${full?'disabled':''}>快速上传（自动适配）</button>
+      <span class="ca-mwb__cnt">${arr.length+CAMP_MWB_QUEUE.length}/${res.max}</span>
     </div>
-    <div class="ca-mwb__grid">${items||'<div class="ca-mwb__empty">还没有照片。先上传本地图片（可一次多选、最多 5 张、可调比例与顺序），AI 会按图片自动排版。</div>'}</div>
+    <div class="ca-mwb__tools">${pending?'':`<button type="button" class="ca-btn ghost sm" onclick="caMwbAutoAll()">一键自动适配全部照片</button>`}
+      <span class="ca-mwb__tip">焦点会同步到 C 端头图 / 卡片 / 详情页，避免天空占满画面</span></div>
+    <div class="ca-mwb__queue" id="caMwbQueue">${_mwbQueueHtml()}</div>
+    <div class="ca-mwb__grid">${items||'<div class="ca-mwb__empty">还没有照片。上传后可逐张点「裁剪」调整取景，或用「一键自动适配」交给系统识别主体。</div>'}</div>
     <div class="ca-mwb__ai">
       <div class="ca-mwb__ail">一个文本框写清照片说明、设施要点、退改与经营规则；还可上传参考资料（PDF / Word / PPT / 图片，可选），模型会把多种资料统一排版成规格 / 设施 / 须知 / 图文段落，无需手填。</div>
       <textarea id="caMwbPrompt" rows="3" placeholder="例如：湖景木屋，两张床，可住 2 大 1 小；含独立卫浴、空调、充电桩；18:00 后安静；退订需提前 2 天。"></textarea>
@@ -474,42 +546,91 @@ async function _campRenderMwb(kind,id){
         <button type="button" class="ca-btn" id="caMwbGen" onclick="caMwbGenerate()">AI 生成图文详情</button><span id="caMwbGenTip" class="ca-mwb__tip"></span></div>
       <div id="caMwbResult" class="ca-mwb__result"></div>
     </div>`;
+  _mwbRestoreDraft();
   const docs=document.getElementById('caMwbDocs');
   if(docs)docs.addEventListener('change',()=>{
     const n=docs.files?docs.files.length:0;
     const names=[...(docs.files||[])].map(f=>f.name).join('、');
+    CAMP_MWB_DRAFT.docs=n?[...docs.files]:[];
     const tip=document.getElementById('caMwbDocsName');
     if(tip)tip.textContent=n?('已选 '+n+' 个资料：'+names.slice(0,60)):'';
   });
 }
-window.caMwbUpload=async function(){
+async function _mwbStage(kind,id,ratio,file,params,url){
+  if(id){
+    try{ await _mwbPost(kind,id,{ratio,file,params}); return 'ok'; }
+    catch(e){ showAlert({title:'上传失败',message:e.message||'请重试'}); return 'err'; }
+  }
+  CAMP_MWB_QUEUE.push({qid:CAMP_MWB_SEQ++,file,url,ratio,params});
+  return 'queued';
+}
+async function _mwbPick(autoMode){
   const box=document.getElementById('caMwb'); if(!box)return;
-  const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'));
+  const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'))||0;
   const f=document.getElementById('caMwbFile'); if(!f||!f.files||!f.files.length){toast('请先选择本地图片（可多选）');return;}
   const ratio=document.getElementById('caMwbRatio')?document.getElementById('caMwbRatio').value:'4:3';
   const max=Number(box.getAttribute('data-max'))||5;
-  // #809：多图同传 —— 逐张走同一上传接口（服务端裁剪/入库/同步封面），超出上限的部分如实提示
-  let cur=0;
-  try{ const l=await api(`/api/club/${CLUB}/camp-media-list?target_kind=${encodeURIComponent(kind)}&target_id=${id}`,{cache:'no-store'}); cur=(l.items||[]).length; }catch(e){}
-  const room=Math.max(0,max-cur);
-  const files=[...f.files];
+  let cur=CAMP_MWB_QUEUE.length;
+  if(id){ try{const l=await api(`/api/club/${CLUB}/camp-media-list?target_kind=${encodeURIComponent(kind)}&target_id=${id}`,{cache:'no-store'});cur+=(l.items||[]).length;}catch(e){} }
+  const room=Math.max(0,max-cur), files=[...f.files];
   if(!room){toast('已达照片上限，请先删除再上传');return;}
   const will=files.slice(0,room), drop=files.length-will.length;
-  let done=0, lastErr='';
+  if(!autoMode&&typeof window.campCropOpen!=='function'){toast('裁剪组件未加载，请刷新页面后重试');return;}
+  let done=0,queued=0;
   for(const file of will){
-    const fd=new FormData(); fd.append('target_kind',kind); fd.append('target_id',id); fd.append('ratio',ratio); fd.append('file',file);
+    const blobUrl=URL.createObjectURL(file);
+    let params={ratio,autoFit:true};
+    if(!autoMode){
+      params=await window.campCropOpen({src:blobUrl,ratio,title:'裁剪照片 · '+file.name});
+      if(!params){try{URL.revokeObjectURL(blobUrl);}catch(e){}continue;}
+    }
+    const st=await _mwbStage(kind,id,ratio,file,params,blobUrl);
+    if(st==='ok')done++; else if(st==='queued')queued++; else break;
+  }
+  f.value='';
+  await _campRenderMwb(kind,id);
+  if(done)toast(done>1?`已上传 ${done} 张`:'已上传');
+  if(queued)toast(`已选 ${queued} 张照片，保存基础信息后自动上传`);
+  if(drop)toast(`${drop} 张超出上限未上传（每对象最多 ${max} 张）`);
+}
+window.caMwbUpload=function(){return _mwbPick(false);};
+window.caMwbUploadAuto=function(){return _mwbPick(true);};
+window.caMwbCrop=async function(assetId){
+  const box=document.getElementById('caMwb'); if(!box)return;
+  const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'))||0;
+  if(!id||typeof window.campCropOpen!=='function'){toast('请先保存基础信息');return;}
+  let a=null;
+  try{const l=await api(`/api/club/${CLUB}/camp-media-list?target_kind=${encodeURIComponent(kind)}&target_id=${id}`,{cache:'no-store'});a=(l.items||[]).find(x=>String(x.id)===String(assetId));}catch(e){}
+  if(!a){toast('素材不存在');return;}
+  const params=await window.campCropOpen({src:a.srcPreview,ratio:a.ratio||'4:3',title:'重新裁剪照片'});
+  if(!params)return;
+  try{
+    const r=await fetch(`/api/club/${CLUB}/camp-media/${assetId}/crop`,{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ratio:params.ratio,crop:params.crop,focalX:params.focalX,focalY:params.focalY})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(j.detail||'裁剪失败');
+    await _campRenderMwb(kind,id); toast('裁剪已保存，C 端将按新取景与焦点显示');
+  }catch(e){showAlert({title:'裁剪失败',message:e.message||'请重试'});}
+};
+window.caMwbAutoAll=async function(){
+  const box=document.getElementById('caMwb'); if(!box)return;
+  const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'))||0;
+  if(!id){toast('请先保存基础信息');return;}
+  let arr=[];
+  try{const l=await api(`/api/club/${CLUB}/camp-media-list?target_kind=${encodeURIComponent(kind)}&target_id=${id}`,{cache:'no-store'});arr=l.items||[];}catch(e){}
+  if(!arr.length){toast('还没有照片');return;}
+  let done=0;
+  for(const a of arr){
     try{
-      const r=await fetch(`/api/club/${CLUB}/camp-media`,{method:'POST',body:fd});
-      const j=await r.json().catch(()=>({}));
-      if(!r.ok){ lastErr=j.detail||'上传失败'; break; }
-      done++;
-    }catch(e){ lastErr=e.message||'上传失败'; break; }
+      const r=await fetch(`/api/club/${CLUB}/camp-media/${a.id}/crop`,{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ratio:a.ratio||'4:3',autoFit:true})});
+      if(r.ok)done++;
+    }catch(e){}
   }
   await _campRenderMwb(kind,id);
-  f.value='';
-  if(done)toast(done>1?`已上传 ${done} 张`:'已上传');
-  if(drop)toast(`${drop} 张超出上限未上传（每对象最多 ${max} 张）`);
-  if(lastErr)showAlert({title:'部分上传失败',message:lastErr});
+  toast(`已自动适配 ${done} 张照片`);
 };
 window.caMwbMove=async function(assetId,dir){
   const box=document.getElementById('caMwb'); const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'));
@@ -570,6 +691,8 @@ async function _campSaveBasic({kind,idRef,ov,apiPath,build,after}){
     else{ const created=await api(apiPath(0),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); idRef.v=(created&&created.id)?created.id:idRef.v; }
     toast(idRef.v?'已保存':'已创建');
     if(after) await after(idRef.v);
+    // #813：新建态选好的照片在拿到真实 id 后自动上传，用户无需二次操作
+    if(CAMP_MWB_QUEUE.length) await _campFlushQueue(kind,idRef.v);
     if(btn)btn.textContent='保存修改';
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'});}
   finally{ if(btn)btn.disabled=false; }
@@ -592,7 +715,7 @@ async function loadCampProfiles(){
 window.editCamp=function(id){
   const c=(id&&CAMP_PROFILES.find(x=>x.id===id))||{name:'',contactPhone:'',address:'',geoLat:'',geoLng:'',status:'active'};
   const idRef={v:id||0};
-  _openForm(id?'编辑营地':'新建营地','营地头图与图文详情：先保存基础信息，即可上传本地照片（最多 5 张、可调比例），在一个框里写规则，点「AI 生成图文详情」自动整理。',[
+  _openForm(id?'编辑营地':'新建营地','营地头图与图文详情：可直接选照片、手动裁剪或一键自动适配；下方一个文本框写规则，保存后点「AI 生成图文详情」自动整理。',[
     {name:'name',label:'营地名称 *',value:c.name,placeholder:'例如：云顶星空营地'},
     {name:'contactPhone',label:'联系电话',value:c.contactPhone,placeholder:'138 0000 0000'},
     {name:'address',label:'地址',value:c.address,placeholder:'成都市××区××路',full:true},
@@ -635,7 +758,7 @@ async function loadCampPitches(){
 window.editPitch=function(id){
   const p=(id&&CAMP_PITCHES.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,code:'',name:'',pitch_type:'tent',is_overnight:1,capacity:1,base_price:0,weekend_price:null,holiday_price:null,status:'active'};
   const idRef={v:id||0};
-  _openForm(id?'编辑营位':'新增营位','先保存基础信息，即可上传本地照片（最多 5 张、按所选比例统一裁剪）并在一个框里写规则，点「AI 生成图文详情」自动整理规格 / 设施 / 须知 / 图文，无需手填。',[
+  _openForm(id?'编辑营位':'新增营位','照片支持手动裁剪与自动适配最佳显示范围（最多 5 张）；下方一个文本框写规则，保存后点「AI 生成图文详情」自动整理规格 / 设施 / 须知 / 图文，无需手填。',[
     _campField(),{name:'code',label:'营位编码',value:p.code,placeholder:'如 A01'},
     {name:'name',label:'营位名称 *',value:p.name,placeholder:'如 湖景帐篷位 A01'},
     {name:'pitchType',label:'营位类型',type:'select',value:p.pitch_type||'tent',onchange:"pfTypeChange(this.value)",
@@ -688,7 +811,7 @@ async function loadCampRental(){
 window.editRental=function(id){
   const r=(id&&CAMP_RENTAL.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,name:'',daily_price:0,deposit:0,available_qty:0,status:'active'};
   const idRef={v:id||0};
-  _openForm(id?'编辑租赁装备':'新增租赁装备','押金离营时退还；先保存基础信息，即可上传照片、用 AI 生成图文详情。',[
+  _openForm(id?'编辑租赁装备':'新增租赁装备','押金离营时退还；照片支持手动裁剪与自动适配（最多 5 张），下方一个文本框 + AI 即可生成完整图文详情，与营位产品一致。',[
     _campField(),{name:'name',label:'装备名称 *',value:r.name},
     {name:'dailyPrice',label:'日租金（元/天）',type:'number',min:0,step:0.01,value:r.daily_price||0},
     {name:'deposit',label:'押金（元）',type:'number',min:0,step:0.01,value:r.deposit||0},
@@ -733,7 +856,7 @@ async function loadCampStore(){
 window.editStore=function(id){
   const s=(id&&CAMP_STORE.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,name:'',price:0,stock:0,category:'',status:'active'};
   const idRef={v:id||0};
-  _openForm(id?'编辑小站商品':'新增小站商品','小站商品按件售卖，不计入房态。先保存基础信息，即可上传照片、用 AI 生成图文详情。',[
+  _openForm(id?'编辑小站商品':'新增小站商品','小站商品按件售卖，不计入房态；照片支持手动裁剪与自动适配（最多 5 张），下方一个文本框 + AI 即可生成完整图文详情，与营位产品一致。',[
     _campField(),{name:'name',label:'商品名称 *',value:s.name},
     {name:'price',label:'售价（元）',type:'number',min:0,step:0.01,value:s.price||0},
     {name:'stock',label:'库存（件）',type:'number',min:0,value:s.stock||0},

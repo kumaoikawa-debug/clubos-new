@@ -198,3 +198,30 @@
 .ca-mwb__ord{position:absolute;left:0;right:0;top:0;display:flex;gap:4px;justify-content:flex-end;padding:4px;background:linear-gradient(180deg,rgba(0,0,0,.35),transparent)}
 .ca-mwb__ord .ca-btn{padding:2px 6px;font-size:10.5px}
 .ca-mwb__ord .ca-btn:disabled{opacity:.35;cursor:default}
+
+/* ── #813 图片手动裁剪 + 焦点自动适配 ───────────────────────────────────────── */
+.ccrop{display:flex;flex-direction:column;align-items:flex-start;padding:2px 0 4px}
+.ccrop__stage{position:relative;width:460px;height:320px;overflow:hidden;background:#101613;border-radius:10px;touch-action:none;cursor:grab;user-select:none}
+.ccrop__stage:active{cursor:grabbing}
+.ccrop__stage img{position:absolute;top:0;left:0;max-width:none;pointer-events:none;-webkit-user-drag:none;user-select:none}
+.ccrop__frame{position:absolute;border:2px solid #fff;border-radius:2px;box-shadow:0 0 0 9999px rgba(8,16,12,.46);pointer-events:none}
+.ccrop__cross{position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;border:2px solid #fff;border-radius:50%;background:rgba(29,107,72,.6);box-shadow:0 0 0 1px rgba(0,0,0,.35)}
+.ccrop__cross:before,.ccrop__cross:after{content:'';position:absolute;background:#fff}
+.ccrop__cross:before{left:8px;top:-6px;width:2px;height:30px}
+.ccrop__cross:after{top:8px;left:-6px;height:2px;width:30px}
+.ccrop__bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;width:460px;max-width:100%}
+.ccrop__lb,.ccrop__tip,.ccrop__note{font-size:11px;color:#8a9a90}
+.ccrop__bar input[type=range]{flex:1;min-width:120px;accent-color:#1d6b48}
+.ccrop__ratio,.ccrop__auto,.ccrop__reset{border:1px solid #d9e2dc;background:#fff;border-radius:8px;padding:5px 10px;font:inherit;font-size:12px;cursor:pointer;color:#45524b}
+.ccrop__ratio.on{background:#1d6b48;border-color:#1d6b48;color:#fff}
+.ccrop__auto{background:#eaf5ef;border-color:#bcdcc9;color:#1d6b48;font-weight:600}
+.ccrop__note{margin-top:8px}
+/* 素材卡裁剪入口 / 一键自动适配 / 新建态待上传队列 */
+.ca-mwb__tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px}
+.ca-mwb__crop{position:absolute;left:4px;top:4px;z-index:2}
+.ca-mwb__crop .ca-btn{padding:2px 6px;font-size:10.5px;background:rgba(255,255,255,.94)}
+.ca-mwb__queue{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+.ca-mwb__qitem{position:relative;width:70px;height:70px;border-radius:8px;overflow:hidden;border:1px dashed #1d6b48;background:#eef3f0}
+.ca-mwb__qitem img{width:100%;height:100%;object-fit:cover;display:block}
+.ca-mwb__qitem button{position:absolute;right:2px;bottom:2px;font-size:10px;padding:1px 5px;border:0;border-radius:6px;background:rgba(0,0,0,.62);color:#fff;cursor:pointer}
+.ca-mwb__pending{font-size:11.5px;color:#1d6b48;background:#eaf5ef;border-radius:8px;padding:8px 10px;margin-bottom:10px;line-height:1.5}
