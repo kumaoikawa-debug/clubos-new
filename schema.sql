@@ -32,6 +32,8 @@ CREATE TABLE IF NOT EXISTS clubs (
   -- 2026-11-11 #826：营地分区与图标配置（后台自定义 C 端分区宫格的小图标与名称）。
   -- 数组，每项 {key,name,target,icon,emoji,visible,order}；为空则用后端默认分区。
   camp_zones_json TEXT,
+  -- #833 腾讯地图 Key（营地老板在设置里自填，用于地图选点）
+  map_key TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -1904,6 +1906,10 @@ CREATE TABLE IF NOT EXISTS camp_pitches (
   weekend_price REAL,                 -- 周末价
   holiday_price REAL,                 -- 节假日价
   status TEXT NOT NULL DEFAULT 'active',     -- active/maintenance(维护)/disabled
+  -- #832 营位单元化：unit_qty=同型单元数（湖畔营地有 10 个 → 10），unit_codes_json=["A001",...]
+  -- 自定义编号；为空时按 code 前缀自动生成 A001..A0NN。房态按单元数累计（满员不可订）。
+  unit_qty INTEGER NOT NULL DEFAULT 1,
+  unit_codes_json TEXT,
   -- v3 商品详情增强：封面/图廊/规格/须知/图文详情/原价/单位（C 端高标准详情页数据源）
   cover_url TEXT,
   gallery_json TEXT,
@@ -1960,6 +1966,7 @@ CREATE TABLE IF NOT EXISTS camp_pitch_bookings (
   status TEXT NOT NULL DEFAULT 'pending',   -- pending/paid/cancelled/checked_in/checked_out
   order_id INTEGER,                   -- 关联统一结算订单（club 域）
   camp_order_id INTEGER,              -- v3：关联 camp_orders.id（统一商品订单）
+  assigned_units_json TEXT,           -- #832：实际分配的单元编号（如 ["A003"]），null=未分配
   user_id INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(club_id) REFERENCES clubs(id),

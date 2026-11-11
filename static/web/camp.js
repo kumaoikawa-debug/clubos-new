@@ -23,7 +23,7 @@ let CAMP_USE_POINTS=false,CAMP_VOUCHER='',CAMP_GUEST={name:'',phone:''};
 let CAMP_MY_VOUCHERS=null,CAMP_CONTACTS=null,CAMP_VOUCHER_AUTO=false; /* #811 联系人历史+券自动匹配 */
 let CAMP_CAL={in:'',out:'',anchor:''};
 let CAMP_DETAIL=null,CAMP_DETAIL_QTY=1;
-let CAMP_HERO_IDX=0,CAMP_TOAST_T=null,CAMP_PAY_TIMER=null,CAMP_PAY_LEFT=0;
+let CAMP_HERO_IDX=0,CAMP_TOAST_T=null,CAMP_PAY_TIMER=null,CAMP_PAY_LEFT=0,CAMP_HERO_T=null;
 let CAMP_BUSY=false,CAMP_LV=null,CAMP_INTRO=null;
 let CAMP_ME={name:'',avatar:''};   /* #827 会员头像与「我的」同源 */
 
@@ -178,9 +178,19 @@ function _quote(pid,qty,dep){
   const stay=isDay?day.filter(d=>d.day===CAMP_IN):day.filter(d=>d.day>=CAMP_IN&&d.day<CAMP_OUT);
   if(!stay.length)return {ok:false,reason:'所选区间无房态'};
   const blocked=stay.filter(d=>d.status!=='available');
+  /* #832 单元化：按「区间内最少剩余单元数」判定可订 qty 个；满员/不足都算不可订。 */
+  const minLeft=stay.length?Math.min.apply(null,stay.map(d=>(d.unitsLeft==null?1:Number(d.unitsLeft)))):0;
   const payable=Math.round(stay.reduce((a,d)=>a+(Number(d.price)||0),0)*qty*100)/100;
-  return {ok:blocked.length===0,blocked,stay,payable,total:Math.round((payable+dep)*100)/100,
-    reason:blocked.length?('含不可订日期 '+blocked.map(b=>b.day.slice(5)).join('、')):''};
+  const ok=blocked.length===0&&minLeft>=qty;
+  let reason='';
+  if(blocked.length)reason='含不可订日期 '+blocked.map(b=>b.day.slice(5)).join('、');
+  else if(minLeft<qty)reason='所选日期仅剩 '+minLeft+' 个可订';
+  return {ok,blocked,stay,payable,minLeft,unitQty:p.unitQty||1,total:Math.round((payable+dep)*100)/100,reason};
+}
+/* #832 某营位在当前选中区间的最少剩余单元（用于卡片「剩N/10」） */
+function _unitsLeftOf(pid){
+  const q=_quote(pid,1,0);
+  return (q&&q.stay&&q.stay.length)?q.minLeft:0;
 }
 function _pitchPrice(pid){
   const q=_quote(pid,1,0);
@@ -228,8 +238,7 @@ function _render(){
       + '<div class="cp-hero__rail"><span class="cp-hero__tag">'+CP_ICON.tent+' CAMP · 营地预订</span>'
       + (CAMP_LIST.length>1?'<select id="campSel" onchange="campOnChange()" class="cp-hero__sel">'+selOpts+'</select>':'')
       + '</div>'
-      + '<div class="cp-hero__cap"><h1 class="cp-hero__name">'+esc(c.name||'山野营地')+'</h1>'
-      + '<p class="cp-hero__slogan">'+esc(_shortSlogan(c))+'</p></div>'
+      /* #835 hero 纯视觉：不再压营地名/slogan 文字（营地名称保留在下方信息卡），保留轮播圆点 */
       + (gallery.length>1?'<div class="cp-hero__dots">'+gallery.map((_,i)=>'<i class="cp-hero__dot '+(i===CAMP_HERO_IDX?'on':'')+'" onclick="campHero('+i+')"></i>').join('')+'</div>':'')
     + '</div>'
     + '<div class="cp-info"><div class="cp-info__row"><div class="cp-info__main">'
@@ -255,6 +264,17 @@ function _render(){
     + '<div class="cp-footnote">营位按日期房态管理 · 过夜跨日锁定 · 下单后 30 分钟内完成支付<br>营地活动请前往「活动」栏目查看与报名</div>'
     + _cartBarHtml()
     + '</div>';
+  /* #835 多图自动轮播：5s 一张循环；重渲染（筛选/日期变化）会重建 DOM，
+     这里统一重置定时器，保证只有一个在跑。手动点圆点后从下一张继续。 */
+  if(CAMP_HERO_T){clearInterval(CAMP_HERO_T);CAMP_HERO_T=null;}
+  if(gallery.length>1){
+    CAMP_HERO_T=setInterval(()=>{
+      /* 页面不可见或打开了详情浮层时不轮播，回来后自动续 */
+      if(document.hidden||document.querySelector('#cpDetailHost')||!document.querySelector('.cp-hero__img'))return;
+      CAMP_HERO_IDX=(CAMP_HERO_IDX+1)%gallery.length;
+      _render();
+    },5000);
+  }
 }
 
 /* #826：分区宫格读后台配置。配置读不到时退回内置默认（保证旧数据/接口异常也能正常显示）。 */
@@ -319,8 +339,15 @@ function _pitchesHtml(){
   const campName=_curCamp().name||'营地';
   return list.map(p=>{
     const q=_quote(p.id,1,0),off=!q.ok,price=_pitchPrice(p.id);
-    const badge=off?'<span class="cp-card__badge warn">已订满</span>':'<span class="cp-card__badge">'+esc(campName)+'</span>';
-    const spec=_pitchTypeLabel(p.pitch_type)+' · 适用 '+(p.capacity||1)+' 人 · '+(p.is_overnight?'过夜':'日间当天');
+    /* #832 单元化：unitQty>1 显示「剩 N/M」徽章；=1 保持旧徽章 */
+    const uq=Number(p.unitQty||1);
+    let badge;
+    if(uq>1){
+      const left=q.stay&&q.stay.length?q.minLeft:null;
+      badge=(left!=null&&left<=0)?'<span class="cp-card__badge warn">已订满</span>'
+        :'<span class="cp-card__badge">剩 '+(left==null?'-':left)+'/'+uq+'</span>';
+    }else badge=off?'<span class="cp-card__badge warn">已订满</span>':'<span class="cp-card__badge">'+esc(campName)+'</span>';
+    const spec=_pitchTypeLabel(p.pitch_type)+' · 适用 '+(p.capacity||1)+' 人 · '+(p.is_overnight?'过夜':'日间当天')+(uq>1?(' · '+uq+' 个'):'');
     const tags=[p.code,p.pitch_type==='day'?'不过夜':'轻户外'].filter(Boolean)
       .map(t=>'<span class="cp-chip" style="padding:2px 6px;font-size:9.5px">'+esc(t)+'</span>').join('');
     return '<div class="cp-card'+(off?' is-off':'')+'">'
@@ -686,8 +713,7 @@ function _paintAiSections(d){
   const blocks=(ai.sections||[]).map(sec=>{
     const refs=Array.isArray(sec.mediaRefs)?sec.mediaRefs:[];
     const imgs=refs.map(i=>media[Number(i)]).filter(Boolean)
-      .map(x=>'<figure class="cp-dt__fig"><img src="'+esc(x.u)+'" alt="" loading="lazy"'+_focalStyle(x.f)+'>'
-        +(x.cap?'<figcaption>'+esc(String(x.cap).slice(0,56))+'</figcaption>':'')+'</figure>').join('');
+      .map(x=>'<figure class="cp-dt__fig"><img src="'+esc(x.u)+'" alt="" loading="lazy"'+_focalStyle(x.f)+'></figure>').join('');
     const layout=['full','split','grid','text'].indexOf(sec.layout)>=0?sec.layout:'grid';
     return '<section class="cp-dt__sec cp-dt__sec--'+layout+'">'
       + '<div class="cp-dt__sectxt">'
@@ -726,8 +752,7 @@ function _paintIntro(){
   const gallery=(c.gallery||[]).map(_safeUrl).filter(Boolean);
   const pool=pairs.length?pairs:gallery.map(u=>({u,f:null,cap:''}));
   const hero=(c.coverUrl&&_safeUrl(c.coverUrl))||pool[0]&&pool[0].u||'';
-  const figs=pool.slice(0,12).map(x=>'<figure class="cp-intro__fig"><img src="'+esc(x.u)+'" alt="" loading="lazy"'+_focalStyle(x.f)+'>'
-    +(x.cap?'<figcaption>'+esc(String(x.cap).slice(0,52))+'</figcaption>':'')+'</figure>').join('');
+  const figs=pool.slice(0,12).map(x=>'<figure class="cp-intro__fig"><img src="'+esc(x.u)+'" alt="" loading="lazy"'+_focalStyle(x.f)+'></figure>').join('');
   const hl=(ai.highlights||[]).map(h=>'<span class="cp-chip">'+esc(String(h))+'</span>').join('');
   const fac=(c.facilities||[]).map(f=>'<span class="cp-chip">'+esc(String(f))+'</span>').join('');
   const rules=_introRules(c,ai);
@@ -777,7 +802,12 @@ function _paintDetail(){
     if(!CAMP_DETAIL_UNITS)CAMP_DETAIL_UNITS=_planDefaultUnits(plans[CAMP_DETAIL_PLAN]);
   }
   const price=(plans&&plans[CAMP_DETAIL_PLAN])?Number(plans[CAMP_DETAIL_PLAN].price||0):(d.price||0);
-  const canAdd=isPitch?_quote(d.id,1,0).ok:true;
+  /* #832 单元化：营位详情按「区间最少剩余」钳制数量上限，canAdd 也看余量 */
+  const unitQty=isPitch?Number(d.unitQty||1):0;
+  const q=isPitch?_quote(d.id,1,0):null;
+  const maxUnits=isPitch?Math.max(1,Math.min(unitQty||1,(q&&q.minLeft!=null)?q.minLeft:unitQty||1)):20;
+  if(isPitch&&CAMP_DETAIL_QTY>maxUnits)CAMP_DETAIL_QTY=maxUnits;
+  const canAdd=isPitch?!!(q&&q.ok):true;
   const html='<div class="cp-detail" id="cpDetailView">'
     + '<div class="cp-dt__top"><button type="button" onclick="campCloseDetail()">'+CP_ICON.back+'</button>'
       + '<span>商品详情</span><button type="button" onclick="campOpenCheckout()" aria-label="清单">'+CP_ICON.cart+'</button></div>'
@@ -801,8 +831,10 @@ function _paintDetail(){
       + '<div class="cp-dt__safe">ClubOS 营地 · 价格与会员权益由系统实时计算</div>'
     + '</div>'
     + '<div class="cp-dt__bar">'
-      + (isPitch?'<div class="cp-dt__barinfo"><b>1 个营位</b><em>'+_cnDate(CAMP_IN)+' → '+_cnDate(d.isOvernight&&!_isDayUse()?CAMP_OUT:CAMP_IN)+'</em></div>'
-        :'<div class="cp-stepper"><button type="button" onclick="campDetailQty(-1)">−</button><span id="dtQty">'+CAMP_DETAIL_QTY+'</span><button type="button" onclick="campDetailQty(1)">＋</button></div>')
+      + (isPitch
+          ? '<div class="cp-dt__barinfo"><b id="dtQtyNote"></b><em>'+_cnDate(CAMP_IN)+' → '+_cnDate(d.isOvernight&&!_isDayUse()?CAMP_OUT:CAMP_IN)+'</em></div>'
+            + (unitQty>1?'<div class="cp-stepper"><button type="button" onclick="campDetailQty(-1)">−</button><span id="dtQty">'+CAMP_DETAIL_QTY+'</span><button type="button" onclick="campDetailQty(1)">＋</button><em class="cp-stepper__u">个</em></div>':'')
+          :'<div class="cp-stepper"><button type="button" onclick="campDetailQty(-1)">−</button><span id="dtQty">'+CAMP_DETAIL_QTY+'</span><button type="button" onclick="campDetailQty(1)">＋</button></div>')
       + '<button class="cp-dt__add" type="button" '+(canAdd?'':'disabled')+' onclick="campDetailAdd(0)">'+(canAdd?'加入清单':'已订满')+'</button>'
       + '<button class="cp-dt__buy" type="button" '+(canAdd?'':'disabled')+' onclick="campDetailAdd(1)">立即预订</button>'
     + '</div></div>';
@@ -815,14 +847,23 @@ function _paintDetail(){
   if(!node){node=document.createElement('div');node.id='cpDetailHost';document.body.appendChild(node);}
   node.innerHTML=html;
   document.body.classList.add('cp-lock');
+  /* #832 初始化营位数量提示与 stepper 上限 */
+  if(isPitch){
+    const n=document.getElementById('dtQtyNote');
+    if(n)n.textContent=CAMP_DETAIL_QTY+' 个营位 · '+(unitQty>1?('剩 '+(q&&q.minLeft!=null?q.minLeft:unitQty)+'/'+unitQty):'1 个营位');
+  }
 }
 window.campCloseDetail=function(){
   const n=document.querySelector('#cpDetailHost');if(n)n.remove();
   document.body.classList.remove('cp-lock');CAMP_DETAIL=null;
 };
 window.campDetailQty=function(delta){
-  CAMP_DETAIL_QTY=Math.max(1,Math.min(20,CAMP_DETAIL_QTY+delta));
+  const d=CAMP_DETAIL||{};
+  const max=(d.kind==='pitch'&&d.unitQty>1)?Math.max(1,Math.min(d.unitQty,(_quote(d.id,1,0)||{}).minLeft!=null?_quote(d.id,1,0).minLeft:d.unitQty)):20;
+  CAMP_DETAIL_QTY=Math.max(1,Math.min(max,CAMP_DETAIL_QTY+delta));
   const el=$('#dtQty');if(el)el.textContent=CAMP_DETAIL_QTY;
+  const n=$('#dtQtyNote');
+  if(n&&d.kind==='pitch')n.textContent=CAMP_DETAIL_QTY+' 个营位 · '+(d.unitQty>1?('剩 '+((_quote(d.id,1,0)||{}).minLeft!=null?_quote(d.id,1,0).minLeft:d.unitQty)+'/'+d.unitQty):'1 个营位');
   try{_syncRentalPlan();}catch(e){}
 };
 window.campDetailAdd=function(goCheckout){
@@ -1154,7 +1195,11 @@ function _ordersHtml(orders){
     const isNew=(o.id!=null&&!seen.has(String(o.id)));
     const items=(o.items||[]).map(it=>'<div class="cp-order__it"><span>'+esc(it.title||'')+' × '+it.qty+'</span>'
       +'<b>¥'+_money(it.subtotal)+'</b></div>').join('');
-    return '<div class="cp-order"><div class="cp-order__hd"><b>'+esc(o.orderNo||'')+'</b>'
+    /* #837 左滑删除：终态订单（已取消/已过期）卡片支持左滑露出删除按钮 */
+    const canDel=(st==='cancelled'||st==='expired');
+    return '<div class="cp-order-wrap">'
+      +'<div class="cp-order-del" onclick="campDeleteOrder('+o.id+')">删除</div>'
+      +'<div class="cp-order'+(canDel?' cp-order--swipe':'')+'" data-oid="'+o.id+'"><div class="cp-order__hd"><b>'+esc(o.orderNo||'')+'</b>'
       +'<span class="cp-order__st '+esc(st)+'">'+esc(CAMP_ST_CN[st]||CAMP_ST[st]||st)+'</span>'
       +(isNew?'<i class="cp-order__dot" aria-label="新订单"></i>':'')+'</div>'
       +'<div class="cp-order__date">'+esc(o.createdAt||'')+' · 联系人 '+esc(o.guestName||'')+'</div>'
@@ -1173,9 +1218,45 @@ function _ordersHtml(orders){
            +'<div class="cp-order__rc">核销码 <b>'+esc(o.redeemCode)+'</b><em>到营地出示此码，工作人员扫码核销</em></div>')
         +'</div>':'')
       +(st==='paid'?'<div class="cp-order__earn">已获得 '+Number(o.pointsEarned||0)+' 活动积分</div>':'')
-      +'</div>';
+      +'</div></div>';
   }).join('')+'</div>';
 }
+/* #837 左滑手势：touchstart/touchmove 平移卡片，滑过阈值露出删除按钮；松手按位移吸附 */
+function _bindOrderSwipe(root){
+  (root||document).querySelectorAll('.cp-order--swipe').forEach(card=>{
+    if(card.dataset.sw)return;card.dataset.sw='1';
+    let sx=0,dx=0,open=false;
+    card.addEventListener('touchstart',e=>{sx=e.touches[0].clientX;dx=0;},{passive:true});
+    card.addEventListener('touchmove',e=>{
+      dx=e.touches[0].clientX-sx;
+      /* 只响应左滑（dx<0），右滑视为收起 */
+      const t=Math.max(-72,Math.min(0,dx));
+      card.style.transform='translateX('+t+'px)';
+      card.style.transition='none';
+    },{passive:true});
+    card.addEventListener('touchend',()=>{
+      open=dx<-36;
+      card.style.transition='transform .18s ease';
+      card.style.transform=open?'translateX(-72px)':'translateX(0)';
+    });
+    card.addEventListener('click',()=>{ if(open){card.style.transform='translateX(0)';open=false;} },true);
+  });
+}
+window.campDeleteOrder=async function(oid){
+  const ok=await (window.uxConfirm?uxConfirm({title:'删除订单',message:'删除后该订单不再显示，且无法恢复。确定删除？',confirmText:'删除',danger:true}):confirm('删除后不可恢复，确定？'));
+  if(!ok)return;
+  try{
+    await api('/api/public/camp-orders/'+oid+'?user_id='+_uid(),{method:'DELETE',cache:'no-store'});
+    /* 同步清理已读集合（两端共用 key） */
+    const seen=_campSeenSet();seen.delete(String(oid));
+    try{localStorage.setItem(_campSeenKey(),JSON.stringify([...seen]));}catch(e){}
+    try{const k='clubos_camp_seen_'+(typeof CLUB!=='undefined'?CLUB:0)+'_'+_uid();
+      const s=new Set(JSON.parse(localStorage.getItem(k)||'[]').map(String));s.delete(String(oid));
+      localStorage.setItem(k,JSON.stringify([...s]));}catch(e){}
+    _cpToast('订单已删除');
+    campOpenOrders();
+  }catch(e){_cpToast(_err(e));}
+};
 window.campOpenOrders=async function(){
   clearInterval(CAMP_PAY_TIMER);
   _showSheet('我的营地订单','<div id="cpOrdersBody"><div class="cp-state">正在读取订单…</div></div>');
@@ -1184,7 +1265,8 @@ window.campOpenOrders=async function(){
     const list=d.orders||[];
     const el=$('#cpOrdersBody');if(el)el.innerHTML=_ordersHtml(list);
     _drawRedeemQrs();
-    /* 抽屉里订单明细与核销码全摊开了，算「已看」。 */
+    _bindOrderSwipe(el);
+    /* 抽屉里订单明细与核销码全摊开了，算「已看」；红点在打开抽屉后自动消失（#837） */
     _campMarkAllSeen(list);
   }catch(e){const el=$('#cpOrdersBody');if(el)el.innerHTML='<div class="cp-state">'+esc(_err(e))+'</div>';}
 };

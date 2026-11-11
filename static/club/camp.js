@@ -210,7 +210,7 @@ function _chartHtml(){
         data-key="${key}" title="${esc(p.name)} · ${dd.day} · ${label} · ¥${dd.price}"
         onclick="caCell(${p.pitchId},'${dd.day}','${dd.status}')">¥${dd.price}<span>${label}</span></button></td>`;
     }).join('');
-    return `<tr><td class="ca-rowh">${esc(p.name||'营位')}<small>${esc(p.code||'')} · ${_typeName(p.pitchType)}</small></td>${cells}</tr>`;
+    return `<tr><td class="ca-rowh">${esc(p.name||'营位')}<small>${esc(p.code||'')} · ${_typeName(p.pitchType)}${Number(p.unitQty||1)>1?(' · '+p.unitQty+' 个'):''}</small><button type="button" class="ca-mini" style="margin-top:4px" onclick="caOpenUnits(${p.pitchId},'${days[0]||''}','${days[days.length-1]||''}')">单元情况</button></td>${cells}</tr>`;
   }).join('');
   return `<div class="ca-legend">
       <span><i class="av"></i>可订</span><span><i class="bk"></i>已订（预订自动占用）</span>
@@ -770,12 +770,19 @@ async function loadCampProfiles(){
 window.editCamp=function(id){
   const c=(id&&CAMP_PROFILES.find(x=>x.id===id))||{name:'',contactPhone:'',address:'',geoLat:'',geoLng:'',status:'active'};
   const idRef={v:id||0};
+  /* #833 地图选点：不再手填经纬度 → 打开地图点选/搜索定位，自动回填坐标与地址。
+     腾讯地图 GL JS（合规白名单）。坐标只读展示 + 「打开地图选点」按钮。 */
+  const geoHtml='<div class="ca-field full"><div class="ca-geo">'
+    +'<div class="ca-geo__row"><span class="ca-geo__val" id="caGeoVal">'+((c.geoLat!=null&&c.geoLng!=null)?('已选：'+Number(c.geoLat).toFixed(6)+', '+Number(c.geoLng).toFixed(6)):'未选坐标')+'</span>'
+    +'<button type="button" class="ca-btn sm" onclick="caPickGeo()">📍 打开地图选点</button></div>'
+    +'<input type="hidden" name="geoLat" id="f_geoLat" value="'+(c.geoLat==null?'':c.geoLat)+'">'
+    +'<input type="hidden" name="geoLng" id="f_geoLng" value="'+(c.geoLng==null?'':c.geoLng)+'">'
+    +'</div></div>';
   _openForm(id?'编辑营地':'新建营地','营地头图与图文详情：可直接选照片、手动裁剪或一键自动适配；下方一个文本框写规则，保存后点「AI 生成图文详情」自动整理。',[
     {name:'name',label:'营地名称 *',value:c.name,placeholder:'例如：云顶星空营地'},
     {name:'contactPhone',label:'联系电话',value:c.contactPhone,placeholder:'138 0000 0000'},
-    {name:'address',label:'地址',value:c.address,placeholder:'成都市××区××路',full:true},
-    {name:'geoLat',label:'纬度（可空）',value:c.geoLat==null?'':c.geoLat,placeholder:'30.66'},
-    {name:'geoLng',label:'经度（可空）',value:c.geoLng==null?'':c.geoLng,placeholder:'103.95'},
+    {name:'address',label:'地址',value:c.address,placeholder:'成都市××区××路（地图选点后可自动回填）',full:true},
+    {name:'__geo',label:'',type:'html',html:geoHtml},
     {name:'status',label:'状态',type:'select',value:c.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
     {name:'__mwb',label:'',type:'html',html:_campMediaSectionHtml('profile',id||0)}
   ],ov=>_campSaveBasic({kind:'profile',idRef,ov,
@@ -785,6 +792,76 @@ window.editCamp=function(id){
     after:cur=>_campRenderMwb('profile',cur)
   }),'保存基础信息');
   _campRenderMwb('profile',id||0);
+};
+
+/* ══ #833 地图选点（腾讯地图 GL JS，合规白名单）══
+   key 走 clubos_map_key.json（营地老板自己在设置里填，前端不内置任何 key）；
+   未配置 key 时提示申请路径并保留手动输入兜底。 */
+window.caPickGeo=async function(){
+  let key='';
+  try{const st=await api(`/api/club/${CLUB}/settings`);key=(st&&(st.mapKey||st.map_key))||'';}catch(e){}
+  if(!key){
+    showAlert({title:'先配置腾讯地图 Key',
+      message:'地图选点需要腾讯位置服务 Key（免费申请）：1) 打开 lbs.qq.com 控制台 → 应用管理 → 创建应用 → 添加 Key（WebServiceAPI 勾选）；2) 复制 Key；3) 在「设置」里保存。配置好后这里就能地图点选定位。'});
+    return;
+  }
+  const startLat=document.getElementById('f_geoLat'),startLng=document.getElementById('f_geoLng');
+  const initLat=startLat&&startLat.value?Number(startLat.value):30.659462;
+  const initLng=startLng&&startLng.value?Number(startLng.value):104.063341;
+  const ov=uxDialog({title:'地图选点 · 营地位置',wide:true,
+    desc:'点击地图放置标记，或搜索地点后点选；底部实时显示坐标，确认后回填。',
+    body:'<div style="display:flex;gap:8px;margin-bottom:8px"><input id="caGeoQ" class="ca-input" style="flex:1" placeholder="搜索地点，如 蓥华山" onkeydown="if(event.key===\'Enter\')caGeoSearch()"><button type="button" class="ca-btn sm" onclick="caGeoSearch()">搜索</button></div>'
+      +'<div id="caGeoMap" style="width:100%;height:420px;border-radius:12px;overflow:hidden"></div>'
+      +'<div id="caGeoCur" style="margin-top:8px;font-size:13px;font-weight:600;color:#2f6b48">当前标记：'+initLat.toFixed(6)+', '+initLng.toFixed(6)+'</div>',
+    foot:'<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" id="caGeoOk">确认选点</button>'});
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+  let marker=null,curLat=initLat,curLng=initLng;
+  const upd=()=>{const el=document.getElementById('caGeoCur');if(el)el.textContent='当前标记：'+curLat.toFixed(6)+', '+curLng.toFixed(6);};
+  const setPt=(lat,lng)=>{
+    curLat=lat;curLng=lng;upd();
+    const T=window.TMap;
+    if(!T||!window._caGeoMap)return;
+    const pos=new T.LatLng(lat,lng);
+    if(marker)marker.updateGeometry(pos);
+    else marker=new T.MultiMarker({map:window._caGeoMap,styles:{default:new T.MarkerStyle({width:24,height:36})},geometries:[{id:'p',styleId:'default',position:pos}]});
+    window._caGeoMap.setCenter(pos);
+  };
+  ov.querySelector('#caGeoOk').onclick=()=>{
+    const la=document.getElementById('f_geoLat'),lg=document.getElementById('f_geoLng'),vv=document.getElementById('caGeoVal');
+    if(la)la.value=curLat.toFixed(6); if(lg)lg.value=curLng.toFixed(6);
+    if(vv)vv.textContent='已选：'+curLat.toFixed(6)+', '+curLng.toFixed(6);
+    ov.uxClose();toast('已选点：'+curLat.toFixed(4)+', '+curLng.toFixed(4));
+  };
+  /* 加载 SDK（key 显式传入 —— 老板自己的 key，属合规「非默认场景」） */
+  if(!window.TMap){
+    const s=document.createElement('script');
+    s.src='https://map.qq.com/api/gljs?v=1.exp&key='+encodeURIComponent(key);
+    s.onload=init; s.onerror=()=>showAlert({title:'地图加载失败',message:'请检查网络或 Key 配置（Key 需启用 WebServiceAPI / JavascriptAPI GL）'});
+    document.head.appendChild(s);
+  } else init();
+  function init(){
+    const T=window.TMap;if(!T)return;
+    const map=new T.Map(document.getElementById('caGeoMap'),{zoom:14,center:new T.LatLng(initLat,initLng)});
+    window._caGeoMap=map;
+    map.on('click',e=>setPt(e.lat.getLat(),e.lat.getLng()));
+    setPt(initLat,initLng);
+  }
+  window.caGeoSearch=()=>{
+    const q=(document.getElementById('caGeoQ')||{}).value||'';
+    if(!q)return;
+    const T=window.TMap;if(!T)return;
+    /* 用轻量 WebService 搜索：JSONP 不便，直接用 geocoder 的 suggest 不可用无 SDK 服务。
+       简化：调 lbs.qq.com WebServiceAPI（老板自己的 key，浏览器端 Referer 白名单由其控制） */
+    fetch('https://apis.map.qq.com/ws/place/v1/suggestion?key='+encodeURIComponent(key)+'&keyword='+encodeURIComponent(q))
+      .then(r=>r.json()).then(j=>{
+        const list=(j&&j.data)||[];
+        if(!list.length){toast('没有找到该地点');return;}
+        const first=list[0];
+        if(first.location)setPt(first.location.lat,first.location.lng);
+        const addr=first.address||first.title||'';
+        if(addr){const ai=document.getElementById('f_address');if(ai&&!ai.value)ai.value=addr;}
+      }).catch(()=>toast('搜索失败，请检查 Key（需勾选 WebServiceAPI）'));
+  };
 };
 window.saveCamp=function(){};
 window.deleteCamp=async function(id){
@@ -942,14 +1019,21 @@ async function loadCampPitches(){
     newFn:'editPitch(0)',newLabel:'新增营位',
     rowsFn:()=>CAMP_PITCHES.filter(p=>_match(p.name)||_match(p.code)).map(p=>_item(p.name,
       [`<span class="ca-tag">${_typeName(p.pitch_type)}</span>`,p.is_overnight?'<span class="ca-tag grey">过夜 · 跨日锁</span>':'<span class="ca-tag grey">日间当天</span>',
+       Number(p.unit_qty||1)>1?`<span class="ca-tag">${Number(p.unit_qty)} 个单元</span>`:'',
        p.status==='active'?'':'<span class="ca-tag red">已停用</span>'].join(''),
-      `编码 <b>${esc(p.code||'-')}</b> · 适用 ${p.capacity||1} 人<br>平日 ¥${_money(p.base_price)} / 天${p.weekend_price!=null?' · 周末 ¥'+_money(p.weekend_price):''}${p.holiday_price!=null?' · 节假日 ¥'+_money(p.holiday_price):''}`,
+      `编码 <b>${esc(p.code||'-')}</b> · 适用 ${p.capacity||1} 人${Number(p.unit_qty||1)>1?(' · '+esc(_camp_arr(p.unit_codes_json).slice(0,3).join('、'))+(Number(p.unit_qty)>3?' …':'')):''}<br>平日 ¥${_money(p.base_price)} / 天${p.weekend_price!=null?' · 周末 ¥'+_money(p.weekend_price):''}${p.holiday_price!=null?' · 节假日 ¥'+_money(p.holiday_price):''}`,
       `editPitch(${p.id})`,`deletePitch(${p.id})`)).join(''),
     emptyTitle:'这个营地还没有营位',emptySub:'点「新增营位」建第一个营位，之后去「工作台 · 房态」就能看到 tape chart。'});
 }
 window.editPitch=function(id){
-  const p=(id&&CAMP_PITCHES.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,code:'',name:'',pitch_type:'tent',is_overnight:1,capacity:1,base_price:0,weekend_price:null,holiday_price:null,status:'active'};
+  const p=(id&&CAMP_PITCHES.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,code:'',name:'',pitch_type:'tent',is_overnight:1,capacity:1,base_price:0,weekend_price:null,holiday_price:null,status:'active',unit_qty:1,unit_codes:[]};
   const idRef={v:id||0};
+  /* #832 单元化：unit_qty 个同型实体单元（A001-A010），编号可自定义；>1 时 C 端按剩余数判定满员 */
+  const unitHtml='<div class="ca-field full"><div class="ca-unitctl"><span class="ca-unitctl__t">同型数量（如湖畔营地有 10 个一样的营位 → 填 10）</span>'
+    +'<div class="cp-stepper"><button type="button" onclick="caUnitQty(-1)">−</button><b id="caUnitQtyN">'+(p.unit_qty||1)+'</b><button type="button" onclick="caUnitQty(1)">＋</button></div>'
+    +'<div class="ca-unitctl__hint" id="caUnitHint"></div>'
+    +'<textarea id="caUnitCodes" rows="2" placeholder="每行一个编号（留空自动生成 code-01..NN），如：A001 / A002 / …">'+esc((p.unit_codes||[]).join('\n'))+'</textarea>'
+    +'</div></div>';
   _openForm(id?'编辑营位':'新增营位','照片支持手动裁剪与自动适配最佳显示范围（最多 5 张）；下方一个文本框写规则，保存后点「AI 生成图文详情」自动整理规格 / 设施 / 须知 / 图文，无需手填。',[
     _campField(),{name:'code',label:'营位编码',value:p.code,placeholder:'如 A01'},
     {name:'name',label:'营位名称 *',value:p.name,placeholder:'如 湖景帐篷位 A01'},
@@ -958,6 +1042,7 @@ window.editPitch=function(id){
     {name:'isOvernight',label:'住宿语义',type:'select',value:String(p.is_overnight?1:0),
       options:[{value:'1',label:'过夜（跨日锁）'},{value:'0',label:'日间（当天结束）'}]},
     {name:'capacity',label:'适用人数',type:'number',min:1,value:p.capacity||1},
+    {name:'__unit',label:'',type:'html',html:unitHtml},
     {name:'basePrice',label:'平日价（元/天）',type:'number',min:0,step:0.01,value:p.base_price||0},
     {name:'weekendPrice',label:'周末价（留空=同平日）',type:'number',min:0,step:0.01,value:p.weekend_price==null?'':p.weekend_price},
     {name:'holidayPrice',label:'节假日价（留空=同平日）',type:'number',min:0,step:0.01,value:p.holiday_price==null?'':p.holiday_price},
@@ -971,10 +1056,76 @@ window.editPitch=function(id){
       pitchType:_fv(ov,'pitchType')||'tent',isOvernight:Number(_fv(ov,'isOvernight')||0),
       capacity:Math.max(1,Number(_fv(ov,'capacity')||1)),basePrice:Number(_fv(ov,'basePrice')||0),
       weekendPrice:_fn(ov,'weekendPrice'),holidayPrice:_fn(ov,'holidayPrice'),status:_fv(ov,'status')||'active',
+      unitQty:Number((document.getElementById('caUnitQtyN')||{}).textContent||1),
+      unitCodes:String((document.getElementById('caUnitCodes')||{}).value||'').split(/\n+/).map(s=>s.trim()).filter(Boolean),
       ..._benefitBuild(ov)}),
     after:cur=>_campRenderMwb('pitch',cur)
   }),'保存基础信息');
   _campRenderMwb('pitch',id||0);
+  caUnitHint();
+};
+window.caUnitQty=function(delta){
+  const el=document.getElementById('caUnitQtyN');if(!el)return;
+  el.textContent=Math.max(1,Math.min(99,(Number(el.textContent)||1)+delta));
+  caUnitHint();
+};
+function caUnitHint(){
+  const n=document.getElementById('caUnitQtyN'),h=document.getElementById('caUnitHint');
+  if(!n||!h)return;
+  const qty=Math.max(1,Number(n.textContent)||1);
+  const codes=String((document.getElementById('caUnitCodes')||{}).value||'').split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  h.textContent=qty===1?'1 个 = 一号一位（与旧版一致）'
+    :(codes.length>=qty?('已自定义 '+codes.length+' 个编号，取前 '+qty+' 个')
+    :('将生成 '+qty+' 个单元：自定义 '+codes.length+' 个 + 自动补「'+((document.getElementById('f_code')||{}).value||'code')+'-NN」'));
+}
+
+/* ═══ #832 单元情况弹层：老板打开某营位 → N 个单元各自的预订占用 + 人工改派 ═══ */
+let CA_UNITS=null;   /* /pitches/{id}/units 返回 */
+window.caOpenUnits=async function(pitchId,d0,d1){
+  try{CA_UNITS=await api(`/api/club/${CLUB}/pitches/${pitchId}/units?check_in=${encodeURIComponent(d0||'')}&check_out=${encodeURIComponent(d1||d0||'')}`,{cache:'no-store'});}
+  catch(e){showAlert({title:'读取单元占用失败',message:e.message||''});return;}
+  const ov=uxDialog({title:'单元预订情况',desc:'每个实体单元（A001…）在所选日期的占用。点「改派」可人工指定单元编号；不指定则由系统自动分配。',wide:true,
+    body:'<div id="caUnitsBody">加载中…</div>',
+    foot:'<button class="btn ghost" type="button" data-cancel>关闭</button>'});
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+  window._CA_UNITS_OV=ov; window._CA_UNITS_PITCH=pitchId;
+  caRenderUnits();
+};
+function caRenderUnits(){
+  const ov=window._CA_UNITS_OV,body=ov&&ov.querySelector('#caUnitsBody');
+  if(!ov||!body||!CA_UNITS)return;
+  const uq=Number(CA_UNITS.unitQty||0);
+  if(!uq){body.innerHTML='<div class="ca-empty">该营位未配置单元数量。</div>';return;}
+  body.innerHTML='<div class="ca-units">'
+    + CA_UNITS.units.map(u=>{
+        const busy=u.busyDays||[];
+        const who=busy.length?busy.map(b=>`<span class="ca-unit__bk">${esc(u.code)} · ${esc(b.guest||'客人')}（${b.status==='pending'?'待支付':b.status==='paid'?'已付':'在住'}）</span>`).join('')
+          :`<span class="ca-unit__ok">${esc(u.code)} · 空闲</span>`;
+        return `<div class="ca-unit">${who}<button type="button" class="ca-mini" onclick="caReassign('${esc(u.code)}')">改派</button></div>`;
+      }).join('')
+    + '</div>'
+    + '<div class="ca-units__tip">改派须知：目标编号需在区间内空闲；保存后立即生效并同步房态。系统自动分配的预订也可以在这里人工调整。</div>';
+}
+window.caReassign=function(){
+  const cur=CA_UNITS&&CA_UNITS.units?CA_UNITS.units:[];
+  const busyOne=cur.find(u=>u.busyDays&&u.busyDays.length);
+  if(!busyOne){toast('当前区间没有可改派的预订');return;}
+  const bid=busyOne.busyDays[0].bookingId;
+  const existing=cur.filter(u=>u.busyDays&&u.busyDays.length).map(u=>u.code).join(',');
+  uxForm({title:'人工改派',subtitle:'输入当前占用编号对应的新编号（逗号分隔，数量需一致）。目标编号必须在区间内空闲。',
+    fields:[{name:'units',label:'新编号（逗号分隔）',value:existing,required:true}],submitText:'确认改派'})
+  .then(async d=>{
+    if(!d||!d.units)return;
+    const units=String(d.units).split(/[，,]/).map(s=>s.trim()).filter(Boolean);
+    try{
+      await api(`/api/club/${CLUB}/camp-bookings/${bid}/assign`,{method:'PATCH',body:JSON.stringify({units})});
+      toast('已改派');
+      const d0=(CA_START||''),d1=(CA_END||'');
+      CA_UNITS=await api(`/api/club/${CLUB}/pitches/${window._CA_UNITS_PITCH}/units?check_in=${encodeURIComponent(d0)}&check_out=${encodeURIComponent(d1)}`,{cache:'no-store'});
+      caRenderUnits();
+      if(typeof loadOverview==='function')loadOverview();
+    }catch(e){showAlert({title:'改派失败',message:e.message||''});}
+  });
 };
 window.pfTypeChange=function(v){uxChoiceSet('#f_isOvernight',(v==='day')?'0':'1');};
 window.savePitch=function(){};

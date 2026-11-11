@@ -2967,3 +2967,9 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
   border-radius:999px;padding:6px 12px;font-size:12px;font-weight:650;cursor:pointer}
 .me-cpn__ops button:active{background:#eaf3ec}
 .me-cpn__tip{flex:0 0 100%;font-size:11px;color:#8b988f;line-height:1.5;margin-top:2px}
+
+/* ══ #837 me 页订单左滑删除 ══ */
+.me-camp-wrap{position:relative;overflow:hidden;border-radius:18px}
+.me-camp-del{position:absolute;top:0;right:0;bottom:0;width:72px;display:grid;place-items:center;
+  background:#e5484d;color:#fff;font-size:13px;font-weight:700;border-radius:0 18px 18px 0;cursor:pointer}
+.me-swipeable{position:relative;transition:transform .18s ease;touch-action:pan-y;will-change:transform}

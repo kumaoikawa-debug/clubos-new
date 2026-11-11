@@ -2483,7 +2483,8 @@ def club_settings_get(club_id:int):
     x=club_or_404(club_id)
     return {'name':x['name'],'slogan':x.get('slogan') or '','city':x.get('city') or '',
             'contactName':x.get('contact_name') or '','contactPhone':x.get('contact_phone') or '',
-            'logoUrl':x.get('logo_url') or '','insuranceCoverageWan':float(x.get('insurance_coverage_wan') or 0)}
+            'logoUrl':x.get('logo_url') or '','insuranceCoverageWan':float(x.get('insurance_coverage_wan') or 0),
+            'mapKey':x.get('map_key') or ''}
 
 @app.put('/api/club/{club_id}/settings')
 def club_settings_put(club_id:int,payload:dict=Body(...)):
@@ -2496,6 +2497,11 @@ def club_settings_put(club_id:int,payload:dict=Body(...)):
         if f=='name' and len(v)>40: raise HTTPException(400,'俱乐部名称过长（上限 40 字）')
         if f=='slogan' and len(v)>60: raise HTTPException(400,'品牌口号过长（上限 60 字）')
         fields[f]=v or None
+    # #833 腾讯地图 Key（地图选点用；长度钳制 + 仅存不回显给 C 端）
+    if 'mapKey' in payload:
+        mk=str(payload.get('mapKey') or '').strip()
+        if len(mk)>100: raise HTTPException(400,'地图 Key 过长')
+        fields['map_key']=mk or None
     if 'logo_url' in payload:
         # 仅供「移除 logo」置空；设置新值必须走上传端点（它负责落盘和带扩展名）
         fields['logo_url']=str(payload.get('logo_url') or '').strip() or None
@@ -11067,10 +11073,13 @@ def public_pitch_list(club_id:int,camp_id:int=0):
 def club_pitch_create(club_id:int,payload:dict=Body(...)):
     club_or_404(club_id)
     with conn() as c:
+        # #832 单元化：unit_qty 同型数量 + unit_codes 自定义编号（缺省按 code-01..NN 生成）
+        uq=max(1,min(99,int(payload.get('unitQty') or 1)))
+        codes=[str(x).strip() for x in (payload.get('unitCodes') or []) if str(x).strip()]
         c.execute('''INSERT INTO camp_pitches(club_id,camp_id,code,name,pitch_type,is_overnight,capacity,attributes_json,base_price,weekend_price,holiday_price,status,
                      cover_url,gallery_json,specs_json,facilities_json,policies_json,subtitle,description,detail_text,original_price,unit_label,
-                     promo_enabled,member_discount_enabled,points_enabled)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                     promo_enabled,member_discount_enabled,points_enabled,unit_qty,unit_codes_json)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (club_id,payload.get('campId',0),payload.get('code'),payload.get('name'),payload.get('pitchType','tent'),
                    int(bool(payload.get('isOvernight',1))),payload.get('capacity',1),jdump(payload.get('attributes')),
                    payload.get('basePrice',0),payload.get('weekendPrice'),payload.get('holidayPrice'),payload.get('status','active'),
@@ -11079,7 +11088,8 @@ def club_pitch_create(club_id:int,payload:dict=Body(...)):
                    payload.get('description'),payload.get('detailText'),payload.get('originalPrice',0),payload.get('unitLabel'),
                    # v4.1 #810 产品级权益开关（默认全开）
                    int(bool(payload.get('promoEnabled',1))),int(bool(payload.get('memberDiscountEnabled',1))),
-                   int(bool(payload.get('pointsEnabled',1)))))
+                   int(bool(payload.get('pointsEnabled',1))),uq,
+                   jdump(codes[:uq]) if codes else None))
         nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
         return row(c.execute('SELECT * FROM camp_pitches WHERE id=?',(nid,)))
 
@@ -11105,6 +11115,13 @@ def club_pitch_update(club_id:int,pid:int,payload:dict=Body(...)):
                 elif fk.endswith('_json'): v=jdump(v)
                 elif fk.endswith('_enabled'): v=int(bool(v))
                 sets.append(f'{fk}=?'); args.append(v)
+        # #832 单元化
+        if 'unitQty' in payload:
+            try: uq=max(1,min(99,int(payload['unitQty'] or 1)))
+            except (TypeError,ValueError): uq=1
+            sets.append('unit_qty=?'); args.append(uq)
+        if 'unitCodes' in payload:
+            sets.append('unit_codes_json=?'); args.append(jdump([str(x).strip() for x in (payload['unitCodes'] or []) if str(x).strip()]))
         if sets:
             args+=[pid,club_id]; c.execute(f"UPDATE camp_pitches SET {','.join(sets)} WHERE id=? AND club_id=?",args)
         return row(c.execute('SELECT * FROM camp_pitches WHERE id=?',(pid,)))
@@ -11140,30 +11157,27 @@ def public_camp_availability(club_id:int,camp_id:int=0,start:str='',end:str='',d
     with conn() as c:
         pitches=rows(c.execute('SELECT * FROM camp_pitches WHERE club_id=? AND camp_id=? AND status="active"',(club_id,camp_id)))
         # pending 订单只保留 30 分钟支付窗口，超时自动释放房态（酒店式防死锁）；
-        # 与 public_camp_booking_create 的占用判断必须保持完全一致的口径。
-        occ=rows(c.execute('''SELECT pitch_id,check_in,check_out,is_day_use FROM camp_pitch_bookings
-                              WHERE club_id=? AND camp_id=? AND (status IN ("paid","checked_in")
-                                    OR (status="pending" AND created_at>=datetime('now','-30 minutes')))''',(club_id,camp_id)))
+        # 占用判定统一走 _camp_units_left（#832 单元化后与 _camp_line 同口径）。
         blk={}
         for r in rows(c.execute('SELECT pitch_id,day,status,price_override FROM camp_pitch_status WHERE club_id=? AND camp_id=?',(club_id,camp_id))):
             blk[(r['pitch_id'],r['day'])]=r
-    out=[]
-    for p in pitches:
-        days_out=[]
-        for d in rng:
-            key=(p['id'],d)
-            ov=blk[key]['price_override'] if key in blk else None
-            if key in blk and blk[key]['status']=='blocked':
-                days_out.append({'day':d,'status':'blocked','price':_camp_day_price(p,d,ov)}); continue
-            booked=False
-            for o in occ:
-                if o['pitch_id']!=p['id']: continue
-                if o['is_day_use']:
-                    if o['check_in']==d: booked=True; break
-                elif o['check_in']<=d<o['check_out']: booked=True; break
-            days_out.append({'day':d,'status':'booked' if booked else 'available','price':_camp_day_price(p,d,ov)})
-        out.append({'pitchId':p['id'],'code':p['code'],'name':p['name'],'pitchType':p['pitch_type'],
-                    'isOvernight':p['is_overnight'],'capacity':p['capacity'],'days':days_out})
+        out=[]
+        for p in pitches:
+            # #832 单元化：unit_qty 输出给 C 端做「剩 N/10」显示
+            try: uq=max(1,min(99,int(p['unit_qty'] or 1)))
+            except (TypeError,ValueError,IndexError): uq=1
+            days_out=[]
+            for d in rng:
+                key=(p['id'],d)
+                ov=blk[key]['price_override'] if key in blk else None
+                if key in blk and blk[key]['status']=='blocked':
+                    days_out.append({'day':d,'status':'blocked','price':_camp_day_price(p,d,ov),'unitsLeft':0}); continue
+                left=_camp_units_left(c,club_id,p,d)
+                days_out.append({'day':d,'status':'available' if left>0 else 'booked',
+                                 'price':_camp_day_price(p,d,ov),'unitsLeft':left})
+            out.append({'pitchId':p['id'],'code':p['code'],'name':p['name'],'pitchType':p['pitch_type'],
+                        'isOvernight':p['is_overnight'],'capacity':p['capacity'],'unitQty':uq,
+                        'unitCodes':_camp_units_of(p),'days':days_out})
     return {'clubId':club_id,'campId':camp_id,'start':start,'end':end,'pitches':out}
 
 # ---- 营位预订（酒店式跨日锁；防超售）----
@@ -11188,22 +11202,19 @@ def public_camp_booking_create(club_id:int,payload:dict=Body(...)):
         blk=rows(c.execute('SELECT day,status,price_override FROM camp_pitch_status WHERE club_id=? AND pitch_id=?',(club_id,pid)))
         blocked={b['day']:b['status'] for b in blk}
         ovmap={b['day']:b['price_override'] for b in blk if b['price_override'] is not None}
-        occ=rows(c.execute('''SELECT check_in,check_out,is_day_use FROM camp_pitch_bookings
-                              WHERE club_id=? AND pitch_id=? AND (status IN ("paid","checked_in")
-                                    OR (status="pending" AND created_at>=datetime('now','-30 minutes')))''',(club_id,pid)))
+        # #832 单元化：按剩余单元数判定（unit_qty=1 时等价旧版一号一位）。
         for d in rng:
             if blocked.get(d)=='blocked': raise HTTPException(409,f'{d} 该营位已封锁/维护')
-            for o in occ:
-                if o['is_day_use']:
-                    if o['check_in']==d: raise HTTPException(409,f'{d} 该营位已被预订')
-                elif o['check_in']<=d<o['check_out']: raise HTTPException(409,f'{d} 该营位已被预订')
+            left=_camp_units_left(c,club_id,p,d)
+            if left<qty: raise HTTPException(409,f'{d} 该营位仅剩 {left} 个可订（所需 {qty}）')
+        au=_camp_assign_units(c,club_id,p,check_in,check_out,is_day,max(1,qty))
         payable=round(sum(_camp_day_price(p,d,ovmap.get(d)) for d in rng)*qty,2)
         deposit=round(float(payload.get('deposit') or 0),2)
         total=round(payable+deposit,2)
-        c.execute('''INSERT INTO camp_pitch_bookings(club_id,camp_id,pitch_id,check_in,check_out,is_day_use,guest_name,guest_phone,qty,nights,payable,deposit,total,status,user_id)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+        c.execute('''INSERT INTO camp_pitch_bookings(club_id,camp_id,pitch_id,check_in,check_out,is_day_use,guest_name,guest_phone,qty,nights,payable,deposit,total,status,user_id,assigned_units_json)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (club_id,p.get('camp_id',0),pid,check_in,check_out,is_day,payload.get('guestName'),payload.get('guestPhone'),
-                   qty,nights,payable,deposit,total,'pending',payload.get('userId')))
+                   qty,nights,payable,deposit,total,'pending',payload.get('userId'),jdump(au) if au else None))
         nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
         return row(c.execute('SELECT * FROM camp_pitch_bookings WHERE id=?',(nid,)))
 
@@ -11214,6 +11225,78 @@ def club_camp_booking_list(club_id:int,camp_id:int=0,status:str=''):
         sql='SELECT * FROM camp_pitch_bookings WHERE club_id=? AND camp_id=?'; args=[club_id,camp_id]
         if status: sql+=' AND status=?'; args.append(status)
         return rows(c.execute(sql+' ORDER BY check_in DESC,id DESC',args))
+
+# ---- #832 营位单元分配：后台查看占用 + 人工改派 ----
+@app.get('/api/club/{club_id}/pitches/{pid:int}/units')
+def club_pitch_units(club_id:int,pid:int,check_in:str='',check_out:str='',day:str=''):
+    """某营位的单元占用视图：可选传区间（check_in/check_out）看「谁占哪个号」，
+    不传则返回全部单元列表与今日占用。"""
+    club_or_404(club_id)
+    import datetime as _dt
+    with conn() as c:
+        p=row(c.execute('SELECT * FROM camp_pitches WHERE id=? AND club_id=?',(pid,club_id)))
+        if not p: raise HTTPException(404,'pitch not found')
+        codes=_camp_units_of(p)
+        rng=None
+        if check_in:
+            try: _ci=_dt.date.fromisoformat(check_in)
+            except Exception: raise HTTPException(400,'check_in 格式应为 YYYY-MM-DD')
+            _co=_dt.date.fromisoformat(check_out) if check_out else _ci
+            rng=[(_ci+_dt.timedelta(days=i)).isoformat() for i in range(max(1,(_co-_ci).days+1))]
+        occ=rows(c.execute('''SELECT id,check_in,check_out,is_day_use,qty,assigned_units_json,status,
+                              guest_name,camp_order_id FROM camp_pitch_bookings
+                              WHERE club_id=? AND pitch_id=? AND (status IN ("paid","checked_in")
+                                    OR (status="pending" AND created_at>=datetime('now','-30 minutes')))''',(club_id,pid)))
+        units=[]
+        for i,code in enumerate(codes):
+            u={'code':code,'order':i+1,'busyDays':[]}
+            for o in occ:
+                au=_camp_arr(o['assigned_units_json'])
+                if au and code not in au: continue
+                # 未分配的旧预订按保守归属：只有当它单独占满整位时才标到第一个单元上
+                if not au and o['qty']!=1: continue
+                for d in (rng or []):
+                    hit=(o['is_day_use'] and o['check_in']==d) or ((not o['is_day_use']) and o['check_in']<=d<o['check_out'])
+                    if hit: u['busyDays'].append({'day':d,'bookingId':o['id'],'guest':o['guest_name'] or '','status':o['status'],'campOrderId':o['camp_order_id']})
+            units.append(u)
+        return {'pitchId':pid,'unitQty':len(codes),'units':units}
+
+@app.patch('/api/club/{club_id}/camp-bookings/{bid:int}/assign')
+def club_camp_booking_assign(club_id:int,bid:int,payload:dict=Body(...)):
+    """人工改派/分配单元：payload.units=["A003"] 或 [] (清空=恢复自动)。
+    校验目标单元在区间内未被其它预订占用。"""
+    club_or_404(club_id)
+    import datetime as _dt
+    with conn() as c:
+        b=row(c.execute('SELECT * FROM camp_pitch_bookings WHERE id=? AND club_id=?',(bid,club_id)))
+        if not b: raise HTTPException(404,'booking not found')
+        if b['status'] in ('cancelled','checked_out'): raise HTTPException(409,'该预订已取消/退房，不能改派')
+        p=row(c.execute('SELECT * FROM camp_pitches WHERE id=? AND club_id=?',(b['pitch_id'],club_id)))
+        if not p: raise HTTPException(404,'pitch not found')
+        codes=_camp_units_of(p)
+        units=[str(x).strip() for x in (payload.get('units') or []) if str(x).strip()]
+        if units:
+            if len(units)!=max(1,int(b['qty'] or 1)): raise HTTPException(400,f'需要分配 {b["qty"]} 个单元编号')
+            for u in units:
+                if u not in codes: raise HTTPException(400,f'编号 {u} 不在营位单元列表中')
+            # 与其它预订冲突校验
+            _ci=_dt.date.fromisoformat(b['check_in']); _co=_dt.date.fromisoformat(b['check_out'])
+            rng=[b['check_in']] if b['is_day_use'] else [(_ci+_dt.timedelta(days=i)).isoformat() for i in range((_co-_ci).days)]
+            for d in rng:
+                for o in rows(c.execute('''SELECT id,qty,assigned_units_json FROM camp_pitch_bookings
+                                  WHERE club_id=:c AND pitch_id=:p AND id!=:b AND (status IN ("paid","checked_in")
+                                        OR (status="pending" AND created_at>=datetime('now','-30 minutes')))
+                                  AND ((is_day_use=1 AND check_in=:d) OR (is_day_use=0 AND check_in<=:d AND check_out>:d))''',
+                               {'c':club_id,'p':b['pitch_id'],'b':bid,'d':d})):
+                    au=_camp_arr(o['assigned_units_json'])
+                    clash=[u for u in units if u in au]
+                    if clash: raise HTTPException(409,f'{d} 单元 {",".join(clash)} 已被其它预订占用')
+                    if not au:
+                        # 旧数据未分配：等价于全部单元被占（保守），除非该单 qty<=剩余总数
+                        left=_camp_units_left(c,club_id,p,d)
+                        if left<int(o['qty'] or 1): raise HTTPException(409,f'{d} 存在未分配的旧预订占用单元，不能改派到该日')
+        c.execute('UPDATE camp_pitch_bookings SET assigned_units_json=? WHERE id=?',(jdump(units) if units else None,bid))
+        return {'ok':True,'units':units}
 
 # ---- 营地档案删除（级联清掉其营位/房态/预订，避免孤儿 camp_id）----
 @app.delete('/api/club/{club_id}/camps/{cid:int}')
@@ -11696,6 +11779,10 @@ def _camp_goods_out(r,kind=None):
     # #822：租赁商品下发计费项（项目 + 价格 + 单位），C 端据此让顾客选「按小时 / 按天 …」
     if kind=='rental':
         d['pricing']=_camp_rental_plans(r)
+    # #832：营位单元数（同型 N 个，C 端显示「N 个可订」）
+    if kind=='pitch':
+        try: d['unitQty']=max(1,min(99,int(r.get('unit_qty') or 1)))
+        except (TypeError,ValueError): d['unitQty']=1
     return d
 
 def _camp_public_quote(q):
@@ -11709,6 +11796,78 @@ def _camp_flag(v):
     if v is None: return 1
     try: return 1 if int(v)!=0 else 0
     except (TypeError,ValueError): return 1
+
+def _camp_units_of(p):
+    """#832 营位单元：unit_qty 个实体单元（湖畔帐篷位 × 10 = A001-A010）。
+    编号优先 unit_codes_json；缺省按「code-01..code-NN」生成，保证唯一可读。
+    旧数据 unit_qty 缺列/为 1 → 返回 1 个单元（行为与旧版完全一致）。"""
+    n=1
+    try: n=max(1,min(99,int(p.get('unit_qty') or 1)))
+    except (TypeError,ValueError): n=1
+    codes=[]
+    for x in _camp_arr(p.get('unit_codes_json')) or []:
+        s=str(x or '').strip()
+        if s: codes.append(s)
+    if len(codes)<n:
+        base=(p.get('code') or 'U').strip() or 'U'
+        i=1
+        while len(codes)<n:
+            cand=f'{base}-{i:02d}'
+            if cand not in codes: codes.append(cand)
+            i+=1
+    return codes[:n]
+
+def _camp_units_left(c,club_id,pitch,day):
+    """某营位某日剩余可订单元数 = unit_qty - 当日重叠占用(qty 之和)（手工封锁=0）。
+    口径与 _camp_line / public_camp_booking_create / camp-availability 一致：pending 仅 30 分钟。"""
+    pid=pitch['id']
+    total=1
+    try: total=max(1,min(99,int(pitch.get('unit_qty') or 1)))
+    except (TypeError,ValueError): total=1
+    st=row(c.execute('SELECT status FROM camp_pitch_status WHERE club_id=:c AND pitch_id=:p AND day=:d',
+                     {'c':club_id,'p':pid,'d':day}))
+    if st and st['status']=='blocked': return 0
+    occ=rows(c.execute('''SELECT qty FROM camp_pitch_bookings
+                          WHERE club_id=:c AND pitch_id=:p AND (status IN ("paid","checked_in")
+                                OR (status="pending" AND created_at>=datetime('now','-30 minutes')))
+                          AND ((is_day_use=1 AND check_in=:d) OR (is_day_use=0 AND check_in<=:d AND check_out>:d))''',
+                       {'c':club_id,'p':pid,'d':day}))
+    used=0
+    for o in occ:
+        try: used+=max(1,int(o['qty'] or 1))
+        except (TypeError,ValueError): used+=1
+    return max(0,total-used)
+
+def _camp_assign_units(c,club_id,pitch,check_in,check_out,is_day,qty):
+    """#832 自动分配：区间内每天剩余都足够的单元里按编号顺序挑 qty 个，返回编号数组；不足返回 None。
+    整位封锁（camp_pitch_status.status=blocked）→ 无单元可用。"""
+    import datetime as _dt
+    _ci=_dt.date.fromisoformat(check_in)
+    rng=[check_in] if is_day else [(_ci+_dt.timedelta(days=i)).isoformat() for i in range((_dt.date.fromisoformat(check_out)-_ci).days)]
+    codes=_camp_units_of(pitch)
+    for d in rng:
+        st=row(c.execute('SELECT status FROM camp_pitch_status WHERE club_id=:c AND pitch_id=:p AND day=:d',
+                         {'c':club_id,'p':pitch['id'],'d':d}))
+        if st and st['status']=='blocked': return None
+    busy={code:0 for code in codes}
+    for d in rng:
+        for o in rows(c.execute('''SELECT qty,assigned_units_json FROM camp_pitch_bookings
+                          WHERE club_id=:c AND pitch_id=:p AND (status IN ("paid","checked_in")
+                                OR (status="pending" AND created_at>=datetime('now','-30 minutes')))
+                          AND ((is_day_use=1 AND check_in=:d) OR (is_day_use=0 AND check_in<=:d AND check_out>:d))''',
+                       {'c':club_id,'p':pitch['id'],'d':d})):
+            try: q=max(1,int(o['qty'] or 1))
+            except (TypeError,ValueError): q=1
+            au=_camp_arr(o['assigned_units_json'])
+            if au:
+                for code in au:
+                    if code in busy: busy[code]+=1
+            else:
+                # 旧数据未分配：保守平摊到当前最空闲的前 q 个编号上
+                for code in sorted(busy,key=lambda k:busy[k])[:q]: busy[code]+=1
+    avail=[k for k in codes if busy.get(k,0)==0]
+    if len(avail)<qty: return None
+    return avail[:qty]
 
 def _camp_line(c,club_id,raw):
     """服务端重算单行价格 —— 绝不信任前端传来的任何金额。返回规范行（带 _ 内部键）。"""
@@ -11742,18 +11901,14 @@ def _camp_line(c,club_id,raw):
             if (_co-_ci).days>60: raise HTTPException(400,'单次预订最多 60 晚')
             nights=(_co-_ci).days
             rng=[(_ci+_dt.timedelta(days=i)).isoformat() for i in range(nights)]
-        # 房态占用：与 public_camp_booking_create / camp-availability 完全同口径（pending 仅 30 分钟）。
+        # 房态占用（#832 单元化）：与 public_camp_booking_create / camp-availability 完全同口径。
+        # unit_qty=1 → 一号一位（与旧版一致）；unit_qty>1 → 按单元数累计，满员不可订。
         blk={b['day']:b for b in rows(c.execute('SELECT day,status,price_override FROM camp_pitch_status WHERE club_id=? AND pitch_id=?',(club_id,rid)))}
         ovmap={d:b['price_override'] for d,b in blk.items() if b['price_override'] is not None}
-        occ=rows(c.execute('''SELECT check_in,check_out,is_day_use FROM camp_pitch_bookings
-                              WHERE club_id=? AND pitch_id=? AND (status IN ("paid","checked_in")
-                                    OR (status="pending" AND created_at>=datetime('now','-30 minutes')))''',(club_id,rid)))
         for d in rng:
             if blk.get(d,{}).get('status')=='blocked': raise HTTPException(409,f'{d} 该营位已封锁/维护')
-            for o in occ:
-                if o['is_day_use']:
-                    if o['check_in']==d: raise HTTPException(409,f'{d} 该营位已被预订')
-                elif o['check_in']<=d<o['check_out']: raise HTTPException(409,f'{d} 该营位已被预订')
+            left=_camp_units_left(c,club_id,p,d)
+            if left<qty: raise HTTPException(409,f'{d} 该营位仅剩 {left} 个可订（所需 {qty}）')
         unit=round(sum(_camp_day_price(p,d,ovmap.get(d)) for d in rng),2)
         subtotal=round(unit*qty,2)
         # 押金由前端带（离营退还），钳制上限防止脏数据；不参与折扣与积分抵扣。
@@ -11975,14 +12130,20 @@ def public_camp_order_create(club_id:int,payload:dict=Body(...)):
                  ln['unitPrice'],ln['qty'],ln['days'],ln['checkIn'],ln['checkOut'],ln['isDayUse'],
                  ln['subtotal'],ln['deposit']))
         # 营位行同步写 camp_pitch_bookings：房态网格仍是唯一占用真源，避免新旧订单互相超售。
+        # #832：下单即自动分配实体单元编号（湖畔帐篷位 → A003），支付超时/取消随单作废释放。
         for ln in lines:
             if ln['kind']!='pitch': continue
+            p=row(c.execute('SELECT * FROM camp_pitches WHERE id=? AND club_id=?',(ln['id'],club_id)))
+            au=None
+            if p:
+                try: au=_camp_assign_units(c,club_id,p,ln['checkIn'],ln['checkOut'],ln['isDayUse'],max(1,int(ln['qty'] or 1)))
+                except Exception: au=None
             c.execute('''INSERT INTO camp_pitch_bookings(club_id,camp_id,pitch_id,check_in,check_out,is_day_use,
-                  guest_name,guest_phone,qty,nights,payable,deposit,total,status,user_id,camp_order_id)
-                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,"pending",?,?)''',
+                  guest_name,guest_phone,qty,nights,payable,deposit,total,status,user_id,camp_order_id,assigned_units_json)
+                  VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,"pending",?,?,?)''',
                 (club_id,ln['campId'],ln['id'],ln['checkIn'],ln['checkOut'],ln['isDayUse'],guest,phone,
                  ln['qty'],ln['days'],ln['subtotal'],ln['deposit'],
-                 round(ln['subtotal']+ln['deposit'],2),uid,oid))
+                 round(ln['subtotal']+ln['deposit'],2),uid,oid,jdump(au) if au else None))
         # 小站商品：下单即占库存（pending 30 分钟窗口），取消/过期自动释放。
         for ln in lines:
             if ln['kind']!='store': continue
@@ -12020,7 +12181,7 @@ def public_camp_order_get(order_id:int,user_id:int=0,userId:int=0):
     uid=user_id or userId
     with conn() as c:
         o=row(c.execute('SELECT * FROM camp_orders WHERE id=?',(order_id,)))
-        if not o: raise HTTPException(404,'营地订单不存在')
+        if not o or o['status']=='deleted': raise HTTPException(404,'营地订单不存在')
         if uid and int(o['user_id'] or 0)!=int(uid): raise HTTPException(404,'营地订单不存在')
         _camp_expire_stale(c,o['club_id'])
         o=row(c.execute('SELECT * FROM camp_orders WHERE id=?',(order_id,)))
@@ -12034,8 +12195,24 @@ def public_camp_order_list(club_id:int,user_id:int=0,userId:int=0,limit:int=30):
         _camp_expire_stale(c,club_id)
         sql='SELECT * FROM camp_orders WHERE club_id=?'; args=[club_id]
         if uid: sql+=' AND user_id=?'; args.append(int(uid))
+        sql+=' AND status!="deleted"'
         os_=rows(c.execute(sql+' ORDER BY id DESC LIMIT ?',args+[max(1,min(100,int(limit)))]))
         return {'ok':True,'orders':[_camp_order_out(c,o) for o in os_]}
+
+# ---- #837 删除订单（软删除：仅限本人 + 终态订单；列表与详情都不再返回） ----
+DELETABLE_CAMP_STATUSES=('cancelled','expired')
+@app.delete('/api/public/camp-orders/{order_id}')
+def public_camp_order_delete(order_id:int,user_id:int=0,userId:int=0):
+    uid=user_id or userId
+    if not uid: raise HTTPException(400,'缺少 user_id')
+    with conn() as c:
+        o=row(c.execute('SELECT * FROM camp_orders WHERE id=?',(order_id,)))
+        if not o or int(o['user_id'] or 0)!=int(uid): raise HTTPException(404,'营地订单不存在')
+        if o['status'] not in DELETABLE_CAMP_STATUSES:
+            raise HTTPException(409,'该订单尚在进行中，请先取消再删除')
+        c.execute('UPDATE camp_orders SET status="deleted" WHERE id=?',(order_id,))
+        # 同步清掉已读记录里的 id（避免本地 seen 集合无限增长 —— 无害但顺手清理）
+        return {'ok':True,'deleted':order_id}
 
 @app.get('/api/club/{club_id}/camp-orders')
 def club_camp_order_list(club_id:int,status:str='',limit:int=100):

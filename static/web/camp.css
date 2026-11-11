@@ -32,8 +32,9 @@
 .cp-hero__fallback:after{content:"";position:absolute;left:12%;bottom:12%;width:0;height:0;
   border-left:46px solid transparent;border-right:46px solid transparent;border-bottom:64px solid rgba(248,246,232,.92);
   filter:drop-shadow(0 6px 10px rgba(10,30,18,.25))}
+/* #835 hero 纯视觉：标题/slogan 已移除，shade 减淡、圆点沉底 */
 .cp-hero__shade{position:absolute;inset:0;pointer-events:none;
-  background:linear-gradient(180deg,rgba(6,24,15,.40) 0%,rgba(6,24,15,0) 40%,rgba(6,24,15,.52) 100%)}
+  background:linear-gradient(180deg,rgba(6,24,15,.28) 0%,rgba(6,24,15,0) 35%,rgba(6,24,15,.30) 100%)}
 .cp-hero__rail{position:absolute;top:14px;left:16px;right:16px;display:flex;align-items:center;justify-content:space-between;gap:8px}
 .cp-hero__tag{display:inline-flex;align-items:center;gap:5px;padding:6px 11px;border-radius:99px;
   background:rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.34);color:#fff;
@@ -41,12 +42,7 @@
 .cp-hero__tag svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:1.8;
   stroke-linecap:round;stroke-linejoin:round}
 .cp-hero__count{color:rgba(255,255,255,.9);font-size:11px;font-weight:600;text-shadow:0 1px 8px rgba(0,0,0,.4)}
-.cp-hero__cap{position:absolute;left:18px;right:18px;bottom:56px;color:#fff}
-.cp-hero__name{margin:0;font-size:27px;font-weight:800;letter-spacing:-.02em;line-height:1.15;
-  text-shadow:0 2px 18px rgba(0,0,0,.4)}
-.cp-hero__slogan{margin:7px 0 0;font-size:12.5px;line-height:1.5;color:rgba(255,255,255,.9);
-  max-width:82%;text-shadow:0 1px 10px rgba(0,0,0,.35)}
-.cp-hero__dots{position:absolute;left:0;right:0;bottom:50px;display:flex;justify-content:center;gap:5px}
+.cp-hero__dots{position:absolute;left:0;right:0;bottom:14px;display:flex;justify-content:center;gap:5px}
 .cp-hero__dot{width:5px;height:5px;border-radius:99px;background:rgba(255,255,255,.45)}
 .cp-hero__dot.on{width:16px;background:#fff}
 
@@ -611,3 +607,19 @@ body.cp-lock{overflow:hidden}
 .cp-planqty em{font-style:normal;font-size:12px;color:var(--cp-muted,#8a9a90)}
 .cp-planhint{margin-top:8px;font-size:12.5px;color:var(--cp-ink2,#4a5b4f)}
 .cp-planhint b,.cp-planhint{font-weight:600}
+
+/* ══ #832 营位单元化（C 端）══ */
+.cp-stepper__u{font-size:11px;color:#7c8a80;margin-left:4px;font-style:normal}
+
+/* ══ #834 防御性修复：详情/二级浮层必须完全不透明（用户反馈「详情页面透明、
+   与底部文字图片重叠」）。上一轮修了 #cpDetailHost 嵌套，这里再把浮层背景
+   钉死为不透明，杜绝任何宿主/层级异常导致的透底。 ══ */
+.cp-detail,.cp-lv,.cp-intro,.cp-sheet{background:#f3f7f4 !important}
+.cp-detail{background:#fff !important}
+#cpDetailHost,#cpIntroHost,#cpLvHost,.cp-lv-host{isolation:isolate}
+
+/* ══ #837 订单左滑删除 ══ */
+.cp-order-wrap{position:relative;overflow:hidden;border-radius:16px}
+.cp-order-del{position:absolute;top:0;right:0;bottom:0;width:72px;display:grid;place-items:center;
+  background:#e5484d;color:#fff;font-size:13px;font-weight:700;border-radius:0 16px 16px 0;cursor:pointer}
+.cp-order--swipe{position:relative;transition:transform .18s ease;touch-action:pan-y;will-change:transform}

@@ -208,6 +208,15 @@ def _run_compat_migrations(c):
     _ensure_column(c,'clubs','camp_benefits_json','camp_benefits_json TEXT')
     # 2026-11-11 #826：营地分区与图标配置（后台自定义 C 端那排小图标）。
     _ensure_column(c,'clubs','camp_zones_json','camp_zones_json TEXT')
+    # 2026-11-11 #833：腾讯地图 Key（营地老板在设置里自填，用于地图选点；合规：key 归属用户）。
+    _ensure_column(c,'clubs','map_key','map_key TEXT')
+    # 2026-11-11 #832 营位单元化：同一营位（如「湖畔帐篷位」）可配置 N 个实体单元
+    # （A001-A010，老板自定义编号）。房态按单元数累计判定，满员不可订。
+    # unit_qty=1 时行为与旧版完全一致（一号一位）。
+    _ensure_column(c,'camp_pitches','unit_qty','unit_qty INTEGER NOT NULL DEFAULT 1')
+    _ensure_column(c,'camp_pitches','unit_codes_json','unit_codes_json TEXT')
+    # 自动/人工分配落位：预订记录里存实际占用的单元编号数组（如 ["A003"] 或 ["A001","A002"]）。
+    _ensure_column(c,'camp_pitch_bookings','assigned_units_json','assigned_units_json TEXT')
     _ensure_column(c,'camp_pitch_bookings','camp_order_id','camp_order_id INTEGER')
     for _t in ('camp_pitches','camp_rental_items','camp_store_products'):
         for _col,_ddl in (

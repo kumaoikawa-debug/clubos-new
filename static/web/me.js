@@ -717,7 +717,10 @@ function meCampOrderTone(s){return ({pending_payment:'warn',paid:'ok',checked_in
 function meCampOrdersHtml(list){
   if(!list||!list.length) return empty('暂无营地订单','预订营位、租赁装备或购买营地小站商品后，订单会出现在这里');
   const seen=meCampSeenSet();
-  return list.map(o=>{
+  /* #837 用户已删除的订单不再显示 */
+  const visible=(list||[]).filter(o=>o&&o.status!=='deleted');
+  if(!visible.length) return empty('暂无营地订单','预订营位、租赁装备或购买营地小站商品后，订单会出现在这里');
+  return visible.map(o=>{
     const its=o.items||[];
     const itemsHtml=its.map(i=>{
       const parts=[];
@@ -747,7 +750,11 @@ function meCampOrdersHtml(list){
     const guest=(o.guestName||o.guestPhone)?`<div class="me-camp__guest">${esc(o.guestName||'')} ${esc(o.guestPhone||'')}</div>`:'';
     const head=(its[0]&&its[0].title)||'营地订单';
     const isNew=(o.id!=null&&!seen.has(String(o.id)));
-    return `<div class="me-card2 me-camp${isNew?' is-new':''}" role="button" tabindex="0" onclick="meCampOrderDetail(${Number(o.id)})">
+    /* #837 左滑删除：终态订单（已取消/已过期）支持左滑露出删除 */
+    const canDel=(o.status==='cancelled'||o.status==='expired');
+    return `<div class="me-camp-wrap">
+      <div class="me-camp-del" onclick="event.stopPropagation();meCampOrderDelete(${Number(o.id)})">删除</div>
+      <div class="me-card2 me-camp${isNew?' is-new':''}${canDel?' me-swipeable':''}" role="button" tabindex="0" data-oid="${Number(o.id)}" onclick="meCampOrderDetail(${Number(o.id)})">
       <div class="me-card2__hd"><b>${esc(head)}</b><span class="me-card2__hdR">${meBadge(meCampOrderSt(o.status),meCampOrderTone(o.status))}${isNew?'<i class="me-camp__dot" aria-label="新订单"></i>':''}</span></div>
       ${guest}
       ${itemsHtml?`<div class="me-camp__items">${itemsHtml}</div>`:''}
@@ -759,9 +766,40 @@ function meCampOrdersHtml(list){
       </div>
       <div class="me-card2__meta">订单号 #${esc(o.orderNo||o.id)} · ${esc(String(o.createdAt||'').slice(0,16))}</div>
       <div class="me-camp__more">查看订单详情${o.redeemCode?' · 出示核销码':''} ›</div>
-    </div>`;
+    </div></div>`;
   }).join('');
 }
+/* #837 左滑删除（me 页）：与营地页同一套手势与后端 */
+function meBindSwipe(){
+  document.querySelectorAll('.me-swipeable').forEach(card=>{
+    if(card.dataset.sw)return;card.dataset.sw='1';
+    let sx=0,dx=0,open=false;
+    card.addEventListener('touchstart',e=>{sx=e.touches[0].clientX;dx=0;},{passive:true});
+    card.addEventListener('touchmove',e=>{
+      dx=e.touches[0].clientX-sx;
+      card.style.transform='translateX('+Math.max(-72,Math.min(0,dx))+'px)';card.style.transition='none';
+    },{passive:true});
+    card.addEventListener('touchend',()=>{
+      open=dx<-36;
+      card.style.transition='transform .18s ease';
+      card.style.transform=open?'translateX(-72px)':'translateX(0)';
+    });
+    card.addEventListener('click',()=>{if(open){card.style.transform='translateX(0)';open=false;}},true);
+  });
+}
+async function meCampOrderDelete(oid){
+  const ok=await uxConfirm({title:'删除订单',message:'删除后该订单不再显示，且无法恢复。确定删除？',confirmText:'删除',danger:true});
+  if(!ok)return;
+  try{
+    const uid=(typeof USER!=='undefined'&&USER)||0;
+    await api('/api/public/camp-orders/'+oid+'?user_id='+uid,{method:'DELETE',cache:'no-store'});
+    const s=meCampSeenSet();s.delete(String(oid));meCampSeenSave(s);
+    toast('订单已删除');
+    try{renderMeSub();}catch(e){}
+    try{await meLoadCampOrders&&meLoadCampOrders();}catch(e){}
+  }catch(e){showAlert({title:'删除失败',message:e.message||'请重试'});}
+}
+window.meCampOrderDelete=meCampOrderDelete;
 /* ── #829 营地订单详情（订单信息 + 便于核销的二维码）─────────────────────
    原来只有一张列表卡：顾客看到「已支付 · 待出行」却不知道订单号、住了几晚、
    押金多少、码长什么样，到营地只能靠报手机号。这里点开订单 → 独立详情层，
@@ -896,6 +934,7 @@ SUB_ME_AFTER.myregs=async function(param){
     const list=(data&&data.orders)||[];
     ME.campOrders=list;
     box.innerHTML = list.length ? meCampOrdersHtml(list) : empty('暂无营地订单','预订营位、租赁装备或购买营地小站商品后，订单会出现在这里');
+    meBindSwipe(); /* #837 左滑删除 */
   }catch(e){
     if(box) box.innerHTML='<div class="me-empty">营地订单加载失败，请稍后重试</div>';
   }
