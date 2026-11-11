@@ -243,6 +243,21 @@ def _run_compat_migrations(c):
             ('member_discount_enabled','member_discount_enabled INTEGER NOT NULL DEFAULT 1'),
             ('points_enabled','points_enabled INTEGER NOT NULL DEFAULT 1')):
             _ensure_column(c,_t,_col,_ddl)
+    # 2026-11-11 营地 v4.1 #812：订单核销码（工作人员扫码/输码核销）。
+    # 存量未取消订单回填核销码；字母表去掉易混淆的 0/O/1/I。
+    for _col,_ddl in (
+            ('redeem_code','redeem_code TEXT'),
+            ('redeemed_at','redeemed_at TEXT'),
+            ('redeemed_by','redeemed_by TEXT')):
+        _ensure_column(c,'camp_orders',_col,_ddl)
+    import secrets as _secrets
+    _rc_alpha='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    for _r in c.execute("SELECT id FROM camp_orders WHERE redeem_code IS NULL AND status!='cancelled'").fetchall():
+        for _ in range(50):
+            _code=''.join(_secrets.choice(_rc_alpha) for _ in range(8))
+            if not c.execute('SELECT 1 FROM camp_orders WHERE redeem_code=?',(_code,)).fetchone():
+                c.execute('UPDATE camp_orders SET redeem_code=? WHERE id=?',(_code,_r['id']))
+                break
     # 「注册成为该俱乐部会员 → 自动成为总平台会员」用触发器兜住所有写入路径
     # （报名 / 邀请码 / 买会员卡 / 会员中心 refresh_member），不漏任何一个调用点。
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_club_member_platform

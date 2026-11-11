@@ -11717,7 +11717,9 @@ def _camp_order_out(c,o,with_items=True):
        'depositForfeit':float(o['deposit_forfeit'] or 0),'finalAmount':float(o['final_amount'] or 0),
        'checkedInAt':o['checked_in_at'] or '','checkedOutAt':o['checked_out_at'] or '',
        'settledAt':o['settled_at'] or '','checkinNote':o['checkin_note'] or '',
-       'checkoutNote':o['checkout_note'] or ''}
+       'checkoutNote':o['checkout_note'] or '',
+       'redeemCode':o['redeem_code'] or '','redeemedAt':o['redeemed_at'] or '',
+       'redeemedBy':o['redeemed_by'] or ''}
     if with_items:
         its=[]
         for r in rows(c.execute('SELECT * FROM camp_order_items WHERE order_id=? ORDER BY id',(o['id'],))):
@@ -11781,17 +11783,18 @@ def public_camp_order_create(club_id:int,payload:dict=Body(...)):
         if not guest or not phone: raise HTTPException(400,'请填写联系人姓名与手机号')
         camp_id=lines[0].get('campId',0) if lines else 0
         order_no='CP'+_dt_date_compact()+uuid.uuid4().hex[:6].upper()
+        rcode=_camp_redeem_code_gen(c)
         cur=c.execute('''INSERT INTO camp_orders(club_id,camp_id,user_id,order_no,status,
               goods_amount,member_discount,member_discount_rate,club_points_used,gear_points_used,
               club_point_discount,gear_point_discount,voucher_discount,voucher_codes_json,
               payable,deposit_amount,total,points_earned,points_redeem_rate,
-              guest_name,guest_phone,quote_snapshot_json)
-              VALUES(?,?,?,?,"pending_payment",?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+              guest_name,guest_phone,redeem_code,quote_snapshot_json)
+              VALUES(?,?,?,?,"pending_payment",?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
             (club_id,camp_id,uid,order_no,
              q['goodsAmount'],q['memberDiscount'],q['memberDiscountRate'],q['clubPointsUsed'],q['gearPointsUsed'],
              q['clubPointDiscount'],q['gearPointDiscount'],q['voucherDiscount'],jdump(codes),
              q['payable'],q['depositAmount'],q['total'],q['pointsEarned'],q['pointsRedeemRate'],
-             guest,phone,jdump(q)))
+             guest,phone,rcode,jdump(q)))
         oid=int(cur.lastrowid)
         for ln in lines:
             c.execute('''INSERT INTO camp_order_items(order_id,club_id,kind,ref_id,title,cover_url,spec,unit_label,
@@ -11835,7 +11838,7 @@ def public_camp_order_create(club_id:int,payload:dict=Body(...)):
         except ValueError as e:
             raise HTTPException(409,str(e))
         return {'ok':True,'orderId':oid,'orderNo':order_no,'checkoutId':iid,
-                'status':'pending_payment','total':q['total'],'expiresInSeconds':1800,'nextAction':'PAY'}
+                'redeemCode':rcode,'status':'pending_payment','total':q['total'],'expiresInSeconds':1800,'nextAction':'PAY'}
 
 def _dt_date_compact():
     import datetime as _dt
@@ -11991,6 +11994,53 @@ def club_camp_pitch_bookings(club_id:int,pitch_id:int=0,date:str=''):
             sql+=' AND b.check_in<=? AND b.check_out>?'; args+= [date,date]
         recs=rows(c.execute(sql+' ORDER BY b.check_in DESC, b.id DESC',args))
         return {'ok':True,'bookings':[{k:v for k,v in dict(r).items()} for r in recs]}
+
+# ---- 营地 v4.1 #812：订单核销码（工作人员手机后台扫码/输码核销） ----
+def _camp_redeem_code_gen(c):
+    """8 位大写核销码（字母表去掉易混淆的 0/O/1/I），查重后返回。"""
+    import secrets as _s
+    alpha='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    for _ in range(50):
+        code=''.join(_s.choice(alpha) for _ in range(8))
+        if not c.execute('SELECT 1 FROM camp_orders WHERE redeem_code=?',(code,)).fetchone():
+            return code
+    raise HTTPException(500,'核销码生成失败，请重试')
+
+def _camp_redeem_apply(c,club_id:int,o,by:str=''):
+    """核销语义：到店核销确认（独立字段，不改变 paid/checked_in/completed 状态机）。
+    待支付/已取消/已过期不可核销；已核销幂等拒绝（409）。"""
+    st=o['status']
+    if st=='pending_payment': raise HTTPException(409,'订单尚未支付，不能核销')
+    if st in ('cancelled','expired'): raise HTTPException(409,'订单已取消或已过期，不能核销')
+    if o['redeemed_at']: raise HTTPException(409,'该订单已于 '+str(o['redeemed_at'])+' 核销，请勿重复操作')
+    c.execute("UPDATE camp_orders SET redeemed_at=datetime('now','localtime'),redeemed_by=? WHERE id=?",
+              (str(by or '')[:40],o['id']))
+    return row(c.execute('SELECT * FROM camp_orders WHERE id=?',(o['id'],)))
+
+@app.post('/api/club/{club_id}/camp-orders/redeem')
+def club_camp_order_redeem_by_code(club_id:int,payload:dict=Body(default={})):
+    """扫码核销：前端把二维码解码出的核销码 POST 上来，按码找本俱乐部订单并核销。"""
+    club_or_404(club_id)
+    code=str((payload or {}).get('code') or '').strip().upper()
+    if not code: raise HTTPException(400,'缺少核销码')
+    with conn() as c:
+        o=row(c.execute('SELECT * FROM camp_orders WHERE club_id=? AND redeem_code=?',(club_id,code)))
+        if not o: raise HTTPException(404,'核销码无效：本俱乐部没有该订单')
+        o=_camp_redeem_apply(c,club_id,o,by=(payload or {}).get('by') or '')
+        return {'ok':True,'order':_camp_order_out(c,o)}
+
+@app.post('/api/club/{club_id}/camp-orders/{order_id}/redeem')
+def club_camp_order_redeem(club_id:int,order_id:int,payload:dict=Body(default={})):
+    """按订单号核销（详情抽屉按钮场景）；传 code 时做码单双校验。"""
+    club_or_404(club_id)
+    with conn() as c:
+        o=row(c.execute('SELECT * FROM camp_orders WHERE id=? AND club_id=?',(order_id,club_id)))
+        if not o: raise HTTPException(404,'营地订单不存在')
+        code=str((payload or {}).get('code') or '').strip().upper()
+        if code and o['redeem_code'] and code!=o['redeem_code']:
+            raise HTTPException(400,'核销码与订单不匹配')
+        o=_camp_redeem_apply(c,club_id,o,by=(payload or {}).get('by') or '')
+        return {'ok':True,'order':_camp_order_out(c,o)}
 
 # ---- 商品详情（高标准详情页数据源） ----
 @app.get('/api/public/clubs/{club_id}/camp-products/{kind}/{pid}')

@@ -2074,6 +2074,9 @@ CREATE TABLE IF NOT EXISTS camp_orders (
   points_earned INTEGER NOT NULL DEFAULT 0,
   points_redeem_rate INTEGER NOT NULL DEFAULT 100,
   guest_name TEXT, guest_phone TEXT,
+  redeem_code TEXT UNIQUE,                       -- v4.1 #812：核销码（8 位，去 0/O/1/I；工作人员扫码/输码核销）
+  redeemed_at TEXT,                              -- 核销时间（核销后不可重复核销）
+  redeemed_by TEXT,                              -- 核销操作人
   checkout_id TEXT,                              -- 关联 checkout_intents（积分/券 hold 的载体）
   quote_snapshot_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

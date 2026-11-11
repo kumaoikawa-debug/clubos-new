@@ -808,6 +808,7 @@ async function loadCampOrders(){
       <div class="ca-card__t">营地订单 · 共 ${CAMP_ORDERS.length} 笔</div>
       <div class="ca-card__s">营位 / 租赁装备 / 小站商品统一进一张订单，金额与会员权益由系统重算。待支付订单 30 分钟未付款会自动释放房态与库存。按「营位 / 租赁 / 其它销售」筛选，已支付订单可确认入住（登记押金），已入住可办理退房（退押金并结算）。</div></div>
       <div class="ca-tools"><div class="ca-search"><input class="ca-input" type="search" placeholder="搜索订单号 / 联系人" oninput="caSearch(this.value)"></div>
+      <button class="ca-btn primary sm" type="button" onclick="caRedeemScan()">📷 扫码核销</button>
       <button class="ca-btn ghost sm" type="button" onclick="caReload()">↻ 刷新</button></div></div>
     <div class="ca-chips">${chips}</div>
     <div class="ca-list" id="caList">${caOrderRows()}</div></div>`;
@@ -846,14 +847,17 @@ window.caOpenOrderDetail=async function(id){
   else depHtml=row('押金',`¥${_money(o.depositAmount)}`);
   const logHtml=row('下单',esc(o.createdAt||'—'))
     +(o.paidAt?row('支付',esc(o.paidAt)):'')
+    +(o.redeemCode?row('核销码',(o.redeemedAt?`已核销 ${esc(o.redeemedAt)}${o.redeemedBy?`（${esc(o.redeemedBy)}）`:''}`:`<b style="letter-spacing:2px">${esc(o.redeemCode)}</b> · 未核销`)):'')
     +(o.checkedInAt?row('入住',esc(o.checkedInAt)):'')
     +(o.checkedOutAt?row('退房',esc(o.checkedOutAt)):'')
     +(o.checkinNote?row('入住备注',esc(o.checkinNote)):'')
     +(o.checkoutNote?row('退房备注',esc(o.checkoutNote)):'');
+  const canRedeem=o.redeemCode&&!o.redeemedAt&&(st==='paid'||st==='checked_in');
+  const redeemBtn=canRedeem?`<button class="ca-btn ghost sm" type="button" onclick="this.closest('.ux-overlay').uxClose();caCampRedeemById(${o.id},'${esc(o.redeemCode)}')">立即核销</button>`:'';
   const act= st==='paid'
-    ? `<button class="ca-btn primary sm" type="button" onclick="this.closest('.ux-overlay').uxClose();caCampCheckin(${o.id})">确认入住 · 登记押金</button>`
+    ? `<button class="ca-btn primary sm" type="button" onclick="this.closest('.ux-overlay').uxClose();caCampCheckin(${o.id})">确认入住 · 登记押金</button>${redeemBtn}`
     : st==='checked_in'
-    ? `<button class="ca-btn primary sm" type="button" onclick="this.closest('.ux-overlay').uxClose();caCampCheckout(${o.id})">办理退房 · 退押金结算</button>`:'';
+    ? `<button class="ca-btn primary sm" type="button" onclick="this.closest('.ux-overlay').uxClose();caCampCheckout(${o.id})">办理退房 · 退押金结算</button>${redeemBtn}`:'';
   const ov=uxDialog({title:'营地订单详情',desc:`${esc(o.orderNo||'')} · ${esc(CA_ORDER_ST[st]||st)}`,
     body:`<div class="ca">
       ${sec('顾客信息',row('姓名',esc(o.guestName||'—'))+row('电话',esc(o.guestPhone||'—'))+row('订单号',esc(o.orderNo||'—')))}
@@ -864,6 +868,62 @@ window.caOpenOrderDetail=async function(id){
     </div>`,
     foot:`<button class="btn ghost" type="button" data-cancel>关闭</button>${act}`});
   ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+};
+/* #812 扫码核销：优先 BarcodeDetector 相机扫码，不支持时手输核销码兜底（手机后台可用） */
+window.caRedeemScan=function(){
+  let stream=null,raf=0,stopped=false;
+  const ov=uxDialog({title:'扫码核销',desc:'对准顾客「我的订单」里的核销码，或手动输入',
+    body:`<div class="ca">
+      <video id="caRedeemVideo" autoplay playsinline muted style="width:100%;aspect-ratio:4/3;object-fit:cover;background:#000;border-radius:10px"></video>
+      <div class="ca-form__hint" id="caRedeemHint">正在启动相机…</div>
+      <label class="ca-field"><span>手动输入核销码</span>
+        <input id="caRedeemCode" placeholder="8 位核销码" autocapitalize="characters" style="text-transform:uppercase;letter-spacing:2px"></label>
+    </div>`,
+    foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>核销</button>`});
+  const cleanup=()=>{stopped=true;cancelAnimationFrame(raf);if(stream)stream.getTracks().forEach(t=>t.stop());};
+  ov.querySelector('[data-cancel]').onclick=()=>{cleanup();ov.uxClose();};
+  const doRedeem=async code=>{
+    code=String(code||'').trim().toUpperCase();
+    if(!code){ov.querySelector('#caRedeemHint').textContent='请先扫描或输入核销码';return;}
+    cleanup();
+    try{
+      const r=await api(`/api/club/${CLUB}/camp-orders/redeem`,{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
+      ov.uxClose();toast(`核销成功 · ${r.order.orderNo} · ${r.order.guestName||''}`);
+      await _campAfterFulfil();
+    }catch(e){showAlert({title:'核销失败',message:e.message||'请重试'});}
+  };
+  ov.querySelector('[data-ok]').onclick=()=>doRedeem(ov.querySelector('#caRedeemCode').value);
+  (async()=>{
+    try{
+      if(!('BarcodeDetector' in window))throw new Error('当前浏览器不支持相机扫码，请手动输入核销码');
+      if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)throw new Error('相机不可用（需 HTTPS 或 localhost），请手动输入核销码');
+      const det=new window.BarcodeDetector();
+      stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      const v=ov.querySelector('#caRedeemVideo');
+      if(!v||!v.isConnected){cleanup();return;}
+      v.srcObject=stream;
+      const h=ov.querySelector('#caRedeemHint');if(h)h.textContent='将核销码对准取景框，识别后自动核销';
+      const tick=async()=>{
+        if(stopped||!ov.isConnected)return;
+        try{
+          const found=await det.detect(v);
+          if(found&&found.length&&found[0].rawValue){ov.querySelector('#caRedeemCode').value=found[0].rawValue;await doRedeem(found[0].rawValue);return;}
+        }catch(e){}
+        raf=requestAnimationFrame(tick);
+      };
+      raf=requestAnimationFrame(tick);
+    }catch(e){
+      const h=ov.querySelector('#caRedeemHint');if(h)h.textContent=e.message||'相机不可用，请手动输入核销码';
+    }
+  })();
+};
+window.caCampRedeemById=async function(id,code){
+  try{
+    const r=await api(`/api/club/${CLUB}/camp-orders/${id}/redeem`,{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
+    toast(`已核销 · ${r.order.orderNo}`);await _campAfterFulfil();
+  }catch(e){showAlert({title:'核销失败',message:e.message||'请重试'});}
 };
 window.caCampCheckin=async function(id){
   const o=await _campOrderFetch(id);if(!o)return;

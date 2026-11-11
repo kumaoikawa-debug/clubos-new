@@ -853,15 +853,19 @@ window.campCancelCurrent=async function(){
 };
 function _showSuccess(r){
   const earned=Number(r.pointsEarned||0);
+  const rc=String((CAMP_ORDER||{}).redeemCode||'');
   _showSheet('支付成功','<div class="cp-ok"><div class="cp-ok__ico">'+CP_ICON.check+'</div>'
     + '<h2>预订成功</h2><p class="cp-ok__amt">实付 ¥'+_money(r.total||(CAMP_ORDER||{}).total)+'</p>'
     + '<div class="cp-ok__card"><div><span>订单号</span><b>'+esc((CAMP_ORDER||{}).orderNo||'')+'</b></div>'
     + '<div><span>订单状态</span><b>已支付</b></div>'
     + '<div><span>获得活动积分</span><b>+'+earned+' 分</b></div>'
     + '<div><span>营位 / 库存</span><b>已锁定</b></div></div>'
-    + '<p class="cp-ok__tip">出行信息可在「我的订单」查看；到营地报订单号或手机号即可。</p>'
+    + (rc?'<div class="cp-ok__redeem"><canvas class="cp-qr" data-code="'+esc(rc)+'"></canvas>'
+        +'<div class="cp-order__rc">核销码 <b>'+esc(rc)+'</b><em>到营地出示此码，工作人员扫码核销</em></div></div>':'')
+    + '<p class="cp-ok__tip">出行信息可在「我的订单」查看'+(rc?'，也可直接出示核销码':'到营地报订单号或手机号即可')+'。</p>'
     + '<button class="cp-submit" type="button" onclick="campOpenOrders()">查看我的订单</button>'
     + '<button class="cp-link" type="button" onclick="campCloseSheet();loadCampPage()">继续逛营地 ›</button></div>');
+  _drawRedeemQrs();
 }
 
 /* ── 我的营地订单 ───────────────────────────────────────────────────────── */
@@ -885,6 +889,11 @@ function _ordersHtml(orders){
       +(st==='pending_payment'?'<div class="cp-order__ops">'
         +'<button type="button" onclick="campResumePay('+o.id+')">去支付</button>'
         +'<button type="button" onclick="campCancelOrder('+o.id+')">取消订单</button></div>':'')
+      +(st==='paid'&&o.redeemCode?'<div class="cp-order__redeem'+(o.redeemedAt?' done':'')+'">'
+        +(o.redeemedAt?'<b>已核销</b><em>'+esc(o.redeemedAt)+'</em>'
+          :'<canvas class="cp-qr" data-code="'+esc(o.redeemCode)+'"></canvas>'
+           +'<div class="cp-order__rc">核销码 <b>'+esc(o.redeemCode)+'</b><em>到营地出示此码，工作人员扫码核销</em></div>')
+        +'</div>':'')
       +(st==='paid'?'<div class="cp-order__earn">已获得 '+Number(o.pointsEarned||0)+' 活动积分</div>':'')
       +'</div>';
   }).join('')+'</div>';
@@ -895,8 +904,17 @@ window.campOpenOrders=async function(){
   try{
     const d=await _get('/camp-orders?user_id='+_uid());
     const el=$('#cpOrdersBody');if(el)el.innerHTML=_ordersHtml(d.orders||[]);
+    _drawRedeemQrs();
   }catch(e){const el=$('#cpOrdersBody');if(el)el.innerHTML='<div class="cp-state">'+esc(_err(e))+'</div>';}
 };
+/* #812：把订单列表里的核销码 canvas 画成二维码（本地生成，无外网） */
+function _drawRedeemQrs(root){
+  if(!window.ClubOSQR)return;
+  (root||document).querySelectorAll('canvas.cp-qr[data-code]').forEach(cv=>{
+    if(cv.dataset.drawn)return;cv.dataset.drawn='1';
+    try{window.ClubOSQR.draw(cv,cv.dataset.code);}catch(e){}
+  });
+}
 window.campResumePay=async function(oid){
   try{
     const d=await api('/api/public/camp-orders/'+oid+'?user_id='+_uid(),{cache:'no-store'});

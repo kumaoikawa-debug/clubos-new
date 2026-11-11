@@ -378,6 +378,19 @@
 .cp-link{display:block;width:100%;border:0;background:none;color:var(--cp-muted);
   font-size:11.5px;font-weight:600;padding:13px 0 2px}
 
+/* #812 订单核销码（列表 + 支付成功页） */
+.cp-order__redeem{display:flex;align-items:center;gap:10px;margin-top:10px;padding:10px;
+  background:#f2f8f4;border:1px dashed var(--cp-green);border-radius:10px}
+.cp-order__redeem canvas.cp-qr{width:96px;height:96px;border-radius:6px;background:#fff;flex:none}
+.cp-order__redeem.done{border-style:solid;border-color:#cfe3d6}
+.cp-order__redeem.done b{color:var(--cp-green-d);font-size:13px}
+.cp-order__redeem.done em{font-style:normal;color:var(--cp-muted);font-size:11px;margin-left:6px}
+.cp-order__rc b{font-size:15px;letter-spacing:2px;color:#10271c}
+.cp-order__rc em{display:block;font-style:normal;font-size:10.5px;color:var(--cp-muted);margin-top:3px}
+.cp-ok__redeem{display:flex;align-items:center;gap:12px;margin:12px 0 2px;padding:12px;
+  background:#f2f8f4;border:1px dashed var(--cp-green);border-radius:12px;text-align:left}
+.cp-ok__redeem canvas.cp-qr{width:110px;height:110px;border-radius:6px;background:#fff;flex:none}
+
 /* 支付确认 / 成功 / 我的订单 */
 .cp-pay{text-align:center;padding:6px 2px 0}
 .cp-pay__badge{width:52px;height:52px;margin:2px auto 10px;border-radius:50%;background:#eaf5ed;
