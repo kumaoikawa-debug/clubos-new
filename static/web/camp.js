@@ -18,6 +18,7 @@ let CAMP_AVAIL=null,CAMP_CAMP_ID=0,CAMP_FILTER='all';
 let CAMP_IN='',CAMP_OUT='';
 let CAMP_BENEFITS=null,CAMP_CART=[],CAMP_QUOTE=null,CAMP_ORDER=null;
 let CAMP_USE_POINTS=false,CAMP_VOUCHER='',CAMP_GUEST={name:'',phone:''};
+let CAMP_MY_VOUCHERS=null,CAMP_CONTACTS=null,CAMP_VOUCHER_AUTO=false; /* #811 联系人历史+券自动匹配 */
 let CAMP_CAL={in:'',out:'',anchor:''};
 let CAMP_DETAIL=null,CAMP_DETAIL_QTY=1;
 let CAMP_HERO_IDX=0,CAMP_TOAST_T=null,CAMP_PAY_TIMER=null,CAMP_PAY_LEFT=0;
@@ -631,8 +632,16 @@ function _quoteBody(){
 }
 async function _refreshQuote(){
   if(!CAMP_CART.length){CAMP_QUOTE=null;return;}
-  try{CAMP_QUOTE=await _post('/camp-quote',_quoteBody());}
-  catch(e){CAMP_QUOTE=null;_cpToast(_err(e));}
+  try{CAMP_QUOTE=await _post('/camp-quote',_quoteBody());return;}
+  catch(e){
+    /* #811：券不满足门槛/不可用时，不把结算页卡死在「计算中」——自动降级回无券价 */
+    if(CAMP_VOUCHER){
+      CAMP_VOUCHER='';CAMP_VOUCHER_AUTO=false;
+      try{CAMP_QUOTE=await _post('/camp-quote',_quoteBody());_cpToast('所选优惠券不可用，已按无券计价');return;}
+      catch(_e){CAMP_QUOTE=null;_cpToast(_err(_e));return;}
+    }
+    CAMP_QUOTE=null;_cpToast(_err(e));
+  }
 }
 
 /* ── 确认订单页 ─────────────────────────────────────────────────────────── */
@@ -666,8 +675,7 @@ function _checkoutHtml(){
     + '可用 '+Number(b.clubPoints||0)+' 积分 · '+(b.pointsRedeemRate||100)+' 分抵 ¥1</em></div></div>'
     + '<label class="cp-ck__switch"><span>使用活动积分抵扣<i>本单最多可抵 ¥'+_money(maxCash)+'</i></span>'
     + '<input type="checkbox" '+(CAMP_USE_POINTS?'checked':'')+' onchange="campTogglePoints(this.checked)"></label>'
-    + '<div class="cp-ck__coupon"><input id="cpVoucher" placeholder="输入优惠券码（选填）" value="'+esc(CAMP_VOUCHER)+'">'
-    + '<button type="button" onclick="campApplyVoucher()">应用</button></div>';
+    + _voucherChipsHtml();
   const amount=q?('<div class="cp-sum">'+_amountRows(q)
     + '<div class="cp-sum__total"><span>应付合计</span><b>¥'+_money(q.total)+'</b></div>'
     + '<div class="cp-sum__note">支付完成后预计获得 '+Number(q.pointsEarned||0)+' 活动积分；押金不计入积分与折扣。</div></div>')
@@ -677,24 +685,84 @@ function _checkoutHtml(){
     + '<input id="cpGuestName" value="'+esc(g.name)+'" placeholder="请填写真实姓名" oninput="campGuestInput()"></div>'
     + '<div class="cp-f"><label for="cpGuestPhone">手机号</label>'
     + '<input id="cpGuestPhone" type="tel" value="'+esc(g.phone)+'" placeholder="便于营地联系" oninput="campGuestInput()"></div></div>'
+    + _contactChipsHtml()
     + amount
     + '<button class="cp-submit" id="cpOrderSubmit" type="button" '+(q?'':'disabled')+' onclick="campSubmitOrder()">'
     + (q?'提交订单 · ¥'+_money(q.total):'计算中…')+'</button>'
     + '<button class="cp-link" type="button" onclick="campOpenOrders()">查看我的营地订单 ›</button></div>';
 }
 function _paintCheckout(){const el=$('#cpCheckoutBody');if(el)el.innerHTML=_checkoutHtml();}
+/* ── #811 联系人历史 + 优惠券自动匹配 ───────────────────────────────────── */
+function _contactChipsHtml(){
+  const cs=CAMP_CONTACTS||[];
+  if(!cs.length)return '';
+  return '<div class="cp-contacts">'+cs.slice(0,4).map((c,i)=>
+    '<button type="button" class="cp-cchip" onclick="campUseContact('+i+')">'+esc(c.name)+' '+esc(c.phone)+'</button>').join('')+'</div>';
+}
+function _voucherChipsHtml(){
+  const vs=CAMP_MY_VOUCHERS||[];
+  if(!vs.length)return '<div class="cp-ck__coupon"><span class="cp-vempty">暂无可用优惠券</span></div>';
+  const chips=vs.slice(0,6).map(v=>{
+    const sel=!!CAMP_VOUCHER&&String(v.voucher_code)===String(CAMP_VOUCHER);
+    const val=String(v.mode||'fixed')==='discount'?((Number(v.discount_percent)||0)/10)+'折':'¥'+_money(v.cash_value||0);
+    return '<button type="button" class="cp-vchip'+(sel?' on':'')+'" onclick="campPickVoucher(\''+esc(v.voucher_code)+'\')">'
+      +'<b>'+esc(v.title||'福利券')+'</b><em>'+val+(Number(v.threshold_amount)>0?' · 满¥'+_money(v.threshold_amount):'')+'</em></button>';
+  }).join('');
+  return '<div class="cp-ck__coupon cp-vchips">'+chips
+    +(CAMP_VOUCHER?'<button type="button" class="cp-vchip off" onclick="campPickVoucher(\'\')">不使用</button>':'')+'</div>';
+}
+/* 按「当前报价的可券金额」估算每张券能抵多少，取最大者为自动匹配结果 */
+function _voucherEst(v){
+  const q=CAMP_QUOTE;let avail;
+  if(q&&Number(q.goodsAmount)>0){
+    const el=q.eligibility||{};
+    avail=(Number(q.goodsAmount)-Number(q.clubPointDiscount||0)-Number(q.memberDiscount||0))*(Number(el.promoBase)||0)/Number(q.goodsAmount);
+  }else{
+    avail=CAMP_CART.reduce((s,x)=>s+Number(x.unitPrice||0)*Number(x.qty||1)*(x.kind==='pitch'?Number(x.days||1):1),0);
+  }
+  avail=Math.max(0,avail);
+  const thr=Number(v.threshold_amount||0);
+  if(avail<thr)return 0;
+  if(String(v.mode||'fixed')==='discount'){
+    const dp=Math.max(1,Math.min(99,Number(v.discount_percent)||0));
+    return Math.round(avail*(100-dp))/100;
+  }
+  return Math.min(avail,Math.max(0,Number(v.cash_value||0)));
+}
+function _autoPickVoucher(){
+  if(CAMP_VOUCHER)return; /* 用户已选券则不覆盖 */
+  const vs=CAMP_MY_VOUCHERS||[];let best=null,bestVal=0;
+  for(const v of vs){const val=_voucherEst(v);if(val>bestVal){best=v;bestVal=val;}}
+  if(best&&bestVal>0){CAMP_VOUCHER=best.voucher_code;CAMP_VOUCHER_AUTO=true;}
+}
+async function _loadBookingAssist(){
+  const uid=_uid();
+  if(uid){try{CAMP_CONTACTS=await api('/api/public/users/'+uid+'/camp-contacts?club_id='+CLUB,{cache:'no-store'});}catch(e){CAMP_CONTACTS=null;}}
+  try{CAMP_MY_VOUCHERS=await api('/api/public/clubs/'+CLUB+'/vouchers?user_id='+uid+'&kind=camp',{cache:'no-store'});}catch(e){CAMP_MY_VOUCHERS=null;}
+  if(CAMP_CONTACTS&&CAMP_CONTACTS.length&&!CAMP_GUEST.name&&!CAMP_GUEST.phone)
+    CAMP_GUEST={name:String(CAMP_CONTACTS[0].name||''),phone:String(CAMP_CONTACTS[0].phone||'')};
+  _autoPickVoucher();
+  _paintCheckout();
+  if(CAMP_VOUCHER&&CAMP_VOUCHER_AUTO){CAMP_QUOTE=null;await _refreshQuote();_paintCheckout();}
+}
 window.campOpenCheckout=async function(){
   if(!CAMP_CART.length){_cpToast('清单是空的，先挑一个营位或商品');return;}
   CAMP_GUEST=_guest();
   _showSheet('确认订单','<div id="cpCheckoutBody">'+_checkoutHtml()+'</div>');
   await _refreshQuote();_paintCheckout();
+  _loadBookingAssist(); /* 异步补联系人历史与券包，回来后自动匹配最优券并重绘 */
 };
 window.campGuestInput=function(){
   CAMP_GUEST={name:($('#cpGuestName')||{}).value||'',phone:($('#cpGuestPhone')||{}).value||''};
 };
+window.campUseContact=function(i){
+  const c=(CAMP_CONTACTS||[])[i];if(!c)return;
+  CAMP_GUEST={name:String(c.name||''),phone:String(c.phone||'')};_paintCheckout();
+};
 window.campTogglePoints=async function(on){campGuestInput();CAMP_USE_POINTS=!!on;
   CAMP_QUOTE=null;_paintCheckout();await _refreshQuote();_paintCheckout();};
-window.campApplyVoucher=async function(){campGuestInput();CAMP_VOUCHER=(($('#cpVoucher')||{}).value||'').trim();
+window.campPickVoucher=async function(code){
+  campGuestInput();CAMP_VOUCHER=String(code||'').trim();CAMP_VOUCHER_AUTO=false;
   CAMP_QUOTE=null;_paintCheckout();await _refreshQuote();_paintCheckout();
   if(CAMP_VOUCHER&&CAMP_QUOTE&&!Number(CAMP_QUOTE.voucherDiscount))_cpToast('该券暂不可用或不符合门槛');};
 window.campCartQty=async function(i,d){
@@ -715,7 +783,7 @@ window.campSubmitOrder=async function(){
   try{
     const body=Object.assign(_quoteBody(),{guestName:g.name.trim(),guestPhone:g.phone.trim()});
     const r=await _post('/camp-orders',body);
-    CAMP_ORDER=r;CAMP_CART=[];CAMP_QUOTE=null;CAMP_USE_POINTS=false;CAMP_VOUCHER='';
+    CAMP_ORDER=r;CAMP_CART=[];CAMP_QUOTE=null;CAMP_USE_POINTS=false;CAMP_VOUCHER='';CAMP_VOUCHER_AUTO=false;
     _render();
     _openPaySheet();
   }catch(e){_cpToast(_err(e));if(btn){btn.disabled=false;btn.textContent='重新提交订单';}}

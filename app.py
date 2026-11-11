@@ -6601,6 +6601,20 @@ def public_vouchers(club_id:int,user_id:int=1,kind:str='activity'):
         try:return benefit_engine.eligible_vouchers(c,user_id=user_id,club_id=club_id,kind=kind)
         except ValueError as e: raise HTTPException(400,str(e))
 
+@app.get('/api/public/users/{user_id}/camp-contacts')
+def public_camp_contacts(user_id:int,club_id:int=0):
+    """营地 v4.1 #811：预订联系人历史——该用户营地订单里真实用过的联系人，最近优先。
+    C 端确认订单页据此自动回填/点选联系人，避免每次手输姓名手机号。"""
+    sql=("SELECT guest_name name,guest_phone phone,MAX(created_at) last_used "
+         "FROM camp_orders WHERE user_id=? AND status!='cancelled' "
+         "AND guest_name IS NOT NULL AND TRIM(guest_name)<>'' "
+         "AND guest_phone IS NOT NULL AND TRIM(guest_phone)<>'' ")
+    params=[user_id]
+    if int(club_id)>0:
+        sql+='AND club_id=? '; params.append(int(club_id))
+    sql+='GROUP BY guest_name,guest_phone ORDER BY last_used DESC LIMIT 5'
+    with conn() as c:return rows(c.execute(sql,params))
+
 @app.get('/api/public/clubs/{club_id}/member-center')
 def public_member_center(club_id:int,user_id:int=1):
     club_or_404(club_id)

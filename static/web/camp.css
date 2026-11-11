@@ -361,6 +361,20 @@
   background:#fbfdfb;font-size:12.5px;font-family:inherit;outline:none}
 .cp-ck__coupon button{border:0;border-radius:10px;background:#e9f3eb;color:var(--cp-green-d);
   padding:0 16px;font-size:12px;font-weight:800}
+/* #811 券自动匹配 chip 行 */
+.cp-vchips{flex-wrap:wrap}
+.cp-vempty{color:var(--cp-muted);font-size:11.5px}
+.cp-vchip{border:1px solid #e4eae5;border-radius:10px;background:#fbfdfb;padding:7px 11px;
+  font-family:inherit;text-align:left;cursor:pointer}
+.cp-vchip b{display:block;font-size:12px;color:#22342a;font-weight:800}
+.cp-vchip em{display:block;font-style:normal;font-size:10.5px;color:var(--cp-muted);margin-top:2px}
+.cp-vchip.on{border-color:var(--cp-green);background:#e9f3eb;box-shadow:0 0 0 1px var(--cp-green) inset}
+.cp-vchip.off{border-style:dashed;color:var(--cp-muted)}
+/* #811 历史联系人 chip 行 */
+.cp-contacts{display:flex;flex-wrap:wrap;gap:6px;padding:2px 0 4px}
+.cp-cchip{border:1px solid #e4eae5;border-radius:999px;background:#fbfdfb;padding:6px 12px;
+  font-size:11.5px;font-weight:600;color:#22342a;font-family:inherit;cursor:pointer}
+.cp-cchip:active{background:#e9f3eb;border-color:var(--cp-green)}
 .cp-link{display:block;width:100%;border:0;background:none;color:var(--cp-muted);
   font-size:11.5px;font-weight:600;padding:13px 0 2px}
 
