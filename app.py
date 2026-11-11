@@ -11043,14 +11043,18 @@ def club_pitch_create(club_id:int,payload:dict=Body(...)):
     club_or_404(club_id)
     with conn() as c:
         c.execute('''INSERT INTO camp_pitches(club_id,camp_id,code,name,pitch_type,is_overnight,capacity,attributes_json,base_price,weekend_price,holiday_price,status,
-                     cover_url,gallery_json,specs_json,facilities_json,policies_json,subtitle,description,detail_text,original_price,unit_label)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                     cover_url,gallery_json,specs_json,facilities_json,policies_json,subtitle,description,detail_text,original_price,unit_label,
+                     promo_enabled,member_discount_enabled,points_enabled)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (club_id,payload.get('campId',0),payload.get('code'),payload.get('name'),payload.get('pitchType','tent'),
                    int(bool(payload.get('isOvernight',1))),payload.get('capacity',1),jdump(payload.get('attributes')),
                    payload.get('basePrice',0),payload.get('weekendPrice'),payload.get('holidayPrice'),payload.get('status','active'),
                    payload.get('coverUrl'),jdump(payload.get('gallery')),jdump(payload.get('specs')),
                    jdump(payload.get('facilities')),jdump(payload.get('policies')),payload.get('subtitle'),
-                   payload.get('description'),payload.get('detailText'),payload.get('originalPrice',0),payload.get('unitLabel')))
+                   payload.get('description'),payload.get('detailText'),payload.get('originalPrice',0),payload.get('unitLabel'),
+                   # v4.1 #810 产品级权益开关（默认全开）
+                   int(bool(payload.get('promoEnabled',1))),int(bool(payload.get('memberDiscountEnabled',1))),
+                   int(bool(payload.get('pointsEnabled',1)))))
         nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
         return row(c.execute('SELECT * FROM camp_pitches WHERE id=?',(nid,)))
 
@@ -11065,13 +11069,16 @@ def club_pitch_update(club_id:int,pid:int,payload:dict=Body(...)):
               # v3 商品详情增强
               'coverUrl':'cover_url','gallery':'gallery_json','specs':'specs_json',
               'facilities':'facilities_json','policies':'policies_json','subtitle':'subtitle',
-              'description':'description','detailText':'detail_text','originalPrice':'original_price','unitLabel':'unit_label'}
+              'description':'description','detailText':'detail_text','originalPrice':'original_price','unitLabel':'unit_label',
+              # v4.1 #810 产品级权益开关
+              'promoEnabled':'promo_enabled','memberDiscountEnabled':'member_discount_enabled','pointsEnabled':'points_enabled'}
         sets=[];args=[]
         for pk,fk in flds.items():
             if pk in payload:
                 v=payload[pk]
                 if fk=='is_overnight': v=int(bool(v))
                 elif fk.endswith('_json'): v=jdump(v)
+                elif fk.endswith('_enabled'): v=int(bool(v))
                 sets.append(f'{fk}=?'); args.append(v)
         if sets:
             args+=[pid,club_id]; c.execute(f"UPDATE camp_pitches SET {','.join(sets)} WHERE id=? AND club_id=?",args)
@@ -11247,13 +11254,17 @@ def club_rental_create(club_id:int,payload:dict=Body(...)):
     club_or_404(club_id)
     with conn() as c:
         c.execute('''INSERT INTO camp_rental_items(club_id,camp_id,name,cover_url,description,daily_price,deposit,available_qty,attributes_json,status,
-                     gallery_json,specs_json,facilities_json,policies_json,subtitle,detail_text,original_price,unit_label)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                     gallery_json,specs_json,facilities_json,policies_json,subtitle,detail_text,original_price,unit_label,
+                     promo_enabled,member_discount_enabled,points_enabled)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (club_id,payload.get('campId',0),payload.get('name'),payload.get('coverUrl'),payload.get('description'),
                    payload.get('dailyPrice',0),payload.get('deposit',0),payload.get('availableQty',0),jdump(payload.get('attributes')),payload.get('status','active'),
                    jdump(payload.get('gallery')),jdump(payload.get('specs')),jdump(payload.get('facilities')),
                    jdump(payload.get('policies')),payload.get('subtitle'),payload.get('detailText'),
-                   payload.get('originalPrice',0),payload.get('unitLabel')))
+                   payload.get('originalPrice',0),payload.get('unitLabel'),
+                   # v4.1 #810 产品级权益开关（默认全开）
+                   int(bool(payload.get('promoEnabled',1))),int(bool(payload.get('memberDiscountEnabled',1))),
+                   int(bool(payload.get('pointsEnabled',1)))))
         nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
         return row(c.execute('SELECT * FROM camp_rental_items WHERE id=?',(nid,)))
 
@@ -11267,12 +11278,15 @@ def club_rental_update(club_id:int,rid:int,payload:dict=Body(...)):
               # v3 商品详情增强
               'gallery':'gallery_json','specs':'specs_json','facilities':'facilities_json',
               'policies':'policies_json','subtitle':'subtitle','detailText':'detail_text',
-              'originalPrice':'original_price','unitLabel':'unit_label'}
+              'originalPrice':'original_price','unitLabel':'unit_label',
+              # v4.1 #810 产品级权益开关
+              'promoEnabled':'promo_enabled','memberDiscountEnabled':'member_discount_enabled','pointsEnabled':'points_enabled'}
         sets=[];args=[]
         for pk,fk in flds.items():
             if pk in payload:
                 v=payload[pk]
                 if fk.endswith('_json'): v=jdump(v)
+                elif fk.endswith('_enabled'): v=int(bool(v))
                 sets.append(f'{fk}=?'); args.append(v)
         if sets:
             args+=[rid,club_id]; c.execute(f"UPDATE camp_rental_items SET {','.join(sets)} WHERE id=? AND club_id=?",args)
@@ -11304,13 +11318,17 @@ def club_store_create(club_id:int,payload:dict=Body(...)):
     club_or_404(club_id)
     with conn() as c:
         c.execute('''INSERT INTO camp_store_products(club_id,camp_id,name,cover_url,price,stock,category,status,
-                     gallery_json,specs_json,facilities_json,policies_json,subtitle,description,detail_text,original_price,unit_label)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                     gallery_json,specs_json,facilities_json,policies_json,subtitle,description,detail_text,original_price,unit_label,
+                     promo_enabled,member_discount_enabled,points_enabled)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (club_id,payload.get('campId',0),payload.get('name'),payload.get('coverUrl'),payload.get('price',0),
                    payload.get('stock',0),payload.get('category'),payload.get('status','active'),
                    jdump(payload.get('gallery')),jdump(payload.get('specs')),jdump(payload.get('facilities')),
                    jdump(payload.get('policies')),payload.get('subtitle'),payload.get('description'),
-                   payload.get('detailText'),payload.get('originalPrice',0),payload.get('unitLabel')))
+                   payload.get('detailText'),payload.get('originalPrice',0),payload.get('unitLabel'),
+                   # v4.1 #810 产品级权益开关（默认全开）
+                   int(bool(payload.get('promoEnabled',1))),int(bool(payload.get('memberDiscountEnabled',1))),
+                   int(bool(payload.get('pointsEnabled',1)))))
         nid=c.execute('SELECT last_insert_rowid()').fetchone()[0]
         return row(c.execute('SELECT * FROM camp_store_products WHERE id=?',(nid,)))
 
@@ -11323,11 +11341,16 @@ def club_store_update(club_id:int,sid:int,payload:dict=Body(...)):
               # v3 商品详情增强
               'gallery':'gallery_json','specs':'specs_json','facilities':'facilities_json',
               'policies':'policies_json','subtitle':'subtitle','description':'description',
-              'detailText':'detail_text','originalPrice':'original_price','unitLabel':'unit_label'}
+              'detailText':'detail_text','originalPrice':'original_price','unitLabel':'unit_label',
+              # v4.1 #810 产品级权益开关
+              'promoEnabled':'promo_enabled','memberDiscountEnabled':'member_discount_enabled','pointsEnabled':'points_enabled'}
         sets=[];args=[]
         for pk,fk in flds.items():
             if pk in payload:
-                sets.append(f'{fk}=?'); args.append(payload[pk])
+                v=payload[pk]
+                if fk.endswith('_json'): v=jdump(v)
+                elif fk.endswith('_enabled'): v=int(bool(v))
+                sets.append(f'{fk}=?'); args.append(v)
         if sets:
             args+=[sid,club_id]; c.execute(f"UPDATE camp_store_products SET {','.join(sets)} WHERE id=? AND club_id=?",args)
         return row(c.execute('SELECT * FROM camp_store_products WHERE id=?',(sid,)))
@@ -11515,6 +11538,12 @@ def _camp_public_quote(q):
     out['items']=[{k:v for k,v in dict(x).items() if not k.startswith('_')} for x in (q.get('items') or [])]
     return out
 
+def _camp_flag(v):
+    """v4.1 #810：产品级权益开关解析。NULL/None/缺列=开（兼容旧行），0=关，其余非零=开。"""
+    if v is None: return 1
+    try: return 1 if int(v)!=0 else 0
+    except (TypeError,ValueError): return 1
+
 def _camp_line(c,club_id,raw):
     """服务端重算单行价格 —— 绝不信任前端传来的任何金额。返回规范行（带 _ 内部键）。"""
     import datetime as _dt
@@ -11567,7 +11596,10 @@ def _camp_line(c,club_id,raw):
         return {'kind':'pitch','id':rid,'title':p['name'] or '营位','coverUrl':_camp_safe_url(p.get('cover_url')),
                 'spec':spec,'unitLabel':'/晚' if p['is_overnight'] else '/天','unitPrice':unit,'qty':qty,
                 'days':nights,'subtotal':subtotal,'deposit':deposit,'checkIn':ci,'checkOut':co,
-                'isDayUse':is_day,'campId':p['camp_id'],'_rng':rng}
+                'isDayUse':is_day,'campId':p['camp_id'],'_rng':rng,
+                # v4.1 #810 产品级权益开关（NULL/缺列兜底=开）
+                'promoEnabled':_camp_flag(p['promo_enabled']),'memberEnabled':_camp_flag(p['member_discount_enabled']),
+                'pointsEnabled':_camp_flag(p['points_enabled'])}
 
     if kind=='rental':
         r=row(c.execute('SELECT * FROM camp_rental_items WHERE id=? AND club_id=? AND status="active"',(rid,club_id)))
@@ -11600,7 +11632,9 @@ def _camp_line(c,club_id,raw):
         return {'kind':'rental','id':rid,'title':r['name'] or '租赁装备','coverUrl':_camp_safe_url(r.get('cover_url')),
                 'spec':(r['description'] or '')[:60],'unitLabel':'/天','unitPrice':unit,'qty':qty,
                 'days':days,'subtotal':subtotal,'deposit':dep,'checkIn':ci,'checkOut':co,
-                'isDayUse':0,'campId':r['camp_id']}
+                'isDayUse':0,'campId':r['camp_id'],
+                'promoEnabled':_camp_flag(r['promo_enabled']),'memberEnabled':_camp_flag(r['member_discount_enabled']),
+                'pointsEnabled':_camp_flag(r['points_enabled'])}
 
     s=row(c.execute('SELECT * FROM camp_store_products WHERE id=? AND club_id=? AND status="active"',(rid,club_id)))
     if not s: raise HTTPException(404,'小站商品不存在或已下架')
@@ -11617,7 +11651,9 @@ def _camp_line(c,club_id,raw):
     return {'kind':'store','id':rid,'title':s['name'] or '商品','coverUrl':_camp_safe_url(s.get('cover_url')),
             'spec':s['category'] or '营地自营','unitLabel':'/件','unitPrice':unit,'qty':qty,
             'days':1,'subtotal':round(unit*qty,2),'deposit':0.0,'checkIn':'','checkOut':'',
-            'isDayUse':0,'campId':s['camp_id']}
+            'isDayUse':0,'campId':s['camp_id'],
+            'promoEnabled':_camp_flag(s['promo_enabled']),'memberEnabled':_camp_flag(s['member_discount_enabled']),
+            'pointsEnabled':_camp_flag(s['points_enabled'])}
 
 def _camp_build_quote(c,club_id,payload):
     """报价与下单共用同一段计算，杜绝「页面显示 9 折、下单按原价」的漂移。"""

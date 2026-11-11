@@ -152,6 +152,11 @@ class CampPricingEngine:
               voucher_codes: list[str] | None = None) -> dict:
         """营地统一报价（**只读**，不落库、不 hold）。items 必须是服务端重算过价的规范行。
 
+        v4.1 #810：行级权益开关（promoEnabled/memberEnabled/pointsEnabled，缺省=开）。
+        三个「合格基数」分别统计各开关打开的行小计；每层折扣只作用于该层合格金额，
+        上一层折扣按金额占比分摊到下层基数。**全部行开关全开时三个基数都等于 goods，
+        计算路径与 #810 之前完全一致（零漂移）**。
+
         返回键固定，见 /tmp/camp-api-contract.md §2。任何一处异常都退回「无权益原价」，
         绝不让会员体系把下单链路卡死（宁可不打折，不能付不了款）。
         """
@@ -161,6 +166,21 @@ class CampPricingEngine:
         lines = [dict(x) for x in items]
         goods = round(sum(float(x.get('subtotal') or 0) for x in lines), 2)
         deposit = round(sum(float(x.get('deposit') or 0) for x in lines), 2)
+
+        def _on(line, key):
+            v = line.get(key)
+            if v is None:
+                return True
+            try:
+                return int(v) != 0
+            except (TypeError, ValueError):
+                return True
+
+        # 三个合格基数：积分抵用 / 会员折扣 / 优惠活动(福利券)。关掉的行不进该层折扣基数。
+        points_base = round(sum(float(x.get('subtotal') or 0) for x in lines if _on(x, 'pointsEnabled')), 2)
+        member_base = round(sum(float(x.get('subtotal') or 0) for x in lines if _on(x, 'memberEnabled')), 2)
+        promo_base = round(sum(float(x.get('subtotal') or 0) for x in lines if _on(x, 'promoEnabled')), 2)
+
         wallet = self.wallet_snapshot(c, uid or 0, club_id) if uid else {
             'clubPoints': 0, 'gearPoints': 0, 'memberLevel': '非会员'}
 
@@ -179,44 +199,57 @@ class CampPricingEngine:
             'wallet': wallet,
             'benefits': {k: bool(cfg[k]) for k in
                          ('memberDiscountEnabled', 'pointsEnabled', 'voucherEnabled')},
+            'eligibility': {'pointsBase': points_base, 'memberBase': member_base, 'promoBase': promo_base},
         }
         if goods <= 0 or not uid:
             return out
 
         try:
             synth = self._synthetic_activity(club_id, cfg)
-            req_cp = max(0, int(club_points or 0))
-            req_gp = max(0, int(gear_points or 0))
-            q, policy, max_redeemable, rate = self.booking._quote_with_policy(
-                c=c, activity=synth, amount=goods, wallet=wallet,
-                requested_club_points=req_cp, requested_gear_points=req_gp, user_id=uid)
-            after_points = round(float(q.payable), 2)
-            out['clubPointsUsed'] = int(q.club_points_used)
-            out['gearPointsUsed'] = int(q.gear_points_used)
-            out['clubPointDiscount'] = round(float(q.club_point_discount), 2)
-            out['gearPointDiscount'] = round(float(q.platform_point_subsidy), 2)
-            out['pointsRedeemRate'] = int(rate)
-            mr = max_redeemable or {}
-            out['maxRedeemable'] = {
-                'club': mr.get('club') or {'points': 0, 'cash': 0.0},
-                'gear': mr.get('gear') or {'points': 0, 'cash': 0.0},
-            }
+            policy = None
+            # 第一层：积分抵用 —— 只对 pointsEnabled=开 的行生效。
+            after_points = goods
+            if points_base > 0:
+                req_cp = max(0, int(club_points or 0))
+                req_gp = max(0, int(gear_points or 0))
+                q, policy, max_redeemable, rate = self.booking._quote_with_policy(
+                    c=c, activity=synth, amount=points_base, wallet=wallet,
+                    requested_club_points=req_cp, requested_gear_points=req_gp, user_id=uid)
+                point_discount = round(points_base - float(q.payable), 2)
+                after_points = round(goods - point_discount, 2)
+                out['clubPointsUsed'] = int(q.club_points_used)
+                out['gearPointsUsed'] = int(q.gear_points_used)
+                out['clubPointDiscount'] = round(float(q.club_point_discount), 2)
+                out['gearPointDiscount'] = round(float(q.platform_point_subsidy), 2)
+                out['pointsRedeemRate'] = int(rate)
+                mr = max_redeemable or {}
+                out['maxRedeemable'] = {
+                    'club': mr.get('club') or {'points': 0, 'cash': 0.0},
+                    'gear': mr.get('gear') or {'points': 0, 'cash': 0.0},
+                }
+                out['_policy'] = policy.as_dict() if hasattr(policy, 'as_dict') else {}
 
-            # 会员等级立减：直接用活动侧的同一个函数，口径零漂移。
+            # 第二层：会员等级立减 —— 只对 memberEnabled=开 的行生效；
+            # 折扣基数 = 积分折后总额 × (会员合格金额 / 商品总额)，全开时=积分折后总额（与活动一致）。
             after_member = after_points
-            if cfg['memberDiscountEnabled']:
+            member_share = (member_base / goods) if goods > 0 else 0.0
+            if cfg['memberDiscountEnabled'] and member_base > 0 and member_share > 0:
+                m_amount = round(after_points * member_share, 2)
                 md, mrate = self.checkout._member_activity_discount(
-                    c, activity=synth, user_id=uid, amount=after_points)
+                    c, activity=synth, user_id=uid, amount=m_amount)
                 if md > 0:
                     out['memberDiscount'] = round(float(md), 2)
                     out['memberDiscountRate'] = float(mrate)
                     after_member = round(after_points - float(md), 2)
 
-            # 福利券：营地用独立适用范围（kind='camp'），只有 applies_to∈{camp,all} 的活动券能抵。
-            if cfg['voucherEnabled'] and codes:
+            # 第三层：福利券 —— 只对 promoEnabled=开 的行生效；
+            # 可用金额 = 会员折后总额 × (优惠合格金额 / 商品总额)，全开时=会员折后总额（与活动一致）。
+            promo_share = (promo_base / goods) if goods > 0 else 0.0
+            if cfg['voucherEnabled'] and codes and promo_base > 0 and promo_share > 0:
+                v_avail = round(max(0.0, (after_points - out['memberDiscount']) * promo_share), 2)
                 vb = self.benefits.quote_vouchers(
                     c, voucher_codes=codes, user_id=uid, club_id=int(club_id),
-                    kind='camp', amount_available=after_member)
+                    kind='camp', amount_available=v_avail)
                 out['voucherDiscount'] = round(float(vb.get('totalDiscount') or 0), 2)
                 out['vouchersApplied'] = vb.get('applied') or []
                 out['_voucherClubDiscount'] = float(vb.get('clubDiscount') or 0)
@@ -225,10 +258,10 @@ class CampPricingEngine:
             payable = round(max(0.0, after_member - out['voucherDiscount']), 2)
             out['payable'] = payable
             out['total'] = round(payable + deposit, 2)
-            if cfg['earnPointsEnabled'] and getattr(policy, 'effective_earn_club_points', False):
+            if cfg['earnPointsEnabled'] and points_base > 0 and policy is not None \
+                    and getattr(policy, 'effective_earn_club_points', False):
                 out['pointsEarned'] = int(self.points.club_points_earned_from_activity(
                     payable, rate_override=policy.club_points_earn_rate_override))
-            out['_policy'] = policy.as_dict() if hasattr(policy, 'as_dict') else {}
         except Exception:
             # 券码非法 / 券已被占用等是「可预期业务错误」，由调用方转成 409；
             # 其余异常退回原价，保证下单不被会员体系阻断。

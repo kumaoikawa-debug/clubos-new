@@ -392,6 +392,23 @@ function _fv(ov,n){const e=ov.querySelector('#f_'+n);return e?String(e.value).tr
 function _fn(ov,n){const v=_fv(ov,n);return v===''?null:Number(v);}
 function _lines(ov,n){return _fv(ov,n).split('\n').map(t=>t.trim()).filter(Boolean).slice(0,20);}
 function _campField(label='所属营地'){return {name:'campId',label,type:'select',value:CA_CAMP_ID,options:CAMP_PROFILES.map(c=>({value:c.id,label:c.name}))};}
+/* v4.1 #810 产品级权益开关：三类商品共用一套（参与优惠活动=福利券可用 / 会员等级折扣 / 积分抵扣），默认全开 */
+function _fl(v){return (Number(v)===0)?'0':'1';}
+function _benefitFields(x){
+  return [
+    {name:'promoEnabled',label:'参与优惠活动（用户福利券可用）',type:'select',value:_fl(x.promo_enabled),
+      options:[{value:'1',label:'参与'},{value:'0',label:'不参与（券不可抵此商品）'}]},
+    {name:'memberEnabled',label:'享会员等级折扣',type:'select',value:_fl(x.member_discount_enabled),
+      options:[{value:'1',label:'享受'},{value:'0',label:'不享受（会员价不适用此商品）'}]},
+    {name:'pointsEnabled',label:'可用积分抵扣',type:'select',value:_fl(x.points_enabled),
+      options:[{value:'1',label:'可用'},{value:'0',label:'不可用（积分不能抵此商品）'}]}
+  ];
+}
+function _benefitBuild(ov){
+  return {promoEnabled:_fv(ov,'promoEnabled')==='0'?0:1,
+    memberDiscountEnabled:_fv(ov,'memberEnabled')==='0'?0:1,
+    pointsEnabled:_fv(ov,'pointsEnabled')==='0'?0:1};
+}
 /* v3：C 端高标准详情页所需字段，三类商品共用一套录入口径（后台列表返回 snake_case + json 字符串） */
 function _detailFields(x){
   const arr=v=>Array.isArray(v)?v:_j(v,[]);
@@ -630,13 +647,16 @@ window.editPitch=function(id){
     {name:'weekendPrice',label:'周末价（留空=同平日）',type:'number',min:0,step:0.01,value:p.weekend_price==null?'':p.weekend_price},
     {name:'holidayPrice',label:'节假日价（留空=同平日）',type:'number',min:0,step:0.01,value:p.holiday_price==null?'':p.holiday_price},
     {name:'status',label:'状态',type:'select',value:p.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
+    {name:'__ben',label:'',type:'html',html:'<div class="ca-field full" style="font-weight:600;margin-top:4px">会员权益（产品级）</div>'},
+    ..._benefitFields(p),
     {name:'__mwb',label:'',type:'html',html:_campMediaSectionHtml('pitch',id||0)}
   ],ov=>_campSaveBasic({kind:'pitch',idRef,ov,
     apiPath:cur=>cur?`/api/club/${CLUB}/pitches/${cur}`:`/api/club/${CLUB}/pitches`,
     build:ov=>({campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,code:_fv(ov,'code'),name:_fv(ov,'name'),
       pitchType:_fv(ov,'pitchType')||'tent',isOvernight:Number(_fv(ov,'isOvernight')||0),
       capacity:Math.max(1,Number(_fv(ov,'capacity')||1)),basePrice:Number(_fv(ov,'basePrice')||0),
-      weekendPrice:_fn(ov,'weekendPrice'),holidayPrice:_fn(ov,'holidayPrice'),status:_fv(ov,'status')||'active'}),
+      weekendPrice:_fn(ov,'weekendPrice'),holidayPrice:_fn(ov,'holidayPrice'),status:_fv(ov,'status')||'active',
+      ..._benefitBuild(ov)}),
     after:cur=>_campRenderMwb('pitch',cur)
   }),'保存基础信息');
   _campRenderMwb('pitch',id||0);
@@ -674,12 +694,15 @@ window.editRental=function(id){
     {name:'deposit',label:'押金（元）',type:'number',min:0,step:0.01,value:r.deposit||0},
     {name:'availableQty',label:'可租数量',type:'number',min:0,value:r.available_qty||0},
     {name:'status',label:'状态',type:'select',value:r.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
+    {name:'__ben',label:'',type:'html',html:'<div class="ca-field full" style="font-weight:600;margin-top:4px">会员权益（产品级）</div>'},
+    ..._benefitFields(r),
     {name:'__mwb',label:'',type:'html',html:_campMediaSectionHtml('rental',id||0)}
   ],ov=>_campSaveBasic({kind:'rental',idRef,ov,
     apiPath:cur=>cur?`/api/club/${CLUB}/rental-items/${cur}`:`/api/club/${CLUB}/rental-items`,
     build:ov=>({campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name:_fv(ov,'name'),
       dailyPrice:Number(_fv(ov,'dailyPrice')||0),deposit:Number(_fv(ov,'deposit')||0),
-      availableQty:Math.max(0,Number(_fv(ov,'availableQty')||0)),status:_fv(ov,'status')||'active'}),
+      availableQty:Math.max(0,Number(_fv(ov,'availableQty')||0)),status:_fv(ov,'status')||'active',
+      ..._benefitBuild(ov)}),
     after:cur=>_campRenderMwb('rental',cur)
   }),'保存基础信息');
   _campRenderMwb('rental',id||0);
@@ -716,12 +739,15 @@ window.editStore=function(id){
     {name:'stock',label:'库存（件）',type:'number',min:0,value:s.stock||0},
     {name:'category',label:'分类',value:s.category,placeholder:'饮料 / 食材 / 配件'},
     {name:'status',label:'状态',type:'select',value:s.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
+    {name:'__ben',label:'',type:'html',html:'<div class="ca-field full" style="font-weight:600;margin-top:4px">会员权益（产品级）</div>'},
+    ..._benefitFields(s),
     {name:'__mwb',label:'',type:'html',html:_campMediaSectionHtml('store',id||0)}
   ],ov=>_campSaveBasic({kind:'store',idRef,ov,
     apiPath:cur=>cur?`/api/club/${CLUB}/store-products/${cur}`:`/api/club/${CLUB}/store-products`,
     build:ov=>({campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name:_fv(ov,'name'),
       price:Number(_fv(ov,'price')||0),stock:Math.max(0,Number(_fv(ov,'stock')||0)),
-      category:_fv(ov,'category'),status:_fv(ov,'status')||'active'}),
+      category:_fv(ov,'category'),status:_fv(ov,'status')||'active',
+      ..._benefitBuild(ov)}),
     after:cur=>_campRenderMwb('store',cur)
   }),'保存基础信息');
   _campRenderMwb('store',id||0);

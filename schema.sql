@@ -1912,6 +1912,10 @@ CREATE TABLE IF NOT EXISTS camp_pitches (
   detail_text TEXT,
   original_price REAL NOT NULL DEFAULT 0,
   unit_label TEXT,
+  -- v4.1 #810：产品级权益开关（默认全开=与旧行为一致）
+  promo_enabled INTEGER NOT NULL DEFAULT 1,           -- 参与优惠活动（福利券可用）
+  member_discount_enabled INTEGER NOT NULL DEFAULT 1, -- 享会员等级折扣
+  points_enabled INTEGER NOT NULL DEFAULT 1,          -- 可用积分抵扣
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(club_id) REFERENCES clubs(id)
 );
@@ -1982,6 +1986,10 @@ CREATE TABLE IF NOT EXISTS camp_rental_items (
   detail_text TEXT,
   original_price REAL NOT NULL DEFAULT 0,
   unit_label TEXT,
+  -- v4.1 #810：产品级权益开关（默认全开=与旧行为一致）
+  promo_enabled INTEGER NOT NULL DEFAULT 1,
+  member_discount_enabled INTEGER NOT NULL DEFAULT 1,
+  points_enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(club_id) REFERENCES clubs(id)
 );
@@ -2008,6 +2016,10 @@ CREATE TABLE IF NOT EXISTS camp_store_products (
   detail_text TEXT,
   original_price REAL NOT NULL DEFAULT 0,
   unit_label TEXT,
+  -- v4.1 #810：产品级权益开关（默认全开=与旧行为一致）
+  promo_enabled INTEGER NOT NULL DEFAULT 1,
+  member_discount_enabled INTEGER NOT NULL DEFAULT 1,
+  points_enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(club_id) REFERENCES clubs(id)
 );

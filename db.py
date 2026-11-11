@@ -235,6 +235,14 @@ def _run_compat_migrations(c):
         ('checkout_note','checkout_note TEXT'),
         ('final_amount','final_amount REAL NOT NULL DEFAULT 0')):
         _ensure_column(c,'camp_orders',_col,_ddl)
+    # 2026-11-11 营地 v4.1 #810：产品级权益开关 —— 参与优惠活动(福利券)/会员等级折扣/积分抵用。
+    # 默认全开=存量商品行为不变；三类商品表都要，必须排在所有写它们的 INSERT / UPDATE 之前。
+    for _t in ('camp_pitches','camp_rental_items','camp_store_products'):
+        for _col,_ddl in (
+            ('promo_enabled','promo_enabled INTEGER NOT NULL DEFAULT 1'),
+            ('member_discount_enabled','member_discount_enabled INTEGER NOT NULL DEFAULT 1'),
+            ('points_enabled','points_enabled INTEGER NOT NULL DEFAULT 1')):
+            _ensure_column(c,_t,_col,_ddl)
     # 「注册成为该俱乐部会员 → 自动成为总平台会员」用触发器兜住所有写入路径
     # （报名 / 邀请码 / 买会员卡 / 会员中心 refresh_member），不漏任何一个调用点。
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_club_member_platform
