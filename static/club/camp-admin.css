@@ -194,3 +194,7 @@
 .ca-bk__row span{color:#8a9a90}
 .ca-bk__row b{color:#2b3631;font-weight:600}
 .ca-mwb__sec b{display:block;color:#141a17}
+/* #809：素材排序条（图块顶部，← → 调整顺序） */
+.ca-mwb__ord{position:absolute;left:0;right:0;top:0;display:flex;gap:4px;justify-content:flex-end;padding:4px;background:linear-gradient(180deg,rgba(0,0,0,.35),transparent)}
+.ca-mwb__ord .ca-btn{padding:2px 6px;font-size:10.5px}
+.ca-mwb__ord .ca-btn:disabled{opacity:.35;cursor:default}

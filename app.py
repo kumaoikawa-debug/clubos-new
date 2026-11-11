@@ -12074,6 +12074,35 @@ def club_camp_media_list(club_id: int, target_kind: str, target_id: int = 0):
                            'sortNo': x['sort_no'], 'isCover': bool(x['is_cover'])} for x in a]}
 
 
+@app.post('/api/club/{club_id}/camp-media/{asset_id}/move')
+def club_camp_media_move(club_id: int, asset_id: int, payload: dict = Body(default={})):
+    """#809：素材排序（dir=left/right 与相邻素材交换位置）；首张不可左移、末张不可右移。"""
+    direction = str((payload or {}).get('dir') or '')
+    if direction not in ('left', 'right'):
+        raise HTTPException(400, 'dir 必须是 left / right')
+    with conn() as c:
+        a = row(c.execute('SELECT * FROM camp_media_assets WHERE id=? AND club_id=?', (asset_id, club_id)))
+        if not a:
+            raise HTTPException(404, '素材不存在')
+        kind, tid = a['target_kind'], a['target_id']
+        ordered = rows(c.execute('''SELECT id FROM camp_media_assets
+                                    WHERE club_id=? AND target_kind=? AND target_id=? ORDER BY sort_no,id''',
+                                 (club_id, kind, tid)))
+        ids = [x['id'] for x in ordered]
+        i = ids.index(asset_id)
+        j = i - 1 if direction == 'left' else i + 1
+        if j < 0 or j >= len(ids):
+            return {'ok': True, 'moved': False, 'sortNo': i}
+        ids[i], ids[j] = ids[j], ids[i]
+        # sort_no 有 (club,kind,target,sort_no) 联合 UNIQUE 约束：先整体挪到负数区避开中间态冲突
+        for k, mid in enumerate(ids):
+            c.execute('UPDATE camp_media_assets SET sort_no=? WHERE id=?', (k - 1000000, mid))
+        for k, mid in enumerate(ids):
+            c.execute('UPDATE camp_media_assets SET sort_no=? WHERE id=?', (k, mid))
+        _, cover = _camp_media_sync(c, club_id, kind, tid)
+        return {'ok': True, 'moved': True, 'cover': cover}
+
+
 @app.post('/api/club/{club_id}/camp-media/{asset_id}/cover')
 def club_camp_media_cover(club_id: int, asset_id: int, payload: dict = Body(default={})):
     kind = str((payload or {}).get('targetKind') or '')
@@ -12175,7 +12204,8 @@ async def _run_camp_detail_job(job_id: str, club_id: int, kind: str, tid: int,
         # 文本并入那一个文本框，图片并入视觉素材，成本数据由 cost_guard 在解析期剔除。
         extra_text, extra_images = '', []
         if saved_paths:
-            src = parse_sources(saved_paths, source_text, STATIC)
+            # #809 修复：parse_sources 期望 Path（p.name/p.suffix/p.relative_to），此前传 str 导致资料解析必然失败
+            src = parse_sources([Path(p) for p in saved_paths], source_text, STATIC)
             extra_text = str(src.get('text') or '')
             extra_images = [str(m.get('path') or '') for m in (src.get('images') or []) if m.get('path')]
         with conn() as c:

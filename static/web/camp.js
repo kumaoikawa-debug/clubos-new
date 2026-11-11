@@ -37,7 +37,11 @@ function _svg(p){return '<svg viewBox="0 0 24 24" aria-hidden="true">'+p+'</svg>
 function _uid(){try{return (typeof USER!=='undefined'&&USER)||0}catch(e){return 0}}
 function _guest(){return {name:CAMP_GUEST.name||((typeof PAYER_NAME!=='undefined'&&PAYER_NAME)||''),
                           phone:CAMP_GUEST.phone||((typeof PAYER_PHONE!=='undefined'&&PAYER_PHONE)||'')};}
-function _safeUrl(u){const s=String(u||'');return /^(https?:\/\/|\/static\/|\/uploads\/|data:image\/)/i.test(s)?s:'';}
+function _safeUrl(u){const s=String(u||'');
+  if(/^(https?:\/\/|\/static\/|\/uploads\/|data:image\/)/i.test(s))return s;
+  /* #809 修复「后台传图前端不显示」：营地素材工作台的公开代理路径（服务端 _camp_safe_url 已放行同一形状） */
+  if(s.startsWith('/api/public/clubs/')&&s.includes('/camp-media-file/'))return s;
+  return '';}
 function _curCamp(){return CAMP_LIST.find(c=>String(c.id)===String(CAMP_CAMP_ID))||CAMP_LIST[0]||{};}
 function _cpToast(msg){
   let t=document.querySelector('.cp-toast');

@@ -429,38 +429,77 @@ async function _campRenderMwb(kind,id){
   if(!id){ box.innerHTML='<div class="ca-mwb__lock">保存基础信息后即可上传本地照片、用 AI 生成图文详情。</div>'; return; }
   let res={max:5,ratios:['4:3','1:1','16:9'],items:[]};
   try{ res=await api(`/api/club/${CLUB}/camp-media-list?target_kind=${encodeURIComponent(kind)}&target_id=${id}`,{cache:'no-store'})||res; }catch(e){}
-  const items=(res.items||[]).map(a=>`<div class="ca-mwb__img ${a.isCover?'on':''}">
+  const arr=res.items||[];
+  const items=arr.map((a,idx)=>`<div class="ca-mwb__img ${a.isCover?'on':''}">
       <img src="${esc(a.preview)}" alt="">
       <div class="ca-mwb__ov">${a.isCover?'<span class="ca-tag">封面</span>':`<button type="button" class="ca-btn ghost xs" onclick="caMwbCover(${a.id})">设封面</button>`}
-      <button type="button" class="ca-btn ghost xs" onclick="caMwbDel(${a.id})">删除</button></div></div>`).join('');
-  const full=(res.items||[]).length>=res.max;
-  box.innerHTML=`<div class="ca-mwb__hint">本地照片（最多 ${res.max} 张，服务端按所选比例统一裁剪，保证 C 端视觉一致；首张默认封面，可改设）</div>
+      <button type="button" class="ca-btn ghost xs" onclick="caMwbDel(${a.id})">删除</button></div>
+      <div class="ca-mwb__ord"><button type="button" class="ca-btn ghost xs" title="前移" ${idx===0?'disabled':''} onclick="caMwbMove(${a.id},'left')">←</button>
+      <button type="button" class="ca-btn ghost xs" title="后移" ${idx===arr.length-1?'disabled':''} onclick="caMwbMove(${a.id},'right')">→</button></div></div>`).join('');
+  const full=arr.length>=res.max;
+  box.setAttribute('data-max',res.max||5);
+  box.innerHTML=`<div class="ca-mwb__hint">本地照片（最多 ${res.max} 张，可一次多选；服务端按所选比例统一裁剪，保证 C 端视觉一致；首张默认封面，可改设，← → 可调整顺序）</div>
     <div class="ca-mwb__bar">
-      <label class="ca-mwb__file ${full?'disabled':''}">${full?'已达上限':`<input type="file" id="caMwbFile" accept="image/*">`}</label>
+      <label class="ca-mwb__file ${full?'disabled':''}">${full?'已达上限':`<input type="file" id="caMwbFile" accept="image/*" multiple>`}</label>
       <select id="caMwbRatio"><option value="4:3">4:3</option><option value="1:1">1:1</option><option value="16:9">16:9</option></select>
       <button type="button" class="ca-btn sm" onclick="caMwbUpload()" ${full?'disabled':''}>上传照片</button>
-      <span class="ca-mwb__cnt">${(res.items||[]).length}/${res.max}</span>
+      <span class="ca-mwb__cnt">${arr.length}/${res.max}</span>
     </div>
-    <div class="ca-mwb__grid">${items||'<div class="ca-mwb__empty">还没有照片。先上传本地图片（最多 5 张、可调比例），AI 会按图片自动排版。</div>'}</div>
+    <div class="ca-mwb__grid">${items||'<div class="ca-mwb__empty">还没有照片。先上传本地图片（可一次多选、最多 5 张、可调比例与顺序），AI 会按图片自动排版。</div>'}</div>
     <div class="ca-mwb__ai">
-      <div class="ca-mwb__ail">一个文本框写清照片说明、设施要点、退改与经营规则（也可不上传文件）。点「AI 生成图文详情」，模型自动整理成规格 / 设施 / 须知 / 图文段落，无需手填。</div>
+      <div class="ca-mwb__ail">一个文本框写清照片说明、设施要点、退改与经营规则；还可上传参考资料（PDF / Word / PPT / 图片，可选），模型会把多种资料统一排版成规格 / 设施 / 须知 / 图文段落，无需手填。</div>
       <textarea id="caMwbPrompt" rows="3" placeholder="例如：湖景木屋，两张床，可住 2 大 1 小；含独立卫浴、空调、充电桩；18:00 后安静；退订需提前 2 天。"></textarea>
-      <div class="ca-mwb__aibar"><button type="button" class="ca-btn" id="caMwbGen" onclick="caMwbGenerate()">AI 生成图文详情</button><span id="caMwbGenTip" class="ca-mwb__tip"></span></div>
+      <div class="ca-mwb__aibar">
+        <label class="ca-btn sm" style="position:relative;overflow:hidden;display:inline-flex;align-items:center">上传资料
+          <input type="file" id="caMwbDocs" multiple accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,image/*" style="position:absolute;inset:0;opacity:0;cursor:pointer">
+        </label>
+        <span id="caMwbDocsName" class="ca-mwb__tip"></span>
+        <button type="button" class="ca-btn" id="caMwbGen" onclick="caMwbGenerate()">AI 生成图文详情</button><span id="caMwbGenTip" class="ca-mwb__tip"></span></div>
       <div id="caMwbResult" class="ca-mwb__result"></div>
     </div>`;
+  const docs=document.getElementById('caMwbDocs');
+  if(docs)docs.addEventListener('change',()=>{
+    const n=docs.files?docs.files.length:0;
+    const names=[...(docs.files||[])].map(f=>f.name).join('、');
+    const tip=document.getElementById('caMwbDocsName');
+    if(tip)tip.textContent=n?('已选 '+n+' 个资料：'+names.slice(0,60)):'';
+  });
 }
 window.caMwbUpload=async function(){
   const box=document.getElementById('caMwb'); if(!box)return;
   const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'));
-  const f=document.getElementById('caMwbFile'); if(!f||!f.files||!f.files.length){toast('请先选择本地图片');return;}
+  const f=document.getElementById('caMwbFile'); if(!f||!f.files||!f.files.length){toast('请先选择本地图片（可多选）');return;}
   const ratio=document.getElementById('caMwbRatio')?document.getElementById('caMwbRatio').value:'4:3';
-  const fd=new FormData(); fd.append('target_kind',kind); fd.append('target_id',id); fd.append('ratio',ratio); fd.append('file',f.files[0]);
+  const max=Number(box.getAttribute('data-max'))||5;
+  // #809：多图同传 —— 逐张走同一上传接口（服务端裁剪/入库/同步封面），超出上限的部分如实提示
+  let cur=0;
+  try{ const l=await api(`/api/club/${CLUB}/camp-media-list?target_kind=${encodeURIComponent(kind)}&target_id=${id}`,{cache:'no-store'}); cur=(l.items||[]).length; }catch(e){}
+  const room=Math.max(0,max-cur);
+  const files=[...f.files];
+  if(!room){toast('已达照片上限，请先删除再上传');return;}
+  const will=files.slice(0,room), drop=files.length-will.length;
+  let done=0, lastErr='';
+  for(const file of will){
+    const fd=new FormData(); fd.append('target_kind',kind); fd.append('target_id',id); fd.append('ratio',ratio); fd.append('file',file);
+    try{
+      const r=await fetch(`/api/club/${CLUB}/camp-media`,{method:'POST',body:fd});
+      const j=await r.json().catch(()=>({}));
+      if(!r.ok){ lastErr=j.detail||'上传失败'; break; }
+      done++;
+    }catch(e){ lastErr=e.message||'上传失败'; break; }
+  }
+  await _campRenderMwb(kind,id);
+  f.value='';
+  if(done)toast(done>1?`已上传 ${done} 张`:'已上传');
+  if(drop)toast(`${drop} 张超出上限未上传（每对象最多 ${max} 张）`);
+  if(lastErr)showAlert({title:'部分上传失败',message:lastErr});
+};
+window.caMwbMove=async function(assetId,dir){
+  const box=document.getElementById('caMwb'); const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'));
   try{
-    const r=await fetch(`/api/club/${CLUB}/camp-media`,{method:'POST',body:fd});
-    const j=await r.json().catch(()=>({}));
-    if(!r.ok){ toast(j.detail||'上传失败'); return; }
-    await _campRenderMwb(kind,id); toast('已上传');
-  }catch(e){toast('上传失败：'+(e.message||''));}
+    await api(`/api/club/${CLUB}/camp-media/${assetId}/move`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir})});
+    await _campRenderMwb(kind,id); toast('顺序已调整');
+  }catch(e){showAlert({title:'调整失败',message:e.message||''});}
 };
 window.caMwbDel=async function(assetId){
   try{ await api(`/api/club/${CLUB}/camp-media/${assetId}`,{method:'DELETE'}); const box=document.getElementById('caMwb'); await _campRenderMwb(box.getAttribute('data-kind'),Number(box.getAttribute('data-id'))); toast('已删除'); }
@@ -480,6 +519,9 @@ window.caMwbGenerate=async function(){
   const tip=document.getElementById('caMwbGenTip'); if(tip)tip.textContent='生成中…';
   try{
     const fd=new FormData(); fd.append('target_kind',kind); fd.append('target_id',id); fd.append('prompt',prompt);
+    // #809：参考资料（PDF / Word / PPT / 图片）随生成一起提交，模型统一排版
+    const docs=document.getElementById('caMwbDocs');
+    if(docs&&docs.files){ [...docs.files].forEach(df=>fd.append('files',df)); }
     const r=await fetch(`/api/club/${CLUB}/camp-ai/generate`,{method:'POST',body:fd});
     const j=await r.json().catch(()=>({}));
     if(!r.ok){ toast(j.detail||'生成失败'); return; }
