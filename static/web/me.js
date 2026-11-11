@@ -70,7 +70,7 @@ function meAsSt(s){return ({
 /* ── 数据获取 ─────────────────────────────────────────────────────────── */
 async function meLoadAll(force){
   if(!force && ME.ts && Date.now()-ME.ts<1500 && ME.mc) return;
-  const [mc,oc,addr,vch,claimable,mine,prof]=await Promise.all([
+  const [mc,oc,addr,vch,claimable,mine,prof,camp]=await Promise.all([
     api(`/api/public/clubs/${CLUB}/member-center?user_id=${USER}`),
     api(`/api/public/users/${USER}/order-center?club_id=${CLUB}`),
     api(`/api/public/users/${USER}/addresses`),
@@ -78,7 +78,9 @@ async function meLoadAll(force){
     // 领券中心与券包（2026-10-24 优惠券体系）：券是用户维度的钱包，跨俱乐部。
     api(`/api/public/coupons/claimable?user_id=${USER}&club_id=${CLUB}`).catch(()=>[]),
     api(`/api/public/coupons/mine?user_id=${USER}`).catch(()=>[]),
-    api(`/api/public/users/${USER}/profile`).catch(()=>({}))
+    api(`/api/public/users/${USER}/profile`).catch(()=>({})),
+    // 营地订单（#799 S3）：与活动订单并列归入「我的订单」。
+    api(`/api/public/clubs/${CLUB}/camp-orders?user_id=${USER}`).catch(()=>({orders:[]}))
   ]);
   ME.mc=mc||{}; ME.oc=oc||{};
   if(mc&&mc.member&&mc.member.name) ME.name=mc.member.name;
@@ -89,6 +91,7 @@ async function meLoadAll(force){
   ME.city=(prof&&prof.city)||'';
   ME.avatar=(prof&&prof.avatarUrl)||''; ME.wechatAvatar=(prof&&prof.wechatAvatarUrl)||'';
   ME.ts=Date.now();
+  ME.campOrders=(camp&&camp.orders)||[];
   ME.cardNo='YT'+String(CLUB).padStart(2,'0')+String(USER).padStart(4,'0');
   if(!ME.club){ try{ ME.club=await api(`/api/public/clubs/${CLUB}`); }catch(e){ ME.club=ME.club||{}; } }
   /* 角标要跟着数据走：顾客一进小程序就停在首页，不点「我的」也得看得见有新通知。 */
@@ -233,7 +236,7 @@ function mePaintHome(){
 function renderMeQuad(){
   const box=document.getElementById('meQuad'); if(!box)return;
   const cells=[
-    ['我的报名', meActivity().length, 'myregs', 'regs'],
+    ['我的订单', meActivity().length + (ME.campOrders||[]).length, 'myregs', 'regs'],
     ['会员权益', meBenefits().length, 'member', 'gift'],
     ['收货地址', ME.addr.length, 'address', 'pin'],
     ['优惠券', ME.vch.length, 'coupons', 'coupon']
@@ -275,7 +278,7 @@ window.loadOrders=loadOrders;
 /* ── 二级页栈 ─────────────────────────────────────────────────────────── */
 const meStack=[];
 const SUB_ME={};
-const SUB_ME_TITLE={myregs:'我的报名',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息',pointsmall:'积分商城',invite:'邀请好友',inquiries:'我的咨询'};
+const SUB_ME_TITLE={myregs:'我的订单',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息',pointsmall:'积分商城',invite:'邀请好友',inquiries:'我的咨询'};
 const SUB_ME_AFTER={};
 function meStackOpen(){return meStack.length>0;}
 function meEnsureStack(){
@@ -507,7 +510,7 @@ function openNoticeSheet(){
         }).join('')
       : '<div class="w-sh__none">暂时没有俱乐部通知。出发前的集合与装备提醒会发到这里。</div>')
     +`</div>`
-    +`<div class="w-sh__noticego"><button type="button" class="w-sh__btn is-primary" onclick="closeNoticeSheet();wv('wme');pushMe('myregs')">查看我的报名</button></div>`;
+    +`<div class="w-sh__noticego"><button type="button" class="w-sh__btn is-primary" onclick="closeNoticeSheet();wv('wme');pushMe('myregs')">查看我的订单</button></div>`;
   meInitNoticeSwipe(document.getElementById('wNoticeList'));
 }
 window.closeNoticeSheet=closeNoticeSheet;
@@ -656,7 +659,10 @@ function meZoomQr(pid,name){
 }
 
 /* ── 子页面实现 ───────────────────────────────────────────────────────── */
-SUB_ME.myregs=function(){
+/* 「我的订单」= 活动订单（原「我的报名」）+ 营地订单（住宿 / 租赁 / 营地小站）。
+   两个 tab 共用同一个 meStack 入口 myregs；param 用 'activity'/'camp' 区分，
+   切换走 meSetTab，renderMeSub 会重跑 SUB_ME.myregs 并触发 SUB_ME_AFTER.myregs 拉取营地侧。 */
+function meActivityOrdersHtml(){
   const list=meActivity();
   if(!list.length) return empty('暂无活动订单','报名成功后订单会出现在这里');
   return list.map(o=>{
@@ -678,6 +684,79 @@ SUB_ME.myregs=function(){
       ${act?`<div class="me-card2__ops">${act}</div>`:''}
     </div>`;
   }).join('');
+}
+function meOrderTabs(cur){
+  return `<div class="me-tabs">
+    <button class="me-tab ${cur==='activity'?'on':''}" type="button" onclick="meSetTab('activity')">活动订单</button>
+    <button class="me-tab ${cur==='camp'?'on':''}" type="button" onclick="meSetTab('camp')">营地订单</button>
+  </div>`;
+}
+function meCampKindLabel(k){return ({stay:'住宿',rental:'租赁',store:'营地小站'})[k]||k||'商品';}
+function meCampOrderSt(s){return ({pending_payment:'待支付',paid:'已支付',completed:'已完成',cancelled:'已取消',expired:'已过期'})[s]||s||'处理中';}
+function meCampOrderTone(s){return ({pending_payment:'warn',paid:'ok',completed:'info',cancelled:'off',expired:'off'})[s]||'info';}
+function meCampOrdersHtml(list){
+  if(!list||!list.length) return empty('暂无营地订单','预订营位、租赁装备或购买营地小站商品后，订单会出现在这里');
+  return list.map(o=>{
+    const its=o.items||[];
+    const itemsHtml=its.map(i=>{
+      const parts=[];
+      if(i.spec) parts.push(i.spec);
+      if(Number(i.qty)>1) parts.push('×'+i.qty);
+      if(Number(i.days)>1) parts.push('· '+i.days+'天');
+      const specTxt=parts.filter(Boolean).join(' ');
+      const cover=i.coverUrl?`<div class="me-camp__cover"><img src="${esc(i.coverUrl)}" alt="" loading="lazy"></div>`:'';
+      return `<div class="me-camp__item ${cover?'has-cover':''}">
+        ${cover}
+        <div class="me-camp__info">
+          <div class="me-camp__tags">${meBadge(meCampKindLabel(i.kind),'info')}</div>
+          <b class="me-camp__title">${esc(i.title||'营地商品')}</b>
+          ${specTxt?`<div class="me-camp__spec">${esc(specTxt)}</div>`:''}
+          ${Number(i.deposit)>0?`<div class="me-camp__dep">押金 ${money(i.deposit)}</div>`:''}
+          ${(i.checkIn||i.checkOut)?`<div class="me-camp__dates">${esc(i.checkIn||'')}${i.checkOut?(' → '+esc(i.checkOut)):''}</div>`:''}
+          <div class="me-camp__sub">小计 <b>${money(Number(i.subtotal||0))}</b></div>
+        </div>
+      </div>`;
+    }).join('');
+    const deposit=Number(o.depositAmount||0), payable=Number(o.payable||0), tot=Number(o.total||0);
+    const disc=[];
+    if(Number(o.memberDiscount)>0) disc.push('会员折扣 '+money(o.memberDiscount));
+    if(Number(o.clubPointDiscount)>0) disc.push('积分 '+money(o.clubPointDiscount));
+    if(Number(o.voucherDiscount)>0) disc.push('优惠券 '+money(o.voucherDiscount));
+    const discHtml=disc.length?`<div class="me-camp__disc">${disc.map(d=>`<span>${esc(d)}</span>`).join('')}</div>`:'';
+    const guest=(o.guestName||o.guestPhone)?`<div class="me-camp__guest">${esc(o.guestName||'')} ${esc(o.guestPhone||'')}</div>`:'';
+    const head=(its[0]&&its[0].title)||'营地订单';
+    return `<div class="me-card2 me-camp">
+      <div class="me-card2__hd"><b>${esc(head)}</b>${meBadge(meCampOrderSt(o.status),meCampOrderTone(o.status))}</div>
+      ${guest}
+      ${itemsHtml?`<div class="me-camp__items">${itemsHtml}</div>`:''}
+      ${discHtml}
+      <div class="me-camp__tot">
+        <span>应付 <b>${money(payable)}</b></span>
+        ${deposit?`<span>押金 <b>${money(deposit)}</b></span>`:''}
+        <span class="me-camp__grand">合计 <b>${money(tot)}</b></span>
+      </div>
+      <div class="me-card2__meta">订单号 #${esc(o.orderNo||o.id)} · ${esc(String(o.createdAt||'').slice(0,16))}</div>
+    </div>`;
+  }).join('');
+}
+SUB_ME.myregs=function(param){
+  const tab = param==='camp' ? 'camp' : 'activity';
+  const body = tab==='activity'
+    ? meActivityOrdersHtml()
+    : (ME.campOrders&&ME.campOrders.length ? meCampOrdersHtml(ME.campOrders) : '<div class="me-loading">加载营地订单中…</div>');
+  return meOrderTabs(tab) + `<div id="meOrdersTab" class="me-orderstab">${body}</div>`;
+};
+SUB_ME_AFTER.myregs=async function(param){
+  if(param!=='camp') return;
+  const box=document.getElementById('meOrdersTab'); if(!box) return;
+  try{
+    const data=await api(`/api/public/clubs/${CLUB}/camp-orders?user_id=${USER}`);
+    const list=(data&&data.orders)||[];
+    ME.campOrders=list;
+    box.innerHTML = list.length ? meCampOrdersHtml(list) : empty('暂无营地订单','预订营位、租赁装备或购买营地小站商品后，订单会出现在这里');
+  }catch(e){
+    if(box) box.innerHTML='<div class="me-empty">营地订单加载失败，请稍后重试</div>';
+  }
 };
 
 SUB_ME.member=function(){

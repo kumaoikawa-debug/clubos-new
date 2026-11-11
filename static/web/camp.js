@@ -21,7 +21,7 @@ let CAMP_USE_POINTS=false,CAMP_VOUCHER='',CAMP_GUEST={name:'',phone:''};
 let CAMP_CAL={in:'',out:'',anchor:''};
 let CAMP_DETAIL=null,CAMP_DETAIL_QTY=1;
 let CAMP_HERO_IDX=0,CAMP_TOAST_T=null,CAMP_PAY_TIMER=null,CAMP_PAY_LEFT=0;
-let CAMP_BUSY=false;
+let CAMP_BUSY=false,CAMP_LV=null;
 
 /* ── 小工具 ─────────────────────────────────────────────────────────────── */
 function _iso(d){const z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate());}
@@ -291,8 +291,9 @@ function _shopHtml(kind){
       + '<button class="cp-prod__add" type="button" '+(off?'disabled':'')
       + ' onclick="event.stopPropagation();campAddCart(\''+kind+'\','+x.id+')">＋</button></div></div></div>';
   }).join('');
-  return '<div class="cp-sec" id="cp-'+kind+'"><div class="cp-sec__head"><span class="cp-sec__title">'+title+'</span>'
-    + '<span class="cp-sec__hint">共 '+list.length+' 项 · '+hint+'</span></div>'
+  return '<div class="cp-sec" id="cp-'+kind+'"><div class="cp-sec__head cp-sec__head--link" onclick="_openShopList(\''+kind+'\')">'
+    + '<span class="cp-sec__title">'+title+'</span>'
+    + '<span class="cp-sec__hint">共 '+list.length+' 项 · 查看全部 ›</span></div>'
     + '<div class="cp-shop">'+cards+'</div></div>';
 }
 
@@ -312,9 +313,74 @@ window.campFilter=function(k){CAMP_FILTER=(CAMP_FILTER===k?'all':k);_render();
   const el=document.querySelector('.cp-zone');if(el)el.scrollIntoView({behavior:'smooth',block:'start'});};
 window.campJump=function(k){
   if(k==='service'){const p=_curCamp().contactPhone;if(p)location.href='tel:'+p;else _cpToast('营地暂未登记联系电话');return;}
+  if(k==='rental'||k==='store'){_openShopList(k);return;}
   const el=document.querySelector('#cp-'+k);if(el)el.scrollIntoView({behavior:'smooth',block:'start'});
   else _cpToast('该营地暂未上架'+(k==='rental'?'租赁装备':'小站商品'));
 };
+
+/* ── 双商城二级页（独立列表页：从分区宫格 / 主页分区头进入） ──────────────── */
+function _jsStr(s){return "'"+String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'")+"'";}
+function _openShopList(kind){
+  const list=CAMP_GOODS[kind]||[];
+  if(!list.length){_cpToast('该营地暂未上架'+(kind==='rental'?'租赁装备':'小站商品'));return;}
+  _paintShopList(kind,'');
+}
+function _shopCats(kind){
+  if(kind!=='store')return [];
+  return [...new Set((CAMP_GOODS.store||[]).map(x=>x.category).filter(Boolean))];
+}
+function _shopCardHtml(x,kind){
+  const isR=kind==='rental';
+  const price=isR?Number(x.daily_price||0):Number(x.price||0);
+  const unit=isR?'/天':'/件';
+  const sub=isR?('押金 ¥'+_money(x.deposit)+' · 可租 '+(x.available_qty||0)+' 件')
+               :(esc(x.category||'营地自营')+' · 库存 '+(x.stock||0));
+  const spec=(x.specs&&x.specs[0])?(x.specs[0].label+' '+x.specs[0].value):(x.description||x.subtitle||'');
+  const off=isR?!(Number(x.available_qty||0)>0):!(Number(x.stock||0)>0);
+  return '<div class="cp-prod cp-prod--lv" onclick="campOpenDetail(\''+kind+'\','+x.id+')">'
+    + '<div class="cp-prod__media">'+_mediaHtml(x.coverUrl||x.cover_url,'cp-prod__img')
+    + (off?'<span class="cp-prod__off">已租罄</span>':'')+'</div>'
+    + '<div class="cp-prod__body"><div class="cp-prod__t">'+esc(x.name||'商品')+'</div>'
+    + '<div class="cp-prod__spec">'+esc(String(spec).slice(0,28))+'</div>'
+    + '<div class="cp-prod__sub">'+sub+'</div>'
+    + '<div class="cp-prod__foot"><div class="cp-price"><small>¥</small>'+_money(price)+'<em>'+unit+'</em></div>'
+    + '<button class="cp-prod__add" type="button" '+(off?'disabled':'')
+    + ' onclick="event.stopPropagation();campAddCart(\''+kind+'\','+x.id+')">＋</button></div></div></div>';
+}
+function _paintShopList(kind,cat){
+  const isR=kind==='rental';
+  const title=isR?'装备租赁':'营地小站';
+  const cats=_shopCats(kind);
+  const list=(CAMP_GOODS[kind]||[]).filter(x=>!cat||x.category===cat);
+  const hero=(CAMP_GOODS[kind]||[]).find(x=>_safeUrl(x.coverUrl||x.cover_url))||list[0]||{};
+  const heroUrl=_safeUrl(hero.coverUrl||hero.cover_url);
+  const catChips=cats.length
+    ? ('<div class="cp-lv__chips">'
+       + '<button class="cp-lv__chip'+(!cat?' on':'')+'" type="button" onclick="_shopPickCat(\''+kind+'\',\'\')">全部</button>'
+       + cats.map(c=>'<button class="cp-lv__chip'+(cat===c?' on':'')+'" type="button" onclick="_shopPickCat(\''+kind+'\','+_jsStr(c)+')">'+esc(c)+'</button>').join('')
+       + '</div>')
+    : '';
+  const cnt=CAMP_CART.reduce((a,x)=>a+Number(x.qty||1),0);
+  const cards=list.length?list.map(x=>_shopCardHtml(x,kind)).join('')
+    : '<div class="cp-empty">该分类下暂无商品，换个分类看看。</div>';
+  const html='<div class="cp-lv" id="cpShop">'
+    + '<div class="cp-lv__bar"><button class="cp-lv__back" type="button" onclick="_closeShopList()">'+CP_ICON.back+'</button>'
+    + '<span class="cp-lv__title">'+title+'</span>'
+    + '<button class="cp-lv__cart'+(cnt?' has':'')+'" type="button" onclick="campOpenCheckout()">'+CP_ICON.cart+(cnt?'<i>'+cnt+'</i>':'')+'</button></div>'
+    + (heroUrl?'<div class="cp-lv__hero"><img src="'+esc(heroUrl)+'" alt=""></div>':'')
+    + catChips
+    + '<div class="cp-lv__meta">共 '+list.length+' 项 · '+(isR?'按天计价 · 押金离营退还':'营地自营 · 现场取货')+'</div>'
+    + '<div class="cp-shop cp-lv__grid">'+cards+'</div>'
+    + '<div class="cp-footnote">营地活动请前往「活动」栏目查看与报名</div>'
+    + '</div>';
+  let node=document.querySelector('#cpShopHost');
+  if(!node){node=document.createElement('div');node.id='cpShopHost';document.body.appendChild(node);}
+  node.innerHTML=html;
+  document.body.classList.add('cp-lock');
+}
+window._shopPickCat=function(kind,cat){_paintShopList(kind,cat);};
+window._closeShopList=function(){const n=document.querySelector('#cpShopHost');if(n)n.remove();
+  document.body.classList.remove('cp-lock');CAMP_LV=null;};
 
 /* ── 连续日期区间日历（一次点选起止、一次确认） ──────────────────────────── */
 function _monthAdd(ym,n){const p=ym.split('-');const d=new Date(Number(p[0]),Number(p[1])-1+n,1);
@@ -431,13 +497,36 @@ function _detailPolicies(d){
     return '<div class="cp-dt__pol"><b>'+esc(t)+'</b>'+(x?'<p>'+esc(x)+'</p>':'')+'</div>';
   }).join('');
 }
+/* AI 图文详情（营地 v4）：sections=[{headline,body,mediaRefs:[idx]}]，mediaRefs 指向图廊 */
+function _paintHighlights(d){
+  const ai=d.aiDetail;
+  if(!ai||!Array.isArray(ai.highlights)||!ai.highlights.length)return '';
+  return '<div class="cp-dt__hl">'+ai.highlights.map(h=>'<span class="cp-chip">'+esc(String(h))+'</span>').join('')+'</div>';
+}
+function _paintAiSections(d){
+  const ai=d.aiDetail;
+  if(!ai||!Array.isArray(ai.sections)||!ai.sections.length)return '';
+  const gal=[d.coverUrl].concat(d.gallery||[]).map(_safeUrl).filter(Boolean);
+  const blocks=(ai.sections||[]).map(s=>{
+    const refs=Array.isArray(s.mediaRefs)?s.mediaRefs:[];
+    const imgs=refs.map(i=>gal[Number(i)]).filter(Boolean)
+      .map(u=>'<img src="'+esc(u)+'" alt="" loading="lazy">').join('');
+    return '<div class="cp-dt__sec">'
+      + (s.headline?'<h4>'+esc(String(s.headline))+'</h4>':'')
+      + (s.body?'<p>'+esc(String(s.body))+'</p>':'')
+      + (imgs?'<div class="cp-dt__secimgs">'+imgs+'</div>':'')
+      + '</div>';
+  }).join('');
+  return '<div class="cp-dt__block"><h3>图文详情</h3><div class="cp-dt__ai">'+blocks+'</div></div>';
+}
 function _paintDetail(){
   const d=CAMP_DETAIL;if(!d)return;
   const gal=[d.coverUrl].concat(d.gallery||[]).map(_safeUrl).filter(Boolean);
   const imgs=gal.length?gal.map(u=>'<img src="'+esc(u)+'" alt="">').join('')
     :'<div class="cp-dt__ph"></div>';
   const fac=(d.facilities||[]).map(f=>'<span class="cp-chip">'+esc(String(f))+'</span>').join('');
-  const para=String(d.detailText||d.description||'').split(/\n+/).filter(Boolean)
+  const hasAi=!!(d.aiDetail&&Array.isArray(d.aiDetail.sections)&&d.aiDetail.sections.length);
+  const para=hasAi?'':String(d.detailText||d.description||'').split(/\n+/).filter(Boolean)
     .map(t=>'<p>'+esc(t)+'</p>').join('');
   const isPitch=d.kind==='pitch';
   const price=d.price||0;
@@ -450,6 +539,7 @@ function _paintDetail(){
       + '<div class="cp-dt__head"><div class="cp-dt__kicker">'+esc(isPitch?'PITCH / 营位':(d.kind==='rental'?'RENTAL / 装备租赁':'STORE / 营地小站'))+'</div>'
         + '<h2>'+esc(d.name||'营地商品')+'</h2>'
         + (d.subtitle?'<p class="cp-dt__sub">'+esc(d.subtitle)+'</p>':'')
+        + _paintHighlights(d)
         + '<div class="cp-dt__price"><span>¥</span>'+_money(price)+'<em>'+esc(d.unitLabel||'')+'</em>'
         + (Number(d.originalPrice)>price?'<del>¥'+_money(d.originalPrice)+'</del>':'')+'</div>'
         + (CAMP_BENEFITS&&Number(CAMP_BENEFITS.memberDiscountPercent)>0
@@ -458,6 +548,7 @@ function _paintDetail(){
       + '<div class="cp-dt__block"><h3>规格参数</h3><div class="cp-dt__specs">'+_detailSpecs(d)+'</div></div>'
       + (fac?'<div class="cp-dt__block"><h3>设施与服务</h3><div class="cp-dt__chips">'+fac+'</div></div>':'')
       + (para?'<div class="cp-dt__block"><h3>商品详情</h3><div class="cp-dt__rich">'+para+'</div></div>':'')
+      + _paintAiSections(d)
       + '<div class="cp-dt__block"><h3>预订须知</h3>'+_detailPolicies(d)+'</div>'
       + '<div class="cp-dt__safe">ClubOS 营地 · 价格与会员权益由系统实时计算</div>'
     + '</div>'
@@ -778,7 +869,9 @@ function _closeSheet(now){
 window.campCloseSheet=function(){_closeSheet();clearInterval(CAMP_PAY_TIMER);};
 document.addEventListener('keydown',e=>{
   if(e.key!=='Escape')return;
-  if(document.querySelector('#cpDetail'))campCloseDetail();else _closeSheet();
+  if(document.querySelector('#cpDetail')){campCloseDetail();return;}
+  if(document.querySelector('#cpShopHost')){_closeShopList();return;}
+  _closeSheet();
 });
 
 applyModuleSwitches();

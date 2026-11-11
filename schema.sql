@@ -2091,3 +2091,45 @@ CREATE TABLE IF NOT EXISTS camp_order_items (
 CREATE INDEX IF NOT EXISTS idx_camp_order_items_order ON camp_order_items(order_id);
 -- 租赁按日期区间占用数量：与营位房态同口径（pending 仅 30 分钟内占用）。
 CREATE INDEX IF NOT EXISTS idx_camp_order_items_rental ON camp_order_items(kind,ref_id,check_in,check_out);
+
+
+-- ===========================================================================
+-- 营地 v4（2026-11-11）：素材工作台 / AI 图文详情 / 履约结算 / 券适用范围
+-- 设计要点：营位 / 租赁 / 小站 / 营地档案四类对象共用同一套素材与 AI 生成链路，
+-- 老板只上传照片 + 填一个文本框，结构化图文详情由模型生成后写回各对象的
+-- ai_detail_json；gallery_json 仍是 C 端渲染真源，camp_media_assets 只存上传元数据。
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS camp_media_assets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  target_kind TEXT NOT NULL,          -- profile | pitch | rental | store
+  target_id INTEGER NOT NULL DEFAULT 0,
+  url TEXT NOT NULL,                  -- 落库形状 /static/uploads/{club}/camp/{uuid}{ext}
+  preview TEXT,                       -- 俱乐部域代理预览（生产 /static 被网关挡）
+  ratio TEXT NOT NULL DEFAULT '4:3',  -- 裁剪比例：4:3 头图 / 1:1 商品图 / 16:9 宽幅
+  width INTEGER NOT NULL DEFAULT 0,
+  height INTEGER NOT NULL DEFAULT 0,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  sort_no INTEGER NOT NULL DEFAULT 0,
+  is_cover INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_camp_media_target ON camp_media_assets(club_id,target_kind,target_id,sort_no);
+-- 每个对象最多 5 张：应用层强校验 + 唯一序号约束双层兜底。
+CREATE UNIQUE INDEX IF NOT EXISTS uq_camp_media_slot ON camp_media_assets(club_id,target_kind,target_id,sort_no);
+
+CREATE TABLE IF NOT EXISTS camp_detail_jobs (
+  id TEXT PRIMARY KEY,
+  club_id INTEGER NOT NULL,
+  target_kind TEXT NOT NULL,          -- profile | pitch | rental | store
+  target_id INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',   -- queued | running | done | failed
+  source_text TEXT,                   -- 老板填的那一个文本框（照片/文件/规则说明）
+  media_json TEXT NOT NULL DEFAULT '[]',
+  result_json TEXT,                   -- 模型产出的结构化图文详情
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  finished_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_camp_detail_jobs_club ON camp_detail_jobs(club_id,status,created_at DESC);

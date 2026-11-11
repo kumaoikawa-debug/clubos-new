@@ -151,3 +151,46 @@
 @media (max-width:900px){.ca-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
   .ca-form,.ca-sw-grid{grid-template-columns:1fr}.ca-form .full,.ca-form__hint{grid-column:auto}}
 @media (max-width:560px){.ca-kpis{grid-template-columns:1fr 1fr}.ca-kpi__v{font-size:23px}}
+
+/* ── 营地 v4 素材工作台（本地上传 + AI 图文详情） ───────────────────────────── */
+.ca-mwb{margin-top:4px;border-top:1px dashed #e1e8e3;padding-top:14px}
+.ca-mwb__lock{font-size:12px;color:#8a9a90;padding:14px;background:#f6faf7;border-radius:10px;text-align:center}
+.ca-mwb__hint{font-size:11.5px;color:#6b7a72;margin-bottom:8px}
+.ca-mwb__bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.ca-mwb__file{display:inline-flex}
+.ca-mwb__file.disabled{color:#aab4ad;font-size:11.5px}
+.ca-mwb__cnt{font-size:11.5px;color:#8a9a90;margin-left:auto}
+.ca-mwb__grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:14px}
+.ca-mwb__img{position:relative;border-radius:8px;overflow:hidden;aspect-ratio:1/1;background:#eef3f0;border:1px solid #e3eae6}
+.ca-mwb__img img{width:100%;height:100%;object-fit:cover;display:block}
+.ca-mwb__img.on{border-color:#1d6b48}
+.ca-mwb__ov{position:absolute;left:0;right:0;bottom:0;display:flex;gap:4px;justify-content:space-between;padding:4px;background:linear-gradient(0deg,rgba(0,0,0,.5),transparent)}
+.ca-mwb__ov .ca-btn{padding:2px 6px;font-size:10.5px}
+.ca-mwb__empty{grid-column:1/-1;font-size:11.5px;color:#8a9a90;padding:10px;border:1px dashed #dde6e0;border-radius:8px;text-align:center}
+.ca-mwb__ai{border-top:1px solid #eef2ef;padding-top:12px}
+.ca-mwb__ail{font-size:11.5px;color:#6b7a72;margin-bottom:8px;line-height:1.5}
+.ca-mwb__ai textarea{width:100%;border:1px solid #d9e2dc;border-radius:8px;padding:8px 10px;font:inherit;font-size:12px;resize:vertical;box-sizing:border-box}
+.ca-mwb__aibar{display:flex;gap:10px;align-items:center;margin-top:8px}
+.ca-mwb__tip{font-size:11.5px;color:#1d6b48}
+.ca-mwb__result{margin-top:10px}
+.ca-mwb__ok{font-size:12px;color:#1d6b48;background:#eaf5ef;border-radius:8px;padding:8px 10px;margin-bottom:8px}
+.ca-mwb__preview{font-size:12px;line-height:1.6;color:#3b4740}
+.ca-mwb__preview b{font-size:13px}
+.ca-mwb__sec{margin-top:8px;padding-top:8px;border-top:1px dashed #e6edea}
+
+/* #800 营地订单分类筛选 + 两步履约 */
+.ca-chips{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px 0}
+.ca-chips .ca-chip{border:1px solid #dde6e0;background:#fff;border-radius:99px;padding:6px 14px;font-size:12.5px;color:#45524b;cursor:pointer}
+.ca-chips .ca-chip.on{background:#1d6b48;border-color:#1d6b48;color:#fff}
+.ca-item__cats{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.ca-tag.soft{background:#eef3f0;color:#5a6b62;font-size:11px;padding:2px 8px;border-radius:99px}
+.ca-item__foot{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px}
+.ca-item__dep{font-size:12px;color:#1d6b48}
+.ca-btn.primary{background:#1d6b48;border-color:#1d6b48;color:#fff}
+.ca-btn.sm{padding:6px 12px;font-size:12px}
+.ca-bk{display:grid;gap:8px}
+.ca-bk__row{display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:6px 0;border-bottom:1px dashed #eef2ef}
+.ca-bk__row:last-child{border-bottom:0}
+.ca-bk__row span{color:#8a9a90}
+.ca-bk__row b{color:#2b3631;font-weight:600}
+.ca-mwb__sec b{display:block;color:#141a17}

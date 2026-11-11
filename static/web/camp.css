@@ -195,12 +195,12 @@
  * v3（2026-11-11）：连续日期日历 / 高标准详情 / 双商城 / 会员条 / 购物车 /
  * 确认订单 / 支付确认 / 成功 / 我的订单。全部 cp- 前缀，不污染其它三端。
  * =========================================================================== */
-.cp-sheet,.cp-detail{--cp-ink:#141a17;--cp-ink2:#3b4740;--cp-muted:#8b9691;--cp-line:#edf1ee;
+.cp-sheet,.cp-detail,.cp-lv{--cp-ink:#141a17;--cp-ink2:#3b4740;--cp-muted:#8b9691;--cp-line:#edf1ee;
   --cp-green:#1d6b48;--cp-green-d:#124a32;--cp-price:#e0412a;--cp-black:#171a19;
   --cp-bg:#f3f7f4;--cp-card:#fff;color:var(--cp-ink)}
-.cp-sheet,.cp-sheet *,.cp-detail,.cp-detail *{box-sizing:border-box}
-.cp-sheet button,.cp-detail button{font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
-.cp-sheet svg,.cp-detail svg{display:block}
+.cp-sheet,.cp-sheet *,.cp-detail,.cp-detail *,.cp-lv,.cp-lv *{box-sizing:border-box}
+.cp-sheet button,.cp-detail button,.cp-lv button{font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent}
+.cp-sheet svg,.cp-detail svg,.cp-lv svg{display:block}
 .cp-hero__sel{border:0;background:rgba(255,255,255,.9);color:#1d3527;border-radius:99px;
   padding:6px 10px;font-size:11px;font-weight:700;max-width:150px}
 .cp-card__img{width:100%;height:100%;object-fit:cover}
@@ -419,3 +419,45 @@
   font-size:11.5px;font-weight:700;color:var(--cp-green-d)}
 .cp-order__ops button:last-child{color:var(--cp-muted);border-color:#e5eae6}
 .cp-order__earn{margin-top:9px;font-size:10.5px;color:var(--cp-green-d);font-weight:700;text-align:right}
+
+/* ── 双商城二级页（独立列表页） ─────────────────────────────────────────── */
+body.cp-lock{overflow:hidden}
+.cp-lv{position:fixed;inset:0;z-index:72;background:var(--cp-bg);display:flex;flex-direction:column;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  -webkit-font-smoothing:antialiased;animation:cpLvIn .22s ease}
+@keyframes cpLvIn{from{transform:translateX(18px);opacity:.4}to{transform:none;opacity:1}}
+.cp-lv__bar{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:10px;height:52px;
+  padding:0 12px;background:rgba(255,255,255,.94);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--cp-line)}
+.cp-lv__back{width:34px;height:34px;border:0;background:#f0f4f1;border-radius:50%;display:grid;place-items:center;flex:0 0 auto}
+.cp-lv__back svg{width:20px;height:20px;stroke:var(--cp-ink);fill:none;stroke-width:2}
+.cp-lv__title{flex:1;font-size:16px;font-weight:800;letter-spacing:.01em}
+.cp-lv__cart{position:relative;width:34px;height:34px;border:0;background:#f0f4f1;border-radius:50%;display:grid;place-items:center;flex:0 0 auto}
+.cp-lv__cart svg{width:20px;height:20px;stroke:var(--cp-green);fill:none;stroke-width:1.8}
+.cp-lv__cart i{position:absolute;top:-2px;right:-2px;min-width:16px;height:16px;padding:0 4px;border-radius:99px;
+  background:var(--cp-price);color:#fff;font-size:10px;font-style:normal;font-weight:800;display:grid;place-items:center;line-height:16px}
+.cp-lv__hero{height:150px;overflow:hidden;background:#1d3b2c}
+.cp-lv__hero img{width:100%;height:100%;object-fit:cover}
+.cp-lv__chips{display:flex;gap:8px;overflow-x:auto;padding:12px 12px 2px;scrollbar-width:none}
+.cp-lv__chips::-webkit-scrollbar{display:none}
+.cp-lv__chip{flex:0 0 auto;border:1px solid #e2eae4;background:#fff;color:var(--cp-ink2);border-radius:99px;
+  padding:7px 14px;font-size:12px;font-weight:700;white-space:nowrap}
+.cp-lv__chip.on{background:var(--cp-green);border-color:var(--cp-green);color:#fff}
+.cp-lv__meta{padding:6px 14px 8px;font-size:11px;color:var(--cp-muted)}
+.cp-lv__grid{padding:8px 12px 24px;overflow-y:auto;flex:1}
+.cp-prod--lv{margin-bottom:12px}
+.cp-prod--lv .cp-prod__media{height:170px}
+/* 主页分区头可点进二级页 */
+.cp-sec__head--link{cursor:pointer}
+.cp-sec__head--link:active{opacity:.7}
+
+/* ── 详情页：AI 图文详情 + 亮点 ─────────────────────────────────────────── */
+.cp-dt__hl{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 2px}
+.cp-dt__ai{padding-top:4px}
+.cp-dt__sec{padding:14px 0;border-bottom:1px dashed var(--cp-line)}
+.cp-dt__sec:last-child{border-bottom:0}
+.cp-dt__sec h4{margin:0 0 8px;font-size:14.5px;font-weight:800;color:var(--cp-ink);letter-spacing:.01em}
+.cp-dt__sec p{margin:0 0 10px;font-size:13px;line-height:1.85;color:var(--cp-ink2)}
+.cp-dt__secimgs{display:grid;grid-template-columns:1fr;gap:8px}
+.cp-dt__secimgs img{width:100%;border-radius:12px;object-fit:cover;background:#eef2ef;max-height:520px}
+@media(min-width:480px){.cp-dt__secimgs{grid-template-columns:1fr 1fr}}

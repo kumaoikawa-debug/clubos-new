@@ -102,6 +102,12 @@ class BenefitEngine:
         stock=payload.get('stock')
         stock=None if stock in (None,'') else max(0,int(stock))
         benefit_type=str(payload.get('benefitType') or 'gift')
+        # 适用品类（2026-11-11 营地 v4 S5）：activity=活动报名 / camp=营地消费 / all=通用。
+        # 营地商品复用「活动券」这一券种（benefit_type='activity_coupon'），靠 applies_to 区分适用范围，
+        # 这样俱乐部既能发「活动专用券」，也能发「营地专用券」或「通用券」，互不串味。
+        applies_to=str(payload.get('appliesTo') or 'activity').strip().lower()
+        if applies_to not in ('activity', 'camp', 'all'):
+            raise ValueError('适用品类只能是活动报名、营地消费或通用')
         # 券形态：直接抵 / 满减 / 折扣（2026-10-26）
         # 折扣券只允许活动报名券 —— 券的适用边界就是俱乐部活动，不涉及装备商城。
         mode=str(payload.get('mode') or 'fixed').strip()
@@ -147,11 +153,12 @@ class BenefitEngine:
             face_json=json.dumps({k:_hex(face.get(k)) for k in ('c1','c2','ink') if _hex(face.get(k))},
                                  ensure_ascii=False) if any(_hex(face.get(k)) for k in ('c1','c2','ink')) else None
         c.execute('''INSERT INTO member_benefits(owner_type,owner_club_id,target_club_id,title,description,
-                     benefit_type,points_type,points_cost,cash_value,stock,status,rules_json,
+                     benefit_type,applies_to,points_type,points_cost,cash_value,stock,status,rules_json,
                      mode,discount_percent,threshold_amount,image_key,valid_from,valid_to,claim_mode,
                      target_type,target_city,per_user_limit,claimed_count,share_enabled,face_json)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
             owner_type,owner_club_id,target_club_id,title,payload.get('description'),benefit_type,
+            applies_to,
             points_type,cost,cash_value,stock,payload.get('status','active'),
             json.dumps(payload.get('rules') or {},ensure_ascii=False),
             mode,discount_percent,threshold,image_key,valid_from,valid_to,claim_mode,
@@ -219,11 +226,13 @@ class BenefitEngine:
 
     def eligible_vouchers(self,c,*,user_id:int,club_id:int,kind:str)->list[dict[str,Any]]:
         kind=str(kind).lower()
-        if kind not in {'activity','gear'}: raise ValueError('kind must be activity or gear')
-        benefit_type='activity_coupon' if kind=='activity' else 'gear_coupon'
+        if kind not in {'activity','gear','camp'}: raise ValueError('kind must be activity, gear or camp')
+        # 营地商品复用「活动券」这一券种（benefit_type='activity_coupon'），
+        # 靠 applies_to 区分适用范围：camp 订单只能用 applies_to∈{camp,all} 的券。
+        benefit_type='gear_coupon' if kind=='gear' else 'activity_coupon'
         rows=c.execute('''SELECT r.*,b.title,b.description,b.benefit_type,b.owner_type,b.owner_club_id,b.target_club_id,
                                  b.mode,b.discount_percent,b.threshold_amount,b.image_key,b.valid_from,b.valid_to,
-                                 b.target_type,b.target_city,b.share_enabled,b.face_json
+                                 b.target_type,b.target_city,b.share_enabled,b.face_json,b.applies_to
                           FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
                           WHERE r.user_id=? AND r.status='issued' AND b.status='active' AND b.benefit_type=?
                           ORDER BY r.id DESC''',(user_id,benefit_type)).fetchall()
@@ -232,25 +241,35 @@ class BenefitEngine:
             x=dict(rr)
             if self._expired(x):
                 continue  # 过期 / 未生效的券不参与报价
-            if kind=='activity':
-                if x['owner_type']=='CLUB':
-                    # 俱乐部券仍然只在本俱乐部报名时能用（成本由该俱乐部承担）。
-                    if int(x['owner_club_id']) != int(club_id):
-                        continue
-                    if int(x['display_club_id']) != int(club_id):
-                        continue
-                else:
-                    # 平台活动券：默认全平台通用（成都区域各俱乐部都能用）。
-                    # 指定了俱乐部的券只在该俱乐部有效；定向发到某俱乐部的券同理。
-                    if x['target_club_id'] is not None and int(x['target_club_id']) != int(club_id):
-                        continue
-                    if int(x['display_club_id'] or 0) > 0 and int(x['display_club_id']) != int(club_id):
-                        continue
-            else:
+            # 适用范围过滤（2026-11-11 营地 v4 S5）
+            at=str(x.get('applies_to') or 'activity').lower()
+            if at not in ('activity','camp','all'):
+                at='activity'
+            if kind=='camp' and at not in ('camp','all'):
+                continue
+            if kind=='activity' and at not in ('activity','all'):
+                continue
+            if kind=='gear':
                 # Gear storefront is platform-owned. Only platform-funded gear coupons can reduce gear orders.
                 if x['owner_type']!='PLATFORM':
                     continue
                 if x['target_club_id'] is not None and int(x['target_club_id']) != int(club_id):
+                    continue
+                out.append(x)
+                continue
+            # activity / camp 共用同一套活动券，沿用原有俱乐部归属限制
+            if x['owner_type']=='CLUB':
+                # 俱乐部券仍然只在本俱乐部报名 / 营地消费时能用（成本由该俱乐部承担）。
+                if int(x['owner_club_id']) != int(club_id):
+                    continue
+                if int(x.get('display_club_id') or 0) != int(club_id):
+                    continue
+            else:
+                # 平台活动券：默认全平台通用（成都区域各俱乐部都能用）。
+                # 指定了俱乐部的券只在该俱乐部有效；定向发到某俱乐部的券同理。
+                if x['target_club_id'] is not None and int(x['target_club_id']) != int(club_id):
+                    continue
+                if int(x.get('display_club_id') or 0) > 0 and int(x.get('display_club_id')) != int(club_id):
                     continue
             out.append(x)
         return out

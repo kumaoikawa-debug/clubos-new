@@ -217,6 +217,24 @@ def _run_compat_migrations(c):
     _ensure_column(c,'camp_pitches','cover_url','cover_url TEXT')
     _ensure_column(c,'camp_pitches','description','description TEXT')
     _ensure_column(c,'camp_store_products','description','description TEXT')
+    # 2026-11-11 营地 v4：素材工作台 / AI 图文详情 / 履约结算 / 券适用范围。
+    # ★ 同样必须排在所有写它们的 INSERT / UPDATE 之前。
+    _ensure_column(c,'member_benefits','applies_to',"applies_to TEXT NOT NULL DEFAULT 'activity'")
+    _ensure_column(c,'camp_profiles','cover_url','cover_url TEXT')
+    _ensure_column(c,'camp_profiles','ai_detail_json','ai_detail_json TEXT')
+    for _t in ('camp_pitches','camp_rental_items','camp_store_products'):
+        _ensure_column(c,_t,'ai_detail_json','ai_detail_json TEXT')
+    for _col,_ddl in (
+        ('deposit_held','deposit_held REAL NOT NULL DEFAULT 0'),
+        ('deposit_refunded','deposit_refunded REAL NOT NULL DEFAULT 0'),
+        ('deposit_forfeit','deposit_forfeit REAL NOT NULL DEFAULT 0'),
+        ('checked_in_at','checked_in_at TEXT'),
+        ('checked_out_at','checked_out_at TEXT'),
+        ('settled_at','settled_at TEXT'),
+        ('checkin_note','checkin_note TEXT'),
+        ('checkout_note','checkout_note TEXT'),
+        ('final_amount','final_amount REAL NOT NULL DEFAULT 0')):
+        _ensure_column(c,'camp_orders',_col,_ddl)
     # 「注册成为该俱乐部会员 → 自动成为总平台会员」用触发器兜住所有写入路径
     # （报名 / 邀请码 / 买会员卡 / 会员中心 refresh_member），不漏任何一个调用点。
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_club_member_platform

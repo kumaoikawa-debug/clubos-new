@@ -99,9 +99,10 @@ window.addTier=async mode=>{
 /* 俱乐部营销 · 优惠券（2026-10-26）：满减 / 折扣 / 直抵三种形态，只能用于活动报名。
    两步创建：先填券的业务信息，再进「券面设计器」挑模板或自定义渐变配色（实时预览）。 */
 window.addClubBenefit=window.addClubCoupon=async()=>uxTask(async()=>{
-  const d=await uxForm({title:'创建俱乐部优惠券',subtitle:'券只能用于本俱乐部活动报名，不能涉及装备商城；成本由本俱乐部承担。顾客可用活动积分兑换，也可由「消费送券」「升级赠券」自动赠送。',
+  const d=await uxForm({title:'创建俱乐部优惠券',subtitle:'券用于本俱乐部活动报名或营地消费（由「适用品类」决定），不能涉及装备商城；成本由本俱乐部承担。顾客可用活动积分兑换，也可由「消费送券」「升级赠券」自动赠送。',
     fields:[
       {name:'title',label:'券名称',required:true,full:true,value:'活动满 200 减 30 券'},
+      {name:'appliesTo',label:'适用品类',type:'select',full:true,required:true,value:'activity',options:[{value:'activity',label:'活动报名（仅活动报名可用）'},{value:'camp',label:'营地消费（仅营地商品可用）'},{value:'all',label:'通用（活动报名 + 营地消费均可）'}]},
       {name:'mode',label:'券形态',type:'select',full:true,required:true,value:'threshold',options:[{value:'threshold',label:'满减券（满指定金额立减）'},{value:'discount',label:'折扣券（订单打 N 折）'},{value:'fixed',label:'直抵券（无门槛直接抵）'}]},
       {name:'thresholdAmount',label:'满减门槛（元，仅满减券填写）',type:'number',min:0,step:.01,value:200},
       {name:'cashValue',label:'抵扣金额（元，仅满减/直抵券填写）',type:'number',min:0,step:.01,value:30},
@@ -112,7 +113,7 @@ window.addClubBenefit=window.addClubCoupon=async()=>uxTask(async()=>{
     ],submitText:'下一步：设计券面'});
   if(!d)return;
   const mode=String(d.mode||'threshold');
-  const base={title:d.title,benefitType:'activity_coupon',mode,
+  const base={title:d.title,benefitType:'activity_coupon',appliesTo:d.appliesTo||'activity',mode,
     thresholdAmount:mode==='threshold'?Number(d.thresholdAmount||0):0,
     cashValue:(mode==='discount')?0:Number(d.cashValue||0),
     discountPercent:(mode==='discount')?Number(d.discountPercent||0):0,

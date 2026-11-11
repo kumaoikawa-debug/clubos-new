@@ -8,7 +8,7 @@ from __future__ import annotations
   * 本模块**不新建**任何会员/积分/券规则，只做「编排」：把营地商品金额送进
     BookingEngine._quote_with_policy()（活动报名同一条报价链）、
     CheckoutEngine._member_activity_discount()（活动会员等级折扣同一函数）、
-    BenefitEngine.quote_vouchers(kind='activity')（活动券同一池子）、
+    BenefitEngine.quote_vouchers(kind='camp')（营地专属适用范围，applies_to∈{camp,all} 的活动券）、
     ClubOSPointsEngine（同一积分账本）。这样活动侧口径一变，营地自动跟随，
     绝不会出现「活动 9 折、营地原价」的两套会员。
   * 不触碰 CheckoutEngine.confirm() / BookingEngine.quote() 等既有支付核心，
@@ -212,11 +212,11 @@ class CampPricingEngine:
                     out['memberDiscountRate'] = float(mrate)
                     after_member = round(after_points - float(md), 2)
 
-            # 福利券：营地复用「活动券」池（kind='activity'），用户已有的活动券可直接用。
+            # 福利券：营地用独立适用范围（kind='camp'），只有 applies_to∈{camp,all} 的活动券能抵。
             if cfg['voucherEnabled'] and codes:
                 vb = self.benefits.quote_vouchers(
                     c, voucher_codes=codes, user_id=uid, club_id=int(club_id),
-                    kind='activity', amount_available=after_member)
+                    kind='camp', amount_available=after_member)
                 out['voucherDiscount'] = round(float(vb.get('totalDiscount') or 0), 2)
                 out['vouchersApplied'] = vb.get('applied') or []
                 out['_voucherClubDiscount'] = float(vb.get('clubDiscount') or 0)
@@ -254,7 +254,7 @@ class CampPricingEngine:
         if quote.get('voucherDiscount', 0) > 0 and voucher_codes:
             self.benefits.hold_vouchers(
                 c, intent_id=checkout_id, voucher_codes=voucher_codes,
-                user_id=uid, club_id=club_id, kind='activity',
+                user_id=uid, club_id=club_id, kind='camp',
                 amount_available=float(quote.get('payable') or 0) + float(quote.get('voucherDiscount') or 0))
 
     def finalize(self, c, *, checkout_id: str, order_id: int, club_id: int,

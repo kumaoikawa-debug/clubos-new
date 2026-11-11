@@ -290,7 +290,8 @@ window.caBatch=async function(act){
 };
 
 /* 单格操作弹层（保留原全局名 openPitchDay） */
-window.openPitchDay=function(pitchId,day,status){
+window.openPitchDay=async function(pitchId,day,status){
+  if(status==='booked'){ return _openPitchBooking(pitchId,day); }
   const ov=uxDialog({title:'房态操作',desc:`营位 #${pitchId} · ${day}（当前：${status==='booked'?'已订':status==='blocked'?'已封锁':'可订'}）`,
     body:`<div class="ca"><div class="ca-form">
       <label class="ca-field"><span>操作</span><select id="f_act">
@@ -318,6 +319,33 @@ window.openPitchDay=function(pitchId,day,status){
     }catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
   };
 };
+/* #800：已订格子点击 → 查看预订人姓名 / 电话 / 订单详情，并可直接走两步履约 */
+async function _openPitchBooking(pitchId,day){
+  let b=null;
+  try{const r=await api(`/api/club/${CLUB}/camp-pitch-bookings?pitch_id=${pitchId}&date=${day}`,{cache:'no-store'});
+    b=(r&&r.bookings&&r.bookings[0])||null;}catch(e){}
+  if(!b){ const ov=uxDialog({title:'房态预订',desc:`营位 #${pitchId} · ${day}`,
+      body:`<div class="ca-empty"><b>查无此日预订</b>可能已被取消或数据未同步。</div>`,
+      foot:`<button class="btn" type="button" data-ok>知道了</button>`});
+    ov.querySelector('[data-ok]').onclick=()=>ov.uxClose(); return; }
+  const oid=b.camp_order_id||b.orderId;
+  const acts = b.status==='paid'
+    ? `<button class="ca-btn primary sm" type="button" onclick="caCampCheckin(${oid});this.closest('.ux-overlay').uxClose()">确认入住 · 登记押金</button>`
+    : b.status==='checked_in'
+    ? `<button class="ca-btn primary sm" type="button" onclick="caCampCheckout(${oid});this.closest('.ux-overlay').uxClose()">办理退房 · 退押金结算</button>`
+    : `<span class="ca-item__dep">状态：${esc(CA_ORDER_ST[b.status]||b.status||'')}</span>`;
+  const ov=uxDialog({title:'房态预订详情',desc:`营位 #${pitchId} · ${day}`,
+    body:`<div class="ca"><div class="ca-form">
+      <div class="ca-bk"><div class="ca-bk__row"><span>预订人</span><b>${esc(b.guest_name||'—')}</b></div>
+        <div class="ca-bk__row"><span>联系电话</span><b>${esc(b.guest_phone||'—')}</b></div>
+        <div class="ca-bk__row"><span>订单号</span><b>${esc(b.order_no||'—')}</b></div>
+        <div class="ca-bk__row"><span>状态</span><b>${esc(CA_ORDER_ST[b.order_status||b.status]||b.order_status||b.status||'')}</b></div>
+        <div class="ca-bk__row"><span>合计</span><b>¥${_money(b.total||0)}${Number(b.deposit_amount||b.deposit||0)?'（押金 ¥'+_money(b.deposit_amount||b.deposit||0)+'）':''}</b></div>
+        <div class="ca-bk__row"><span>入住 → 离营</span><b>${esc(b.check_in||'')} → ${esc(b.check_out||'')}</b></div></div>
+    </div></div>`,
+    foot:`<button class="btn ghost" type="button" data-cancel>关闭</button>${acts}`});
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+};
 
 /* ===================== 通用：卡片列表 + 搜索 + 空态 + 弹层表单 ===================== */
 function _listCard({title,desc,newFn,newLabel,rowsFn,emptyTitle,emptySub}){
@@ -337,9 +365,10 @@ function _item(name,tags,meta,editFn,delFn){
     <div class="ca-item__foot"><button class="ca-btn ghost sm" type="button" onclick="${editFn}">编辑</button>
       <button class="ca-btn ghost sm" type="button" onclick="${delFn}">删除</button></div></div>`;
 }
-function _openForm(title,desc,fields,saveFn){
+function _openForm(title,desc,fields,saveFn,okLabel){
   const html=fields.map(f=>{
     const val=f.value==null?'':String(f.value);
+    if(f.type==='html'){return '<div class="ca-field full">'+f.html+'</div>';}
     let ctrl;
     if(f.type==='textarea')ctrl=`<textarea id="f_${f.name}" rows="${f.rows||3}" placeholder="${esc(f.placeholder||'')}">${esc(val)}</textarea>`;
     else if(f.type==='select')ctrl=`<select id="f_${f.name}" ${f.onchange?`onchange="${f.onchange}"`:''}>${(f.options||[]).map(o=>`<option value="${esc(o.value)}" ${String(o.value)===val?'selected':''}>${esc(o.label)}</option>`).join('')}</select>`;
@@ -348,7 +377,7 @@ function _openForm(title,desc,fields,saveFn){
   }).join('');
   const ov=uxDialog({title,desc,wide:true,
     body:`<div class="ca"><div class="ca-form">${html}</div></div>`,
-    foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>保存</button>`,
+    foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" id="campFormOk" data-ok>${okLabel||'保存'}</button>`,
     onClose:()=>{CA_OV=null;}});
   CA_OV=ov;
   ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
@@ -388,6 +417,101 @@ function _detailPayload(ov){
     originalPrice:Number(_fv(ov,'originalPrice')||0),unitLabel:_fv(ov,'unitLabel')};
 }
 
+/* ===================== 营地 v4：素材工作台（本地上传 ≤5 + 比例 + AI 图文详情） ===================== */
+function _campMediaSectionHtml(kind,id){return `<div class="ca-mwb" id="caMwb" data-kind="${kind}" data-id="${id}"></div>`;}
+async function _campRenderMwb(kind,id){
+  const box=document.getElementById('caMwb'); if(!box)return;
+  box.setAttribute('data-kind',kind); box.setAttribute('data-id',id);
+  if(!id){ box.innerHTML='<div class="ca-mwb__lock">保存基础信息后即可上传本地照片、用 AI 生成图文详情。</div>'; return; }
+  let res={max:5,ratios:['4:3','1:1','16:9'],items:[]};
+  try{ res=await api(`/api/club/${CLUB}/camp-media-list?target_kind=${encodeURIComponent(kind)}&target_id=${id}`,{cache:'no-store'})||res; }catch(e){}
+  const items=(res.items||[]).map(a=>`<div class="ca-mwb__img ${a.isCover?'on':''}">
+      <img src="${esc(a.preview)}" alt="">
+      <div class="ca-mwb__ov">${a.isCover?'<span class="ca-tag">封面</span>':`<button type="button" class="ca-btn ghost xs" onclick="caMwbCover(${a.id})">设封面</button>`}
+      <button type="button" class="ca-btn ghost xs" onclick="caMwbDel(${a.id})">删除</button></div></div>`).join('');
+  const full=(res.items||[]).length>=res.max;
+  box.innerHTML=`<div class="ca-mwb__hint">本地照片（最多 ${res.max} 张，服务端按所选比例统一裁剪，保证 C 端视觉一致；首张默认封面，可改设）</div>
+    <div class="ca-mwb__bar">
+      <label class="ca-mwb__file ${full?'disabled':''}">${full?'已达上限':`<input type="file" id="caMwbFile" accept="image/*">`}</label>
+      <select id="caMwbRatio"><option value="4:3">4:3</option><option value="1:1">1:1</option><option value="16:9">16:9</option></select>
+      <button type="button" class="ca-btn sm" onclick="caMwbUpload()" ${full?'disabled':''}>上传照片</button>
+      <span class="ca-mwb__cnt">${(res.items||[]).length}/${res.max}</span>
+    </div>
+    <div class="ca-mwb__grid">${items||'<div class="ca-mwb__empty">还没有照片。先上传本地图片（最多 5 张、可调比例），AI 会按图片自动排版。</div>'}</div>
+    <div class="ca-mwb__ai">
+      <div class="ca-mwb__ail">一个文本框写清照片说明、设施要点、退改与经营规则（也可不上传文件）。点「AI 生成图文详情」，模型自动整理成规格 / 设施 / 须知 / 图文段落，无需手填。</div>
+      <textarea id="caMwbPrompt" rows="3" placeholder="例如：湖景木屋，两张床，可住 2 大 1 小；含独立卫浴、空调、充电桩；18:00 后安静；退订需提前 2 天。"></textarea>
+      <div class="ca-mwb__aibar"><button type="button" class="ca-btn" id="caMwbGen" onclick="caMwbGenerate()">AI 生成图文详情</button><span id="caMwbGenTip" class="ca-mwb__tip"></span></div>
+      <div id="caMwbResult" class="ca-mwb__result"></div>
+    </div>`;
+}
+window.caMwbUpload=async function(){
+  const box=document.getElementById('caMwb'); if(!box)return;
+  const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'));
+  const f=document.getElementById('caMwbFile'); if(!f||!f.files||!f.files.length){toast('请先选择本地图片');return;}
+  const ratio=document.getElementById('caMwbRatio')?document.getElementById('caMwbRatio').value:'4:3';
+  const fd=new FormData(); fd.append('target_kind',kind); fd.append('target_id',id); fd.append('ratio',ratio); fd.append('file',f.files[0]);
+  try{
+    const r=await fetch(`/api/club/${CLUB}/camp-media`,{method:'POST',body:fd});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ toast(j.detail||'上传失败'); return; }
+    await _campRenderMwb(kind,id); toast('已上传');
+  }catch(e){toast('上传失败：'+(e.message||''));}
+};
+window.caMwbDel=async function(assetId){
+  try{ await api(`/api/club/${CLUB}/camp-media/${assetId}`,{method:'DELETE'}); const box=document.getElementById('caMwb'); await _campRenderMwb(box.getAttribute('data-kind'),Number(box.getAttribute('data-id'))); toast('已删除'); }
+  catch(e){showAlert({title:'删除失败',message:e.message||''});}
+};
+window.caMwbCover=async function(assetId){
+  const box=document.getElementById('caMwb'); const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'));
+  try{ await api(`/api/club/${CLUB}/camp-media/${assetId}/cover`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetKind:kind,targetId:id})}); await _campRenderMwb(kind,id); toast('已设为封面'); }
+  catch(e){showAlert({title:'操作失败',message:e.message||''});}
+};
+window.caMwbGenerate=async function(){
+  const box=document.getElementById('caMwb'); if(!box)return;
+  const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'));
+  if(!id){toast('请先保存基础信息再生成详情');return;}
+  const prompt=document.getElementById('caMwbPrompt')?document.getElementById('caMwbPrompt').value:'';
+  const gen=document.getElementById('caMwbGen'); if(gen)gen.disabled=true;
+  const tip=document.getElementById('caMwbGenTip'); if(tip)tip.textContent='生成中…';
+  try{
+    const fd=new FormData(); fd.append('target_kind',kind); fd.append('target_id',id); fd.append('prompt',prompt);
+    const r=await fetch(`/api/club/${CLUB}/camp-ai/generate`,{method:'POST',body:fd});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok){ toast(j.detail||'生成失败'); return; }
+    const job=j.jobId; let st=null;
+    for(let i=0;i<80;i++){
+      await new Promise(r=>setTimeout(r,1500));
+      const s=await api(`/api/club/${CLUB}/camp-ai/jobs/${job}`,{cache:'no-store'});
+      if(s.status==='done'||s.status==='failed'){st=s;break;}
+      if(tip)tip.textContent='生成中…（'+(i+1)+'）';
+    }
+    if(!st||st.status!=='done'){ toast('生成未完成，请稍后重试'); return; }
+    await api(`/api/club/${CLUB}/camp-ai/apply`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetKind:kind,targetId:id,jobId:job})});
+    const d=st.result||{};
+    const res=document.getElementById('caMwbResult');
+    if(res)res.innerHTML=`<div class="ca-mwb__ok">已生成图文详情（规格 ${d.specs?d.specs.length:0} · 设施 ${d.facilities?d.facilities.length:0} · 须知 ${d.policies?d.policies.length:0} 条），已写入并可在 C 端查看。</div>
+      <div class="ca-mwb__preview"><b>${esc(d.subtitle||'')}</b><p>${esc(d.description||'')}</p>${(d.sections||[]).map(s=>`<div class="ca-mwb__sec"><b>${esc(s.headline||'')}</b><p>${esc(s.body||'')}</p></div>`).join('')}</div>`;
+    if(tip)tip.textContent='完成 ✓';
+    toast('AI 图文详情已生成并写入');
+  }catch(e){toast('生成失败：'+(e.message||''));}
+  finally{ if(gen)gen.disabled=false; if(tip&&tip.textContent!=='完成 ✓')tip.textContent=''; }
+};
+async function _campSaveBasic({kind,idRef,ov,apiPath,build,after}){
+  ov=ov||CA_OV; if(!ov)return;
+  const name=_fv(ov,'name'); if(!name){toast('请填写名称');return;}
+  const btn=document.getElementById('campFormOk'); if(btn){btn.disabled=true;btn.textContent='保存中…';}
+  try{
+    const body=build(ov);
+    if(idRef.v){ await api(apiPath(idRef.v),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); }
+    else{ const created=await api(apiPath(0),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); idRef.v=(created&&created.id)?created.id:idRef.v; }
+    toast(idRef.v?'已保存':'已创建');
+    if(after) await after(idRef.v);
+    if(btn)btn.textContent='保存修改';
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'});}
+  finally{ if(btn)btn.disabled=false; }
+}
+
 /* ===================== 营地档案 ===================== */
 async function loadCampProfiles(){
   const box=$('#campPane');if(!box)return;
@@ -403,31 +527,25 @@ async function loadCampProfiles(){
     emptyTitle:'还没有营地',emptySub:'点右上角「新建营地」开始，建好后回到工作台就能看到房态带。'});
 }
 window.editCamp=function(id){
-  const c=(id&&CAMP_PROFILES.find(x=>x.id===id))||{name:'',introText:'',facilities:[],rules:[],contactPhone:'',address:'',geoLat:'',geoLng:'',status:'active'};
-  _openForm(id?'编辑营地':'新建营地','营地档案会展示在 C 端头图、信息卡与导航按钮上。',[
+  const c=(id&&CAMP_PROFILES.find(x=>x.id===id))||{name:'',contactPhone:'',address:'',geoLat:'',geoLng:'',status:'active'};
+  const idRef={v:id||0};
+  _openForm(id?'编辑营地':'新建营地','营地头图与图文详情：先保存基础信息，即可上传本地照片（最多 5 张、可调比例），在一个框里写规则，点「AI 生成图文详情」自动整理。',[
     {name:'name',label:'营地名称 *',value:c.name,placeholder:'例如：云顶星空营地'},
     {name:'contactPhone',label:'联系电话',value:c.contactPhone,placeholder:'138 0000 0000'},
     {name:'address',label:'地址',value:c.address,placeholder:'成都市××区××路',full:true},
-    {name:'introText',label:'一句话简介',type:'textarea',value:c.introText,placeholder:'营地特色、适合人群',full:true},
-    {name:'facilities',label:'设施（每行一项，最多 20 项）',type:'textarea',value:(c.facilities||[]).join('\n'),placeholder:'水电桩\n公共卫生间\n篝火区'},
-    {name:'rules',label:'规则须知（每行一条）',type:'textarea',value:(c.rules||[]).join('\n'),placeholder:'22:00 后请安静\n宠物需牵绳'},
     {name:'geoLat',label:'纬度（可空）',value:c.geoLat==null?'':c.geoLat,placeholder:'30.66'},
     {name:'geoLng',label:'经度（可空）',value:c.geoLng==null?'':c.geoLng,placeholder:'103.95'},
-    {name:'status',label:'状态',type:'select',value:c.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]}
-  ],ov=>saveCamp(id,ov));
+    {name:'status',label:'状态',type:'select',value:c.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
+    {name:'__mwb',label:'',type:'html',html:_campMediaSectionHtml('profile',id||0)}
+  ],ov=>_campSaveBasic({kind:'profile',idRef,ov,
+    apiPath:cur=>cur?`/api/club/${CLUB}/camps/${cur}`:`/api/club/${CLUB}/camps`,
+    build:ov=>({name:_fv(ov,'name'),contactPhone:_fv(ov,'contactPhone'),address:_fv(ov,'address'),
+      geoLat:_fn(ov,'geoLat'),geoLng:_fn(ov,'geoLng'),status:_fv(ov,'status')||'active'}),
+    after:cur=>_campRenderMwb('profile',cur)
+  }),'保存基础信息');
+  _campRenderMwb('profile',id||0);
 };
-window.saveCamp=async function(id,ov){
-  ov=ov||CA_OV;if(!ov)return;
-  const name=_fv(ov,'name');if(!name){toast('请填写营地名称');return;}
-  const payload={name,introText:_fv(ov,'introText'),facilities:_lines(ov,'facilities'),rules:_lines(ov,'rules'),
-    contactPhone:_fv(ov,'contactPhone'),address:_fv(ov,'address'),geoLat:_fn(ov,'geoLat'),geoLng:_fn(ov,'geoLng'),
-    status:_fv(ov,'status')||'active'};
-  try{
-    if(id)await api(`/api/club/${CLUB}/camps/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    else await api(`/api/club/${CLUB}/camps`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    ov.uxClose();toast(id?'营地已更新':'营地已创建');await _loadCamps();await campTab('profiles');
-  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
-};
+window.saveCamp=function(){};
 window.deleteCamp=async function(id){
   const ok=await showConfirm({title:'删除营地',message:'确定删除这个营地？其下的营位、房态覆盖与历史预订会一并清除，且不可恢复。',danger:true});
   if(!ok)return;
@@ -453,7 +571,8 @@ async function loadCampPitches(){
 }
 window.editPitch=function(id){
   const p=(id&&CAMP_PITCHES.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,code:'',name:'',pitch_type:'tent',is_overnight:1,capacity:1,base_price:0,weekend_price:null,holiday_price:null,status:'active'};
-  _openForm(id?'编辑营位':'新增营位','价格按「营位 × 日期」结算：周六/周日自动取周末价，房态日历里还能对单日临时改价。',[
+  const idRef={v:id||0};
+  _openForm(id?'编辑营位':'新增营位','先保存基础信息，即可上传本地照片（最多 5 张、按所选比例统一裁剪）并在一个框里写规则，点「AI 生成图文详情」自动整理规格 / 设施 / 须知 / 图文，无需手填。',[
     _campField(),{name:'code',label:'营位编码',value:p.code,placeholder:'如 A01'},
     {name:'name',label:'营位名称 *',value:p.name,placeholder:'如 湖景帐篷位 A01'},
     {name:'pitchType',label:'营位类型',type:'select',value:p.pitch_type||'tent',onchange:"pfTypeChange(this.value)",
@@ -465,24 +584,19 @@ window.editPitch=function(id){
     {name:'weekendPrice',label:'周末价（留空=同平日）',type:'number',min:0,step:0.01,value:p.weekend_price==null?'':p.weekend_price},
     {name:'holidayPrice',label:'节假日价（留空=同平日）',type:'number',min:0,step:0.01,value:p.holiday_price==null?'':p.holiday_price},
     {name:'status',label:'状态',type:'select',value:p.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
-    ..._detailFields(p)
-  ],ov=>savePitch(id,ov));
+    {name:'__mwb',label:'',type:'html',html:_campMediaSectionHtml('pitch',id||0)}
+  ],ov=>_campSaveBasic({kind:'pitch',idRef,ov,
+    apiPath:cur=>cur?`/api/club/${CLUB}/pitches/${cur}`:`/api/club/${CLUB}/pitches`,
+    build:ov=>({campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,code:_fv(ov,'code'),name:_fv(ov,'name'),
+      pitchType:_fv(ov,'pitchType')||'tent',isOvernight:Number(_fv(ov,'isOvernight')||0),
+      capacity:Math.max(1,Number(_fv(ov,'capacity')||1)),basePrice:Number(_fv(ov,'basePrice')||0),
+      weekendPrice:_fn(ov,'weekendPrice'),holidayPrice:_fn(ov,'holidayPrice'),status:_fv(ov,'status')||'active'}),
+    after:cur=>_campRenderMwb('pitch',cur)
+  }),'保存基础信息');
+  _campRenderMwb('pitch',id||0);
 };
 window.pfTypeChange=function(v){const el=CA_OV&&CA_OV.querySelector('#f_isOvernight');if(el)el.value=(v==='day')?'0':'1';};
-window.savePitch=async function(id,ov){
-  ov=ov||CA_OV;if(!ov)return;
-  const name=_fv(ov,'name');if(!name){toast('请填写营位名称');return;}
-  const payload={campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,code:_fv(ov,'code'),name,
-    pitchType:_fv(ov,'pitchType')||'tent',isOvernight:Number(_fv(ov,'isOvernight')||0),
-    capacity:Math.max(1,Number(_fv(ov,'capacity')||1)),basePrice:Number(_fv(ov,'basePrice')||0),
-    weekendPrice:_fn(ov,'weekendPrice'),holidayPrice:_fn(ov,'holidayPrice'),status:_fv(ov,'status')||'active'};
-  Object.assign(payload,_detailPayload(ov));
-  try{
-    if(id)await api(`/api/club/${CLUB}/pitches/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    else await api(`/api/club/${CLUB}/pitches`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    ov.uxClose();toast(id?'营位已更新':'营位已创建');await campTab('pitches');
-  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
-};
+window.savePitch=function(){};
 window.deletePitch=async function(id){
   const ok=await showConfirm({title:'删除营位',message:'确定删除这个营位？该营位的历史预订与房态覆盖会一并清除。',danger:true});
   if(!ok)return;
@@ -506,30 +620,25 @@ async function loadCampRental(){
     emptyTitle:'还没有租赁装备',emptySub:'帐篷、天幕、防潮垫等按日出租的装备都放这里。'});
 }
 window.editRental=function(id){
-  const r=(id&&CAMP_RENTAL.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,name:'',cover_url:'',description:'',daily_price:0,deposit:0,available_qty:0,attributes_json:'',status:'active'};
-  _openForm(id?'编辑租赁装备':'新增租赁装备','押金在离营时退还；租赁下单与营位预订共用 C 端营地页。',[
+  const r=(id&&CAMP_RENTAL.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,name:'',daily_price:0,deposit:0,available_qty:0,status:'active'};
+  const idRef={v:id||0};
+  _openForm(id?'编辑租赁装备':'新增租赁装备','押金离营时退还；先保存基础信息，即可上传照片、用 AI 生成图文详情。',[
     _campField(),{name:'name',label:'装备名称 *',value:r.name},
     {name:'dailyPrice',label:'日租金（元/天）',type:'number',min:0,step:0.01,value:r.daily_price||0},
     {name:'deposit',label:'押金（元）',type:'number',min:0,step:0.01,value:r.deposit||0},
     {name:'availableQty',label:'可租数量',type:'number',min:0,value:r.available_qty||0},
     {name:'status',label:'状态',type:'select',value:r.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
-    {name:'attributes',label:'规格属性（每行一项）',type:'textarea',value:_j(r.attributes_json,[]).join('\n'),full:true},
-    ..._detailFields(r)
-  ],ov=>saveRental(id,ov));
+    {name:'__mwb',label:'',type:'html',html:_campMediaSectionHtml('rental',id||0)}
+  ],ov=>_campSaveBasic({kind:'rental',idRef,ov,
+    apiPath:cur=>cur?`/api/club/${CLUB}/rental-items/${cur}`:`/api/club/${CLUB}/rental-items`,
+    build:ov=>({campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name:_fv(ov,'name'),
+      dailyPrice:Number(_fv(ov,'dailyPrice')||0),deposit:Number(_fv(ov,'deposit')||0),
+      availableQty:Math.max(0,Number(_fv(ov,'availableQty')||0)),status:_fv(ov,'status')||'active'}),
+    after:cur=>_campRenderMwb('rental',cur)
+  }),'保存基础信息');
+  _campRenderMwb('rental',id||0);
 };
-window.saveRental=async function(id,ov){
-  ov=ov||CA_OV;if(!ov)return;
-  const name=_fv(ov,'name');if(!name){toast('请填写装备名称');return;}
-  const payload={campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name,coverUrl:_fv(ov,'coverUrl'),description:_fv(ov,'description'),
-    dailyPrice:Number(_fv(ov,'dailyPrice')||0),deposit:Number(_fv(ov,'deposit')||0),
-    availableQty:Math.max(0,Number(_fv(ov,'availableQty')||0)),attributes:_lines(ov,'attributes'),status:_fv(ov,'status')||'active'};
-  Object.assign(payload,_detailPayload(ov));
-  try{
-    if(id)await api(`/api/club/${CLUB}/rental-items/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    else await api(`/api/club/${CLUB}/rental-items`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    ov.uxClose();toast(id?'装备已更新':'装备已创建');await campTab('rental');
-  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
-};
+window.saveRental=function(){};
 window.deleteRental=async function(id){
   const ok=await showConfirm({title:'删除租赁装备',message:'确定删除该租赁装备？',danger:true});if(!ok)return;
   try{await api(`/api/club/${CLUB}/rental-items/${id}`,{method:'DELETE'});toast('已删除');await campTab('rental');}
@@ -553,60 +662,98 @@ async function loadCampStore(){
     emptyTitle:'还没有小站商品',emptySub:'饮料、烧烤食材、一次性用品等现场零售商品放这里。'});
 }
 window.editStore=function(id){
-  const s=(id&&CAMP_STORE.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,name:'',cover_url:'',price:0,stock:0,category:'',status:'active'};
-  _openForm(id?'编辑小站商品':'新增小站商品','小站商品按件售卖，不计入营位房态。',[
+  const s=(id&&CAMP_STORE.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,name:'',price:0,stock:0,category:'',status:'active'};
+  const idRef={v:id||0};
+  _openForm(id?'编辑小站商品':'新增小站商品','小站商品按件售卖，不计入房态。先保存基础信息，即可上传照片、用 AI 生成图文详情。',[
     _campField(),{name:'name',label:'商品名称 *',value:s.name},
     {name:'price',label:'售价（元）',type:'number',min:0,step:0.01,value:s.price||0},
     {name:'stock',label:'库存（件）',type:'number',min:0,value:s.stock||0},
     {name:'category',label:'分类',value:s.category,placeholder:'饮料 / 食材 / 配件'},
     {name:'status',label:'状态',type:'select',value:s.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
-    ..._detailFields(s)
-  ],ov=>saveStore(id,ov));
+    {name:'__mwb',label:'',type:'html',html:_campMediaSectionHtml('store',id||0)}
+  ],ov=>_campSaveBasic({kind:'store',idRef,ov,
+    apiPath:cur=>cur?`/api/club/${CLUB}/store-products/${cur}`:`/api/club/${CLUB}/store-products`,
+    build:ov=>({campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name:_fv(ov,'name'),
+      price:Number(_fv(ov,'price')||0),stock:Math.max(0,Number(_fv(ov,'stock')||0)),
+      category:_fv(ov,'category'),status:_fv(ov,'status')||'active'}),
+    after:cur=>_campRenderMwb('store',cur)
+  }),'保存基础信息');
+  _campRenderMwb('store',id||0);
 };
-window.saveStore=async function(id,ov){
-  ov=ov||CA_OV;if(!ov)return;
-  const name=_fv(ov,'name');if(!name){toast('请填写商品名称');return;}
-  const payload={campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name,coverUrl:_fv(ov,'coverUrl'),
-    price:Number(_fv(ov,'price')||0),stock:Math.max(0,Number(_fv(ov,'stock')||0)),
-    category:_fv(ov,'category'),status:_fv(ov,'status')||'active'};
-  Object.assign(payload,_detailPayload(ov));
-  try{
-    if(id)await api(`/api/club/${CLUB}/store-products/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    else await api(`/api/club/${CLUB}/store-products`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-    ov.uxClose();toast(id?'商品已更新':'商品已创建');await campTab('store');
-  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
-};
+window.saveStore=function(){};
 window.deleteStore=async function(id){
   const ok=await showConfirm({title:'删除商品',message:'确定删除该小站商品？',danger:true});if(!ok)return;
   try{await api(`/api/club/${CLUB}/store-products/${id}`,{method:'DELETE'});toast('已删除');await campTab('store');}
   catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}
 };
 
-/* ===================== 营地订单（v3 统一订单，只读） ===================== */
-const CA_ORDER_ST={pending_payment:'待支付',paid:'已支付',cancelled:'已取消',expired:'已超时'};
-async function loadCampOrders(){
-  const box=$('#campPane');if(!box)return;
-  try{const d=await api(`/api/club/${CLUB}/camp-orders`,{cache:'no-store'})||{};CAMP_ORDERS=d.orders||[];}
-  catch(e){box.innerHTML=`<div class="ca-empty">读取失败：${esc(e.message||'')}</div>`;return;}
-  const rows=CAMP_ORDERS.filter(o=>_match(o.orderNo)||_match(o.guestName)).map(o=>{
+/* ===================== 营地订单（v3 统一订单；#800 增加分类筛选 + 两步履约） ===================== */
+const CA_ORDER_ST={pending_payment:'待支付',paid:'已支付',checked_in:'已入住',completed:'已完成',cancelled:'已取消',expired:'已超时'};
+const CA_ORDER_CAT=[['all','全部'],['stay','营位'],['rental','租赁'],['store','其它销售']];
+let CA_ORDER_CAT_CUR='all';
+function _orderCats(o){
+  const ks=new Set((o.items||[]).map(i=>i.kind));
+  const out=[];if(ks.has('stay'))out.push('营位');if(ks.has('rental'))out.push('租赁');if(ks.has('store'))out.push('其它销售');
+  return out;
+}
+function _orderMatch(o){
+  if(CA_ORDER_CAT_CUR!=='all'){const map={stay:'营位',rental:'租赁',store:'其它销售'};if(!_orderCats(o).includes(map[CA_ORDER_CAT_CUR]))return false;}
+  if(CA_SEARCH){const s=CA_SEARCH,t=String(o.orderNo||'').toLowerCase()+' '+String(o.guestName||'').toLowerCase()+' '+String(o.guestPhone||'').toLowerCase();if(!t.includes(s))return false;}
+  return true;
+}
+function _orderActions(o){
+  const st=o.status||'';
+  if(st==='paid')return `<button class="ca-btn primary sm" type="button" onclick="caCampCheckin(${o.id})">确认入住 · 登记押金</button>`;
+  if(st==='checked_in')return `<button class="ca-btn primary sm" type="button" onclick="caCampCheckout(${o.id})">办理退房 · 退押金结算</button>`+
+    (Number(o.depositHeld||o.deposit_held||0)?`<span class="ca-item__dep">押金 ¥${_money(o.depositHeld||o.deposit_held)} 已登记</span>`:'');
+  if(st==='completed')return `<span class="ca-item__dep">押金已退 ¥${_money(o.depositRefunded||o.deposit_refunded||0)}</span>`;
+  return '';
+}
+function caOrderRows(){
+  const rows=CAMP_ORDERS.filter(_orderMatch).map(o=>{
     const st=o.status||'',items=(o.items||[]).map(x=>`${esc(x.title||'')} ×${x.qty}`).join('、');
+    const cats=_orderCats(o).map(c=>`<span class="ca-tag soft">${c}</span>`).join('');
     return `<div class="ca-item"><div class="ca-item__top"><div class="ca-item__n">${esc(o.orderNo||'')}</div>
-      <span class="ca-tag ${st==='paid'?'':st==='pending_payment'?'amber':'grey'}">${esc(CA_ORDER_ST[st]||st)}</span></div>
+      <span class="ca-tag ${st==='paid'?'':st==='pending_payment'?'amber':(st==='checked_in'||st==='completed')?'green':'grey'}">${esc(CA_ORDER_ST[st]||st)}</span></div>
+      ${cats?`<div class="ca-item__cats">${cats}</div>`:''}
       <div class="ca-item__meta" style="margin-top:8px">
         ${esc(o.createdAt||'')} · 联系人 ${esc(o.guestName||'')} ${esc(o.guestPhone||'')}<br>
         ${items}<br>
         商品 ¥${_money(o.goodsAmount)}${Number(o.memberDiscount)?' − 会员 ¥'+_money(o.memberDiscount):''}${Number(o.clubPointDiscount)?' − 积分 ¥'+_money(o.clubPointDiscount):''}${Number(o.voucherDiscount)?' − 券 ¥'+_money(o.voucherDiscount):''}${Number(o.depositAmount)?' + 押金 ¥'+_money(o.depositAmount):''}
         · <b>合计 ¥${_money(o.total)}</b> · 送 ${Number(o.pointsEarned||0)} 积分
-      </div></div>`;
+      </div>
+      <div class="ca-item__foot">${_orderActions(o)}</div></div>`;
   }).join('');
+  return rows||'<div class="ca-empty"><b>没有匹配的营地订单</b>调整筛选条件，或 C 端下单后会显示在这里。</div>';
+}
+async function loadCampOrders(){
+  const box=$('#campPane');if(!box)return;
+  try{const d=await api(`/api/club/${CLUB}/camp-orders`,{cache:'no-store'})||{};CAMP_ORDERS=d.orders||[];}
+  catch(e){box.innerHTML=`<div class="ca-empty">读取失败：${esc(e.message||'')}</div>`;return;}
+  const chips=CA_ORDER_CAT.map(([k,t])=>`<button class="ca-chip ${CA_ORDER_CAT_CUR===k?'on':''}" type="button" onclick="caSetOrderCat('${k}')">${t}</button>`).join('');
   box.innerHTML=`<div class="ca-card"><div class="ca-card__head"><div>
       <div class="ca-card__t">营地订单 · 共 ${CAMP_ORDERS.length} 笔</div>
-      <div class="ca-card__s">营位 / 租赁装备 / 小站商品统一进一张订单，金额与会员权益由系统重算。待支付订单 30 分钟未付款会自动释放房态与库存。</div></div>
+      <div class="ca-card__s">营位 / 租赁装备 / 小站商品统一进一张订单，金额与会员权益由系统重算。待支付订单 30 分钟未付款会自动释放房态与库存。按「营位 / 租赁 / 其它销售」筛选，已支付订单可确认入住（登记押金），已入住可办理退房（退押金并结算）。</div></div>
       <div class="ca-tools"><div class="ca-search"><input class="ca-input" type="search" placeholder="搜索订单号 / 联系人" oninput="caSearch(this.value)"></div>
       <button class="ca-btn ghost sm" type="button" onclick="caReload()">↻ 刷新</button></div></div>
-    <div class="ca-list" id="caList">${rows||'<div class="ca-empty"><b>还没有营地订单</b>C 端下单后会显示在这里。</div>'}</div></div>`;
-  CA_ROWS_FN=()=>rows;
+    <div class="ca-chips">${chips}</div>
+    <div class="ca-list" id="caList">${caOrderRows()}</div></div>`;
+  CA_ROWS_FN=caOrderRows;
 }
+window.caSetOrderCat=function(k){CA_ORDER_CAT_CUR=k;const b=$('#caList');if(b&&CA_ROWS_FN)b.innerHTML=CA_ROWS_FN();
+  document.querySelectorAll('.ca-chips .ca-chip').forEach(c=>c.classList.toggle('on',c.textContent===({all:'全部',stay:'营位',rental:'租赁',store:'其它销售'})[k]));};
+window.caCampCheckin=async function(id){
+  const ok=await showConfirm({title:'确认入住',message:'将订单状态置为「已入住」并登记押金（押金金额取自订单），确定继续？'});if(!ok)return;
+  try{const r=await api(`/api/club/${CLUB}/camp-orders/${id}/checkin`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:'{}'});
+    toast(`已确认入住 · 押金 ¥${_money(r.depositHeld||0)} 已登记`);await loadCampOrders();}
+  catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
+};
+window.caCampCheckout=async function(id){
+  const ok=await showConfirm({title:'办理退房',message:'将订单状态置为「已完成」，押金全额退还并生成最终结算金额，确定继续？',danger:true});if(!ok)return;
+  try{const r=await api(`/api/club/${CLUB}/camp-orders/${id}/checkout`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:'{}'});
+    toast(`已退房 · 押金退还 ¥${_money(r.depositRefunded||0)} · 合计 ¥${_money(r.finalAmount||0)}`);await loadCampOrders();}
+  catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
+};
 window.caOrderSearch=v=>caSearch(v);
 
 /* ===================== 营地会员权益（v3，复用原活动会员体系） ===================== */

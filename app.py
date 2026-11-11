@@ -7295,7 +7295,7 @@ def platform_add_benefit(payload:dict=Body(...)):
 
 @app.patch('/api/platform/benefits/{benefit_id}')
 def platform_update_benefit(benefit_id:int,payload:dict=Body(...)):
-    allowed=['title','description','points_cost','cash_value','stock','status','target_club_id','benefit_type'];sets=[];vals=[]
+    allowed=['title','description','points_cost','cash_value','stock','status','target_club_id','benefit_type','applies_to'];sets=[];vals=[]
     for k in allowed:
         if k in payload: sets.append(f'{k}=?'); vals.append(payload[k])
     with conn() as c:
@@ -7357,7 +7357,7 @@ def platform_update_coupon(coupon_id: int, payload: dict = Body(...)):
     payload = {_COUPON_PATCH_ALIAS.get(k, k): v for k, v in (payload or {}).items()}
     allowed = ['title', 'description', 'status', 'stock', 'cash_value', 'mode', 'threshold_amount',
                'image_key', 'valid_from', 'valid_to', 'claim_mode', 'target_type', 'target_city',
-               'target_club_id', 'per_user_limit', 'share_enabled']
+               'target_club_id', 'per_user_limit', 'share_enabled', 'applies_to']
     sets = []
     vals = []
     for k in allowed:
@@ -11476,6 +11476,10 @@ def _camp_safe_url(u):
     # 只放行 https 与本站静态/上传路径，避免后台误填 javascript: 之类注入 C 端。
     if s.startswith('https://') or s.startswith('/static/') or s.startswith('/uploads/') or s.startswith('data:image/'):
         return s
+    # 2026-11-11 营地 v4：本地上传的素材走公开代理（生产 /static/uploads/* 被网关挡），
+    # 只放行 camp-media-file 这一种形状，避免把 /api/public 变成任意路径白名单。
+    if s.startswith('/api/public/clubs/') and '/camp-media-file/' in s:
+        return s
     return ''
 
 def _camp_arr(v):
@@ -11658,7 +11662,12 @@ def _camp_order_out(c,o,with_items=True):
        'depositAmount':o['deposit_amount'],'total':o['total'],'pointsEarned':o['points_earned'],
        'guestName':o['guest_name'] or '','guestPhone':o['guest_phone'] or '',
        'campId':o['camp_id'],'userId':o['user_id'],
-       'createdAt':o['created_at'],'paidAt':o['paid_at'],'cancelledAt':o['cancelled_at']}
+       'createdAt':o['created_at'],'paidAt':o['paid_at'],'cancelledAt':o['cancelled_at'],
+       'depositHeld':float(o['deposit_held'] or 0),'depositRefunded':float(o['deposit_refunded'] or 0),
+       'depositForfeit':float(o['deposit_forfeit'] or 0),'finalAmount':float(o['final_amount'] or 0),
+       'checkedInAt':o['checked_in_at'] or '','checkedOutAt':o['checked_out_at'] or '',
+       'settledAt':o['settled_at'] or '','checkinNote':o['checkin_note'] or '',
+       'checkoutNote':o['checkout_note'] or ''}
     if with_items:
         its=[]
         for r in rows(c.execute('SELECT * FROM camp_order_items WHERE order_id=? ORDER BY id',(o['id'],))):
@@ -11864,6 +11873,60 @@ def public_camp_order_cancel(order_id:int):
         c.execute('''UPDATE camp_orders SET status="cancelled",cancelled_at=CURRENT_TIMESTAMP WHERE id=?''',(order_id,))
         return {'ok':True,'orderId':order_id,'status':'cancelled'}
 
+# ---- 履约两步状态机（后台）：确认入住（登记押金） / 办理退房（退押金 + 最终结算）----
+# 状态流转：paid → checked_in（登记押金 deposit_held）→ completed（退押金 deposit_refunded + settled_at）。
+# 仅后台可调；生产环境同样走后台登录态（CLUBOS_TEST_OPEN 下免登录）。房态带与订单列表据此联动。
+@app.patch('/api/club/{club_id}/camp-orders/{order_id}/checkin')
+def club_camp_order_checkin(club_id:int,order_id:int,payload:dict=Body(default={})):
+    club_or_404(club_id)
+    with conn() as c:
+        o=row(c.execute('SELECT * FROM camp_orders WHERE id=? AND club_id=?',(order_id,club_id)))
+        if not o: raise HTTPException(404,'营地订单不存在')
+        if o['status']=='checked_in': return {'ok':True,'orderId':order_id,'status':'checked_in','idempotent':True}
+        if o['status']=='completed': raise HTTPException(409,'订单已完成退房，不能重复入住')
+        if o['status']!='paid': raise HTTPException(409,'仅「已支付」订单可办理入住')
+        note=str((payload or {}).get('note') or '')
+        c.execute('''UPDATE camp_orders SET status="checked_in",checked_in_at=CURRENT_TIMESTAMP,
+                     deposit_held=deposit_amount,checkin_note=? WHERE id=?''',(note,order_id))
+        c.execute('''UPDATE camp_pitch_bookings SET status="checked_in"
+                     WHERE club_id=? AND camp_order_id=? AND status="paid"''',(club_id,order_id))
+        return {'ok':True,'orderId':order_id,'status':'checked_in',
+                'depositHeld':float(o['deposit_amount'] or 0),'checkinNote':note}
+
+@app.patch('/api/club/{club_id}/camp-orders/{order_id}/checkout')
+def club_camp_order_checkout(club_id:int,order_id:int,payload:dict=Body(default={})):
+    club_or_404(club_id)
+    with conn() as c:
+        o=row(c.execute('SELECT * FROM camp_orders WHERE id=? AND club_id=?',(order_id,club_id)))
+        if not o: raise HTTPException(404,'营地订单不存在')
+        if o['status']=='completed': return {'ok':True,'orderId':order_id,'status':'completed','idempotent':True}
+        if o['status']!='checked_in': raise HTTPException(409,'仅「已入住」订单可办理退房')
+        note=str((payload or {}).get('note') or '')
+        # 押金全额退还（默认）；forfeit 仅在显式传入小于押金时记扣减。
+        dep=float(o['deposit_amount'] or 0)
+        forfeit=min(dep,max(0.0,float((payload or {}).get('depositForfeit') or 0)))
+        refunded=round(dep-forfeit,2); final=round(float(o['total'] or 0),2)
+        c.execute('''UPDATE camp_orders SET status="completed",checked_out_at=CURRENT_TIMESTAMP,settled_at=CURRENT_TIMESTAMP,
+                     deposit_refunded=?,deposit_forfeit=?,final_amount=?,checkout_note=? WHERE id=?''',
+                  (refunded,forfeit,final,note,order_id))
+        c.execute('''UPDATE camp_pitch_bookings SET status="completed"
+                     WHERE club_id=? AND camp_order_id=? AND status="checked_in"''',(club_id,order_id))
+        return {'ok':True,'orderId':order_id,'status':'completed',
+                'depositRefunded':refunded,'depositForfeit':forfeit,'finalAmount':final,'checkoutNote':note}
+
+@app.get('/api/club/{club_id}/camp-pitch-bookings')
+def club_camp_pitch_bookings(club_id:int,pitch_id:int=0,date:str=''):
+    club_or_404(club_id)
+    with conn() as c:
+        sql='SELECT b.*,o.order_no,o.status AS order_status,o.guest_name,o.guest_phone,o.total,o.deposit_amount '
+        sql+='FROM camp_pitch_bookings b LEFT JOIN camp_orders o ON o.id=b.camp_order_id WHERE b.club_id=?'
+        args=[club_id]
+        if pitch_id: sql+=' AND b.pitch_id=?'; args.append(pitch_id)
+        if date:
+            sql+=' AND b.check_in<=? AND b.check_out>?'; args+= [date,date]
+        recs=rows(c.execute(sql+' ORDER BY b.check_in DESC, b.id DESC',args))
+        return {'ok':True,'bookings':[{k:v for k,v in dict(r).items()} for r in recs]}
+
 # ---- 商品详情（高标准详情页数据源） ----
 @app.get('/api/public/clubs/{club_id}/camp-products/{kind}/{pid}')
 def public_camp_product_detail(club_id:int,kind:str,pid:int):
@@ -11888,7 +11951,319 @@ def public_camp_product_detail(club_id:int,kind:str,pid:int):
                 'price':price,'originalPrice':d['originalPrice'],'unitLabel':unit,
                 'specs':d['specs'],'facilities':d['facilities'],'policies':d['policies'],
                 'description':d['description'],'detailText':d['detailText'],
+                'aiDetail':jload(r.get('ai_detail_json'), None),
                 'stock':stock,'dailyPrice':daily,'deposit':dep,
                 'isOvernight':bool(r['is_overnight']) if kind=='pitch' else False,
                 'capacity':int(r['capacity'] or 0) if kind=='pitch' else 0,
                 'pitchType':r['pitch_type'] if kind=='pitch' else ''}
+
+
+# ===========================================================================
+# 营地 v4（2026-11-11）：本地素材工作台 + AI 图文详情
+# 四类对象（营地档案 / 营位 / 装备租赁 / 营地小站）共用同一套上传与生成链路。
+# 老板只做两件事：上传本地照片（≤5 张、服务端按选定比例统一裁剪）+
+# 在一个文本框里写照片说明与经营规则；规格/设施/须知/图文详情全部由模型生成。
+# ===========================================================================
+from clubos_domain.camp_detail_ai import generate_camp_detail as _camp_ai_detail
+
+_CAMP_TARGET_TABLE = {
+    'profile': 'camp_profiles', 'pitch': 'camp_pitches',
+    'rental': 'camp_rental_items', 'store': 'camp_store_products',
+}
+_CAMP_MEDIA_RATIOS = {'4:3': (1600, 1200), '1:1': (1400, 1400), '16:9': (1600, 900)}
+_CAMP_MEDIA_MAX = 5
+
+
+def _camp_media_public(club_id: int, url: str) -> str:
+    name = str(url or '').rsplit('/', 1)[-1]
+    return f'/api/public/clubs/{club_id}/camp-media-file/uploads/{club_id}/camp/{name}'
+
+
+def _camp_media_sync(c, club_id: int, kind: str, tid: int):
+    """素材表是上传真源，gallery_json / cover_url 是 C 端渲染真源；每次增删后同步一次。"""
+    tbl = _CAMP_TARGET_TABLE[kind]
+    assets = rows(c.execute('''SELECT * FROM camp_media_assets
+                               WHERE club_id=? AND target_kind=? AND target_id=?
+                               ORDER BY sort_no,id''', (club_id, kind, tid)))
+    urls = [_camp_media_public(club_id, a['url']) for a in assets]
+    cover = next((_camp_media_public(club_id, a['url']) for a in assets if a['is_cover']), urls[0] if urls else '')
+    c.execute(f'UPDATE {tbl} SET gallery_json=?, cover_url=? WHERE id=? AND club_id=?',
+              (jdump(urls), cover, tid, club_id))
+    return urls, cover
+
+
+@app.post('/api/club/{club_id}/camp-media')
+async def upload_camp_media(club_id: int, target_kind: str = Form(...), target_id: int = Form(0),
+                            ratio: str = Form('4:3'), file: UploadFile = File(...)):
+    """本地图片上传：服务端统一裁剪到目标比例并压到固定尺寸，保证 C 端视觉一致。"""
+    from PIL import ImageOps
+    club_or_404(club_id)
+    if target_kind not in _CAMP_TARGET_TABLE:
+        raise HTTPException(400, '对象类型必须是 profile / pitch / rental / store')
+    if ratio not in _CAMP_MEDIA_RATIOS:
+        raise HTTPException(400, '比例必须是 4:3 / 1:1 / 16:9')
+    real = Path(file.filename or '').suffix.lower()
+    if real not in _PUBLIC_IMAGE_EXT:
+        raise HTTPException(400, '仅支持图片文件：png/jpg/jpeg/webp/gif')
+    data = await file.read()
+    if len(data) > 10 * 1024 * 1024:
+        raise HTTPException(413, '图片过大（上限 10MB）')
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.load()
+            im = ImageOps.exif_transpose(im).convert('RGB')
+            w, h = _CAMP_MEDIA_RATIOS[ratio]
+            fitted = ImageOps.fit(im, (w, h), method=Image.LANCZOS, centering=(0.5, 0.5))
+            buf = io.BytesIO()
+            fitted.save(buf, 'JPEG', quality=86, optimize=True)
+        out = buf.getvalue()
+    except Exception:
+        raise HTTPException(400, '图片文件损坏或格式不受支持')
+    dest = UPLOAD / str(club_id) / 'camp'
+    dest.mkdir(parents=True, exist_ok=True)
+    name = uuid.uuid4().hex + '.jpg'
+    (dest / name).write_bytes(out)
+    url = f'/static/uploads/{club_id}/camp/{name}'
+    preview = f'/api/club/{club_id}/camp-media-file/uploads/{club_id}/camp/{name}'
+    with conn() as c:
+        cnt = int(c.execute('''SELECT COUNT(*) FROM camp_media_assets
+                               WHERE club_id=? AND target_kind=? AND target_id=?''',
+                            (club_id, target_kind, target_id)).fetchone()[0])
+        if cnt >= _CAMP_MEDIA_MAX:
+            raise HTTPException(409, f'每个对象最多上传 {_CAMP_MEDIA_MAX} 张图片，请先删除后再上传')
+        c.execute('''INSERT INTO camp_media_assets(club_id,target_kind,target_id,url,preview,ratio,
+                       width,height,bytes,sort_no,is_cover)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                  (club_id, target_kind, target_id, url, preview, ratio, w, h, len(out), cnt, 1 if cnt == 0 else 0))
+        asset_id = int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+        urls, cover = _camp_media_sync(c, club_id, target_kind, target_id)
+    return {'ok': True, 'id': asset_id, 'url': url, 'preview': preview,
+            'publicUrl': _camp_media_public(club_id, url), 'ratio': ratio,
+            'width': w, 'height': h, 'bytes': len(out), 'count': len(urls),
+            'gallery': urls, 'cover': cover}
+
+
+@app.get('/api/club/{club_id}/camp-media-list')
+def club_camp_media_list(club_id: int, target_kind: str, target_id: int = 0):
+    club_or_404(club_id)
+    if target_kind not in _CAMP_TARGET_TABLE:
+        raise HTTPException(400, '对象类型不存在')
+    with conn() as c:
+        a = rows(c.execute('''SELECT * FROM camp_media_assets
+                              WHERE club_id=? AND target_kind=? AND target_id=?
+                              ORDER BY sort_no,id''', (club_id, target_kind, target_id)))
+        return {'ok': True, 'max': _CAMP_MEDIA_MAX, 'ratios': list(_CAMP_MEDIA_RATIOS),
+                'items': [{'id': x['id'], 'url': x['url'], 'preview': x['preview'],
+                           'publicUrl': _camp_media_public(club_id, x['url']),
+                           'ratio': x['ratio'], 'width': x['width'], 'height': x['height'],
+                           'sortNo': x['sort_no'], 'isCover': bool(x['is_cover'])} for x in a]}
+
+
+@app.post('/api/club/{club_id}/camp-media/{asset_id}/cover')
+def club_camp_media_cover(club_id: int, asset_id: int, payload: dict = Body(default={})):
+    kind = str((payload or {}).get('targetKind') or '')
+    tid = int((payload or {}).get('targetId') or 0)
+    with conn() as c:
+        a = row(c.execute('SELECT * FROM camp_media_assets WHERE id=? AND club_id=?', (asset_id, club_id)))
+        if not a:
+            raise HTTPException(404, '素材不存在')
+        kind = kind or a['target_kind']; tid = tid or a['target_id']
+        c.execute('''UPDATE camp_media_assets SET is_cover=0
+                     WHERE club_id=? AND target_kind=? AND target_id=?''', (club_id, kind, tid))
+        c.execute('UPDATE camp_media_assets SET is_cover=1 WHERE id=?', (asset_id,))
+        _, cover = _camp_media_sync(c, club_id, kind, tid)
+        return {'ok': True, 'cover': cover}
+
+
+@app.delete('/api/club/{club_id}/camp-media/{asset_id}')
+def club_camp_media_delete(club_id: int, asset_id: int):
+    with conn() as c:
+        a = row(c.execute('SELECT * FROM camp_media_assets WHERE id=? AND club_id=?', (asset_id, club_id)))
+        if not a:
+            raise HTTPException(404, '素材不存在')
+        kind, tid = a['target_kind'], a['target_id']
+        c.execute('DELETE FROM camp_media_assets WHERE id=?', (asset_id,))
+        left = rows(c.execute('''SELECT id FROM camp_media_assets
+                                 WHERE club_id=? AND target_kind=? AND target_id=? ORDER BY sort_no,id''',
+                              (club_id, kind, tid)))
+        for i, x in enumerate(left):
+            c.execute('UPDATE camp_media_assets SET sort_no=? WHERE id=?', (i, x['id']))
+        if left and not c.execute('''SELECT 1 FROM camp_media_assets
+                                     WHERE club_id=? AND target_kind=? AND target_id=? AND is_cover=1''',
+                                  (club_id, kind, tid)).fetchone():
+            c.execute('UPDATE camp_media_assets SET is_cover=1 WHERE id=?', (left[0]['id'],))
+        urls, cover = _camp_media_sync(c, club_id, kind, tid)
+        return {'ok': True, 'count': len(urls), 'gallery': urls, 'cover': cover}
+
+
+def _camp_media_serve(club_id: int, asset_path: str, *, public: bool):
+    from fastapi.responses import FileResponse
+    original = '/static/' + unquote(asset_path)
+    with conn() as c:
+        hit = c.execute('SELECT 1 FROM camp_media_assets WHERE club_id=? AND url=?',
+                        (club_id, original)).fetchone()
+    if not hit:
+        raise HTTPException(404, '素材不存在')
+    p = _safe_media_path(original)
+    if not p or not p.is_file():
+        raise HTTPException(404, '素材不存在')
+    r = FileResponse(p)
+    r.headers['Cache-Control'] = 'public, max-age=300' if public else 'private, max-age=300'
+    return r
+
+
+@app.get('/api/club/{club_id}/camp-media-file/{asset_path:path}')
+def club_camp_media_file(club_id: int, asset_path: str):
+    """后台编辑弹窗即时预览（带登录态）。"""
+    return _camp_media_serve(club_id, asset_path, public=False)
+
+
+@app.get('/api/public/clubs/{club_id}/camp-media-file/{asset_path:path}')
+def public_camp_media_file(club_id: int, asset_path: str):
+    """C 端公开读取：只放行素材表里真实引用过的文件，不是对 uploads 通配开放。"""
+    x = club_or_404(club_id)
+    if IS_PROD and x['status'] != 'active':
+        raise HTTPException(404, 'not found')
+    return _camp_media_serve(club_id, asset_path, public=True)
+
+
+def _camp_ai_base(c, club_id: int, kind: str, tid: int):
+    tbl = _CAMP_TARGET_TABLE[kind]
+    r = row(c.execute(f'SELECT * FROM {tbl} WHERE id=? AND club_id=?', (tid, club_id)))
+    if not r:
+        return None
+    d = dict(r)
+    hard = {}
+    if kind == 'pitch':
+        hard = {'营位类型': d.get('pitch_type') or '营位', '可住人数': f"{int(d.get('capacity') or 0)} 人",
+                '平日价': f"¥{round(float(d.get('base_price') or 0),2)}",
+                '计价单位': d.get('unit_label') or ('/晚' if d.get('is_overnight') else '/天')}
+    elif kind == 'rental':
+        hard = {'日租金': f"¥{round(float(d.get('daily_price') or 0),2)}",
+                '押金': f"¥{round(float(d.get('deposit') or 0),2)}",
+                '可租数量': f"{int(d.get('available_qty') or 0)} 件",
+                '计价单位': d.get('unit_label') or '/天'}
+    elif kind == 'store':
+        hard = {'售价': f"¥{round(float(d.get('price') or 0),2)}",
+                '库存': f"{int(d.get('stock') or 0)} 件", '计价单位': d.get('unit_label') or '/件'}
+    return {'name': d.get('name') or '', 'hardSpecs': hard,
+            'facilities': _camp_arr(d.get('facilities_json'))}
+
+
+async def _run_camp_detail_job(job_id: str, club_id: int, kind: str, tid: int,
+                               source_text: str, media_paths: list, saved_paths: list):
+    from document_parser import parse_sources
+    try:
+        with conn() as c:
+            c.execute('UPDATE camp_detail_jobs SET status="running" WHERE id=?', (job_id,))
+        # 老板上传的文件（PDF / Word / 图片…）走活动详情同一条资料解析链，
+        # 文本并入那一个文本框，图片并入视觉素材，成本数据由 cost_guard 在解析期剔除。
+        extra_text, extra_images = '', []
+        if saved_paths:
+            src = parse_sources(saved_paths, source_text, STATIC)
+            extra_text = str(src.get('text') or '')
+            extra_images = [str(m.get('path') or '') for m in (src.get('images') or []) if m.get('path')]
+        with conn() as c:
+            base = _camp_ai_base(c, club_id, kind, tid) or {'name': '', 'hardSpecs': {}, 'facilities': []}
+        result, usage = await _camp_ai_detail(
+            club_id=club_id, target_kind=kind, base=base,
+            source_text=(source_text + '\n\n' + extra_text).strip(),
+            media_paths=media_paths + extra_images)
+        try:
+            charge_credits(club_id, 'detail', getattr(usage, 'usage_id', None))
+        except Exception:
+            pass
+        with conn() as c:
+            c.execute('''UPDATE camp_detail_jobs SET status="done",result_json=?,
+                         finished_at=CURRENT_TIMESTAMP WHERE id=?''', (jdump(result), job_id))
+    except Exception as e:
+        with conn() as c:
+            c.execute('''UPDATE camp_detail_jobs SET status="failed",error=?,
+                         finished_at=CURRENT_TIMESTAMP WHERE id=?''', (str(e)[:300], job_id))
+
+
+@app.post('/api/club/{club_id}/camp-ai/generate')
+async def camp_ai_generate(club_id: int, background_tasks: BackgroundTasks,
+                           target_kind: str = Form(...), target_id: int = Form(0),
+                           prompt: str = Form(''), files: list[UploadFile] = File(default=[])):
+    """一个文本框 + 已上传照片 + 可选资料文件 → 异步生成结构化图文详情。"""
+    from document_parser import save_uploads
+    club_or_404(club_id)
+    if target_kind not in _CAMP_TARGET_TABLE:
+        raise HTTPException(400, '对象类型不存在')
+    ensure_credits(club_id, 'detail')
+    with conn() as c:
+        running = c.execute('''SELECT COUNT(*) FROM camp_detail_jobs
+                               WHERE club_id=? AND status IN ("queued","running")''', (club_id,)).fetchone()[0]
+        if running:
+            raise HTTPException(409, '已有一次 AI 生成正在进行中，请等它完成再提交新的')
+        assets = rows(c.execute('''SELECT * FROM camp_media_assets
+                                   WHERE club_id=? AND target_kind=? AND target_id=? ORDER BY sort_no,id''',
+                                (club_id, target_kind, target_id)))
+    media_paths = [str(UPLOAD / str(club_id) / 'camp' / str(a['url']).rsplit('/', 1)[-1]) for a in assets]
+    media_paths = [p for p in media_paths if Path(p).is_file()]
+    saved = []
+    if files:
+        batch = UPLOAD / str(club_id) / 'camp_src' / uuid.uuid4().hex
+        saved = [str(p) for p in save_uploads(files, batch, max_total_bytes=20 * 1024 * 1024 if IS_PROD else None)]
+    if not str(prompt or '').strip() and not media_paths and not saved:
+        raise HTTPException(400, '先上传照片、资料文件，或在文本框里写几句说明')
+    job_id = 'campai_' + uuid.uuid4().hex[:16]
+    with conn() as c:
+        c.execute('''INSERT INTO camp_detail_jobs(id,club_id,target_kind,target_id,status,
+                       source_text,media_json) VALUES(?,?,?,?,"queued",?,?)''',
+                  (job_id, club_id, target_kind, target_id, str(prompt or '')[:6000], jdump(media_paths + saved)))
+    background_tasks.add_task(_run_camp_detail_job, job_id, club_id, target_kind, target_id,
+                              str(prompt or '')[:6000], media_paths, saved)
+    return {'ok': True, 'jobId': job_id, 'status': 'queued', 'mediaCount': len(media_paths)}
+
+
+@app.get('/api/club/{club_id}/camp-ai/jobs/{job_id}')
+def camp_ai_job_status(club_id: int, job_id: str):
+    with conn() as c:
+        j = row(c.execute('SELECT * FROM camp_detail_jobs WHERE id=? AND club_id=?', (job_id, club_id)))
+        if not j:
+            raise HTTPException(404, '生成任务不存在')
+        return {'ok': True, 'jobId': job_id, 'status': j['status'],
+                'result': jload(j['result_json'], None) if j['status'] == 'done' else None,
+                'error': j['error'] or ''}
+
+
+@app.post('/api/club/{club_id}/camp-ai/apply')
+def camp_ai_apply(club_id: int, payload: dict = Body(...)):
+    """把生成结果写回对象：一个 AI 结果同时填齐规格 / 设施 / 须知 / 简介 / 图文详情。"""
+    p = payload or {}
+    kind = str(p.get('targetKind') or '')
+    tid = int(p.get('targetId') or 0)
+    detail = p.get('detail') if isinstance(p.get('detail'), dict) else None
+    if kind not in _CAMP_TARGET_TABLE:
+        raise HTTPException(400, '对象类型不存在')
+    if detail is None:
+        jid = str(p.get('jobId') or '')
+        with conn() as c:
+            j = row(c.execute('SELECT * FROM camp_detail_jobs WHERE id=? AND club_id=?', (jid, club_id)))
+        if not j or j['status'] != 'done':
+            raise HTTPException(409, '生成结果尚未就绪')
+        detail = jload(j['result_json'], {}) or {}
+    specs = [{'label': str(s.get('label') or ''), 'value': str(s.get('value') or '')}
+             for s in (detail.get('specs') or []) if isinstance(s, dict)]
+    facilities = [str(x) for x in (detail.get('facilities') or [])]
+    policies = [{'label': str(s.get('label') or ''), 'text': str(s.get('text') or '')}
+                for s in (detail.get('policies') or []) if isinstance(s, dict)]
+    tbl = _CAMP_TARGET_TABLE[kind]
+    with conn() as c:
+        if not row(c.execute(f'SELECT 1 FROM {tbl} WHERE id=? AND club_id=?', (tid, club_id))):
+            raise HTTPException(404, '对象不存在')
+        if kind == 'profile':
+            c.execute('''UPDATE camp_profiles SET intro_text=?,facilities_json=?,rules_json=?,
+                         ai_detail_json=? WHERE id=? AND club_id=?''',
+                      (str(detail.get('description') or ''), jdump(facilities), jdump(policies),
+                       jdump(detail), tid, club_id))
+        else:
+            c.execute(f'''UPDATE {tbl} SET subtitle=?,description=?,detail_text=?,specs_json=?,
+                          facilities_json=?,policies_json=?,ai_detail_json=? WHERE id=? AND club_id=?''',
+                      (str(detail.get('subtitle') or '')[:80], str(detail.get('description') or ''),
+                       jdump(detail.get('sections') or []), jdump(specs), jdump(facilities),
+                       jdump(policies), jdump(detail), tid, club_id))
+        return {'ok': True, 'targetKind': kind, 'targetId': tid,
+                'specs': len(specs), 'facilities': len(facilities), 'policies': len(policies)}
