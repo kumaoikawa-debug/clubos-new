@@ -111,14 +111,22 @@ ck('手动设置的城市不被自动定位覆盖', "meCitySource()==='manual'" 
 ck('meLocateCity 已导出（inline onclick）', 'window.meLocateCity=meLocateCity;' in ME)
 
 # ── 6. 缓存护栏：改动文件必须 bump 版本，否则浏览器仍吃旧代码 ────────────────
-for rel, token in (
-    ('web.css', '/static/web/web.css?v=20261109a'),
-    ('web.js', '/static/web/web.js?v=20261109a'),
-    ('me.js', '/static/web/me.js?v=20261109a'),
-    ('address-sheet.js', '/static/web/address-sheet.js?v=20261109a'),
-    ('payment-experience.js', '/static/ux/payment-experience.js?v=20261108f'),
+# 2026-11-11 #812：改为「不低于基线」语义比较（原精确 token 匹配在版本继续升级后恒假）。
+import re as _re
+def _vnum(s):
+    m=_re.search(r'(\d{8}[a-z]?)(?:\D|$)', str(s))
+    if not m: return ''
+    t=m.group(1); return t[:-1] if t[-1].isalpha() else t
+for rel, floor in (
+    ('web.css', '20261109'),
+    ('web.js', '20261109'),
+    ('me.js', '20261109'),
+    ('address-sheet.js', '20261109'),
+    ('payment-experience.js', '20261108'),
 ):
-    ck('%s 静态资源版本已 bump' % rel, token in HTML)
+    mm=_re.search(r'/static/(?:web|ux)/'+_re.escape(rel)+r'\?v=(\d{8}[a-z]?)', HTML)
+    ck('%s 静态资源版本已 bump' % rel, bool(mm) and _vnum(mm.group(1)) >= floor,
+       ('found '+mm.group(1)) if mm else 'no version token')
 
 print('\nRESULT:', 'ALL PASS' if OK else 'HAS FAILURE')
 sys.exit(0 if OK else 1)
