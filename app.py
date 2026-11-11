@@ -10990,7 +10990,9 @@ def _camp_profile_out(r):
     foc=_camp_focal_list(r.get('media_focal_json'),len(gal))
     ai=jload(r.get('ai_detail_json'), None)
     ai=ai if isinstance(ai,dict) else {}
-    short=str(r.get('intro_text') or ai.get('subtitle') or '').strip().replace('\n',' ')[:40]
+    # #814 修正：slogan 只能是真正的短 tagline（来自 AI 短卖点），
+    # 绝不能再拿长 intro_text 截断后塞进头图——长介绍统一走 camp-info 独立页。
+    short=str(ai.get('subtitle') or '').strip().replace('\n',' ')[:40]
     return {'id':r['id'],'clubId':r['club_id'],'name':r['name'],'introText':r.get('intro_text'),
             'subtitle':str(ai.get('subtitle') or '')[:60],'slogan':short,
             'aiDetail':ai or None,'detailAvailable':bool(ai.get('sections')),

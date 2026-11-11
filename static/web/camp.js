@@ -520,7 +520,9 @@ function _detailPolicies(d){
 }
 /* ── #814 图文详情：资料图统一媒体池 + 可复用版式模板 ──────────────────────── */
 function _shortSlogan(c){
-  const s=String((c&&(c.slogan||c.subtitle||c.introText))||'选一处营位，把日子过成山野的样子')
+  // #814 修正：头图只显示真正的短 tagline（slogan/subtitle），
+  // 绝不再兜底长 introText——长介绍统一在 camp-info 独立页。
+  const s=String((c&&(c.slogan||c.subtitle))||'选一处营位，把日子过成山野的样子')
     .replace(/\s+/g,' ').trim();
   return s.length>30?s.slice(0,30)+'…':s;
 }
