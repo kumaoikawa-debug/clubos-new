@@ -11823,6 +11823,15 @@ def club_camp_order_list(club_id:int,status:str='',limit:int=100):
         return {'ok':True,'orders':[_camp_order_out(c,o) for o in
                 rows(c.execute(sql+' ORDER BY id DESC LIMIT ?',args+[max(1,min(300,int(limit)))]))]}
 
+@app.get('/api/club/{club_id}/camp-orders/{order_id}')
+def club_camp_order_detail(club_id:int,order_id:int):
+    # #808：订单详情抽屉数据源（顾客信息 / 明细 / 押金 / 履约时间线），仅后台可见。
+    club_or_404(club_id)
+    with conn() as c:
+        o=row(c.execute('SELECT * FROM camp_orders WHERE id=? AND club_id=?',(order_id,club_id)))
+        if not o: raise HTTPException(404,'营地订单不存在')
+        return {'ok':True,'order':_camp_order_out(c,o)}
+
 @app.post('/api/public/camp-orders/{order_id}/pay')
 def public_camp_order_pay(order_id:int,payload:dict=Body(default={})):
     # 与既有 camp-checkouts/confirm 同口径：生产环境必须由已验证的支付渠道回调触发。
@@ -11882,16 +11891,22 @@ def club_camp_order_checkin(club_id:int,order_id:int,payload:dict=Body(default={
     with conn() as c:
         o=row(c.execute('SELECT * FROM camp_orders WHERE id=? AND club_id=?',(order_id,club_id)))
         if not o: raise HTTPException(404,'营地订单不存在')
-        if o['status']=='checked_in': return {'ok':True,'orderId':order_id,'status':'checked_in','idempotent':True}
+        if o['status']=='checked_in': return {'ok':True,'orderId':order_id,'status':'checked_in',
+                                              'depositHeld':float(o['deposit_held'] or o['deposit_amount'] or 0),
+                                              'idempotent':True}
         if o['status']=='completed': raise HTTPException(409,'订单已完成退房，不能重复入住')
         if o['status']!='paid': raise HTTPException(409,'仅「已支付」订单可办理入住')
         note=str((payload or {}).get('note') or '')
+        # #808：押金可手动调整（默认取订单押金）；退房扣减与退还一律以实收押金 deposit_held 为基数。
+        dep_req=(payload or {}).get('depositHeld')
+        held=round(float(dep_req),2) if dep_req is not None and float(dep_req or 0)>0 \
+            else round(float(o['deposit_amount'] or 0),2)
         c.execute('''UPDATE camp_orders SET status="checked_in",checked_in_at=CURRENT_TIMESTAMP,
-                     deposit_held=deposit_amount,checkin_note=? WHERE id=?''',(note,order_id))
+                     deposit_held=?,checkin_note=? WHERE id=?''',(held,note,order_id))
         c.execute('''UPDATE camp_pitch_bookings SET status="checked_in"
                      WHERE club_id=? AND camp_order_id=? AND status="paid"''',(club_id,order_id))
         return {'ok':True,'orderId':order_id,'status':'checked_in',
-                'depositHeld':float(o['deposit_amount'] or 0),'checkinNote':note}
+                'depositHeld':held,'checkinNote':note}
 
 @app.patch('/api/club/{club_id}/camp-orders/{order_id}/checkout')
 def club_camp_order_checkout(club_id:int,order_id:int,payload:dict=Body(default={})):
@@ -11902,9 +11917,9 @@ def club_camp_order_checkout(club_id:int,order_id:int,payload:dict=Body(default=
         if o['status']=='completed': return {'ok':True,'orderId':order_id,'status':'completed','idempotent':True}
         if o['status']!='checked_in': raise HTTPException(409,'仅「已入住」订单可办理退房')
         note=str((payload or {}).get('note') or '')
-        # 押金全额退还（默认）；forfeit 仅在显式传入小于押金时记扣减。
-        dep=float(o['deposit_amount'] or 0)
-        forfeit=min(dep,max(0.0,float((payload or {}).get('depositForfeit') or 0)))
+        # #808：押金基数=实收押金 deposit_held（入住时可手动调整）；forfeit 仅在显式传入小于押金时记扣减。
+        dep=float(o['deposit_held'] or o['deposit_amount'] or 0)
+        forfeit=round(min(dep,max(0.0,float((payload or {}).get('depositForfeit') or 0))),2)
         refunded=round(dep-forfeit,2); final=round(float(o['total'] or 0),2)
         c.execute('''UPDATE camp_orders SET status="completed",checked_out_at=CURRENT_TIMESTAMP,settled_at=CURRENT_TIMESTAMP,
                      deposit_refunded=?,deposit_forfeit=?,final_amount=?,checkout_note=? WHERE id=?''',

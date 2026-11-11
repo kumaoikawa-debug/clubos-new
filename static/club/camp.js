@@ -319,21 +319,25 @@ window.openPitchDay=async function(pitchId,day,status){
     }catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
   };
 };
-/* #800：已订格子点击 → 查看预订人姓名 / 电话 / 订单详情，并可直接走两步履约 */
+/* #800：已订格子点击 → 查看预订详情并可直接走两步履约
+   #808 修复「查无此日预订」：不再依赖单独日期边界接口（服务端 check_in<=date<check_out 过滤与房态带口径不一致会漏单），
+   改为在已加载的 CA_BOOKINGS（当前营地全量预订）里客户端匹配。 */
+function _findPitchBooking(pitchId,day){
+  const pid=Number(pitchId),dead=['cancelled','expired'];
+  return (CA_BOOKINGS||[]).find(x=>Number(x.pitch_id||x.pitchId)===pid
+    && !dead.includes(String(x.status||''))
+    && String(x.check_in||'')<=String(day) && String(day)<String(x.check_out||''))||null;
+}
 async function _openPitchBooking(pitchId,day){
-  let b=null;
-  try{const r=await api(`/api/club/${CLUB}/camp-pitch-bookings?pitch_id=${pitchId}&date=${day}`,{cache:'no-store'});
-    b=(r&&r.bookings&&r.bookings[0])||null;}catch(e){}
+  let b=_findPitchBooking(pitchId,day);
+  if(!b){ await _refreshChartData().catch(()=>{}); b=_findPitchBooking(pitchId,day); }
   if(!b){ const ov=uxDialog({title:'房态预订',desc:`营位 #${pitchId} · ${day}`,
       body:`<div class="ca-empty"><b>查无此日预订</b>可能已被取消或数据未同步。</div>`,
       foot:`<button class="btn" type="button" data-ok>知道了</button>`});
     ov.querySelector('[data-ok]').onclick=()=>ov.uxClose(); return; }
-  const oid=b.camp_order_id||b.orderId;
-  const acts = b.status==='paid'
-    ? `<button class="ca-btn primary sm" type="button" onclick="caCampCheckin(${oid});this.closest('.ux-overlay').uxClose()">确认入住 · 登记押金</button>`
-    : b.status==='checked_in'
-    ? `<button class="ca-btn primary sm" type="button" onclick="caCampCheckout(${oid});this.closest('.ux-overlay').uxClose()">办理退房 · 退押金结算</button>`
-    : `<span class="ca-item__dep">状态：${esc(CA_ORDER_ST[b.status]||b.status||'')}</span>`;
+  const oid=Number(b.camp_order_id||b.orderId||0);
+  if(oid) return caOpenOrderDetail(oid);
+  // 无关联订单的历史数据兜底：保留轻量信息窗
   const ov=uxDialog({title:'房态预订详情',desc:`营位 #${pitchId} · ${day}`,
     body:`<div class="ca"><div class="ca-form">
       <div class="ca-bk"><div class="ca-bk__row"><span>预订人</span><b>${esc(b.guest_name||'—')}</b></div>
@@ -343,7 +347,7 @@ async function _openPitchBooking(pitchId,day){
         <div class="ca-bk__row"><span>合计</span><b>¥${_money(b.total||0)}${Number(b.deposit_amount||b.deposit||0)?'（押金 ¥'+_money(b.deposit_amount||b.deposit||0)+'）':''}</b></div>
         <div class="ca-bk__row"><span>入住 → 离营</span><b>${esc(b.check_in||'')} → ${esc(b.check_out||'')}</b></div></div>
     </div></div>`,
-    foot:`<button class="btn ghost" type="button" data-cancel>关闭</button>${acts}`});
+    foot:`<button class="btn ghost" type="button" data-cancel>关闭</button>`});
   ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
 };
 
@@ -703,11 +707,12 @@ function _orderMatch(o){
 }
 function _orderActions(o){
   const st=o.status||'';
-  if(st==='paid')return `<button class="ca-btn primary sm" type="button" onclick="caCampCheckin(${o.id})">确认入住 · 登记押金</button>`;
-  if(st==='checked_in')return `<button class="ca-btn primary sm" type="button" onclick="caCampCheckout(${o.id})">办理退房 · 退押金结算</button>`+
+  const det=`<button class="ca-btn ghost sm" type="button" onclick="caOpenOrderDetail(${o.id})">详情</button>`;
+  if(st==='paid')return det+`<button class="ca-btn primary sm" type="button" onclick="caCampCheckin(${o.id})">确认入住 · 登记押金</button>`;
+  if(st==='checked_in')return det+`<button class="ca-btn primary sm" type="button" onclick="caCampCheckout(${o.id})">办理退房 · 退押金结算</button>`+
     (Number(o.depositHeld||o.deposit_held||0)?`<span class="ca-item__dep">押金 ¥${_money(o.depositHeld||o.deposit_held)} 已登记</span>`:'');
-  if(st==='completed')return `<span class="ca-item__dep">押金已退 ¥${_money(o.depositRefunded||o.deposit_refunded||0)}</span>`;
-  return '';
+  if(st==='completed')return det+`<span class="ca-item__dep">押金已退 ¥${_money(o.depositRefunded||o.deposit_refunded||0)}${Number(o.depositForfeit||o.deposit_forfeit||0)?'（扣减 ¥'+_money(o.depositForfeit||o.deposit_forfeit)+'）':''}</span>`;
+  return det;
 }
 function caOrderRows(){
   const rows=CAMP_ORDERS.filter(_orderMatch).map(o=>{
@@ -742,17 +747,114 @@ async function loadCampOrders(){
 }
 window.caSetOrderCat=function(k){CA_ORDER_CAT_CUR=k;const b=$('#caList');if(b&&CA_ROWS_FN)b.innerHTML=CA_ROWS_FN();
   document.querySelectorAll('.ca-chips .ca-chip').forEach(c=>c.classList.toggle('on',c.textContent===({all:'全部',stay:'营位',rental:'租赁',store:'其它销售'})[k]));};
+/* #808：酒店化订单详情抽屉 + 入住（押金可调）/ 退房（损坏扣减）对话式履约 */
+async function _campOrderFetch(id){
+  try{const d=await api(`/api/club/${CLUB}/camp-orders/${id}`,{cache:'no-store'});return (d&&d.order)||null;}
+  catch(e){showAlert({title:'读取订单失败',message:e.message||'请重试'});return null;}
+}
+async function _campAfterFulfil(){
+  try{await campTab(CAMP_TAB);}catch(e){}
+}
+window.caOpenOrderDetail=async function(id){
+  const o=await _campOrderFetch(id);if(!o)return;
+  const st=o.status||'';
+  const sec=(t,inner)=>`<div style="margin-top:14px"><div style="font-size:12px;color:#8a9a90;margin-bottom:6px">${t}</div>${inner}</div>`;
+  const row=(k,v)=>`<div class="ca-bk__row"><span>${k}</span><b>${v}</b></div>`;
+  const KIND_CN={stay:'营位',rental:'租赁',store:'小站'};
+  const itemsHtml=(o.items||[]).map(it=>`<div class="ca-bk__row"><span>${esc((KIND_CN[it.kind]||it.kind)+' · '+(it.title||''))}
+      <small style="display:block;color:#8a9a90">${esc(it.spec||'')}${it.checkIn?` ${esc(it.checkIn)} → ${esc(it.checkOut||it.checkIn)}${it.isDayUse?'（日间）':''}`:''}</small></span>
+      <b>¥${_money(it.subtotal)}</b></div>`).join('');
+  const payHtml=row('商品合计',`¥${_money(o.goodsAmount)}`)
+    +(Number(o.memberDiscount)?row('会员优惠',`− ¥${_money(o.memberDiscount)}`):'')
+    +(Number(o.clubPointDiscount)?row('积分抵扣',`− ¥${_money(o.clubPointDiscount)}`):'')
+    +(Number(o.gearPointDiscount)?row('装备积分',`− ¥${_money(o.gearPointDiscount)}`):'')
+    +(Number(o.voucherDiscount)?row('优惠券',`− ¥${_money(o.voucherDiscount)}`):'')
+    +row('实付合计',`<b style="color:#1d7a4f">¥${_money(o.total)}</b>`)
+    +(Number(o.pointsEarned)?row('送积分',`${Number(o.pointsEarned)} 分`):'');
+  let depHtml;
+  if(st==='paid')depHtml=row('押金（入住时登记，可现场调整）',`¥${_money(o.depositAmount)}`);
+  else if(st==='checked_in')depHtml=row('押金已登记',`¥${_money(o.depositHeld)}`);
+  else if(st==='completed')depHtml=row('押金结算',`扣减 ¥${_money(o.depositForfeit)} · 退还 ¥${_money(o.depositRefunded)}`);
+  else depHtml=row('押金',`¥${_money(o.depositAmount)}`);
+  const logHtml=row('下单',esc(o.createdAt||'—'))
+    +(o.paidAt?row('支付',esc(o.paidAt)):'')
+    +(o.checkedInAt?row('入住',esc(o.checkedInAt)):'')
+    +(o.checkedOutAt?row('退房',esc(o.checkedOutAt)):'')
+    +(o.checkinNote?row('入住备注',esc(o.checkinNote)):'')
+    +(o.checkoutNote?row('退房备注',esc(o.checkoutNote)):'');
+  const act= st==='paid'
+    ? `<button class="ca-btn primary sm" type="button" onclick="this.closest('.ux-overlay').uxClose();caCampCheckin(${o.id})">确认入住 · 登记押金</button>`
+    : st==='checked_in'
+    ? `<button class="ca-btn primary sm" type="button" onclick="this.closest('.ux-overlay').uxClose();caCampCheckout(${o.id})">办理退房 · 退押金结算</button>`:'';
+  const ov=uxDialog({title:'营地订单详情',desc:`${esc(o.orderNo||'')} · ${esc(CA_ORDER_ST[st]||st)}`,
+    body:`<div class="ca">
+      ${sec('顾客信息',row('姓名',esc(o.guestName||'—'))+row('电话',esc(o.guestPhone||'—'))+row('订单号',esc(o.orderNo||'—')))}
+      ${sec('预订明细',(o.items||[]).length?itemsHtml:'<div class="ca-card__s">无明细</div>')}
+      ${sec('费用',payHtml)}
+      ${sec('押金',depHtml)}
+      ${sec('履约记录',logHtml)}
+    </div>`,
+    foot:`<button class="btn ghost" type="button" data-cancel>关闭</button>${act}`});
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+};
 window.caCampCheckin=async function(id){
-  const ok=await showConfirm({title:'确认入住',message:'将订单状态置为「已入住」并登记押金（押金金额取自订单），确定继续？'});if(!ok)return;
-  try{const r=await api(`/api/club/${CLUB}/camp-orders/${id}/checkin`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:'{}'});
-    toast(`已确认入住 · 押金 ¥${_money(r.depositHeld||0)} 已登记`);await loadCampOrders();}
-  catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
+  const o=await _campOrderFetch(id);if(!o)return;
+  if(o.status!=='paid'){showAlert({title:'无法入住',message:'仅「已支付」订单可办理入住'});return;}
+  const ov=uxDialog({title:'确认入住 · 登记押金',desc:`${esc(o.orderNo||'')} · ${esc(o.guestName||'')}`,
+    body:`<div class="ca"><div class="ca-form">
+      <div class="ca-bk"><div class="ca-bk__row"><span>订单押金</span><b>¥${_money(o.depositAmount)}</b></div></div>
+      <label class="ca-field"><span>实收押金（元，可按现场情况调整）</span>
+        <input id="f_dep" type="number" min="0" step="0.01" value="${Number(o.depositAmount||0)}" placeholder="0 表示无押金"></label>
+      <label class="ca-field"><span>备注（可选）</span><input id="f_note" type="text" placeholder="房号 / 特殊事项"></label>
+      <div class="ca-form__hint">押金登记后，退房时以该金额为基数退还；如有营位损坏，可在退房时扣减。</div>
+    </div></div>`,
+    foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>确认入住</button>`});
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+  ov.querySelector('[data-ok]').onclick=async()=>{
+    const dep=Math.max(0,Number(ov.querySelector('#f_dep').value||0));
+    const note=String(ov.querySelector('#f_note').value||'').trim();
+    try{
+      const r=await api(`/api/club/${CLUB}/camp-orders/${id}/checkin`,{method:'PATCH',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({depositHeld:dep,note})});
+      ov.uxClose();toast(`已确认入住 · 押金 ¥${_money(r.depositHeld||0)} 已登记`);
+      await _campAfterFulfil();
+    }catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
+  };
+};
+window.caDepPreview=function(dep,v){
+  const f=Math.max(0,Math.min(dep,Number(v||0)));
+  const el=$('#f_refv');if(el)el.textContent='¥'+_money(dep-f);
 };
 window.caCampCheckout=async function(id){
-  const ok=await showConfirm({title:'办理退房',message:'将订单状态置为「已完成」，押金全额退还并生成最终结算金额，确定继续？',danger:true});if(!ok)return;
-  try{const r=await api(`/api/club/${CLUB}/camp-orders/${id}/checkout`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:'{}'});
-    toast(`已退房 · 押金退还 ¥${_money(r.depositRefunded||0)} · 合计 ¥${_money(r.finalAmount||0)}`);await loadCampOrders();}
-  catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
+  const o=await _campOrderFetch(id);if(!o)return;
+  if(o.status!=='checked_in'){showAlert({title:'无法退房',message:'仅「已入住」订单可办理退房'});return;}
+  const dep=Number(o.depositHeld||o.depositAmount||0);
+  const ov=uxDialog({title:'办理退房 · 退押金结算',desc:`${esc(o.orderNo||'')} · ${esc(o.guestName||'')}`,
+    body:`<div class="ca"><div class="ca-form">
+      <div class="ca-bk"><div class="ca-bk__row"><span>实收押金</span><b>¥${_money(dep)}</b></div></div>
+      <label class="ca-field" style="margin-top:8px"><span>损坏 / 违规扣减（元，无损坏填 0）</span>
+        <input id="f_forf" type="number" min="0" max="${dep}" step="0.01" value="0" oninput="caDepPreview(${dep},this.value)"></label>
+      <div class="ca-bk" style="margin-top:8px">
+        <div class="ca-bk__row"><span>预计退还押金</span><b id="f_refv">¥${_money(dep)}</b></div>
+        <div class="ca-bk__row"><span>订单实付（不随押金变化）</span><b>¥${_money(o.total)}</b></div>
+      </div>
+      <label class="ca-field" style="margin-top:8px"><span>退房备注（可选，如损坏说明）</span><input id="f_note" type="text" placeholder="损坏情况 / 处理说明"></label>
+      <div class="ca-form__hint">例：预交押金 ¥400，损坏扣减 ¥200，则退还顾客 ¥200。订单金额不参与押金抵扣。</div>
+    </div></div>`,
+    foot:`<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>办理退房</button>`});
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+  ov.querySelector('[data-ok]').onclick=async()=>{
+    const forf=Math.max(0,Math.min(dep,Number(ov.querySelector('#f_forf').value||0)));
+    const note=String(ov.querySelector('#f_note').value||'').trim();
+    const okc=await showConfirm({title:'办理退房',message:`押金 ¥${_money(dep)}：扣减 ¥${_money(forf)}，退还 ¥${_money(dep-forf)}。确定完成退房？`,danger:forf>0});
+    if(!okc)return;
+    try{
+      const r=await api(`/api/club/${CLUB}/camp-orders/${id}/checkout`,{method:'PATCH',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({depositForfeit:forf,note})});
+      ov.uxClose();toast(`已退房 · 扣减 ¥${_money(r.depositForfeit||0)} · 退还 ¥${_money(r.depositRefunded||0)}`);
+      await _campAfterFulfil();
+    }catch(e){showAlert({title:'操作失败',message:e.message||'请重试'})}
+  };
 };
 window.caOrderSearch=v=>caSearch(v);
 
