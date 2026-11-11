@@ -70,6 +70,21 @@ body{background:var(--bg);font-size:14px}a{color:var(--brand)}:focus-visible{out
 .ux-chip{font-size:12px;font-weight:700;padding:6px 12px;border-radius:999px;border:1px solid #dcebdc;background:#eef5ec;color:#2f6b48;cursor:pointer;transition:background .15s,border-color .15s,color .15s}
 .ux-chip:hover{border-color:#8fbd9a}
 .ux-chip.active{background:#204a35;border-color:#204a35;color:#fff}
+/* ===== #830 后台「下拉选择」改直接点选（uxChoiceHtml 生成的控件）=====
+   形态对齐用户给的目标样式：圆点 + 文字，全部选项平铺可见，点一下就选中；
+   选中 = 绿色实心圆（中心一点白）+ 绿色文字，未选中 = 灰边空心圆 + 深色文字。 */
+.ux-choice{display:flex;flex-direction:column;gap:9px;align-items:flex-start}
+.ux-choice--row{flex-direction:row;flex-wrap:wrap;gap:8px 22px;align-items:center}
+.ux-choice__opt{display:inline-flex;align-items:center;gap:9px;background:none;border:0;padding:1px 0;font:inherit;font-size:13px;line-height:1.5;color:var(--text);cursor:pointer;text-align:left}
+.ux-choice__opt:hover .ux-choice__dot{border-color:#12a150}
+.ux-choice__dot{width:16px;height:16px;flex:0 0 16px;border-radius:50%;border:1.5px solid #c4cec6;background:#fff;position:relative;transition:border-color .15s,background .15s}
+.ux-choice__opt.on .ux-choice__dot{border-color:#12a150;background:#12a150}
+.ux-choice__opt.on .ux-choice__dot::after{content:'';position:absolute;left:50%;top:50%;width:5px;height:5px;margin:-2.5px 0 0 -2.5px;border-radius:50%;background:#fff}
+.ux-choice__opt.on{color:#0f9d58;font-weight:650}
+.ux-choice__txt{word-break:break-word}
+.ux-choice-native{width:auto;max-width:100%;padding:9px 11px;min-height:40px;background:#fff;border:1px solid #d7e0d9;border-radius:10px;color:var(--text);outline:0}
+.ux-field__t{font-size:12px;font-weight:780;color:#455b4c}
+.ux-field__t em{color:#a84735;font-style:normal}
 .ux-dt-preview{font-size:13px;color:#3c674c;background:#f1f6ee;border:1px dashed #cfe0cf;border-radius:9px;padding:9px 12px;min-height:20px}
 .ux-dt-preview:empty{display:none}
 .ux-create-engine{font-size:12px;line-height:1.55;padding:9px 12px;border-radius:10px;background:#f1f6ee;color:#3c674c;border:1px solid #dcebdc;margin:0 0 12px}
@@ -434,6 +449,8 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .leader-inline__head b{font-size:13px;color:#224c38}
 .leader-inline__grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:9px}
 .leader-inline__grid label{display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:700;color:#6b8a7b}
+.leader-inline__grid .lf-field{display:flex;flex-direction:column;gap:4px;font-size:11px;font-weight:700;color:#6b8a7b}
+.leader-inline__grid .lf-field .lf-t{font-size:11px;font-weight:700;color:#6b8a7b}
 .leader-inline__grid input,.leader-inline__grid select,.leader-inline__grid textarea{border:1px solid var(--line);border-radius:9px;padding:7px 9px;font-size:12.5px;color:#17342c;background:#fff;font-family:inherit}
 .leader-inline__grid .full{grid-column:1/-1}
 .leader-inline__foot{display:flex;gap:8px;align-items:center;margin-top:11px;flex-wrap:wrap}

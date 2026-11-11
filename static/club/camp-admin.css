@@ -156,9 +156,23 @@
 .ca-mwb{margin-top:4px;border-top:1px dashed #e1e8e3;padding-top:14px}
 .ca-mwb__lock{font-size:12px;color:#8a9a90;padding:14px;background:#f6faf7;border-radius:10px;text-align:center}
 .ca-mwb__hint{font-size:11.5px;color:#6b7a72;margin-bottom:8px}
-.ca-mwb__bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.ca-mwb__bar{display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px}
 .ca-mwb__file{display:inline-flex}
 .ca-mwb__file.disabled{color:#aab4ad;font-size:11.5px}
+/* #831 上传区：虚线大框 + ＋ 上传图片（对齐平台商品编辑器的图片卡） */
+.ca-mwb__drop{position:relative;width:136px;height:94px;flex:0 0 136px;border:1.5px dashed #c2d5c6;border-radius:12px;background:#fbfdfb;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;cursor:pointer;transition:border-color .15s,background .15s}
+.ca-mwb__drop:hover{border-color:#1d6b48;background:#f4faf5}
+.ca-mwb__drop input[type=file]{position:absolute;inset:0;left:0;top:0;width:100%;height:100%;margin:0;padding:0;border:0;opacity:0;cursor:pointer;font-size:0}
+.ca-mwb__dropplus{font-size:23px;line-height:1;color:#9db3a5;font-weight:300}
+.ca-mwb__droptitle{font-size:12px;color:#5f7168}
+.ca-mwb__drop.is-full{cursor:default;background:#f4f6f5;border-color:#e0e7e2}
+.ca-mwb__drop.is-full .ca-mwb__dropplus{color:#b6c2bb}
+.ca-mwb__drop.is-full .ca-mwb__droptitle{color:#9aa69e}
+.ca-mwb__barinfo{flex:1 1 260px;min-width:0;display:flex;flex-direction:column;gap:9px}
+.ca-mwb__ratiowrap{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.ca-mwb__ratiolabel{font-size:11.5px;color:#6b7a72;white-space:nowrap}
+.ca-mwb__acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .ca-mwb__cnt{font-size:11.5px;color:#8a9a90;margin-left:auto}
 .ca-mwb__grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:14px}
 .ca-mwb__img{position:relative;border-radius:8px;overflow:hidden;aspect-ratio:1/1;background:#eef3f0;border:1px solid #e3eae6}
@@ -235,3 +249,55 @@
 .ca-mwb__secimgs{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}
 .ca-mwb__secimgs img{width:72px;height:56px;object-fit:cover;border-radius:7px;border:1px solid #e2eae5;background:#eef3f0}
 .ca-mwb__layout{display:inline-block;font-size:10.5px;color:#7b8b83;background:#f4f7f5;border-radius:5px;padding:2px 6px}
+
+/* ── #826 C 端分区与图标配置 ─────────────────────────────────────────────── */
+.ca-card--zones{border-left:3px solid #2f6b48}
+.ca-zones{display:flex;flex-direction:column;gap:10px}
+.ca-zone{border:1px solid #e3e8e3;border-radius:12px;padding:10px 12px;background:#fbfcfb}
+.ca-zone__hd{display:flex;align-items:center;gap:10px}
+.ca-zone__ico{flex:none;width:40px;height:40px;border-radius:12px;border:1px solid #dbe3dc;background:#fff;
+  display:grid;place-items:center;cursor:pointer;padding:0;color:#2f6b48}
+.ca-zone__ico.on{border-color:#2f6b48;box-shadow:0 0 0 2px rgba(47,107,72,.14)}
+.ca-zone__ico .zoneico{width:22px;height:22px}
+.ca-zone__ico .zoneico--emoji{font-size:19px}
+.ca-zone__main{flex:1;min-width:0;display:flex;flex-direction:column;gap:6px}
+.ca-zone__name{border:1px solid #dbe3dc;border-radius:9px;padding:8px 10px;font-size:13.5px;font-weight:600;color:#16211a;width:100%;background:#fff}
+.ca-zone__name:focus{outline:0;border-color:#2f6b48;box-shadow:0 0 0 2px rgba(47,107,72,.12)}
+.ca-zone__target{align-self:flex-start;border:1px dashed #c8d4cb;background:#fff;color:#4a5b4f;border-radius:99px;
+  padding:3px 10px;font-size:11.5px;cursor:pointer}
+.ca-zone__target.on{border-style:solid;border-color:#2f6b48;color:#2f6b48}
+.ca-zone__vis{display:flex;align-items:center;gap:5px;font-size:11.5px;color:#6b7a70;white-space:nowrap}
+.ca-zone__ops{display:flex;gap:5px;flex:none}
+.ca-mini{width:28px;height:28px;border-radius:8px;border:1px solid #dbe3dc;background:#fff;color:#4a5b4f;
+  font-size:12px;line-height:1;cursor:pointer}
+.ca-mini:hover{border-color:#2f6b48;color:#2f6b48}
+.ca-mini.del{width:auto;padding:0 8px;color:#a84735}
+.ca-mini:disabled{opacity:.4;cursor:not-allowed}
+.ca-zone__pick{margin-top:10px;padding-top:10px;border-top:1px dashed #dfe5e0}
+.ca-zone__pickt{font-size:11.5px;color:#8a9a90;margin-bottom:8px}
+.ca-zone__icons{display:grid;grid-template-columns:repeat(auto-fill,minmax(38px,1fr));gap:8px}
+.ca-zone__icon{height:38px;border-radius:10px;border:1px solid #dbe3dc;background:#fff;display:grid;place-items:center;cursor:pointer;color:#4a5b4f;padding:6px}
+.ca-zone__icon svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+.ca-zone__icon.on{border-color:#2f6b48;background:#eef5f0;color:#2f6b48}
+.ca-zone__emoji{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12px;color:#6b7a70}
+.ca-zone__emoji input{flex:1;border:1px solid #dbe3dc;border-radius:9px;padding:7px 10px;font-size:13px;background:#fff}
+.ca-zone__targets{display:flex;flex-wrap:wrap;gap:8px}
+.ca-zone__tgt{border:1px solid #dbe3dc;background:#fff;border-radius:99px;padding:6px 13px;font-size:12.5px;color:#4a5b4f;cursor:pointer}
+.ca-zone__tgt.on{border-color:#2f6b48;background:#2f6b48;color:#fff}
+.ca-zones__foot{display:flex;align-items:center;gap:12px;margin-top:14px;flex-wrap:wrap}
+.ca-zones__tip{font-size:11.5px;color:#8a9a90}
+
+/* ── #822 装备租赁：自定义计费项编辑器 ─────────────────────────────────── */
+.ca-plans{display:flex;flex-direction:column;gap:10px}
+.ca-plans__empty{font-size:12px;color:#8a9a90;padding:10px 12px;border:1px dashed #dbe3dc;border-radius:10px;background:#fbfcfb}
+.ca-plan{border:1px solid #e3e8e3;border-radius:12px;padding:10px 12px;background:#fbfcfb}
+.ca-plan__row{display:flex;align-items:center;gap:8px}
+.ca-plan__name{flex:1;min-width:0;border:1px solid #dbe3dc;border-radius:9px;padding:8px 10px;font-size:13px;background:#fff}
+.ca-plan__name:focus,.ca-plan__price:focus{outline:0;border-color:#2f6b48;box-shadow:0 0 0 2px rgba(47,107,72,.12)}
+.ca-plan__yen{font-size:12.5px;color:#6b7a70}
+.ca-plan__price{width:96px;border:1px solid #dbe3dc;border-radius:9px;padding:8px 9px;font-size:13px;background:#fff}
+.ca-plan__units{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+.ca-plan__u{border:1px solid #dbe3dc;background:#fff;border-radius:99px;padding:4px 12px;font-size:12px;color:#4a5b4f;cursor:pointer}
+.ca-plan__u.on{border-color:#2f6b48;background:#2f6b48;color:#fff}
+.ca-plans__bar{display:flex;align-items:center;gap:12px;margin-top:10px;flex-wrap:wrap}
+.ca-plans__tip{font-size:11.5px;color:#8a9a90}

@@ -206,6 +206,8 @@ def _run_compat_migrations(c):
     # 2026-11-11 营地 v3：统一商品订单 + 会员权益打通 + 商品详情增强。
     # ★ 这些补列必须排在所有写它们的 INSERT / UPDATE 之前（同文件 _run_compat_migrations 内顺序即装库顺序）。
     _ensure_column(c,'clubs','camp_benefits_json','camp_benefits_json TEXT')
+    # 2026-11-11 #826：营地分区与图标配置（后台自定义 C 端那排小图标）。
+    _ensure_column(c,'clubs','camp_zones_json','camp_zones_json TEXT')
     _ensure_column(c,'camp_pitch_bookings','camp_order_id','camp_order_id INTEGER')
     for _t in ('camp_pitches','camp_rental_items','camp_store_products'):
         for _col,_ddl in (
@@ -217,6 +219,8 @@ def _run_compat_migrations(c):
     _ensure_column(c,'camp_pitches','cover_url','cover_url TEXT')
     _ensure_column(c,'camp_pitches','description','description TEXT')
     _ensure_column(c,'camp_store_products','description','description TEXT')
+    # 2026-11-11 #822：装备租赁自定义计费项（项目 + 价格 + 时间单位）。
+    _ensure_column(c,'camp_rental_items','pricing_json','pricing_json TEXT')
     # 2026-11-11 营地 v4：素材工作台 / AI 图文详情 / 履约结算 / 券适用范围。
     # ★ 同样必须排在所有写它们的 INSERT / UPDATE 之前。
     _ensure_column(c,'member_benefits','applies_to',"applies_to TEXT NOT NULL DEFAULT 'activity'")

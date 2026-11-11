@@ -10978,13 +10978,10 @@ def patch_club_module_switches(club_id:int,payload:dict=Body(...)):
 
 def _camp_profile_out(r):
     if not r: return r
-    def _arr(k):
-        v=r.get(k)
-        if isinstance(v,str):
-            try: return json.loads(v)
-            except Exception: return []
-        return v if isinstance(v,list) else []
-    raw_gal=_arr('gallery_json')
+    # 统一用 _camp_arr 解析 JSON 列：jdump(None) 落库是字符串 'null'，
+    # json.loads('null') 得到 None —— 本地那个只判 str 的 _arr 会把 None 当数组用，
+    # 新建营地（没传 gallery/facilities/rules）直接 500。
+    raw_gal=_camp_arr(r.get('gallery_json'))
     gal=[x for x in (_camp_safe_url(u) for u in raw_gal) if x]
     cover=_camp_safe_url(r.get('cover_url')) or (gal[0] if gal else '')
     foc=_camp_focal_list(r.get('media_focal_json'),len(gal))
@@ -10998,7 +10995,7 @@ def _camp_profile_out(r):
             'aiDetail':ai or None,'detailAvailable':bool(ai.get('sections')),
             'gallery':raw_gal,'coverUrl':cover,'focalPoints':foc,
             'coverFocal':_camp_cover_focal(cover,gal,foc),
-            'facilities':_arr('facilities_json'),'rules':_arr('rules_json'),
+            'facilities':_camp_arr(r.get('facilities_json')),'rules':_camp_arr(r.get('rules_json')),
             'contactPhone':r.get('contact_phone'),'address':r.get('address'),
             'geoLat':r.get('geo_lat'),'geoLng':r.get('geo_lng'),'status':r.get('status'),
             'createdAt':r.get('created_at')}
@@ -11283,13 +11280,15 @@ def club_rental_create(club_id:int,payload:dict=Body(...)):
     with conn() as c:
         c.execute('''INSERT INTO camp_rental_items(club_id,camp_id,name,cover_url,description,daily_price,deposit,available_qty,attributes_json,status,
                      gallery_json,specs_json,facilities_json,policies_json,subtitle,detail_text,original_price,unit_label,
-                     promo_enabled,member_discount_enabled,points_enabled)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                     pricing_json,promo_enabled,member_discount_enabled,points_enabled)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (club_id,payload.get('campId',0),payload.get('name'),payload.get('coverUrl'),payload.get('description'),
                    payload.get('dailyPrice',0),payload.get('deposit',0),payload.get('availableQty',0),jdump(payload.get('attributes')),payload.get('status','active'),
                    jdump(payload.get('gallery')),jdump(payload.get('specs')),jdump(payload.get('facilities')),
                    jdump(payload.get('policies')),payload.get('subtitle'),payload.get('detailText'),
                    payload.get('originalPrice',0),payload.get('unitLabel'),
+                   # #822 自定义计费项
+                   jdump(payload.get('pricing')),
                    # v4.1 #810 产品级权益开关（默认全开）
                    int(bool(payload.get('promoEnabled',1))),int(bool(payload.get('memberDiscountEnabled',1))),
                    int(bool(payload.get('pointsEnabled',1)))))
@@ -11303,6 +11302,8 @@ def club_rental_update(club_id:int,rid:int,payload:dict=Body(...)):
         if not row(c.execute('SELECT id FROM camp_rental_items WHERE id=? AND club_id=?',(rid,club_id))): raise HTTPException(404,'rental not found')
         flds={'campId':'camp_id','name':'name','coverUrl':'cover_url','description':'description','dailyPrice':'daily_price',
               'deposit':'deposit','availableQty':'available_qty','attributes':'attributes_json','status':'status',
+              # #822 自定义计费项（项目 + 价格 + 时间单位）
+              'pricing':'pricing_json',
               # v3 商品详情增强
               'gallery':'gallery_json','specs':'specs_json','facilities':'facilities_json',
               'policies':'policies_json','subtitle':'subtitle','detailText':'detail_text',
@@ -11389,6 +11390,115 @@ def club_store_delete(club_id:int,sid:int):
     with conn() as c:
         c.execute('DELETE FROM camp_store_products WHERE id=? AND club_id=?',(sid,club_id))
     return {'ok':True}
+
+# ---- 营地分区与图标（#826：营地老板自己定义 C 端那排小图标）----------------
+# 以前 C 端营地主页顶部的分区入口是前端写死的：全部营位 / 帐篷区 / 房车区 /
+# 木屋区 / 日间营 / 装备租赁 / 营地小站 / 联系客服。老板改不了 —— 他的营地明明是
+# 「湖边露营 + 篝火区 + 淋浴区」，前端还是给他帐篷和房车。这里把它变成后台可配置项：
+#   key     分区标识（后端生成，客户端只读）
+#   name    分区显示名（老板自己写）
+#   target  分区动作：all / 营位类型(tent,rv,cabin,day) / rental / store / service
+#   icon    内置图标库 key（'' 表示用 emoji）
+#   emoji   自定义 emoji（老板最省事的自定义方式，不用上传图片）
+#   visible 是否在 C 端显示
+# 存 clubs.camp_zones_json（俱乐部级，一份配置对旗下全部营地生效）。
+CAMP_ZONE_ICONS=['all','tent','rv','cabin','day','rental','store','service','tree','water',
+                  'fire','wifi','parking','coffee','toilet','shop','mountain','sun','moon','bed','star','map']
+_CAMP_PITCH_TYPE_CN={'tent':'帐篷位','rv':'房车位','cabin':'木屋/舱房','day':'日间营位'}
+_CAMP_PITCH_TYPE_ZONE={'tent':('tent','帐篷区'),'rv':('rv','房车区'),'cabin':('cabin','木屋区'),'day':('day','日间营')}
+
+def _camp_zone_defaults(c,club_id):
+    """默认分区 = 全部营位 + 实际存在的营位类型 + 装备租赁 / 营地小站 / 联系客服。"""
+    types=[]
+    for r in rows(c.execute('SELECT DISTINCT pitch_type FROM camp_pitches WHERE club_id=? AND status="active"',(club_id,))):
+        t=str(r.get('pitch_type') or 'tent')
+        if t not in types: types.append(t)
+    zs=[{'key':'all','name':'全部营位','target':'all','icon':'all','emoji':'','visible':True}]
+    for t in types:
+        icon,label=_CAMP_PITCH_TYPE_ZONE.get(t,(t,_CAMP_PITCH_TYPE_CN.get(t,t)))
+        zs.append({'key':'t_'+t,'name':label,'target':t,'icon':icon,'emoji':'','visible':True})
+    zs+=[{'key':'rental','name':'装备租赁','target':'rental','icon':'rental','emoji':'','visible':True},
+         {'key':'store','name':'营地小站','target':'store','icon':'store','emoji':'','visible':True},
+         {'key':'service','name':'联系客服','target':'service','icon':'service','emoji':'','visible':True}]
+    for i,z in enumerate(zs): z['order']=i
+    return zs
+
+def _camp_zones_read(c,club_id):
+    """读配置 + 只补「新增的营位类型」。
+    已配置的分区完全按老板的来（含 visible=false / 已删除）；只把当前存在、
+    但配置里没有对应 target 的新营位类型补进列表，否则 C 端会出现
+    「湖边帐篷」+「帐篷区」这类重复入口，并把后面的入口挤出 slice(0,8)。"""
+    raw=row(c.execute('SELECT camp_zones_json FROM clubs WHERE id=?',(club_id,)))
+    saved=[]
+    if raw and raw.get('camp_zones_json'):
+        try:
+            v=json.loads(raw['camp_zones_json'])
+            if isinstance(v,list): saved=v
+        except Exception: saved=[]
+    defs=_camp_zone_defaults(c,club_id)
+    dm={z['key']:z for z in defs}
+    out=[];seen=set()
+    for i,z in enumerate(saved):
+        if not isinstance(z,dict): continue
+        k=str(z.get('key') or '').strip()[:32]
+        if not k or k in seen: continue
+        seen.add(k)
+        d=dm.get(k,{})
+        tgt=str(z.get('target') or d.get('target') or '').strip()[:20]
+        out.append({'key':k,
+                    'name':str(z.get('name') or d.get('name') or k)[:20],
+                    'target':tgt,
+                    'icon':str(z.get('icon') if z.get('icon') is not None else (d.get('icon') or ''))[:24],
+                    'emoji':str(z.get('emoji') or '')[:8],
+                    'visible':bool(z.get('visible',True)),
+                    'order':i})
+    # 只自动补「老板还没覆盖的新营位类型」。固定入口（all/rental/store/service）
+    # 与老板删掉/隐藏的项都不该被重新塞回来；老板常用自定义 key 配同一个营位
+    # 类型，所以按 target 去重，而不是只比 key。
+    saved_targets={str(x.get('target') or '').strip() for x in out}
+    for z in defs:
+        if not z['key'].startswith('t_'): continue
+        if z['target'] in saved_targets or z['key'] in seen: continue
+        z=dict(z); z['order']=len(out); out.append(z); seen.add(z['key'])
+        saved_targets.add(z['target'])
+    out.sort(key=lambda x:x.get('order',0))
+    return out
+
+@app.get('/api/club/{club_id}/camp-zones')
+def club_camp_zones(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return {'ok':True,'zones':_camp_zones_read(c,club_id),'iconKeys':CAMP_ZONE_ICONS}
+
+@app.patch('/api/club/{club_id}/camp-zones')
+def club_camp_zones_patch(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    zs=payload.get('zones')
+    if not isinstance(zs,list): raise HTTPException(400,'zones 必须是数组')
+    if len(zs)>20: raise HTTPException(400,'分区最多 20 个')
+    out=[];seen=set()
+    for i,z in enumerate(zs):
+        if not isinstance(z,dict): continue
+        k=str(z.get('key') or '').strip()[:32]
+        if not k or k in seen: continue
+        seen.add(k)
+        out.append({'key':k,
+                    'name':str(z.get('name') or '').strip()[:20] or k,
+                    'target':str(z.get('target') or '').strip()[:20],
+                    'icon':str(z.get('icon') or '').strip()[:24],
+                    'emoji':str(z.get('emoji') or '').strip()[:8],
+                    'visible':bool(z.get('visible',True)),
+                    'order':i})
+    with conn() as c:
+        c.execute('UPDATE clubs SET camp_zones_json=? WHERE id=?',(jdump(out),club_id))
+    return {'ok':True,'zones':out}
+
+@app.get('/api/public/clubs/{club_id}/camp-zones')
+def public_camp_zones(club_id:int):
+    """C 端只读分区配置（白名单字段，不下发任何内部数据）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        return {'ok':True,'zones':_camp_zones_read(c,club_id)}
 
 # ---- 营地活动票（camp_activity_tickets，电子票+核销）----
 @app.get('/api/club/{club_id}/tickets')
@@ -11542,6 +11652,27 @@ def _camp_arr(v):
         except Exception: return []
     return []
 
+# #822 装备租赁「租金」自定义：老板可以自己定义计费项目、价格与时间单位
+# （按小时 / 按半天 / 按天 / 按晚 / 按次 / 按件），一个装备可以配多种计费方式。
+_CAMP_RENTAL_UNITS={'hour':'小时','halfday':'半天','day':'天','night':'晚','times':'次','item':'件'}
+
+def _camp_rental_plans(r):
+    """租赁计费项列表；老数据（没配 pricing_json）回落到原来的「日租金」，行为不变。"""
+    out=[]
+    for p in _camp_arr(r.get('pricing_json')):
+        if not isinstance(p,dict): continue
+        nm=str(p.get('name') or '').strip()[:20]
+        try: pr=round(float(p.get('price') or 0),2)
+        except (TypeError,ValueError): pr=0.0
+        u=str(p.get('unit') or 'day').strip()[:12]
+        if u not in _CAMP_RENTAL_UNITS: u='day'
+        if not nm and pr<=0: continue
+        out.append({'name':nm or '租金','price':pr,'unit':u,'unitLabel':_CAMP_RENTAL_UNITS[u]})
+    if not out:
+        pr=round(float(r.get('daily_price') or 0),2)
+        out=[{'name':'租金','price':pr,'unit':'day','unitLabel':'天'}]
+    return out
+
 def _camp_goods_out(r,kind=None):
     """列表/详情统一序列化：保留全部旧 snake_case 键（旧前端不破），追加契约 §5 的 camelCase 别名。"""
     d=dict(r)
@@ -11561,6 +11692,10 @@ def _camp_goods_out(r,kind=None):
         'originalPrice':round(float(r.get('original_price') or 0),2),
         'unitLabel':r.get('unit_label') or '',
     })
+    d.pop('pricing_json',None)
+    # #822：租赁商品下发计费项（项目 + 价格 + 单位），C 端据此让顾客选「按小时 / 按天 …」
+    if kind=='rental':
+        d['pricing']=_camp_rental_plans(r)
     return d
 
 def _camp_public_quote(q):
@@ -11657,11 +11792,30 @@ def _camp_line(c,club_id,raw):
                        AND i.check_in < ? AND i.check_out > ?''',(rid,club_id,co,ci)).fetchone() or [0])[0] or 0)
         avail=max(0,int(r['available_qty'] or 0))-occupied
         if qty>avail: raise HTTPException(409,f'该装备所选日期仅剩 {avail} 件可租')
-        unit=round(float(r['daily_price'] or 0),2)
-        subtotal=round(unit*days*qty,2)
+        # #822：按老板自定义的计费项计价（项目 + 价格 + 时间单位：按小时 / 按天 / 按次…）。
+        # 没配计费项的老装备仍走原来的「日租金 × 天数 × 件数」，行为一字不变。
+        custom=bool(_camp_arr(r.get('pricing_json')))
+        plans=_camp_rental_plans(r)
+        plan=plans[0]
+        pi=raw.get('plan')
+        if pi is not None and str(pi)!='':
+            try:
+                j=int(pi)
+                if 0<=j<len(plans): plan=plans[j]
+            except (TypeError,ValueError): pass
+        unit=round(float(plan.get('price') or 0),2)
+        if raw.get('units') is not None:
+            try: units=max(1,min(720,int(raw.get('units') or 1)))
+            except (TypeError,ValueError): units=1
+        else:
+            # 按天 / 按晚 / 按半天 → 默认取天数；按小时 / 按次 → 默认 1
+            units=days if plan.get('unit') in ('day','night','halfday') else 1
+        subtotal=round(unit*units*qty,2)
         dep=round(float(r['deposit'] or 0)*qty,2)
+        plan_label=(plan.get('name') or '租金')+' · '+(plan.get('unitLabel') or '天')
         return {'kind':'rental','id':rid,'title':r['name'] or '租赁装备','coverUrl':_camp_safe_url(r.get('cover_url')),
-                'spec':(r['description'] or '')[:60],'unitLabel':'/天','unitPrice':unit,'qty':qty,
+                'spec':plan_label if custom else ((r['description'] or '')[:60]),
+                'unitLabel':'/'+(plan.get('unitLabel') or '天'),'unitPrice':unit,'qty':qty,'units':units,
                 'days':days,'subtotal':subtotal,'deposit':dep,'checkIn':ci,'checkOut':co,
                 'isDayUse':0,'campId':r['camp_id'],
                 'promoEnabled':_camp_flag(r['promo_enabled']),'memberEnabled':_camp_flag(r['member_discount_enabled']),
@@ -12075,6 +12229,11 @@ def public_camp_product_detail(club_id:int,kind:str,pid:int):
         elif kind=='rental':
             price=round(float(r['daily_price'] or 0),2); stock=max(0,int(r['available_qty'] or 0))
             daily=price; dep=round(float(r['deposit'] or 0),2); unit=d['unitLabel'] or '/天'
+            # #822：自定义计费项 —— 详情页默认展示第一项（按小时 / 按天…），由顾客自己挑
+            plans=d.get('pricing') or []
+            if plans:
+                price=round(float(plans[0].get('price') or 0),2)
+                unit='/'+(plans[0].get('unitLabel') or '天')
         else:
             price=round(float(r['price'] or 0),2); stock=max(0,int(r['stock'] or 0))
             daily=0.0; dep=0.0; unit=d['unitLabel'] or '/件'
@@ -12086,6 +12245,8 @@ def public_camp_product_detail(club_id:int,kind:str,pid:int):
                 'description':d['description'],'detailText':d['detailText'],
                 'aiDetail':jload(r.get('ai_detail_json'), None),
                 'stock':stock,'dailyPrice':daily,'deposit':dep,
+                # #822：租赁计费项（项目 + 价格 + 单位），C 端让顾客直接点选
+                'pricing':(d.get('pricing') if kind=='rental' else None),
                 'isOvernight':bool(r['is_overnight']) if kind=='pitch' else False,
                 'capacity':int(r['capacity'] or 0) if kind=='pitch' else 0,
                 'pitchType':r['pitch_type'] if kind=='pitch' else ''}

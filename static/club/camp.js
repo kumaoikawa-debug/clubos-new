@@ -40,6 +40,9 @@ function _localDate(d){const z=n=>String(n).padStart(2,'0');return d.getFullYear
 function _addDay(s,n){const d=new Date(s+'T00:00:00');d.setDate(d.getDate()+n);return _localDate(d);}
 function _today(){return _localDate(new Date());}
 function _j(s,d){try{return JSON.parse(s)}catch(e){return d||[];}}
+/* JSON 列的安全解析口：jdump(None) 落库是字符串 'null'，JSON.parse('null') 得到 null
+   （不是异常，catch 抓不到），再 .filter 就整页炸掉。统一走这里。 */
+function _jarr(s){try{const v=JSON.parse(s);return Array.isArray(v)?v:[];}catch(e){return [];}}
 function _money(n){return (Math.round((Number(n)||0)*100)/100).toFixed(2);}
 function _campName(id){const c=(CAMP_PROFILES||[]).find(x=>String(x.id)===String(id));return c?c.name:'未关联营地';}
 function _typeName(t){return {tent:'帐篷位',rv:'房车位',cabin:'木屋/舱房',day:'日间营位'}[t]||t||'营位';}
@@ -133,9 +136,11 @@ async function loadCamp(){
         <div class="ca-bar__s">营位是固定资源，按日期管理房态；过夜营位像酒店一样跨日锁定（如 11/10 → 11/11 一晚），日间营当天结束。</div></div>
       <div class="ca-bar__acts">
         <span style="font-size:11.5px;color:#8a9a90">当前营地</span>
-        <select class="ca-select" id="caCampSel" onchange="caSetCamp(this.value)" ${CAMP_PROFILES.length?'':'disabled'}>
-          ${CAMP_PROFILES.length?_campOpts(CA_CAMP_ID):'<option value="0">请先创建营地</option>'}
-        </select>
+        ${CAMP_PROFILES.length
+          ? uxChoiceHtml({id:'caCampSel',name:'caCampSel',value:CA_CAMP_ID,
+              options:(CAMP_PROFILES||[]).map(c=>({value:c.id,label:c.name||''})),row:true,
+              onchange:'caSetCamp(this.value)',cls:'ca-select'})
+          : '<span style="font-size:11.5px;color:#aab4ad">请先创建营地</span>'}
         <button class="ca-btn ghost" type="button" onclick="caReload()">↻ 刷新</button>
       </div>
     </div>
@@ -294,11 +299,10 @@ window.openPitchDay=async function(pitchId,day,status){
   if(status==='booked'){ return _openPitchBooking(pitchId,day); }
   const ov=uxDialog({title:'房态操作',desc:`营位 #${pitchId} · ${day}（当前：${status==='booked'?'已订':status==='blocked'?'已封锁':'可订'}）`,
     body:`<div class="ca"><div class="ca-form">
-      <label class="ca-field"><span>操作</span><select id="f_act">
-        <option value="blocked">封锁此日（维护 / 满员）</option>
-        <option value="available">解锁（恢复可订）</option>
-        <option value="price">仅临时改价</option>
-      </select></label>
+      <div class="ca-field"><span>操作</span>${uxChoiceHtml({id:'f_act',name:'f_act',value:'blocked',options:[
+        {value:'blocked',label:'封锁此日（维护 / 满员）'},
+        {value:'available',label:'解锁（恢复可订）'},
+        {value:'price',label:'仅临时改价'}]})}</div>
       <label class="ca-field"><span>临时价（元，留空恢复默认）</span><input id="f_price" type="number" min="0" step="0.01" placeholder="覆盖当日价"></label>
       <div class="ca-form__hint">已订格子来自真实预订，不能直接改成可订；如需释放请取消对应订单。临时改价只影响这一天，周末价 / 节假日价规则仍由营位配置决定。</div>
     </div></div>`,
@@ -375,9 +379,13 @@ function _openForm(title,desc,fields,saveFn,okLabel){
     if(f.type==='html'){return '<div class="ca-field full">'+f.html+'</div>';}
     let ctrl;
     if(f.type==='textarea')ctrl=`<textarea id="f_${f.name}" rows="${f.rows||3}" placeholder="${esc(f.placeholder||'')}">${esc(val)}</textarea>`;
-    else if(f.type==='select')ctrl=`<select id="f_${f.name}" ${f.onchange?`onchange="${f.onchange}"`:''}>${(f.options||[]).map(o=>`<option value="${esc(o.value)}" ${String(o.value)===val?'selected':''}>${esc(o.label)}</option>`).join('')}</select>`;
+    else if(f.type==='select')ctrl=uxChoiceHtml({id:'f_'+f.name,name:f.name,value:val,options:f.options||[],onchange:f.onchange||''});
     else ctrl=`<input id="f_${f.name}" type="${f.type||'text'}" value="${esc(val)}" placeholder="${esc(f.placeholder||'')}" ${f.min!=null?`min="${f.min}"`:''} ${f.step!=null?`step="${f.step}"`:''}>`;
-    return `<label class="ca-field ${f.full?'full':''}"><span>${esc(f.label)}</span>${ctrl}</label>`;
+    /* #830：选择类字段改直接点选。点选控件里第一个可聚焦元素是按钮，
+       用 <label> 包会被 label 的激活行为误触发（点标题文字 = 直接选了第一项），
+       所以这类字段的标题容器改成 div。 */
+    const tag=(f.type==='select')?'div':'label';
+    return `<${tag} class="ca-field ${f.full?'full':''}"><span>${esc(f.label)}</span>${ctrl}</${tag}>`;
   }).join('');
   const ov=uxDialog({title,desc,wide:true,
     body:`<div class="ca"><div class="ca-form">${html}</div></div>`,
@@ -397,11 +405,11 @@ function _fl(v){return (Number(v)===0)?'0':'1';}
 function _benefitFields(x){
   return [
     {name:'promoEnabled',label:'参与优惠活动（用户福利券可用）',type:'select',value:_fl(x.promo_enabled),
-      options:[{value:'1',label:'参与'},{value:'0',label:'不参与（券不可抵此商品）'}]},
+      options:[{value:'1',label:'参与'},{value:'0',label:'不参与'}]},
     {name:'memberEnabled',label:'享会员等级折扣',type:'select',value:_fl(x.member_discount_enabled),
-      options:[{value:'1',label:'享受'},{value:'0',label:'不享受（会员价不适用此商品）'}]},
+      options:[{value:'1',label:'享受'},{value:'0',label:'不享受'}]},
     {name:'pointsEnabled',label:'可用积分抵扣',type:'select',value:_fl(x.points_enabled),
-      options:[{value:'1',label:'可用'},{value:'0',label:'不可用（积分不能抵此商品）'}]}
+      options:[{value:'1',label:'可用'},{value:'0',label:'不可用'}]}
   ];
 }
 function _benefitBuild(ov){
@@ -456,7 +464,8 @@ function _mwbCaptureDraft(){
 }
 function _mwbRestoreDraft(){
   const p=document.getElementById('caMwbPrompt'); if(p)p.value=CAMP_MWB_DRAFT.prompt||'';
-  const t=document.getElementById('caMwbTpl'); if(t)t.value=CAMP_MWB_DRAFT.template||'classic';
+  /* 版式模板现在是点选控件（hidden input 承接值），改值要走 uxChoiceSet 才同步高亮。 */
+  if(document.getElementById('caMwbTpl'))uxChoiceSet('#caMwbTpl',CAMP_MWB_DRAFT.template||'classic');
   const d=document.getElementById('caMwbDocs');
   if(d&&CAMP_MWB_DRAFT.docs.length){
     try{const dt=new DataTransfer();CAMP_MWB_DRAFT.docs.forEach(f=>dt.items.add(f));d.files=dt.files;}catch(e){}
@@ -529,15 +538,27 @@ async function _campRenderMwb(kind,id){
       <button type="button" class="ca-btn ghost xs" title="后移" ${idx===arr.length-1?'disabled':''} onclick="caMwbMove(${a.id},'right')">→</button></div></div>`).join('');
   const full=(arr.length+CAMP_MWB_QUEUE.length)>=res.max;
   box.setAttribute('data-max',res.max||5);
-  const tplOpts=(CAMP_MWB_TPLS||[]).map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+  /* #831：上传区改成「虚线大框 + ＋ 上传图片 + 建议尺寸」的网格卡（对齐平台商品编辑器）；
+     比例与版式模板改直接点选（#830），不再用原生下拉。 */
+  const ratioChips=uxChoiceHtml({id:'caMwbRatio',name:'caMwbRatio',value:'4:3',
+    options:[{value:'4:3',label:'4:3'},{value:'1:1',label:'1:1'},{value:'16:9',label:'16:9'}],row:true});
+  const tplOpts=uxChoiceHtml({id:'caMwbTpl',name:'caMwbTpl',value:CAMP_MWB_DRAFT.template||'classic',
+    options:(CAMP_MWB_TPLS||[]).map(t=>({value:t.id,label:t.name})),row:true});
   box.innerHTML=`${pending?`<div class="ca-mwb__pending">新建对象也能直接选照片、手动裁剪并填写详情说明：点底部「保存基础信息」后，照片会自动上传、可用 AI 一键生成图文详情，无需二次打开。</div>`:''}
-    <div class="ca-mwb__hint">本地照片（最多 ${res.max} 张，可一次多选；支持手动拖拽裁剪 / 自动识别主体避开大片天空；首张默认封面，← → 可调顺序）</div>
     <div class="ca-mwb__bar">
-      <label class="ca-mwb__file ${full?'disabled':''}">${full?'已达上限':`<input type="file" id="caMwbFile" accept="image/*" multiple>`}</label>
-      <select id="caMwbRatio"><option value="4:3">4:3</option><option value="1:1">1:1</option><option value="16:9">16:9</option></select>
-      <button type="button" class="ca-btn sm" onclick="caMwbUpload()" ${full?'disabled':''}>选图并裁剪</button>
-      <button type="button" class="ca-btn ghost sm" onclick="caMwbUploadAuto()" ${full?'disabled':''}>快速上传（自动适配）</button>
-      <span class="ca-mwb__cnt">${arr.length+CAMP_MWB_QUEUE.length}/${res.max}</span>
+      <label class="ca-mwb__drop${full?' is-full':''}" title="点击选择本地图片，可一次多选">
+        ${full?'<span class="ca-mwb__dropplus" aria-hidden="true">✓</span><span class="ca-mwb__droptitle">已达上限</span>'
+              :'<input type="file" id="caMwbFile" accept="image/*" multiple><span class="ca-mwb__dropplus" aria-hidden="true">＋</span><span class="ca-mwb__droptitle">上传图片</span>'}
+      </label>
+      <div class="ca-mwb__barinfo">
+        <div class="ca-mwb__ratiowrap"><span class="ca-mwb__ratiolabel">裁剪比例</span>${ratioChips}</div>
+        <div class="ca-mwb__acts">
+          <button type="button" class="ca-btn sm" onclick="caMwbUpload()" ${full?'disabled':''}>上传并手动裁剪</button>
+          <button type="button" class="ca-btn ghost sm" onclick="caMwbUploadAuto()" ${full?'disabled':''}>快速上传（自动适配）</button>
+          <span class="ca-mwb__cnt">${arr.length+CAMP_MWB_QUEUE.length}/${res.max}</span>
+        </div>
+        <span class="ca-mwb__tip">ⓘ 建议尺寸：4:3 横幅（封面用 1:1），最多 ${res.max} 张，可一次多选；上传后可逐张手动裁剪，或一键自动适配避开大片天空。首张默认封面，← → 可调顺序。</span>
+      </div>
     </div>
     <div class="ca-mwb__tools">${pending?'':`<button type="button" class="ca-btn ghost sm" onclick="caMwbAutoAll()">一键自动适配全部照片</button>`}
       <span class="ca-mwb__tip">焦点会同步到 C 端头图 / 卡片 / 详情页，避免天空占满画面</span></div>
@@ -551,7 +572,7 @@ async function _campRenderMwb(kind,id){
           <input type="file" id="caMwbDocs" multiple accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,image/*" style="position:absolute;inset:0;opacity:0;cursor:pointer">
         </label>
         <span id="caMwbDocsName" class="ca-mwb__tip"></span>
-        <select id="caMwbTpl" class="ca-mwb__tpl" title="图文详情版式模板">${tplOpts}</select>
+        <span class="ca-mwb__ratiolabel">版式</span>${tplOpts}
         <button type="button" class="ca-btn" id="caMwbGen" onclick="caMwbGenerate()">AI 生成图文详情</button><span id="caMwbGenTip" class="ca-mwb__tip"></span></div>
       <div id="caMwbResult" class="ca-mwb__result"></div>
     </div>`;
@@ -695,28 +716,48 @@ window.caMwbGenerate=async function(){
   }catch(e){toast('生成失败：'+(e.message||''));}
   finally{ if(gen)gen.disabled=false; if(tip&&tip.textContent!=='完成 ✓')tip.textContent=''; }
 };
+/* 保存成功后刷新当前所在列表（营地档案 / 营位 / 租赁 / 小站 / 订单 / 权益）。 */
+function _campReloadList(){
+  const map={overview:loadOverview,pitches:loadCampPitches,profiles:loadCampProfiles,
+             rental:loadCampRental,store:loadCampStore,orders:loadCampOrders,benefits:loadCampBenefits};
+  const fn=map[CAMP_TAB];return fn?fn():null;
+}
 async function _campSaveBasic({kind,idRef,ov,apiPath,build,after}){
   ov=ov||CA_OV; if(!ov)return;
   const name=_fv(ov,'name'); if(!name){toast('请填写名称');return;}
-  const btn=document.getElementById('campFormOk'); if(btn){btn.disabled=true;btn.textContent='保存中…';}
+  const btn=ov.querySelector('[data-ok]')||document.getElementById('campFormOk');
+  if(btn){btn.disabled=true;btn.textContent='保存中…';}
+  let created=false;
   try{
     const body=build(ov);
     if(idRef.v){ await api(apiPath(idRef.v),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); }
-    else{ const created=await api(apiPath(0),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); idRef.v=(created&&created.id)?created.id:idRef.v; }
-    toast(idRef.v?'已保存':'已创建');
-    if(after) await after(idRef.v);
+    else{ const r=await api(apiPath(0),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+          idRef.v=(r&&r.id)?r.id:idRef.v; created=true; }
     // #813：新建态选好的照片在拿到真实 id 后自动上传，用户无需二次操作
     if(CAMP_MWB_QUEUE.length) await _campFlushQueue(kind,idRef.v);
-    if(btn)btn.textContent='保存修改';
+    if(after) await after(idRef.v);
+    /* #821：保存成功后自动关闭对话框并刷新列表。
+       过去只弹一句 toast 就停住 —— 用户还得自己点「×」把弹窗关掉，
+       关完才发现列表还是旧的（新建的营位根本没出现），整个流程断在半路。
+       现在保存 = 落定 + 关闭 + 列表刷新，一步走完。 */
+    ov.uxClose();
+    toast(created?'已创建':'已保存');
+    await _campReloadList();
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'});}
-  finally{ if(btn)btn.disabled=false; }
+  finally{ if(btn){btn.disabled=false;btn.textContent='保存';} }
 }
 
 /* ===================== 营地档案 ===================== */
 async function loadCampProfiles(){
   const box=$('#campPane');if(!box)return;
   await _loadCamps();
-  box.innerHTML=_listCard({title:'营地档案',desc:'一个俱乐部可建多个营地（如山顶营、湖边营），顶部下拉切换工作台营地；每个营地独立维护营位与房态。',
+  /* #826：C 端那排分区小图标以前是前端写死的，老板改不了。给一个独立入口。 */
+  box.innerHTML=`<div class="ca-card ca-card--zones">
+      <div class="ca-card__head"><div>
+        <div class="ca-card__t">C 端分区与图标</div>
+        <div class="ca-card__s">营地主页顶部那排小图标（全部营位 / 帐篷区 / 装备租赁…）可以自己改名、换图标、用 emoji、隐藏与排序 —— 营地长什么样，首页就长什么样。</div></div>
+        <div class="ca-tools"><button class="ca-btn" type="button" onclick="openCampZones()">配置分区图标 →</button></div></div>
+    </div>`+_listCard({title:'营地档案',desc:'一个俱乐部可建多个营地（如山顶营、湖边营），顶部下拉切换工作台营地；每个营地独立维护营位与房态。',
     newFn:'editCamp(0)',newLabel:'新建营地',
     rowsFn:()=>CAMP_PROFILES.filter(c=>_match(c.name)||_match(c.address)).map(c=>_item(c.name,
       [c.status==='active'?'<span class="ca-tag">启用中</span>':'<span class="ca-tag grey">已停用</span>',
@@ -752,6 +793,143 @@ window.deleteCamp=async function(id){
   try{await api(`/api/club/${CLUB}/camps/${id}`,{method:'DELETE'});toast('已删除');await _loadCamps();await campTab('profiles');}
   catch(e){showAlert({title:'删除失败',message:e.message||'请重试'})}
 };
+
+/* ===================== C 端分区与图标（#826）=====================
+   以前 C 端营地主页顶部那排分区入口是前端写死的：全部营位 / 帐篷区 / 房车区 /
+   木屋区 / 日间营 / 装备租赁 / 营地小站 / 联系客服。营地老板改不了 ——
+   他的营地明明是「湖边露营 + 篝火区 + 淋浴区」，前端还是给他帐篷和房车。
+   现在这些都变成后台可配置项：改名、换内置图标、用 emoji、隐藏、排序。 */
+let CAMP_ZONES=[];
+let CA_ZONE_OV=null;          // 分区配置弹层（不与表单弹层 CA_OV 混用）
+let CA_ZONE_PICK='';      // 当前展开选择器的分区（'icon3' / 'target2' / ''）
+const CA_ZONE_TARGET_CN={all:'全部营位',tent:'帐篷位',rv:'房车位',cabin:'木屋/舱房',day:'日间营位',
+                          rental:'装备租赁',store:'营地小站',service:'联系客服'};
+async function loadCampZones(){
+  try{ const r=await api(`/api/club/${CLUB}/camp-zones`,{cache:'no-store'})||{}; CAMP_ZONES=r.zones||[]; }
+  catch(e){ CAMP_ZONES=[]; }
+}
+window.openCampZones=async function(){
+  await loadCampZones();
+  CA_ZONE_PICK='';
+  const ov=uxDialog({title:'C 端分区与图标',wide:true,
+    desc:'改的是营地主页顶部那排小图标：可以改名、换图标、用 emoji、隐藏不需要的分区、调整顺序。保存后 C 端刷新即生效。',
+    body:'<div class="ca"><div id="caZonesBox" class="ca-zones"></div>'
+      +'<div class="ca-zones__foot"><button class="btn ghost" type="button" onclick="caZoneAdd()">＋ 新增分区</button>'
+      +'<span class="ca-zones__tip">新增分区要选它对应的内容，顾客点一下就跳过去。</span></div></div>',
+    foot:'<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>保存</button>'});
+  /* uxDialog 给 [data-ok] 预置了 onclick=close，必须用 .onclick= 覆盖。 */
+  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+  ov.querySelector('[data-ok]').onclick=()=>saveCampZones(ov);
+  CA_ZONE_OV=ov;
+  renderCampZones(ov);
+};
+function caZoneIconHtml(z){
+  if(window.campZoneIcon)return campZoneIcon(z.icon,z.emoji);
+  return '<span class="cp-zoneico">'+(window.CAMP_ICON_LIB||{}).all+'</span>';
+}
+function renderCampZones(ov){
+  const box=ov.querySelector('#caZonesBox'); if(!box)return;
+  if(!CAMP_ZONES.length){box.innerHTML='<div class="ca-empty">还没有分区，先点下方「＋ 新增分区」。</div>';return;}
+  box.innerHTML=CAMP_ZONES.map((z,i)=>{
+    const ico=caZoneIconHtml(z);
+    const picker=(CA_ZONE_PICK==='icon'+i)?caZoneIconPicker(i):'';
+    const tpicker=(CA_ZONE_PICK==='target'+i)?caZoneTargetPicker(i):'';
+    return `<div class="ca-zone">
+      <div class="ca-zone__hd">
+        <button type="button" class="ca-zone__ico${CA_ZONE_PICK==='icon'+i?' on':''}" title="更换图标" onclick="caZoneToggle('icon',${i})">${ico}</button>
+        <div class="ca-zone__main">
+          <input class="ca-zone__name" value="${esc(z.name||'')}" maxlength="20" placeholder="分区名称" oninput="caZoneName(${i},this.value)">
+          <button type="button" class="ca-zone__target${CA_ZONE_PICK==='target'+i?' on':''}" onclick="caZoneToggle('target',${i})">${esc(CA_ZONE_TARGET_CN[z.target]||'未指定去向')}</button>
+        </div>
+        <label class="ca-zone__vis"><input type="checkbox" ${z.visible!==false?'checked':''} onchange="caZoneVis(${i},this.checked)"><span>显示</span></label>
+        <div class="ca-zone__ops">
+          <button type="button" class="ca-mini" title="上移" onclick="caZoneMove(${i},-1)"${i===0?' disabled':''}>↑</button>
+          <button type="button" class="ca-mini" title="下移" onclick="caZoneMove(${i},1)"${i===CAMP_ZONES.length-1?' disabled':''}>↓</button>
+          <button type="button" class="ca-mini del" title="删除该分区" onclick="caZoneDel(${i})">删</button>
+        </div>
+      </div>
+      ${picker}${tpicker}
+    </div>`;
+  }).join('');
+}
+function caZoneIconPicker(i){
+  const z=CAMP_ZONES[i]; if(!z)return '';
+  const keys=window.CAMP_ICON_KEYS||[];
+  const lib=window.CAMP_ICON_LIB||{};
+  return `<div class="ca-zone__pick">
+    <div class="ca-zone__pickt">点一个图标就选中</div>
+    <div class="ca-zone__icons">${keys.map(k=>`<button type="button" class="ca-zone__icon${String(z.icon)===k&&!z.emoji?' on':''}" title="${k}" onclick="caZoneSetIcon(${i},'${k}')">${lib[k]||''}</button>`).join('')}</div>
+    <div class="ca-zone__emoji"><span>或者用 emoji</span><input value="${esc(z.emoji||'')}" maxlength="4" placeholder="🔥 🚿 ☕ 🅿" oninput="caZoneSetEmoji(${i},this.value)"></div>
+    ${z.emoji?'<button class="btn ghost sm" type="button" onclick="caZoneSetEmoji('+i+',\'\')">清除 emoji，改回内置图标</button>':''}
+  </div>`;
+}
+function caZoneTargetPicker(i){
+  const z=CAMP_ZONES[i]; if(!z)return '';
+  return `<div class="ca-zone__pick">
+    <div class="ca-zone__pickt">顾客点这个分区之后去哪</div>
+    <div class="ca-zone__targets">${Object.keys(CA_ZONE_TARGET_CN).map(k=>`<button type="button" class="ca-zone__tgt${String(z.target)===k?' on':''}" onclick="caZoneSetTarget(${i},'${k}')">${CA_ZONE_TARGET_CN[k]}</button>`).join('')}</div>
+  </div>`;
+}
+window.caZoneToggle=function(kind,i){
+  const key=kind+i;
+  CA_ZONE_PICK=(CA_ZONE_PICK===key)?'':key;
+  if(CA_ZONE_OV)renderCampZones(CA_ZONE_OV);
+};
+window.caZoneName=function(i,v){ if(CAMP_ZONES[i])CAMP_ZONES[i].name=v; };
+window.caZoneVis=function(i,on){ if(CAMP_ZONES[i])CAMP_ZONES[i].visible=!!on; };
+window.caZoneSetIcon=function(i,k){
+  if(!CAMP_ZONES[i])return;
+  CAMP_ZONES[i].icon=k; CAMP_ZONES[i].emoji='';
+  CA_ZONE_PICK='icon'+i;
+  renderCampZones(CA_ZONE_OV);
+};
+window.caZoneSetEmoji=function(i,v){
+  if(!CAMP_ZONES[i])return;
+  CAMP_ZONES[i].emoji=String(v||'').trim().slice(0,4);
+  renderCampZones(CA_ZONE_OV);
+};
+window.caZoneSetTarget=function(i,t){
+  if(!CAMP_ZONES[i])return;
+  CAMP_ZONES[i].target=t;
+  CA_ZONE_PICK='target'+i;
+  renderCampZones(CA_ZONE_OV);
+};
+window.caZoneMove=function(i,dir){
+  const j=i+dir;
+  if(i<0||j<0||i>=CAMP_ZONES.length||j>=CAMP_ZONES.length)return;
+  const tmp=CAMP_ZONES[i];CAMP_ZONES[i]=CAMP_ZONES[j];CAMP_ZONES[j]=tmp;
+  renderCampZones(CA_ZONE_OV);
+};
+window.caZoneDel=function(i){
+  if(!CAMP_ZONES[i])return;
+  const nm=CAMP_ZONES[i].name||'该分区';
+  CAMP_ZONES.splice(i,1);
+  CA_ZONE_PICK='';
+  renderCampZones(CA_ZONE_OV);
+  toast('已移除「'+nm+'」，点保存生效');
+};
+window.caZoneAdd=function(){
+  const n=CAMP_ZONES.length+1;
+  CAMP_ZONES.push({key:'z'+Date.now().toString(36),name:'新分区'+n,target:'rental',icon:'rental',emoji:'',visible:true});
+  CA_ZONE_PICK='';
+  renderCampZones(CA_ZONE_OV);
+};
+async function saveCampZones(ov){
+  const btn=ov.querySelector('[data-ok]');
+  if(btn){btn.disabled=true;btn.textContent='保存中…';}
+  try{
+    const zones=CAMP_ZONES.map((z,i)=>({
+      key:String(z.key||('z'+i)),name:String(z.name||'').trim().slice(0,20)||('分区'+(i+1)),
+      target:String(z.target||'all'),
+      icon:z.emoji?'':String(z.icon||'').slice(0,24),
+      emoji:String(z.emoji||'').slice(0,8),
+      visible:z.visible!==false,order:i}));
+    await api(`/api/club/${CLUB}/camp-zones`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({zones})});
+    ov.uxClose(); CA_ZONE_OV=null;
+    toast('分区配置已保存，C 端刷新即生效');
+  }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'});}
+  finally{ if(btn){btn.disabled=false;btn.textContent='保存';} }
+}
 
 /* ===================== 营位管理 ===================== */
 async function loadCampPitches(){
@@ -798,7 +976,7 @@ window.editPitch=function(id){
   }),'保存基础信息');
   _campRenderMwb('pitch',id||0);
 };
-window.pfTypeChange=function(v){const el=CA_OV&&CA_OV.querySelector('#f_isOvernight');if(el)el.value=(v==='day')?'0':'1';};
+window.pfTypeChange=function(v){uxChoiceSet('#f_isOvernight',(v==='day')?'0':'1');};
 window.savePitch=function(){};
 window.deletePitch=async function(id){
   const ok=await showConfirm({title:'删除营位',message:'确定删除这个营位？该营位的历史预订与房态覆盖会一并清除。',danger:true});
@@ -808,26 +986,79 @@ window.deletePitch=async function(id){
 };
 
 /* ===================== 装备租赁（club 域，与平台商城隔离） ===================== */
+/* #822 租金自定义：老板可以自己定「计费项目 + 价格 + 时间单位」——
+   按小时租、按半天租、按天租、按次租……一个装备可以配多种计费方式，
+   顾客在 C 端自己挑。原来只有一个「日租金」输入框，想按小时租就只能把价格
+   塞进「日租金」里 —— 客人看着是「¥120/天」，实际算的是「¥120/小时」。 */
+const CA_RENTAL_UNITS=[{u:'hour',t:'小时'},{u:'halfday',t:'半天'},{u:'day',t:'天'},
+                       {u:'night',t:'晚'},{u:'times',t:'次'},{u:'item',t:'件'}];
+let CA_RENTAL_PLANS=[];
+function _rentalPlanRows(){
+  if(!CA_RENTAL_PLANS.length)return '<div class="ca-plans__empty">还没有自定义计费项 —— 留空时按上面的「日租金」按天计费。</div>';
+  return CA_RENTAL_PLANS.map((p,i)=>`<div class="ca-plan" data-i="${i}">
+    <div class="ca-plan__row">
+      <input class="ca-plan__name" value="${esc(p.name||'')}" maxlength="20" placeholder="计费项目，如 帐篷 / 睡袋" oninput="caPlanSet(${i},'name',this.value)">
+      <span class="ca-plan__yen">¥</span>
+      <input class="ca-plan__price" type="number" min="0" step="0.01" value="${Number(p.price||0)}" oninput="caPlanSet(${i},'price',this.value)">
+      <button type="button" class="ca-mini del" title="删除该计费项" onclick="caPlanDel(${i})">删</button>
+    </div>
+    <div class="ca-plan__units">${CA_RENTAL_UNITS.map(x=>`<button type="button" class="ca-plan__u${String(p.unit)===x.u?' on':''}" onclick="caPlanSetUnit(${i},'${x.u}')">${x.t}</button>`).join('')}</div>
+  </div>`).join('');
+}
+function _renderRentalPlans(){
+  const box=document.getElementById('caRentalPlans'); if(!box)return;
+  box.innerHTML=_rentalPlanRows();
+}
+window.caPlanSet=function(i,k,v){
+  if(!CA_RENTAL_PLANS[i])return;
+  CA_RENTAL_PLANS[i][k]=(k==='price')?(Number(v)||0):String(v||'');
+};
+window.caPlanSetUnit=function(i,u){
+  if(!CA_RENTAL_PLANS[i])return;
+  CA_RENTAL_PLANS[i].unit=u;
+  _renderRentalPlans();
+};
+window.caPlanDel=function(i){ CA_RENTAL_PLANS.splice(i,1); _renderRentalPlans(); };
+window.caPlanAdd=function(){ CA_RENTAL_PLANS.push({name:'',price:0,unit:'hour'}); _renderRentalPlans(); };
+function _readRentalPlans(){
+  return CA_RENTAL_PLANS
+    .filter(p=>p&&(String(p.name||'').trim()||Number(p.price||0)>0))
+    .map(p=>({name:String(p.name||'').trim().slice(0,20)||'租金',
+              price:Math.max(0,Number(p.price||0)),
+              unit:CA_RENTAL_UNITS.some(x=>x.u===p.unit)?p.unit:'hour'}));
+}
 async function loadCampRental(){
   const box=$('#campPane');if(!box)return;
   if(!CA_CAMP_ID){box.innerHTML='<div class="ca-empty"><b>请先创建营地</b>租赁装备需归属具体营地。</div>';return;}
   try{CAMP_RENTAL=await api(`/api/club/${CLUB}/rental-items?camp_id=${CA_CAMP_ID}`,{cache:'no-store'})||[];}
   catch(e){box.innerHTML=`<div class="ca-empty">读取失败：${esc(e.message||'')}</div>`;return;}
   box.innerHTML=_listCard({title:`装备租赁 · ${esc(_campName(CA_CAMP_ID))}`,
-    desc:'营地自营装备按日租、带押金，属于俱乐部/营地域；与总平台公司的装备售卖（products / gear_orders）物理隔离。',
+    desc:'营地自营装备出租给到营客人：押金离营退还，计费方式（按小时 / 按天 / 按次…）由你自己定义。',
     newFn:'editRental(0)',newLabel:'新增装备',
-    rowsFn:()=>CAMP_RENTAL.filter(r=>_match(r.name)).map(r=>_item(r.name,
+    rowsFn:()=>CAMP_RENTAL.filter(r=>_match(r.name)).map(r=>{
+      const plans=_jarr(r.pricing_json).filter(p=>p&&typeof p==='object');
+      const planTxt=plans.length
+        ? plans.map(p=>`${esc(p.name||'租金')} ¥${_money(p.price)} / ${esc((CA_RENTAL_UNITS.find(x=>x.u===p.unit)||{t:'天'}).t)}`).join('　')
+        : `日租 <b>¥${_money(r.daily_price)}</b> / 天`;
+      return _item(r.name,
       [`<span class="ca-tag">${esc(_campName(r.camp_id))}</span>`,r.status==='active'?'':'<span class="ca-tag grey">已停用</span>'].join(''),
-      `日租 <b>¥${_money(r.daily_price)}</b> · 押金 ¥${_money(r.deposit)} · 可租 ${r.available_qty||0} 件<br>${esc((r.description||'').slice(0,48)||'暂无描述')}`,
-      `editRental(${r.id})`,`deleteRental(${r.id})`)).join(''),
-    emptyTitle:'还没有租赁装备',emptySub:'帐篷、天幕、防潮垫等按日出租的装备都放这里。'});
+      `${planTxt}<br>押金 ¥${_money(r.deposit)} · 可租 ${r.available_qty||0} 件<br>${esc((r.description||'').slice(0,48)||'暂无描述')}`,
+      `editRental(${r.id})`,`deleteRental(${r.id})`);
+    }).join(''),
+    emptyTitle:'还没有租赁装备',emptySub:'帐篷、天幕、防潮垫等出租的装备都放这里。'});
 }
 window.editRental=function(id){
   const r=(id&&CAMP_RENTAL.find(x=>x.id===id))||{camp_id:CA_CAMP_ID,name:'',daily_price:0,deposit:0,available_qty:0,status:'active'};
   const idRef={v:id||0};
-  _openForm(id?'编辑租赁装备':'新增租赁装备','押金离营时退还；照片支持手动裁剪与自动适配（最多 5 张），下方一个文本框 + AI 即可生成完整图文详情，与营位产品一致。',[
+  CA_RENTAL_PLANS=_jarr(r.pricing_json).filter(p=>p&&typeof p==='object')
+    .map(p=>({name:String(p.name||''),price:Number(p.price||0),unit:String(p.unit||'day')}));
+  _openForm(id?'编辑租赁装备':'新增租赁装备','押金离营时退还；租金可以自定义：按小时 / 按半天 / 按天 / 按次…，一个装备可配多种计费方式，顾客在 C 端自己挑。照片支持手动裁剪与自动适配（最多 5 张）。',[
     _campField(),{name:'name',label:'装备名称 *',value:r.name},
-    {name:'dailyPrice',label:'日租金（元/天）',type:'number',min:0,step:0.01,value:r.daily_price||0},
+    {name:'dailyPrice',label:'日租金（元/天 · 未配置计费项时按它算）',type:'number',min:0,step:0.01,value:r.daily_price||0},
+    {name:'__plans',label:'',type:'html',html:'<div class="ca-field full" style="font-weight:600;margin-top:4px">自定义计费项（项目 · 价格 · 时间单位）</div>'
+      +'<div class="ca-plans" id="caRentalPlans"></div>'
+      +'<div class="ca-plans__bar"><button class="ca-btn ghost sm" type="button" onclick="caPlanAdd()">＋ 添加计费项</button>'
+      +'<span class="ca-plans__tip">可按小时 / 半天 / 天 / 晚 / 次 / 件；留空则按上面的日租金按天计费。</span></div>'},
     {name:'deposit',label:'押金（元）',type:'number',min:0,step:0.01,value:r.deposit||0},
     {name:'availableQty',label:'可租数量',type:'number',min:0,value:r.available_qty||0},
     {name:'status',label:'状态',type:'select',value:r.status||'active',options:[{value:'active',label:'启用'},{value:'inactive',label:'停用'}]},
@@ -838,10 +1069,12 @@ window.editRental=function(id){
     apiPath:cur=>cur?`/api/club/${CLUB}/rental-items/${cur}`:`/api/club/${CLUB}/rental-items`,
     build:ov=>({campId:Number(_fv(ov,'campId'))||CA_CAMP_ID,name:_fv(ov,'name'),
       dailyPrice:Number(_fv(ov,'dailyPrice')||0),deposit:Number(_fv(ov,'deposit')||0),
+      pricing:_readRentalPlans(),
       availableQty:Math.max(0,Number(_fv(ov,'availableQty')||0)),status:_fv(ov,'status')||'active',
       ..._benefitBuild(ov)}),
     after:cur=>_campRenderMwb('rental',cur)
   }),'保存基础信息');
+  _renderRentalPlans();
   _campRenderMwb('rental',id||0);
 };
 window.saveRental=function(){};

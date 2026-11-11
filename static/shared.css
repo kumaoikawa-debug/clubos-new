@@ -495,3 +495,8 @@
   .itin-day__meta .tl-chip{white-space:normal;word-break:break-word}
   .itin-day .detail-list>div>b{white-space:nowrap}
 }
+
+/* 营地分区图标（#826）：后台自定义的小图标，俱乐部端与 C 端共用一套样式。 */
+.zoneico{display:inline-flex;align-items:center;justify-content:center;line-height:1;width:100%;height:100%}
+.zoneico svg{width:100%;height:100%;stroke:currentColor;fill:none;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+.zoneico--emoji{font-size:20px;line-height:1}

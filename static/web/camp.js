@@ -15,6 +15,8 @@
 let CAMP_SW={home:true,activity:true,camp:false,bizIntro:true};
 let CAMP_LIST=[],CAMP_PITCHES=[],CAMP_GOODS={rental:[],store:[]};
 let CAMP_AVAIL=null,CAMP_CAMP_ID=0,CAMP_FILTER='all';
+let CAMP_ZONES=[];             // #826：后台自定义的 C 端分区与图标配置
+let CAMP_DETAIL_PLAN=0,CAMP_DETAIL_UNITS=0;   // #822：租赁计费项选中项与数量
 let CAMP_IN='',CAMP_OUT='';
 let CAMP_BENEFITS=null,CAMP_CART=[],CAMP_QUOTE=null,CAMP_ORDER=null;
 let CAMP_USE_POINTS=false,CAMP_VOUCHER='',CAMP_GUEST={name:'',phone:''};
@@ -23,6 +25,7 @@ let CAMP_CAL={in:'',out:'',anchor:''};
 let CAMP_DETAIL=null,CAMP_DETAIL_QTY=1;
 let CAMP_HERO_IDX=0,CAMP_TOAST_T=null,CAMP_PAY_TIMER=null,CAMP_PAY_LEFT=0;
 let CAMP_BUSY=false,CAMP_LV=null,CAMP_INTRO=null;
+let CAMP_ME={name:'',avatar:''};   /* #827 会员头像与「我的」同源 */
 
 /* ── 小工具 ─────────────────────────────────────────────────────────────── */
 function _iso(d){const z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate());}
@@ -54,6 +57,18 @@ function _post(path,body){return api('/api/public/clubs/'+CLUB+path,{method:'POS
   headers:{'Content-Type':'application/json'},body:JSON.stringify(body),cache:'no-store'});}
 function _get(path){return api('/api/public/clubs/'+CLUB+path,{cache:'no-store'});}
 function _err(e){return (e&&(e.message||e.detail))||'网络异常，请重试';}
+/* #827 会员头像：与「我的」页用同一个来源（公开资料的 avatarUrl）。
+   营地页不依赖 me.js 是否已经加载过 —— 自己取一次，取不到再回落 ME.avatar。 */
+function _meAvatarUrl(){
+  if(CAMP_ME&&CAMP_ME.avatar)return CAMP_ME.avatar;
+  try{if(typeof ME!=='undefined'&&ME&&ME.avatar)return ME.avatar;}catch(e){}
+  return '';
+}
+function _meName(){
+  if(CAMP_ME&&CAMP_ME.name)return CAMP_ME.name;
+  try{if(typeof ME!=='undefined'&&ME&&ME.name)return ME.name;}catch(e){}
+  return '远拓会员';
+}
 
 const CP_ICON={
   all:_svg('<path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V21h13V9.5"/><path d="M9.5 21v-6h5v6"/>'),
@@ -108,6 +123,12 @@ async function loadCampPage(){
     root.innerHTML='<div class="cp-page"><div class="cp-state">营地暂未开放预订，敬请期待。</div></div>';return;
   }
   if(!CAMP_LIST.some(c=>String(c.id)===String(CAMP_CAMP_ID))){CAMP_CAMP_ID=CAMP_LIST[0].id;CAMP_HERO_IDX=0;}
+  /* #827：取一次公开资料拿头像，让会员条与「我的」显示同一个头像。 */
+  try{const prof=await api('/api/public/users/'+_uid()+'/profile',{cache:'no-store'});
+      if(prof)CAMP_ME={name:(prof.name||''),avatar:(prof.avatarUrl||'')};}catch(e){}
+  /* #826：分区与图标由后台自定义（老板改名字/图标/隐藏/排序）。读不到就退回内置默认。 */
+  try{const z=await api('/api/public/clubs/'+CLUB+'/camp-zones',{cache:'no-store'});
+      CAMP_ZONES=(z&&z.zones)||[];}catch(e){CAMP_ZONES=[];}
   if(!CAMP_IN){const t=_iso(new Date());CAMP_IN=t;CAMP_OUT=_add(t,1);}
   CAMP_FILTER='all';
   await campOnChange();
@@ -189,8 +210,13 @@ function _render(){
     ? 'https://uri.amap.com/marker?position='+encodeURIComponent(c.geoLng)+','+encodeURIComponent(c.geoLat)+'&name='+encodeURIComponent(c.name||'营地')
     : 'https://www.amap.com/search?query='+encodeURIComponent(c.address||c.name||'营地');
   const b=CAMP_BENEFITS||{};
+  /* #827 会员条头像改用本人头像（与「我的」一致），没有头像时用姓名首字母。 */
+  const _ava=_meAvatarUrl(),_nm=_meName();
+  const memberIco=_ava
+    ? '<span class="cp-member__ico cp-member__ico--ava"><img src="'+esc(_ava)+'" alt=""></span>'
+    : '<span class="cp-member__ico cp-member__ico--letter">'+esc(_nm.slice(0,1))+'</span>';
   const memberBar=`<div class="cp-member" onclick="campOpenOrders()" role="button" tabindex="0">
-      <span class="cp-member__ico">${CP_ICON.member}</span>
+      ${memberIco}
       <span class="cp-member__txt"><b>${esc(b.memberLevel||'营地会员')}</b>
         <em>${Number(b.memberDiscountPercent||0)>0?'营地商品立减 '+_money(b.memberDiscountPercent)+'% · ':''}${Number(b.clubPoints||0)} 积分可用 · ${b.pointsRedeemRate||100} 分抵 ¥1</em></span>
       <span class="cp-member__more">我的订单 ›</span></div>`;
@@ -201,15 +227,16 @@ function _render(){
       + '<div class="cp-hero__shade"></div>'
       + '<div class="cp-hero__rail"><span class="cp-hero__tag">'+CP_ICON.tent+' CAMP · 营地预订</span>'
       + (CAMP_LIST.length>1?'<select id="campSel" onchange="campOnChange()" class="cp-hero__sel">'+selOpts+'</select>':'')
-      + '<button type="button" class="cp-hero__enter" onclick="campOpenIntro()">营地介绍 ›</button>'
       + '</div>'
       + '<div class="cp-hero__cap"><h1 class="cp-hero__name">'+esc(c.name||'山野营地')+'</h1>'
       + '<p class="cp-hero__slogan">'+esc(_shortSlogan(c))+'</p></div>'
       + (gallery.length>1?'<div class="cp-hero__dots">'+gallery.map((_,i)=>'<i class="cp-hero__dot '+(i===CAMP_HERO_IDX?'on':'')+'" onclick="campHero('+i+')"></i>').join('')+'</div>':'')
     + '</div>'
     + '<div class="cp-info"><div class="cp-info__row"><div class="cp-info__main">'
+      /* #825 删除重复提示：头图上的「营地介绍 ›」按钮已撤掉，「详细介绍」入口
+         只保留信息卡这一处；名字后面那个内嵌箭头也和文案里的 › 重复，一并去掉。 */
       + '<div class="cp-info__name" role="button" tabindex="0" onclick="campOpenIntro()">'+esc(c.name||'营地')
-        +' <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg><em>查看详细介绍 ›</em></div>'
+        +'<em>查看详细介绍 ›</em></div>'
       + '<div class="cp-info__addr">'+esc(c.address||'地址待补充')+'</div></div>'
       + '<div class="cp-info__acts"><a class="cp-ibtn" href="'+esc(mapUrl)+'" target="_blank" rel="noopener" aria-label="导航">'+CP_ICON.nav+'</a>'
       + (c.contactPhone?'<a class="cp-ibtn" href="tel:'+esc(c.contactPhone)+'" aria-label="电话">'+CP_ICON.phone+'</a>':'')
@@ -230,18 +257,40 @@ function _render(){
     + '</div>';
 }
 
-function _gridHtml(){
+/* #826：分区宫格读后台配置。配置读不到时退回内置默认（保证旧数据/接口异常也能正常显示）。 */
+function _defaultZones(){
   const types=[...new Set(CAMP_PITCHES.map(p=>p.pitch_type||'tent'))];
-  const items=[{k:'all',t:'全部营位',i:'all'}];
   const label={tent:'帐篷区',rv:'房车区',cabin:'木屋区',day:'日间营'};
-  types.forEach(t=>items.push({k:t,t:label[t]||_pitchTypeLabel(t),i:(CP_ICON[t]?t:'all')}));
-  items.push({k:'rental',t:'装备租赁',i:'rental'},{k:'store',t:'营地小站',i:'store'},
-             {k:'service',t:'联系客服',i:'service'});
+  const zs=[{key:'all',name:'全部营位',target:'all',icon:'all',emoji:''}];
+  types.forEach(t=>zs.push({key:'t_'+t,name:label[t]||_pitchTypeLabel(t),target:t,icon:(CP_ICON[t]?t:'all'),emoji:''}));
+  zs.push({key:'rental',name:'装备租赁',target:'rental',icon:'rental',emoji:''},
+          {key:'store',name:'营地小站',target:'store',icon:'store',emoji:''},
+          {key:'service',name:'联系客服',target:'service',icon:'service',emoji:''});
+  return zs;
+}
+function _zoneIconHtml(z){
+  const lib=window.CAMP_ICON_LIB||{};
+  if(z.emoji)return '<span class="cp-grid__ico cp-grid__ico--emoji">'+esc(z.emoji)+'</span>';
+  const svg=lib[z.icon]||lib.all||CP_ICON.all;
+  return '<span class="cp-grid__ico">'+svg+'</span>';
+}
+function _gridHtml(){
+  const zones=(CAMP_ZONES&&CAMP_ZONES.length)?CAMP_ZONES:_defaultZones();
+  const have={}; CAMP_PITCHES.forEach(p=>{have[p.pitch_type||'tent']=1;});
+  const items=[];
+  zones.forEach(z=>{
+    if(z.visible===false)return;
+    const tgt=String(z.target||z.key||'all');
+    /* 指向某种营位类型、但当前营地没有该类型营位 → 不显示（点了也是空的）。 */
+    if(tgt!=='all'&&tgt!=='rental'&&tgt!=='store'&&tgt!=='service'&&!have[tgt])return;
+    items.push({t:tgt,n:String(z.name||z.key||''),z:z});
+  });
   return items.slice(0,8).map(x=>{
-    const act=CAMP_FILTER===x.k?' active':'';
-    const click=['rental','store','service'].includes(x.k)?"campJump('"+x.k+"')":"campFilter('"+x.k+"')";
+    const act=CAMP_FILTER===x.t?' active':'';
+    const jump=['rental','store','service'].includes(x.t);
+    const click=jump?"campJump('"+x.t+"')":"campFilter('"+x.t+"')";
     return '<button class="cp-grid__item'+act+'" type="button" onclick="'+click+'">'
-      + '<span class="cp-grid__ico">'+(CP_ICON[x.i]||CP_ICON.all)+'</span><span>'+x.t+'</span></button>';
+      + _zoneIconHtml(x.z) +'<span>'+esc(x.n)+'</span></button>';
   }).join('');
 }
 
@@ -286,28 +335,51 @@ function _pitchesHtml(){
   }).join('');
 }
 
-/* 装备租赁 / 营地小站：商品化两列网格（图片、规格、价格、押金、库存、加购） */
+/* 装备租赁 / 营地小站：商品化两列网格（图片、规格、价格、押金、库存、加购）
+   #824 小站商品不显示库存 / 计价单位 / 场地尺寸等仓储或营位字段 —— 与营位商品明确区分。 */
+/* #822：租赁商品价格按老板自定义的计费项走 —— 卡片上显示第一项（最低价优先）与它的单位。 */
+function _rentalPlansOf(x){return (x&&Array.isArray(x.pricing)&&x.pricing.length)?x.pricing:null;}
+function _shopPriceUnit(kind,x){
+  if(kind!=='rental')return '';
+  const pl=_rentalPlansOf(x);
+  return pl?'/'+esc(pl[0].unitLabel||'天'):'/天';
+}
+function _shopPriceOf(x,kind){
+  if(kind!=='rental')return Number(x.price||0);
+  const pl=_rentalPlansOf(x);
+  return pl?Number(pl[0].price||0):Number(x.daily_price||0);
+}
+function _shopSub(x,kind){
+  if(kind==='rental'){
+    const pl=_rentalPlansOf(x);
+    const multi=pl&&pl.length>1?(' · '+pl.length+' 种计费'):'';
+    return '押金 ¥'+_money(x.deposit)+' · 可租 '+(x.available_qty||0)+' 件'+multi;
+  }
+  return esc(x.category||'营地小站');
+}
+function _shopSpec(x){
+  /* 与详情页同一套过滤：营位 / 仓储字段（库存、计价单位、场地尺寸…）不当商品卖点。 */
+  const vis=(x.specs||[]).filter(s=>s&&s.label&&!CAMP_HIDE_SPEC.test(String(s.label).trim()));
+  if(vis.length)return vis[0].label+' '+vis[0].value;
+  return x.description||x.subtitle||'';
+}
 function _shopHtml(kind){
   const list=CAMP_GOODS[kind]||[];
   if(!list.length)return '';
   const isRental=kind==='rental';
   const title=isRental?'装备租赁':'营地小站';
-  const hint=isRental?'按天计价 · 押金离营退还':'营地自营 · 现场取货';
+  const hint=isRental?'计费方式自选（按小时 / 按天 / 按次…）· 押金离营退还':'营地自营 · 现场取货';
   const cards=list.map(x=>{
-    const price=isRental?Number(x.daily_price||0):Number(x.price||0);
-    const unit=isRental?'/天':'/件';
-    const sub=isRental
-      ? ('押金 ¥'+_money(x.deposit)+' · 可租 '+(x.available_qty||0)+' 件')
-      : (esc(x.category||'营地自营')+' · 库存 '+(x.stock||0));
-    const spec=(x.specs&&x.specs[0])?(x.specs[0].label+' '+x.specs[0].value):(x.description||x.subtitle||'');
+    const price=_shopPriceOf(x,kind);
+    const spec=_shopSpec(x);
     const off=isRental?!(Number(x.available_qty||0)>0):!(Number(x.stock||0)>0);
     return '<div class="cp-prod" onclick="campOpenDetail(\''+kind+'\','+x.id+')">'
       + '<div class="cp-prod__media">'+_mediaHtml(x.coverUrl||x.cover_url,'cp-prod__img',x.coverFocal)
       + (off?'<span class="cp-prod__off">已租罄</span>':'')+'</div>'
       + '<div class="cp-prod__body"><div class="cp-prod__t">'+esc(x.name||'商品')+'</div>'
-      + '<div class="cp-prod__spec">'+esc(String(spec).slice(0,28))+'</div>'
-      + '<div class="cp-prod__sub">'+sub+'</div>'
-      + '<div class="cp-prod__foot"><div class="cp-price"><small>¥</small>'+_money(price)+'<em>'+unit+'</em></div>'
+      + (spec?'<div class="cp-prod__spec">'+esc(String(spec).slice(0,28))+'</div>':'')
+      + '<div class="cp-prod__sub">'+_shopSub(x,kind)+'</div>'
+      + '<div class="cp-prod__foot"><div class="cp-price"><small>¥</small>'+_money(price)+'<em>'+_shopPriceUnit(kind,x)+'</em></div>'
       + '<button class="cp-prod__add" type="button" '+(off?'disabled':'')
       + ' onclick="event.stopPropagation();campAddCart(\''+kind+'\','+x.id+')">＋</button></div></div></div>';
   }).join('');
@@ -349,22 +421,22 @@ function _shopCats(kind){
   if(kind!=='store')return [];
   return [...new Set((CAMP_GOODS.store||[]).map(x=>x.category).filter(Boolean))];
 }
+/* #823 二级页商品卡：改成「左图右文」的横版列表 —— 竖版双列在只有一两件商品时
+   会空出整整一列，卡片还被网格拉伸到容器高度，卡内一大片空白。横版一行一件，
+   铺满整屏宽度，也更像商城列表页。 */
 function _shopCardHtml(x,kind){
   const isR=kind==='rental';
-  const price=isR?Number(x.daily_price||0):Number(x.price||0);
-  const unit=isR?'/天':'/件';
-  const sub=isR?('押金 ¥'+_money(x.deposit)+' · 可租 '+(x.available_qty||0)+' 件')
-               :(esc(x.category||'营地自营')+' · 库存 '+(x.stock||0));
-  const spec=(x.specs&&x.specs[0])?(x.specs[0].label+' '+x.specs[0].value):(x.description||x.subtitle||'');
+  const price=_shopPriceOf(x,kind);
+  const spec=_shopSpec(x);
   const off=isR?!(Number(x.available_qty||0)>0):!(Number(x.stock||0)>0);
-  return '<div class="cp-prod cp-prod--lv" onclick="campOpenDetail(\''+kind+'\','+x.id+')">'
-    + '<div class="cp-prod__media">'+_mediaHtml(x.coverUrl||x.cover_url,'cp-prod__img',x.coverFocal)
-    + (off?'<span class="cp-prod__off">已租罄</span>':'')+'</div>'
-    + '<div class="cp-prod__body"><div class="cp-prod__t">'+esc(x.name||'商品')+'</div>'
-    + '<div class="cp-prod__spec">'+esc(String(spec).slice(0,28))+'</div>'
-    + '<div class="cp-prod__sub">'+sub+'</div>'
-    + '<div class="cp-prod__foot"><div class="cp-price"><small>¥</small>'+_money(price)+'<em>'+unit+'</em></div>'
-    + '<button class="cp-prod__add" type="button" '+(off?'disabled':'')
+  return '<div class="cp-pl" onclick="campOpenDetail(\''+kind+'\','+x.id+')">'
+    + '<div class="cp-pl__media">'+_mediaHtml(x.coverUrl||x.cover_url,'cp-pl__img',x.coverFocal)
+    + (off?'<span class="cp-pl__off">已租罄</span>':'')+'</div>'
+    + '<div class="cp-pl__body"><div class="cp-pl__t">'+esc(x.name||'商品')+'</div>'
+    + (spec?'<div class="cp-pl__spec">'+esc(String(spec).slice(0,40))+'</div>':'')
+    + '<div class="cp-pl__sub">'+_shopSub(x,kind)+'</div>'
+    + '<div class="cp-pl__foot"><div class="cp-price"><small>¥</small>'+_money(price)+'<em>'+_shopPriceUnit(kind,x)+'</em></div>'
+    + '<button class="cp-pl__add" type="button" '+(off?'disabled':'')
     + ' onclick="event.stopPropagation();campAddCart(\''+kind+'\','+x.id+')">＋</button></div></div></div>';
 }
 function _paintShopList(kind,cat){
@@ -374,6 +446,10 @@ function _paintShopList(kind,cat){
   const list=(CAMP_GOODS[kind]||[]).filter(x=>!cat||x.category===cat);
   const hero=(CAMP_GOODS[kind]||[]).find(x=>_safeUrl(x.coverUrl||x.cover_url))||list[0]||{};
   const heroUrl=_safeUrl(hero.coverUrl||hero.cover_url);
+  /* #825 去掉重复大图：头图往往就是第一件商品的图，再单独铺一条横幅等于同一张图
+     连着出现两遍。现在只在头图与列表首图不同时才显示横幅。 */
+  const firstCover=_safeUrl(((list[0]||{}).coverUrl)||((list[0]||{}).cover_url));
+  const showHero=!!heroUrl&&heroUrl!==firstCover;
   const catChips=cats.length
     ? ('<div class="cp-lv__chips">'
        + '<button class="cp-lv__chip'+(!cat?' on':'')+'" type="button" onclick="_shopPickCat(\''+kind+'\',\'\')">全部</button>'
@@ -387,10 +463,10 @@ function _paintShopList(kind,cat){
     + '<div class="cp-lv__bar"><button class="cp-lv__back" type="button" onclick="_closeShopList()">'+CP_ICON.back+'</button>'
     + '<span class="cp-lv__title">'+title+'</span>'
     + '<button class="cp-lv__cart'+(cnt?' has':'')+'" type="button" onclick="campOpenCheckout()">'+CP_ICON.cart+(cnt?'<i>'+cnt+'</i>':'')+'</button></div>'
-    + (heroUrl?'<div class="cp-lv__hero"><img src="'+esc(heroUrl)+'" alt=""'+_focalStyle(hero.coverFocal)+'></div>':'')
+    + (showHero?'<div class="cp-lv__hero"><img src="'+esc(heroUrl)+'" alt=""'+_focalStyle(hero.coverFocal)+'></div>':'')
     + catChips
-    + '<div class="cp-lv__meta">共 '+list.length+' 项 · '+(isR?'按天计价 · 押金离营退还':'营地自营 · 现场取货')+'</div>'
-    + '<div class="cp-shop cp-lv__grid">'+cards+'</div>'
+    + '<div class="cp-lv__meta">共 '+list.length+' 项 · '+(isR?'计费方式自选（按小时 / 按天 / 按次…）· 押金离营退还':'营地自营 · 现场取货')+'</div>'
+    + '<div class="cp-lv__list">'+cards+'</div>'
     + '<div class="cp-footnote">营地活动请前往「活动」栏目查看与报名</div>'
     + '</div>';
   let node=document.querySelector('#cpShopHost');
@@ -492,23 +568,84 @@ window.campOpenDetail=async function(kind,id){
   try{d=await _get('/camp-products/'+kind+'/'+id);}catch(e){}
   CAMP_DETAIL=d||_listFallback(kind,id);
   CAMP_DETAIL_QTY=1;
+  CAMP_DETAIL_PLAN=0;CAMP_DETAIL_UNITS=0;
   _paintDetail();
 };
+/* #824 规格区过滤：库存 / 计价单位 / 场地尺寸 / 接待人数 这类是营位或仓储字段，
+   不该出现在装备租赁与小站商品上（后台历史数据里经常混着这些），一律不显示。 */
+const CAMP_HIDE_SPEC=/^(库存|余量|计价单位|单位|场地尺寸|场地面积|接待人数|适用人数|可住人数|售价|价格)$/;
 function _detailSpecs(d){
   const rows=[];
+  const vis=(d.specs||[]).filter(s=>s&&s.label&&!CAMP_HIDE_SPEC.test(String(s.label).trim()));
   if(d.kind==='pitch'){
     rows.push(['营位类型',_pitchTypeLabel(d.pitchType)],['可住人数',(d.capacity||1)+' 人'],
       ['营期',d.isOvernight?'可过夜（跨日锁定）':'日间营 · 当天结束'],['计价单位',d.unitLabel||'/晚']);
   }else if(d.kind==='rental'){
-    rows.push(['日租金','¥'+_money(d.dailyPrice)+' / 天'],['押金','¥'+_money(d.deposit)+' · 离营退还'],
+    /* #822：老板自定义了计费项就逐条列出来，别再只写一个「日租金」。 */
+    const pl=_rentalPlansOf(d);
+    if(pl) pl.forEach(x=>rows.push([x.name||'租金','¥'+_money(x.price)+' / '+(x.unitLabel||'天')]));
+    else rows.push(['日租金','¥'+_money(d.dailyPrice)+' / 天']);
+    rows.push(['押金','¥'+_money(d.deposit)+' · 离营退还'],
       ['可租数量',(d.stock||0)+' 件'],['租期',_isDayUse()?'当天':(_nights()+' 晚')]);
   }else{
-    rows.push(['规格',(d.specs&&d.specs[0])?String(d.specs[0].value):'标准规格'],
-      ['库存',(d.stock||0)+' 件'],['取货','营地小站 · 现场取货'],['计价单位',d.unitLabel||'/件']);
+    /* #824 小站商品：规格逐条列，不额外塞「规格」摘要行（那行会把第一条规格
+       的标签吃掉，只剩一个值，看着像「规格 100 件」这种怪东西）。 */
+    if(vis.length)vis.forEach(s=>rows.push([String(s.label),String(s.value||'')]));
+    else rows.push(['规格','标准规格']);
+    rows.push(['取货','营地小站 · 现场取货']);
   }
-  (d.specs||[]).forEach(s=>{if(s&&s.label)rows.push([String(s.label),String(s.value||'')]);});
+  if(d.kind!=='store')vis.forEach(s=>rows.push([String(s.label),String(s.value||'')]));
   return rows.map(r=>'<div class="cp-dt__spec"><span>'+esc(r[0])+'</span><b>'+esc(r[1])+'</b></div>').join('');
 }
+/* #822 租赁计费项：老板自定义「项目 + 价格 + 时间单位」，顾客直接点选 + 填数量。 */
+function _planMaxUnits(p){
+  const u=String((p||{}).unit||'day');
+  if(u==='hour')return 24;                       // 一天最多 24 小时
+  if(u==='times'||u==='item')return 20;          // 按次 / 按件
+  return 30;                                      // 按天 / 晚 / 半天
+}
+function _planDefaultUnits(p){
+  if(!p)return 1;
+  const u=String(p.unit||'day');
+  return (u==='day'||u==='night'||u==='halfday')?Math.max(1,_nights()):1;
+}
+function _rentalPlanBlock(plans){
+  const i=Math.max(0,Math.min(CAMP_DETAIL_PLAN,plans.length-1));
+  const p=plans[i]||{};
+  return '<div class="cp-dt__block"><h3>计费方式</h3>'
+    +'<div class="cp-plans">'+plans.map((x,j)=>'<button type="button" class="cp-plan'+(j===i?' on':'')+'" onclick="campPickPlan('+j+')">'
+      +'<b>'+esc(x.name||'租金')+'</b><span>¥'+_money(x.price)+' / '+esc(x.unitLabel||'天')+'</span></button>').join('')+'</div>'
+    +'<div class="cp-planqty"><span>租赁数量</span>'
+      +'<button type="button" onclick="campPlanUnits(-1)">−</button><b id="dtPlanQty">'+CAMP_DETAIL_UNITS+'</b>'
+      +'<button type="button" onclick="campPlanUnits(1)">＋</button><em id="dtPlanUnit">'+esc(p.unitLabel||'天')+'</em></div>'
+    +'<div class="cp-planhint" id="dtPlanHint">小计 ¥'+_money((Number(p.price)||0)*CAMP_DETAIL_UNITS*CAMP_DETAIL_QTY)+'</div>'
+    +'</div>';
+}
+function _syncRentalPlan(){
+  const plans=(CAMP_DETAIL&&CAMP_DETAIL.pricing)||[];
+  const p=plans[CAMP_DETAIL_PLAN]||{price:0,unitLabel:'天'};
+  const q=document.getElementById('dtPlanQty'); if(q)q.textContent=CAMP_DETAIL_UNITS;
+  const u=document.getElementById('dtPlanUnit'); if(u)u.textContent=p.unitLabel||'天';
+  const h=document.getElementById('dtPlanHint');
+  if(h)h.textContent='小计 ¥'+_money((Number(p.price)||0)*CAMP_DETAIL_UNITS*CAMP_DETAIL_QTY);
+  const pe=document.getElementById('dtPrice');
+  if(pe&&p)pe.innerHTML='<span>¥</span>'+_money(p.price)+'<em>/'+esc(p.unitLabel||'天')+'</em>';
+}
+window.campPickPlan=function(i){
+  const plans=(CAMP_DETAIL&&CAMP_DETAIL.pricing)||[];
+  if(!plans[i])return;
+  CAMP_DETAIL_PLAN=i;
+  CAMP_DETAIL_UNITS=_planDefaultUnits(plans[i]);
+  const host=document.getElementById('cpDetailHost');
+  if(host)host.querySelectorAll('.cp-plan').forEach((b,j)=>b.classList.toggle('on',j===i));
+  _syncRentalPlan();
+};
+window.campPlanUnits=function(delta){
+  const plans=(CAMP_DETAIL&&CAMP_DETAIL.pricing)||[];
+  const p=plans[CAMP_DETAIL_PLAN]||{};
+  CAMP_DETAIL_UNITS=Math.max(1,Math.min(_planMaxUnits(p),CAMP_DETAIL_UNITS+delta));
+  _syncRentalPlan();
+};
 function _detailPolicies(d){
   const ps=(d.policies||[]).filter(Boolean);
   const base=[{title:'预订说明',text:'下单后营位 / 库存锁定 30 分钟，超时未支付自动释放。'},
@@ -634,9 +771,14 @@ function _paintDetail(){
   const para=hasAi?'':String(d.detailText||d.description||'').split(/\n+/).filter(Boolean)
     .map(t=>'<p>'+esc(t)+'</p>').join('');
   const isPitch=d.kind==='pitch';
-  const price=d.price||0;
+  const plans=(d.kind==='rental')?_rentalPlansOf(d):null;
+  if(plans){
+    if(CAMP_DETAIL_PLAN>=plans.length)CAMP_DETAIL_PLAN=0;
+    if(!CAMP_DETAIL_UNITS)CAMP_DETAIL_UNITS=_planDefaultUnits(plans[CAMP_DETAIL_PLAN]);
+  }
+  const price=(plans&&plans[CAMP_DETAIL_PLAN])?Number(plans[CAMP_DETAIL_PLAN].price||0):(d.price||0);
   const canAdd=isPitch?_quote(d.id,1,0).ok:true;
-  const html='<div class="cp-detail" id="cpDetail">'
+  const html='<div class="cp-detail" id="cpDetailView">'
     + '<div class="cp-dt__top"><button type="button" onclick="campCloseDetail()">'+CP_ICON.back+'</button>'
       + '<span>商品详情</span><button type="button" onclick="campOpenCheckout()" aria-label="清单">'+CP_ICON.cart+'</button></div>'
     + '<div class="cp-dt__scroll">'
@@ -645,12 +787,13 @@ function _paintDetail(){
         + '<h2>'+esc(d.name||'营地商品')+'</h2>'
         + (d.subtitle?'<p class="cp-dt__sub">'+esc(d.subtitle)+'</p>':'')
         + _paintHighlights(d)
-        + '<div class="cp-dt__price"><span>¥</span>'+_money(price)+'<em>'+esc(d.unitLabel||'')+'</em>'
+        + '<div class="cp-dt__price" id="dtPrice"><span>¥</span>'+_money(price)+'<em>'+esc((plans&&plans[CAMP_DETAIL_PLAN])?('/'+(plans[CAMP_DETAIL_PLAN].unitLabel||'天')):(d.unitLabel||''))+'</em>'
         + (Number(d.originalPrice)>price?'<del>¥'+_money(d.originalPrice)+'</del>':'')+'</div>'
         + (CAMP_BENEFITS&&Number(CAMP_BENEFITS.memberDiscountPercent)>0
             ?'<div class="cp-dt__vip">'+esc(CAMP_BENEFITS.memberLevel||'会员')+' 立减 '+_money(CAMP_BENEFITS.memberDiscountPercent)+'% · 可用积分 '+Number(CAMP_BENEFITS.clubPoints||0)+' 分</div>':'')
         + '</div>'
       + '<div class="cp-dt__block"><h3>规格参数</h3><div class="cp-dt__specs">'+_detailSpecs(d)+'</div></div>'
+      + (plans?_rentalPlanBlock(plans):'')
       + (fac?'<div class="cp-dt__block"><h3>设施与服务</h3><div class="cp-dt__chips">'+fac+'</div></div>':'')
       + (para?'<div class="cp-dt__block"><h3>商品详情</h3><div class="cp-dt__rich">'+para+'</div></div>':'')
       + _paintAiSections(d)
@@ -663,25 +806,35 @@ function _paintDetail(){
       + '<button class="cp-dt__add" type="button" '+(canAdd?'':'disabled')+' onclick="campDetailAdd(0)">'+(canAdd?'加入清单':'已订满')+'</button>'
       + '<button class="cp-dt__buy" type="button" '+(canAdd?'':'disabled')+' onclick="campDetailAdd(1)">立即预订</button>'
     + '</div></div>';
-  let node=document.querySelector('#cpDetail');
+  /* #828 修正：这里过去查的是 '#cpDetail'（详情页内部节点），却把新建的宿主节点
+     命名成 '#cpDetailHost' —— 于是第二次打开商品详情时，querySelector 命中的是
+     上一次残留的内层节点，详情页被套进自己上一层的 DOM 里（fixed 层层层嵌套，
+     底部主页面透出来，画面错乱）。统一只用 #cpDetailHost 作为宿主即可。
+     同时打开详情时锁住 body 滚动，避免底层页面跟着一起动。 */
+  let node=document.querySelector('#cpDetailHost');
   if(!node){node=document.createElement('div');node.id='cpDetailHost';document.body.appendChild(node);}
   node.innerHTML=html;
+  document.body.classList.add('cp-lock');
 }
-window.campCloseDetail=function(){const n=document.querySelector('#cpDetailHost');if(n)n.remove();CAMP_DETAIL=null;};
+window.campCloseDetail=function(){
+  const n=document.querySelector('#cpDetailHost');if(n)n.remove();
+  document.body.classList.remove('cp-lock');CAMP_DETAIL=null;
+};
 window.campDetailQty=function(delta){
   CAMP_DETAIL_QTY=Math.max(1,Math.min(20,CAMP_DETAIL_QTY+delta));
   const el=$('#dtQty');if(el)el.textContent=CAMP_DETAIL_QTY;
+  try{_syncRentalPlan();}catch(e){}
 };
 window.campDetailAdd=function(goCheckout){
   const d=CAMP_DETAIL;if(!d)return;
-  const ok=_addToCart(d.kind,d.id,goCheckout?CAMP_DETAIL_QTY:CAMP_DETAIL_QTY);
+  const ok=_addToCart(d.kind,d.id,CAMP_DETAIL_QTY,{plan:CAMP_DETAIL_PLAN,units:CAMP_DETAIL_UNITS});
   if(!ok)return;
   campCloseDetail();
   if(goCheckout)campOpenCheckout();
 };
 
 /* ── 购物车：营位 / 装备 / 商品统一进一张订单 ───────────────────────────── */
-function _addToCart(kind,id,qty){
+function _addToCart(kind,id,qty,opts){
   qty=Math.max(1,Math.min(20,Number(qty)||1));
   if(kind==='pitch'){
     const q=_quote(id,1,0);
@@ -698,14 +851,24 @@ function _addToCart(kind,id,qty){
     const arr=CAMP_GOODS[kind]||[];
     const x=arr.find(v=>String(v.id)===String(id))||{};
     const isR=kind==='rental';
-    const unit=isR?Number(x.daily_price||0):Number(x.price||0);
+    /* #822：租赁按老板自定义的计费项计价（按小时 / 按天 / 按次…）。 */
+    const plans=isR?_rentalPlansOf(x):null;
+    let plan=null,planIdx=-1,units=0;
+    if(plans&&plans.length){
+      planIdx=(opts&&opts.plan!=null)?Math.max(0,Math.min(plans.length-1,opts.plan)):0;
+      plan=plans[planIdx];
+      units=(opts&&opts.units)?Math.max(1,Math.min(_planMaxUnits(plan),opts.units)):_planDefaultUnits(plan);
+    }
+    const unit=isR?(plan?Number(plan.price||0):Number(x.daily_price||0)):Number(x.price||0);
     const cap=isR?Number(x.available_qty||0):Number(x.stock||0);
     const exist=CAMP_CART.find(v=>v.kind===kind&&String(v.id)===String(id));
     const newQty=(exist?Number(exist.qty):0)+qty;
     if(newQty>cap){_cpToast('库存仅剩 '+cap+' 件');return false;}
     if(exist){exist.qty=newQty;exist.deposit=isR?Number(x.deposit||0)*newQty:0;}
     else CAMP_CART.push({kind:kind,id:id,title:x.name||'商品',coverUrl:_safeUrl(x.coverUrl||x.cover_url),coverFocal:x.coverFocal||null,
-      spec:x.description||x.subtitle||'',unitLabel:isR?'/天':'/件',unitPrice:unit,qty:qty,
+      spec:(isR&&plan)?((plan.name||'租金')+' · '+units+(plan.unitLabel||'天')):(x.description||x.subtitle||''),
+      unitLabel:isR?(plan?('/'+plan.unitLabel):'/天'):'/件',unitPrice:unit,qty:qty,
+      planIdx:planIdx,units:units,
       days:Math.max(1,_nights()),checkIn:isR?CAMP_IN:'',checkOut:isR?(_isDayUse()?_add(CAMP_IN,1):CAMP_OUT):'',
       isDayUse:0,deposit:isR?Number(x.deposit||0)*qty:0});
   }
@@ -723,7 +886,10 @@ window.campBookNow=function(kind,id){
 function _quoteItems(){
   return CAMP_CART.map(x=>({kind:x.kind,id:Number(x.id),qty:Number(x.qty)||1,
     checkIn:x.checkIn||'',checkOut:x.checkOut||'',isDayUse:!!x.isDayUse,
-    deposit:Number(x.deposit||0),days:Number(x.days||1)}));
+    deposit:Number(x.deposit||0),days:Number(x.days||1),
+    // #822：租赁带计费项序号与数量，后端据此按老板自定义的单位重算
+    plan:(x.planIdx!=null&&x.planIdx>=0)?x.planIdx:undefined,
+    units:(Number(x.units||0)>0)?Number(x.units):undefined}));
 }
 function _quoteBody(){
   return {userId:_uid(),items:_quoteItems(),
@@ -971,14 +1137,26 @@ function _showSuccess(r){
 /* ── 我的营地订单 ───────────────────────────────────────────────────────── */
 const CAMP_ST={pending_payment:'待支付',paid:'已支付',cancelled:'已取消',expired:'已过期'};
 const CAMP_ST_CN={pending_payment:'待支付',paid:'已支付 · 待出行',cancelled:'已取消',expired:'已超时'};
+/* #829 与「我的」（me.js）共用同一份「已读订单」记录：同一个 key，两端不会各记一套。
+   营地页的订单抽屉本来就直接摊开订单明细 + 核销码，所以「打开抽屉 = 已看」。 */
+function _campSeenKey(){ try{ return 'clubos_camp_seen_'+(typeof CLUB!=='undefined'?CLUB:0)+'_'+_uid(); }catch(e){ return ''; } }
+function _campSeenSet(){ try{ return new Set(JSON.parse(localStorage.getItem(_campSeenKey())||'[]').map(String)); }catch(e){ return new Set(); } }
+function _campMarkAllSeen(orders){
+  const seen=_campSeenSet(); let ch=false;
+  (orders||[]).forEach(o=>{ if(o&&o.id!=null&&!seen.has(String(o.id))){ seen.add(String(o.id)); ch=true; } });
+  if(ch){ try{ localStorage.setItem(_campSeenKey(), JSON.stringify([...seen])); }catch(e){} }
+}
 function _ordersHtml(orders){
   if(!orders.length)return '<div class="cp-state">还没有营地订单，去挑个营位吧。</div>';
+  const seen=_campSeenSet();
   return '<div class="cp-orders">'+orders.map(o=>{
     const st=o.status||'';
+    const isNew=(o.id!=null&&!seen.has(String(o.id)));
     const items=(o.items||[]).map(it=>'<div class="cp-order__it"><span>'+esc(it.title||'')+' × '+it.qty+'</span>'
       +'<b>¥'+_money(it.subtotal)+'</b></div>').join('');
     return '<div class="cp-order"><div class="cp-order__hd"><b>'+esc(o.orderNo||'')+'</b>'
-      +'<span class="cp-order__st '+esc(st)+'">'+esc(CAMP_ST_CN[st]||CAMP_ST[st]||st)+'</span></div>'
+      +'<span class="cp-order__st '+esc(st)+'">'+esc(CAMP_ST_CN[st]||CAMP_ST[st]||st)+'</span>'
+      +(isNew?'<i class="cp-order__dot" aria-label="新订单"></i>':'')+'</div>'
       +'<div class="cp-order__date">'+esc(o.createdAt||'')+' · 联系人 '+esc(o.guestName||'')+'</div>'
       + items
       +'<div class="cp-order__sum">商品 ¥'+_money(o.goodsAmount)
@@ -1003,8 +1181,11 @@ window.campOpenOrders=async function(){
   _showSheet('我的营地订单','<div id="cpOrdersBody"><div class="cp-state">正在读取订单…</div></div>');
   try{
     const d=await _get('/camp-orders?user_id='+_uid());
-    const el=$('#cpOrdersBody');if(el)el.innerHTML=_ordersHtml(d.orders||[]);
+    const list=d.orders||[];
+    const el=$('#cpOrdersBody');if(el)el.innerHTML=_ordersHtml(list);
     _drawRedeemQrs();
+    /* 抽屉里订单明细与核销码全摊开了，算「已看」。 */
+    _campMarkAllSeen(list);
   }catch(e){const el=$('#cpOrdersBody');if(el)el.innerHTML='<div class="cp-state">'+esc(_err(e))+'</div>';}
 };
 /* #812：把订单列表里的核销码 canvas 画成二维码（本地生成，无外网） */
@@ -1059,7 +1240,7 @@ function _closeSheet(now){
 window.campCloseSheet=function(){_closeSheet();clearInterval(CAMP_PAY_TIMER);};
 document.addEventListener('keydown',e=>{
   if(e.key!=='Escape')return;
-  if(document.querySelector('#cpDetail')){campCloseDetail();return;}
+  if(document.querySelector('#cpDetailHost')){campCloseDetail();return;}
   if(document.querySelector('#cpShopHost')){_closeShopList();return;}
   _closeSheet();
 });

@@ -2251,6 +2251,64 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 .web-shell .me-camp__grand{margin-left:auto;font-size:13px;color:var(--w-ink)}
 .web-shell .me-camp__grand b{font-size:16px;color:var(--w-ink)}
 
+/* ── #829 营地订单：未读红点 + 订单详情层 ─────────────────────────────────
+   顾客下了单却不知道后台有没有处理：tab 上挂一枚红点，订单卡右上再挂一枚，
+   点开详情即算已读、红点当场熄灭。 */
+.web-shell .me-tab{position:relative;display:inline-flex;align-items:center;gap:6px}
+.web-shell .me-tab__dot{width:8px;height:8px;border-radius:50%;background:#e5484d;flex:none;box-shadow:0 0 0 2px #fff}
+.web-shell .me-tab.on .me-tab__dot{box-shadow:0 0 0 2px var(--w-ink)}
+.web-shell .me-card2__hdR{display:flex;align-items:center;gap:6px;flex:none}
+.web-shell .me-camp{cursor:pointer;transition:border-color .18s,background .18s}
+.web-shell .me-camp.is-new{border-color:#f3c9cb}
+.web-shell .me-camp__dot{width:8px;height:8px;border-radius:50%;background:#e5484d;flex:none;display:inline-block}
+.web-shell .me-camp__more{margin-top:9px;padding-top:9px;border-top:1px dashed var(--w-line);font-size:12px;color:var(--w-brand);text-align:right}
+/* 详情层：全屏浮层 + 底部抽屉式面板，手机上从下往上滑更符合直觉 */
+.web-shell .me-campd{position:fixed;inset:0;z-index:1700;display:flex;align-items:flex-end;justify-content:center}
+.web-shell .me-campd__mask{position:absolute;inset:0;background:rgba(12,18,14,.55)}
+.web-shell .me-campd__panel{position:relative;width:100%;max-width:520px;max-height:88vh;overflow:auto;background:#fff;border-radius:20px 20px 0 0;box-shadow:var(--w-shadow-lg);animation:meCampdUp .22s ease-out}
+@keyframes meCampdUp{from{transform:translateY(24px);opacity:.6}to{transform:none;opacity:1}}
+.web-shell .me-campd__hd{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;padding:14px 16px;background:#fff;border-bottom:1px solid var(--w-line);z-index:2}
+.web-shell .me-campd__hd b{font-size:15px;font-weight:700}
+.web-shell .me-campd__x{width:30px;height:30px;border:0;border-radius:50%;background:#f2f4f1;color:var(--w-ink2);font-size:19px;line-height:1;cursor:pointer}
+.web-shell .me-campd__body{padding:14px 16px calc(20px + env(safe-area-inset-bottom))}
+.web-shell .me-campd__st{margin-bottom:10px}
+.web-shell .me-campd__kvs{display:flex;flex-direction:column;gap:6px;background:#fafbfa;border:1px solid var(--w-line);border-radius:12px;padding:11px 12px;margin-bottom:14px}
+.web-shell .me-campd__kv{display:flex;justify-content:space-between;gap:12px;font-size:12.5px}
+.web-shell .me-campd__kv span{color:var(--w-muted);flex:none}
+.web-shell .me-campd__kv b{color:var(--w-ink);font-weight:600;text-align:right;word-break:break-all}
+.web-shell .me-campd__sec{margin-bottom:14px}
+.web-shell .me-campd__sec h4{font-size:12px;font-weight:700;color:var(--w-muted);margin:0 0 8px;letter-spacing:.04em}
+.web-shell .me-campd__it{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px dashed var(--w-line)}
+.web-shell .me-campd__it:last-child{border-bottom:0}
+.web-shell .me-campd__cover{width:54px;height:54px;flex:none;border-radius:9px;overflow:hidden;background:#eee}
+.web-shell .me-campd__cover img{width:100%;height:100%;object-fit:cover;display:block}
+.web-shell .me-campd__itbody{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.web-shell .me-campd__itbody b{font-size:13.5px;font-weight:700;color:var(--w-ink)}
+.web-shell .me-campd__itbody span{font-size:12px;color:var(--w-muted)}
+.web-shell .me-campd__itbody em{font-style:normal;font-size:13px;font-weight:700;color:var(--w-ink);margin-top:2px}
+.web-shell .me-campd__amt{display:flex;justify-content:space-between;gap:12px;font-size:12.5px;color:var(--w-ink2);padding:3px 0}
+.web-shell .me-campd__amt b{font-weight:600}
+.web-shell .me-campd__amt.is-cut b{color:#1c7a44}
+.web-shell .me-campd__amt.is-total{margin-top:6px;padding-top:8px;border-top:1px solid var(--w-line);font-size:13.5px;color:var(--w-ink)}
+.web-shell .me-campd__amt.is-total b{font-size:17px;font-weight:800}
+.web-shell .me-campd__qrbox{display:flex;gap:14px;align-items:center;background:#f6faf7;border:1px solid var(--w-line);border-radius:14px;padding:12px;margin-bottom:12px}
+.web-shell .me-campd__qr{width:104px;height:104px;flex:none;background:#fff;border-radius:8px;border:1px solid var(--w-line)}
+.web-shell .me-campd__rctxt{display:flex;flex-direction:column;gap:4px;min-width:0}
+.web-shell .me-campd__rctxt b{font-size:15px;letter-spacing:.06em;color:var(--w-ink);word-break:break-all}
+.web-shell .me-campd__rctxt span{font-size:12px;color:var(--w-muted);line-height:1.5}
+.web-shell .me-campd__qrbox.is-done{flex-direction:column;align-items:flex-start;gap:3px;background:#f7f7f6}
+.web-shell .me-campd__qrbox.is-done b{font-size:14px;color:var(--w-muted)}
+.web-shell .me-campd__qrbox.is-done span{font-size:12px;color:var(--w-muted)}
+.web-shell .me-campd__earn{font-size:12.5px;color:var(--w-brand);background:var(--w-brand-soft);border-radius:10px;padding:9px 12px;margin-bottom:12px}
+.web-shell .me-campd__ops{display:flex;gap:10px;margin-top:4px}
+.web-shell .me-campd__btn{flex:1;border:1px solid var(--w-line);background:#fff;border-radius:11px;padding:11px;font-size:13px;font-weight:600;color:var(--w-ink2);cursor:pointer}
+.web-shell .me-campd__btn.is-primary{background:var(--w-brand);border-color:var(--w-brand);color:#fff}
+/* 核销码放大层 */
+.web-shell .me-campd-zoom{position:fixed;inset:0;z-index:1750;background:rgba(12,18,14,.72);display:flex;align-items:center;justify-content:center;padding:24px}
+.web-shell .me-campd-zoom__box{background:#fff;border-radius:18px;padding:20px;display:flex;flex-direction:column;align-items:center;gap:12px;box-shadow:var(--w-shadow-lg)}
+.web-shell .me-campd-zoom__qr{width:250px;height:250px;background:#fff;border:1px solid var(--w-line);border-radius:10px}
+.web-shell .me-campd-zoom__tip{font-size:12px;color:var(--w-muted);text-align:center;line-height:1.5}
+
 .web-shell .me-tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:10px;margin-bottom:4px}
 .web-shell .me-tab{border:1px solid var(--w-line);background:#fff;border-radius:99px;padding:6px 14px;font-size:13px;color:var(--w-ink2);white-space:nowrap;cursor:pointer}
 .web-shell .me-tab.on{background:var(--w-ink);color:#fff;border-color:var(--w-ink)}

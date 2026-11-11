@@ -35,12 +35,6 @@
 
   const $id = id => document.getElementById(id);
 
-  function optHtml(list, selected) {
-    return (list || []).map(o =>
-      `<option value="${esc(o.value)}"${String(o.value) === String(selected == null ? '' : selected) ? ' selected' : ''}>${esc(o.label)}</option>`
-    ).join('');
-  }
-
   /* 手填色值的非法项（写了东西但不是 #RGB/#RRGGBB）——保存前用来拦一下，
      别把一个看不出错的串悄悄落库，C 端色块会渲染成透明。 */
   function badHexChips(root) {
@@ -163,6 +157,18 @@
     /* ---------- 骨架 ---------- */
     const root = document.createElement('div');
     root.className = 'plat-pe';
+    /* #830：后台「下拉选择」改直接点选 —— 选项 ≤8 铺成圆点行直接点，
+       超过 8 项（品牌 / 品类长列表）由 uxChoiceHtml 自动退回原生 select。 */
+    const peStatusOpts = [
+      {value:'draft',label:'草稿（不入商城）'},{value:'pending_inbound',label:'待入库'},
+      {value:'partially_received',label:'部分入库'},{value:'pending_listing',label:'待上架'},
+      {value:'active',label:'上架（C 端可见）'},{value:'inactive',label:'下架'},{value:'discontinued',label:'停用'}];
+    const peSourceOpts = [{value:'platform_self',label:'平台自营'},{value:'external_api',label:'外部品牌'}];
+    const peInvOpts = [{value:'platform_owned',label:'平台自有库存'},{value:'external_api',label:'外部库存'}];
+    const peFulOpts = [{value:'platform_warehouse',label:'平台仓发货'},{value:'supplier_fulfillment',label:'供应商直发'}];
+    const peFeaturedOpts = [{value:'0',label:'否（普通商品）'},{value:'1',label:'是（进入「本季新品」大图广告位）'}];
+    const peBrandOpts = [{value:'',label:'不设品牌'}].concat(prodBrandOptions(prod && prod.brand_id) || []);
+    const peCatOpts = [{value:'',label:'不分类'}].concat(prodCatOptions(prod && prod.category_id) || []);
     root.innerHTML = `
       <div class="plat-pe__sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
         <header class="plat-pe__bar">
@@ -197,52 +203,32 @@
               <label class="plat-pe__f"><span>仓库</span>
                 <input id="peWarehouse" type="text" maxlength="40" placeholder="例如：成都主仓 / 双流三号仓" value="${esc(prod ? (prod.warehouse || '') : '')}">
                 <em>记录这批货存在哪个仓</em></label>
-              <label class="plat-pe__f"><span>状态</span>
-                <select id="peStatus">
-                  <option value="draft"${prod && prod.status === 'draft' ? ' selected' : ''}>草稿（不入商城）</option>
-                  <option value="pending_inbound"${prod && prod.status === 'pending_inbound' ? ' selected' : ''}>待入库</option>
-                  <option value="partially_received"${prod && prod.status === 'partially_received' ? ' selected' : ''}>部分入库</option>
-                  <option value="pending_listing"${prod && prod.status === 'pending_listing' ? ' selected' : ''}>待上架</option>
-                  <option value="active"${!prod || prod.status === 'active' ? ' selected' : ''}>上架（C 端可见）</option>
-                  <option value="inactive"${prod && prod.status === 'inactive' ? ' selected' : ''}>下架</option>
-                  <option value="discontinued"${prod && prod.status === 'discontinued' ? ' selected' : ''}>停用</option>
-                </select></label>
-              <label class="plat-pe__f"><span>来源</span>
-                <select id="peSource">
-                  <option value="platform_self"${!prod || (prod.source || 'platform_self') === 'platform_self' ? ' selected' : ''}>平台自营</option>
-                  <option value="external_api"${prod && prod.source === 'external_api' ? ' selected' : ''}>外部品牌</option>
-                </select></label>
-              <label class="plat-pe__f"><span>库存模式</span>
-                <select id="peInventoryMode">
-                  <option value="platform_owned"${!prod || (prod.inventory_mode || 'platform_owned') === 'platform_owned' ? ' selected' : ''}>平台自有库存</option>
-                  <option value="external_api"${prod && prod.inventory_mode === 'external_api' ? ' selected' : ''}>外部库存</option>
-                </select></label>
-              <label class="plat-pe__f"><span>履约模式</span>
-                <select id="peFulfillmentMode">
-                  <option value="platform_warehouse"${!prod || (prod.fulfillment_mode || 'platform_warehouse') === 'platform_warehouse' ? ' selected' : ''}>平台仓发货</option>
-                  <option value="supplier_fulfillment"${prod && prod.fulfillment_mode === 'supplier_fulfillment' ? ' selected' : ''}>供应商直发</option>
-                </select></label>
+              <div class="plat-pe__f"><span>状态</span>
+                ${uxChoiceHtml({id:'peStatus',name:'peStatus',value:(prod&&prod.status)||'active',options:peStatusOpts})}</div>
+              <div class="plat-pe__f"><span>来源</span>
+                ${uxChoiceHtml({id:'peSource',name:'peSource',value:(prod&&prod.source)||'platform_self',options:peSourceOpts,row:true})}</div>
+              <div class="plat-pe__f"><span>库存模式</span>
+                ${uxChoiceHtml({id:'peInventoryMode',name:'peInventoryMode',value:(prod&&prod.inventory_mode)||'platform_owned',options:peInvOpts,row:true})}</div>
+              <div class="plat-pe__f"><span>履约模式</span>
+                ${uxChoiceHtml({id:'peFulfillmentMode',name:'peFulfillmentMode',value:(prod&&prod.fulfillment_mode)||'platform_warehouse',options:peFulOpts,row:true})}</div>
               <label class="plat-pe__f"><span>负责人 ID</span>
                 <input id="peOwner" type="number" min="0" step="1" placeholder="用户 ID（可空）" value="${prod && prod.owner_id ? prod.owner_id : ''}">
                 <em>商品负责人，对应 users.id</em></label>
-              <label class="plat-pe__f"><span>是否设为主推款</span>
-                <select id="peFeatured">
-                  <option value="0"${!prod || !Number(prod.is_featured || 0) ? ' selected' : ''}>否（普通商品）</option>
-                  <option value="1"${prod && Number(prod.is_featured || 0) === 1 ? ' selected' : ''}>是（进入「本季新品」大图广告位）</option>
-                </select>
-                <em>只有设为主推款的商品才会出现在 C 端商城顶部大图轮播；一件都没设时大图位自动隐藏</em></label>
+              <div class="plat-pe__f"><span>是否设为主推款</span>
+                ${uxChoiceHtml({id:'peFeatured',name:'peFeatured',value:(prod&&Number(prod.is_featured||0))?'1':'0',options:peFeaturedOpts,row:true})}
+                <em>只有设为主推款的商品才会出现在 C 端商城顶部大图轮播；一件都没设时大图位自动隐藏</em></div>
             </div>
           </section>
 
           <section class="plat-pe__sec">
             <div class="plat-pe__sec-h"><h3>分类维度</h3><p>品牌 / 品类 / 人群 / 季节 / 系列 / 面料 —— 六维决定 C 端筛选能不能筛到它。</p></div>
             <div class="plat-pe__grid">
-              <label class="plat-pe__f"><span>品牌</span>
-                <select id="peBrand"><option value="">不设品牌</option>${optHtml(prodBrandOptions(prod && prod.brand_id), prod && prod.brand_id)}</select></label>
-              <label class="plat-pe__f"><span>品类</span>
-                <select id="peCategory"><option value="">不分类</option>${optHtml(prodCatOptions(prod && prod.category_id), prod && prod.category_id)}</select></label>
-              <label class="plat-pe__f"><span>人群</span>
-                <select id="peGender">${optHtml(PROD_GENDERS, prod ? prod.gender : 'unisex')}</select></label>
+              <div class="plat-pe__f"><span>品牌</span>
+                ${uxChoiceHtml({id:'peBrand',name:'peBrand',value:(prod&&prod.brand_id)||'',options:peBrandOpts})}</div>
+              <div class="plat-pe__f"><span>品类</span>
+                ${uxChoiceHtml({id:'peCategory',name:'peCategory',value:(prod&&prod.category_id)||'',options:peCatOpts})}</div>
+              <div class="plat-pe__f"><span>人群</span>
+                ${uxChoiceHtml({id:'peGender',name:'peGender',value:prod?prod.gender:'unisex',options:PROD_GENDERS,row:true})}</div>
               <label class="plat-pe__f"><span>季节</span>
                 <input id="peSeason" type="text" placeholder="例如 2026 秋冬（留空为常年款）" value="${esc(prod ? prod.season : '')}"></label>
               <label class="plat-pe__f"><span>系列</span>
@@ -315,8 +301,8 @@
        保存时走 wantActive 分支（先落 pending_listing 存图，再校验图/详情/售价后翻 active）。
        若只想先补图不急着上架，运营可手动改回「待上架」。 */
     if (fromWarehouse) {
-      const sel = root.querySelector('#peStatus');
-      if (sel) sel.value = 'active';
+      /* 状态现在是点选控件，值挂在 hidden input 上 —— 用 uxChoiceSet 才能同步高亮。 */
+      if (root.querySelector('#peStatus')) uxChoiceSet('#peStatus', 'active');
       /* 从仓库上架：货已在 WMS，仓库名直接带出（基础信息入库时就有），不用运营手填。
          非阻塞：拉不到也不影响上架，运营仍可手改。 */
       if (pid) {

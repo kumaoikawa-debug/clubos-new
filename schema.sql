@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS clubs (
   -- 2026-11-11 营地会员权益开关：营地「房间/营位、租用装备、小站商品」是否沿用原活动会员体系。
   -- 存 JSON，缺省视为全开（memberDiscountEnabled/pointsEnabled/voucherEnabled/earnPointsEnabled）。
   camp_benefits_json TEXT,
+  -- 2026-11-11 #826：营地分区与图标配置（后台自定义 C 端分区宫格的小图标与名称）。
+  -- 数组，每项 {key,name,target,icon,emoji,visible,order}；为空则用后端默认分区。
+  camp_zones_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -1986,6 +1989,9 @@ CREATE TABLE IF NOT EXISTS camp_rental_items (
   detail_text TEXT,
   original_price REAL NOT NULL DEFAULT 0,
   unit_label TEXT,
+  -- 2026-11-11 #822：自定义计费项数组 [{name,price,unit,unitLabel}]（按小时/按天/按次…）。
+  -- 为空则沿用上面的 daily_price（日租金 × 天数 × 件数），老数据行为不变。
+  pricing_json TEXT,
   -- v4.1 #810：产品级权益开关（默认全开=与旧行为一致）
   promo_enabled INTEGER NOT NULL DEFAULT 1,
   member_discount_enabled INTEGER NOT NULL DEFAULT 1,

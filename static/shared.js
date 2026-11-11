@@ -1642,14 +1642,75 @@ function showAlert({title='提示',message='',okText='知道了',wide=false}={})
     ov.querySelector('[data-ok]').onclick=()=>{ov.uxClose();fin()};
   });
 }
+/* ===== #830 后台「下拉选择」统一改为直接点选 =====
+   原生 <select> 在后台表单里要先点开菜单、再在长列表里滚动找那一项。
+   但后台绝大多数选择只有两三个选项（参与/不参与、启用/停用、帐篷位/房车位），
+   为一个 2 选 1 付一次展开 + 一次查找的成本，纯属自找麻烦。
+   这里统一成 radio 形态的「直接点选」：圆点 + 文字，全部选项一眼可见，点一下就选中。
+
+   · 选项 ≤ 8 → 铺成可点选的圆点行（默认竖排；row=true 时横排）。
+   · 选项 > 8 → 保留原生 select（城市 / 品牌 / 仓库这类长列表摊开反而更难用）。
+
+   取值方式完全不变：控件内保留一个同名 hidden input，
+   form.elements.namedItem(name) / #f_name / #uxf_name 都还能读到值；
+   需要联动时把 onchange 写在 hidden input 上，点选会补发一次 change 事件。 */
+function uxChoiceHtml({id='',name='',value=null,options=[],row=false,onchange='',max=8,cls='',attrs=''}={}){
+  const opts=(options||[]).map(o=>({value:String(o.value),label:String(o.label??o.value)}));
+  const cur=opts.find(o=>o.value===String(value))?String(value):(opts.length?opts[0].value:'');
+  if(opts.length>max){
+    return `<select id="${id}" name="${name}" class="ux-choice-native ${esc(cls||'')}"${attrs?` ${attrs}`:''}${onchange?` onchange="${onchange}"`:''}>${opts.map(o=>`<option value="${esc(o.value)}"${o.value===cur?' selected':''}>${esc(o.label)}</option>`).join('')}</select>`;
+  }
+  return `<div class="ux-choice${row?' ux-choice--row':''}" data-ux-choice>
+    <input type="hidden" id="${id}" name="${name}" value="${esc(cur)}"${attrs?` ${attrs}`:''}${onchange?` onchange="${onchange}"`:''}>
+    ${opts.map(o=>`<button type="button" class="ux-choice__opt${o.value===cur?' on':''}" data-value="${esc(o.value)}" aria-pressed="${o.value===cur?'true':'false'}"><span class="ux-choice__dot" aria-hidden="true"></span><span class="ux-choice__txt">${esc(o.label)}</span></button>`).join('')}
+  </div>`;
+}
+window.uxChoiceHtml=uxChoiceHtml;
+
+/* 点选用事件委托：后台弹层都是动态拼出来的，逐个绑 onclick 容易漏。
+   选中后给 hidden input 补发一次 change —— 这样原来写在 select 上的
+   onchange="xxx(this.value)" 只要原样搬到 hidden input 上就继续有效。 */
+window.uxChoiceSet=function(target,value){
+  const node=(typeof target==='string')?document.querySelector(target):target;
+  if(!node)return;
+  const wrap=(node.classList&&node.classList.contains('ux-choice'))?node:node.closest('[data-ux-choice]');
+  if(!wrap)return;
+  const hid=wrap.querySelector('input[type=hidden]');if(!hid)return;
+  const v=String(value);
+  const changed=hid.value!==v;
+  hid.value=v;
+  wrap.querySelectorAll('.ux-choice__opt').forEach(x=>{
+    const on=x.getAttribute('data-value')===v;
+    x.classList.toggle('on',on);x.setAttribute('aria-pressed',on?'true':'false');
+  });
+  /* 先改值再发事件：回调里若又设置同一字段，值已相等 → 不会递归。
+     input + change 都补发：原生 select 用户点选时两个事件都会来，
+     监听 input 的「表单变脏」之类逻辑才不会漏判。 */
+  if(changed){
+    try{hid.dispatchEvent(new Event('input',{bubbles:true}))}catch(_){}
+    try{hid.dispatchEvent(new Event('change',{bubbles:true}))}catch(_){}
+  }
+};
+document.addEventListener('click',e=>{
+  const btn=(e.target&&e.target.closest)?e.target.closest('.ux-choice__opt'):null;
+  if(!btn)return;
+  const box=btn.closest('[data-ux-choice]');if(!box)return;
+  window.uxChoiceSet(box,btn.getAttribute('data-value'));
+});
+
 function showForm({title='',desc='',fields=[],submitText='提交',validate=null,wide=false}={}){
   const body=fields.map(f=>{
     const id='uxf_'+f.name,val=esc(f.value??'');
     let ctrl;
     if(f.type==='textarea')ctrl=`<textarea id="${id}" name="${f.name}" placeholder="${esc(f.placeholder||'')}">${val}</textarea>`;
-    else if(f.type==='select')ctrl=`<select id="${id}" name="${f.name}">${(f.options||[]).map(o=>`<option value="${esc(o.value)}" ${String(o.value)===String(f.value)?'selected':''}>${esc(o.label??o.value)}</option>`).join('')}</select>`;
+    else if(f.type==='select')ctrl=uxChoiceHtml({id:id,name:f.name,value:f.value,options:f.options||[]});
     else ctrl=`<input id="${id}" name="${f.name}" type="${f.type||'text'}" value="${val}" placeholder="${esc(f.placeholder||'')}" ${f.required?'data-req=1':''} ${f.step!==undefined?`step="${f.step}"`:''} ${f.min!==undefined?`min="${f.min}"`:''}>`;
-    return `<div class="ux-field"><label for="${id}">${esc(f.label)}${f.required?' <em>*</em>':''}</label>${ctrl}${f.help?`<small>${esc(f.help)}</small>`:''}</div>`;
+    /* 点选控件里第一个可聚焦元素是按钮，用 <label for> 包它会被 label 的
+       激活行为误触发（点标签文字 = 选了第一项）。所以选择类字段的标题改成 div。 */
+    const head=(f.type==='select')
+      ?`<div class="ux-field__t">${esc(f.label)}${f.required?' <em>*</em>':''}</div>`
+      :`<label for="${id}">${esc(f.label)}${f.required?' <em>*</em>':''}</label>`;
+    return `<div class="ux-field">${head}${ctrl}${f.help?`<small>${esc(f.help)}</small>`:''}</div>`;
   }).join('');
   return new Promise(resolve=>{
     let done=false;const fin=v=>{if(done)return;done=true;resolve(v)};
@@ -1693,3 +1754,45 @@ function leaderAvatar(name,url,size){
   if(!nm)return `<span class="${cls}" style="background:#9db5a6"></span>`;
   return `<span class="${cls}" style="background:${leaderAvatarColor(nm)}" title="${esc(nm)}" aria-hidden="true">${esc(nm.slice(0,1))}</span>`;
 }
+
+/* ===== 营地分区图标库（#826：后台让营地老板自己挑，俱乐部端与 C 端共用一套 SVG）=====
+   以前 C 端那排分区小图标是前端写死的，老板改不了。现在后台能改名、换图标、
+   用 emoji，两端必须画得一模一样 —— 所以 SVG 放共享层，不各写一份。 */
+(function(){
+  const wrap=d=>'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+d+'</svg>';
+  const P={
+    all:'<path d="M3 10.5 12 3l9 7.5"/><path d="M5.5 9.5V21h13V9.5"/><path d="M9.5 21v-6h5v6"/>',
+    tent:'<path d="M12 4 3 20h18z"/><path d="M12 9 7.5 20h9z"/>',
+    rv:'<path d="M2 16V9h12l4 4h3v3"/><circle cx="7" cy="17.5" r="2"/><circle cx="17" cy="17.5" r="2"/><path d="M9 17.5h6"/>',
+    cabin:'<path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
+    day:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    rental:'<path d="M4 8h16l-1.2 12H5.2z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>',
+    store:'<path d="M3 9h18l-1 11H4z"/><path d="M3 9l2-5h14l2 5"/><path d="M9 20v-7h6v7"/>',
+    service:'<path d="M4 12a8 8 0 0 1 16 0v5a2 2 0 0 1-2 2h-2v-7h4"/><path d="M4 12v5a2 2 0 0 0 2 2h2v-7H4"/>',
+    tree:'<path d="M12 3 6 11h3l-4 6h14l-4-6h3z"/><path d="M12 17v4"/>',
+    water:'<path d="M12 3s6 6.5 6 10a6 6 0 0 1-12 0c0-3.5 6-10 6-10z"/>',
+    fire:'<path d="M12 3c3 4 5 5.5 5 9a5 5 0 0 1-10 0c0-2 1-3 2-4 .5 1.5 1.5 2 2 2 .8 0 1-1 1-2 0-1.5-.5-3 0-5z"/>',
+    wifi:'<path d="M2 8.5a16 16 0 0 1 20 0"/><path d="M5 12a11 11 0 0 1 14 0"/><path d="M8.5 15.5a6 6 0 0 1 7 0"/><circle cx="12" cy="19" r="1.2"/>',
+    parking:'<rect x="3" y="3" width="18" height="18" rx="4"/><path d="M9 17V7h4a3 3 0 0 1 0 6H9"/>',
+    coffee:'<path d="M4 8h12v6a5 5 0 0 1-5 5H9a5 5 0 0 1-5-5z"/><path d="M16 9h2a2.5 2.5 0 0 1 0 5h-2"/><path d="M4 21h13"/>',
+    toilet:'<circle cx="7" cy="5" r="2"/><circle cx="17" cy="5" r="2"/><path d="M5 21v-6H3l2-6h4l2 6H9v6"/><path d="M15 21v-6h4v6"/>',
+    shop:'<path d="M4 8h16l-1 12H5z"/><path d="M9 8V6a3 3 0 0 1 6 0v2"/>',
+    mountain:'<path d="M3 19 10 7l4 6 2-3 5 9z"/>',
+    sun:'<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+    moon:'<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4 8.5 8.5 0 1 0 20 14.5z"/>',
+    bed:'<path d="M3 18V7"/><path d="M3 12h18v6"/><path d="M7 12V9h10v3"/><circle cx="7" cy="8" r="1.6"/>',
+    star:'<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+    map:'<path d="M9 4 3 6.5v13L9 17l6 2.5 6-2.5v-13L15 6.5z"/><path d="M9 4v13M15 6.5v13"/>'
+  };
+  const LIB={};
+  Object.keys(P).forEach(k=>{LIB[k]=wrap(P[k]);});
+  window.CAMP_ICON_LIB=LIB;
+  window.CAMP_ICON_KEYS=Object.keys(P);
+  /* 取图标：优先 emoji（老板自选），其次内置 SVG；都没有就退回「全部」图标。 */
+  window.campZoneIcon=function(icon,emoji){
+    if(emoji){const t=String(emoji).trim();if(t)return '<span class="zoneico zoneico--emoji">'+esc(t)+'</span>';}
+    const k=String(icon||'').trim();
+    const svg=(window.CAMP_ICON_LIB||{})[k];
+    return '<span class="zoneico">'+(svg||window.CAMP_ICON_LIB.all)+'</span>';
+  };
+})();

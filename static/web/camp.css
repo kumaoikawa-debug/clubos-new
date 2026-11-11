@@ -211,8 +211,11 @@
 .cp-member{display:flex;align-items:center;gap:10px;margin:14px 14px 0;padding:12px 14px;border-radius:16px;
   background:linear-gradient(105deg,#193f2e,#2c6a48);color:#fff;box-shadow:0 8px 22px rgba(20,60,40,.18);cursor:pointer}
 .cp-member__ico{width:34px;height:34px;border-radius:11px;background:rgba(255,255,255,.16);
-  display:grid;place-items:center;flex:0 0 auto}
+  display:grid;place-items:center;flex:0 0 auto;overflow:hidden}
 .cp-member__ico svg{width:19px;height:19px;stroke:#fff;fill:none;stroke-width:1.8}
+/* #827 会员头像：与「我的」页同源，有照片就显示照片，没有就显示姓名首字母。 */
+.cp-member__ico--ava img{width:100%;height:100%;object-fit:cover}
+.cp-member__ico--letter{font-size:15px;font-weight:800;color:#fff;letter-spacing:.02em}
 .cp-member__txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
 .cp-member__txt b{font-size:13px;font-weight:800}
 .cp-member__txt em{font-style:normal;font-size:10.5px;color:rgba(255,255,255,.78);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -231,9 +234,11 @@
 .cp-prod__spec{margin-top:4px;font-size:10.5px;color:var(--cp-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cp-prod__sub{margin-top:3px;font-size:10px;color:var(--cp-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .cp-prod__foot{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-top:9px}
-.cp-prod__add{width:28px;height:28px;border:0;border-radius:50%;background:var(--cp-black);color:#fff;
-  font-size:18px;line-height:1;padding:0;flex:0 0 auto}
-.cp-prod__add:disabled{background:#c6cec8}
+.cp-prod__add{width:28px;height:28px;border:0;border-radius:50%;background:var(--cp-green);color:#fff;
+  font-size:18px;line-height:1;padding:0;flex:0 0 auto;display:grid;place-items:center;
+  box-shadow:0 3px 10px rgba(29,107,72,.28);transition:transform .12s}
+.cp-prod__add:active{transform:scale(.94)}
+.cp-prod__add:disabled{background:#c6cec8;box-shadow:none}
 .cp-footnote{margin:24px 14px 4px;text-align:center;color:#9aa79f;font-size:10.5px;line-height:1.8}
 
 /* 底部购物条 */
@@ -437,6 +442,8 @@
 .cp-order__st{font-size:10.5px;font-weight:700;padding:3px 8px;border-radius:99px;background:#eaeaea;color:#6b6b6b}
 .cp-order__st.paid{background:#e4f2e9;color:var(--cp-green-d)}
 .cp-order__st.pending_payment{background:#fff2e4;color:#b06a1b}
+/* #829 未读新订单红点 */
+.cp-order__dot{width:8px;height:8px;border-radius:50%;background:#e5484d;flex:none;display:inline-block}
 .cp-order__date{font-size:10px;color:var(--cp-muted);margin-top:5px}
 .cp-order__it{display:flex;justify-content:space-between;gap:8px;font-size:11.5px;padding:6px 0;color:var(--cp-ink2)}
 .cp-order__sum{font-size:11px;color:var(--cp-muted);border-top:1px solid #e8eee9;padding-top:8px;margin-top:4px;line-height:1.7}
@@ -471,9 +478,27 @@ body.cp-lock{overflow:hidden}
   padding:7px 14px;font-size:12px;font-weight:700;white-space:nowrap}
 .cp-lv__chip.on{background:var(--cp-green);border-color:var(--cp-green);color:#fff}
 .cp-lv__meta{padding:6px 14px 8px;font-size:11px;color:var(--cp-muted)}
-.cp-lv__grid{padding:8px 12px 24px;overflow-y:auto;flex:1}
-.cp-prod--lv{margin-bottom:12px}
-.cp-prod--lv .cp-prod__media{height:170px}
+/* #823 二级页商品列表：横版「左图右文」，一行一件铺满屏宽。
+   竖版双列在只有一两件商品时右侧空一整列，且网格行高被拉伸 → 卡内大片空白。 */
+.cp-lv__list{padding:6px 12px 24px;overflow-y:auto;flex:1;display:flex;flex-direction:column;gap:10px}
+.cp-pl{display:flex;gap:12px;align-items:stretch;background:var(--cp-card);border-radius:14px;padding:10px;
+  box-shadow:0 4px 16px rgba(20,45,32,.06);cursor:pointer}
+.cp-pl:active{transform:scale(.995)}
+.cp-pl__media{position:relative;width:104px;height:104px;flex:0 0 104px;border-radius:11px;overflow:hidden;background:#e3eee3}
+.cp-pl__img{width:100%;height:100%;object-fit:cover}
+.cp-pl__media .cp-card__ph{position:absolute;inset:0}
+.cp-pl__off{position:absolute;left:6px;top:6px;padding:3px 7px;border-radius:7px;
+  background:rgba(20,32,25,.72);color:#fff;font-size:9.5px;font-weight:700}
+.cp-pl__body{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;gap:2px}
+.cp-pl__t{font-size:14px;font-weight:800;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-pl__spec{font-size:11px;color:var(--cp-ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-pl__sub{font-size:10.5px;color:var(--cp-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cp-pl__foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px}
+.cp-pl__add{width:30px;height:30px;border:0;border-radius:50%;background:var(--cp-green);color:#fff;
+  font-size:18px;line-height:1;padding:0;flex:0 0 auto;display:grid;place-items:center;
+  box-shadow:0 3px 10px rgba(29,107,72,.28);transition:transform .12s}
+.cp-pl__add:active{transform:scale(.94)}
+.cp-pl__add:disabled{background:#c6cec8;box-shadow:none}
 /* 主页分区头可点进二级页 */
 .cp-sec__head--link{cursor:pointer}
 .cp-sec__head--link:active{opacity:.7}
@@ -568,3 +593,21 @@ body.cp-lock{overflow:hidden}
   .cp-intro__hero{height:290px}
   .cp-intro__gallery{grid-template-columns:repeat(2,1fr)}
 }
+/* #826：分区图标可由后台换成 emoji */
+.cp-grid__ico--emoji{font-size:21px;line-height:1}
+
+/* ── #822 租赁计费项选择（按小时 / 按天 / 按次…）───────────────────────── */
+.cp-plans{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:8px;margin-bottom:10px}
+.cp-plan{border:1px solid var(--cp-line,#e6e9e4);background:#fff;border-radius:12px;padding:9px 11px;text-align:left;
+  display:flex;flex-direction:column;gap:2px;cursor:pointer}
+.cp-plan b{font-size:13px;font-weight:700;color:var(--cp-ink,#16211a)}
+.cp-plan span{font-size:12px;color:var(--cp-ink2,#4a5b4f)}
+.cp-plan.on{border-color:var(--cp-green,#2f6b48);background:#eef5f0;box-shadow:0 0 0 1px var(--cp-green,#2f6b48) inset}
+.cp-plan.on b{color:var(--cp-green-d,#1f5236)}
+.cp-planqty{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--cp-ink2,#4a5b4f);margin-top:4px}
+.cp-planqty button{width:30px;height:30px;border-radius:9px;border:1px solid var(--cp-line,#e6e9e4);background:#fff;
+  font-size:16px;line-height:1;color:var(--cp-ink,#16211a);cursor:pointer}
+.cp-planqty b{min-width:26px;text-align:center;font-size:15px;font-weight:800;color:var(--cp-ink,#16211a)}
+.cp-planqty em{font-style:normal;font-size:12px;color:var(--cp-muted,#8a9a90)}
+.cp-planhint{margin-top:8px;font-size:12.5px;color:var(--cp-ink2,#4a5b4f)}
+.cp-planhint b,.cp-planhint{font-weight:600}

@@ -1,12 +1,12 @@
 {
-  "runAt": "2026-11-07T23:38:39",
+  "runAt": "2026-11-11T20:50:24",
   "version": "91185e5 + BUG-001 fixed + OBS-02/03/04 fixed",
   "env": {
     "CLUBOS_TEST_OPEN": "1",
     "CLUBOS_SECURITY_MODE": "demo",
     "COMMERCE_PROVIDER": "local",
     "MOCK_AI": "1",
-    "DB": "/var/folders/r4/_sp9s2g5475b26xq2nd71hnh0000gn/T/clubos-ecom-points-x45u4djq/test.db"
+    "DB": "/var/folders/r4/_sp9s2g5475b26xq2nd71hnh0000gn/T/clubos-ecom-points-2a_xrt2h/test.db"
   },
   "invariants": [
     "I1 余额守恒",
@@ -106,7 +106,7 @@
       "priority": "P1",
       "name": "售后退款幂等（OBS-03：200 + idempotent，零重复副作用）",
       "result": "PASS",
-      "detail": "重复售后退款 200 + idempotent:true（原单 rfd_c9770132445643a4927d），余额与冲正流水零变化"
+      "detail": "重复售后退款 200 + idempotent:true（原单 rfd_e900bb0d3ba04a9a94ea），余额与冲正流水零变化"
     },
     {
       "id": "TC-GP-013",
@@ -148,7 +148,7 @@
       "priority": "P2",
       "name": "俱乐部端不得审核装备退款（OBS-04 只读闸门）",
       "result": "PASS",
-      "detail": "装备退款 rfd_6fd4fea6562b4deba3b85c42db13bcdf：俱乐部 approve/reject/retry 全 409，平台列表可查"
+      "detail": "装备退款 rfd_9d3fc3c07d1a49d3a83350fcadc119b5：俱乐部 approve/reject/retry 全 409，平台列表可查"
     },
     {
       "id": "TC-GP-023",
@@ -162,7 +162,7 @@
       "priority": "P2",
       "name": "俱乐部端装备退款只读行与缓存版本护栏",
       "result": "PASS",
-      "detail": "club.js 只读行 + 页面副标题 + index.html?v=20261107e 已生效（node --check 通过）"
+      "detail": "club.js 只读行 + 页面副标题 + index.html?v=20261108a 已生效（node --check 通过）"
     },
     {
       "id": "TC-ECOM-004/005",

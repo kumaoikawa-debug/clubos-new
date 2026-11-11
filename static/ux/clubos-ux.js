@@ -58,7 +58,15 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
   const finish=(v,hold)=>{if(settled)return;settled=true;document.removeEventListener('keydown',key);if(hold){_holdDialogUntilIdle(el,el.querySelector('.ux-submit'),teardown)}else{teardown()}resolve(v)};
   const priorFocus=document.activeElement;const before=document.body.style.overflow;document.body.style.overflow='hidden';const el=document.createElement('div');el.className='ux-overlay';el.innerHTML='<div class="ux-dialog'+(wide?' wide':'')+'" role="dialog" aria-modal="true" aria-labelledby="uxDialogTitle"><div class="ux-dialog-head"><div>'+(steps?'<div class="ux-wizard-steps"><b>'+esc(steps)+'</b></div>':'<div class="eyebrow">CLUBOS / BUSINESS ACTION</div>')+'<h2 id="uxDialogTitle">'+esc(title)+'</h2>'+(subtitle?'<p>'+esc(subtitle)+'</p>':'')+'</div><button class="x" type="button" aria-label="关闭表单">×</button></div><form novalidate><div class="ux-dialog-body">'+(hint?'<div class="ux-help">'+esc(hint)+'</div>':'')+'<div class="ux-fields-2" id="uxFields"></div><div class="ux-inline-error" role="alert" hidden></div></div><div class="ux-dialog-foot"><button type="button" class="btn ghost ux-cancel">取消</button><button type="submit" class="btn ux-submit'+(danger?' danger':'')+'">'+esc(submitText)+'</button></div></form></div>';
   const grid=el.querySelector('#uxFields');fields.forEach((f,i)=>{const box=document.createElement('div');box.className='ux-field';if(f.full)box.style.gridColumn='1/-1';const id='uxf'+i;const label=document.createElement('label');label.htmlFor=id;label.textContent=f.label||f.name;if(f.required){const em=document.createElement('em');em.textContent=' *';label.appendChild(em)}box.appendChild(label);let inp;
-  if(f.type==='select'){inp=document.createElement('select');for(const opt of f.options||[]){const o=document.createElement('option');o.value=String(opt.value);o.textContent=opt.label;inp.appendChild(o)}}
+  if(f.type==='select'){
+    /* #830：下拉改为直接点选。控件内保留同名 hidden input 承接取值，
+       form.elements.namedItem(f.name) 的读法一行都不用改。 */
+    inp=document.createElement('div');inp.className='ux-choice-host';
+    inp.innerHTML=uxChoiceHtml({id:id,name:f.name,value:f.value,options:f.options||[]});
+    const node=inp.querySelector('input,select');
+    inp._collect=()=>node?node.value:'';
+    f._el=inp;box.appendChild(inp);
+  }
   else if(f.type==='textarea'){inp=document.createElement('textarea')}
   else if(f.type==='datetime'){
     /* 日期/时间点选（原生 date+time，可点击选择）＋ 常用时间胶囊 ＋ 实时自然语言预览。
@@ -76,12 +84,15 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
     fmt();inp._collect=()=>{const d=dEl.value,t=tEl.value;return (d&&t)?(d+' '+t):''};inp._focus=dEl;f._el=inp;box.appendChild(inp);
   }
   else{inp=document.createElement('input');inp.type=f.type||'text';if(f.min!==undefined)inp.min=f.min;if(f.max!==undefined)inp.max=f.max;if(f.step!==undefined)inp.step=f.step}
-  if(f.type!=='datetime'){
+  if(f.type!=='datetime'&&f.type!=='select'){
     inp.id=id;inp.name=f.name;if(f.value!==undefined&&f.value!==null)inp.value=f.value;if(f.placeholder)inp.placeholder=f.placeholder;if(f.required)inp.required=true;if(f.maxLength)inp.maxLength=f.maxLength;if(f.readonly)inp.readOnly=true;box.appendChild(inp);
   }
   if(f.help){const small=document.createElement('small');small.textContent=f.help;box.appendChild(small)}grid.appendChild(box)});
   const form=el.querySelector('form'),error=el.querySelector('.ux-inline-error');
-  const invalid=(node,msg)=>{error.textContent=msg;error.hidden=false;node.setAttribute('aria-invalid','true');node.focus()};
+  const invalid=(node,msg)=>{error.textContent=msg;error.hidden=false;node.setAttribute('aria-invalid','true');
+    /* 点选控件的取值节点是 hidden input（不可聚焦），报错时把焦点交给对应圆点行。 */
+    if(node&&node.type==='hidden'){const w=node.closest('.ux-choice');const c=w&&w.querySelector('.ux-choice__opt');if(c){c.focus();return}}
+    node.focus()};
   form.addEventListener('input',e=>{if(e.target instanceof HTMLElement)e.target.removeAttribute('aria-invalid');error.hidden=true});
   /* 单行输入里的 Enter 不再直接提交表单（2026-10-09 用户反馈「这个界面填写价格时老是跳回到详情」）。
      uxForm 用的是真实 <form>，浏览器默认行为是「任一单行 input 里按 Enter 就 submit」→ 校验通过便保存并关闭弹窗
@@ -93,14 +104,14 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
     const t=e.target;if(!t)return;
     if(t.tagName==='TEXTAREA'||t.tagName==='BUTTON'||t.type==='submit')return;
     e.preventDefault();
-    const fs=[...el.querySelectorAll('button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled])')].filter(n=>n.offsetParent!==null);
+    const fs=[...el.querySelectorAll('button:not([disabled]),input:not([type=hidden]):not([disabled]),textarea:not([disabled]),select:not([disabled])')].filter(n=>n.offsetParent!==null);
     const i=fs.indexOf(t);if(i>=0&&i<fs.length-1)fs[i+1].focus();
   });
   form.onsubmit=e=>{e.preventDefault();error.hidden=true;const data={};for(const f of fields){
    if(f.type==='datetime'){const v=f._el?f._el._collect():'';if(f.required&&!v){invalid((f._el&&f._el._focus)||f._el,'请选择「'+(f.label||f.name)+'」的日期和时间');return}data[f.name]=v;continue}
    const node=form.elements.namedItem(f.name);const raw=node.value.trim();if(f.required&&!raw){invalid(node,'请填写「'+f.label+'」');return}if(f.type==='number'&&raw){const n=Number(raw);if(!Number.isFinite(n)||(f.min!==undefined&&n<Number(f.min))||(f.max!==undefined&&n>Number(f.max))||node.validity.stepMismatch){invalid(node,'「'+f.label+'」不在允许范围内或不符合数量精度');return}data[f.name]=n}else data[f.name]=raw;}
    for(const f of fields){if(f.validate){const msg=f.validate(data[f.name],data);if(msg){invalid(form.elements.namedItem(f.name)||(f._el&&f._el._focus),msg);return}}}finish(data,true)};
-  el.querySelector('.x').onclick=()=>finish(null);el.querySelector('.ux-cancel').onclick=()=>finish(null);el.onclick=e=>{if(e.target===el)finish(null)};const key=e=>{if(e.key==='Escape'){e.stopPropagation();finish(null)}if(e.key==='Tab'){const focusables=[...el.querySelectorAll('button:not([disabled]),input:not([disabled]),textarea:not([disabled]),select:not([disabled])')];if(!focusables.length)return;const first=focusables[0],last=focusables.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}}};document.addEventListener('keydown',key);document.body.appendChild(el);el.querySelector('input,select,textarea,.x')?.focus();
+  el.querySelector('.x').onclick=()=>finish(null);el.querySelector('.ux-cancel').onclick=()=>finish(null);el.onclick=e=>{if(e.target===el)finish(null)};const key=e=>{if(e.key==='Escape'){e.stopPropagation();finish(null)}if(e.key==='Tab'){const focusables=[...el.querySelectorAll('button:not([disabled]),input:not([type=hidden]):not([disabled]),textarea:not([disabled]),select:not([disabled])')];if(!focusables.length)return;const first=focusables[0],last=focusables.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}}};document.addEventListener('keydown',key);document.body.appendChild(el);el.querySelector('input:not([type=hidden]):not([type=file]),select,textarea,.x')?.focus();
  })};
  window.uxConfirm=async function({title='确认操作',message,confirmText='确认',danger=false}){const result=await uxForm({title,hint:message,fields:[],submitText:confirmText,danger});return result!==null};
  /* e.message 可能是对象（后端 detail 是数组/对象时），原样塞给 toast 会印出

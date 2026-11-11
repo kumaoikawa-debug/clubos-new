@@ -1681,7 +1681,7 @@ function exeSumHtml(f){
 }
 function exeBarHtml(){
   const st=exeSt();
-  return `<div class="led-bar"><div class="led-chips">${EXE_QUICK.map(q=>`<button class="led-chip ${st.k===q.k?'on':''}" onclick="exeQuick('${q.k}')">${q.label}</button>`).join('')}</div><div class="led-dates"><select onchange="exeStatus(this.value)">${EXE_STATES.map(s=>`<option value="${s.k}" ${st.status===s.k?'selected':''}>${s.label}</option>`).join('')}</select><input type="date" value="${st.from}" onchange="exeCustom()"><span class="led-dates__sep">至</span><input type="date" value="${st.to}" onchange="exeCustom()"></div></div>`;
+  return `<div class="led-bar"><div class="led-chips">${EXE_QUICK.map(q=>`<button class="led-chip ${st.k===q.k?'on':''}" onclick="exeQuick('${q.k}')">${q.label}</button>`).join('')}</div><div class="led-dates">${uxChoiceHtml({value:st.status,options:EXE_STATES.map(s=>({value:s.k,label:s.label})),row:true,onchange:'exeStatus(this.value)'})}<input type="date" value="${st.from}" onchange="exeCustom()"><span class="led-dates__sep">至</span><input type="date" value="${st.to}" onchange="exeCustom()"></div></div>`;
 }
 function exeRow(o){
   const stKey=o.execution_status||'preparing';
@@ -2097,11 +2097,11 @@ function leaderFormHtml(actId,r){
     <div class="leader-inline__grid">
       <label>姓名 *<input name="name" value="${esc(r.name||'')}" required placeholder="如 王野"></label>
       <label>联系电话<input name="phone" value="${esc(r.phone||'')}" placeholder="手机号"></label>
-      <label>角色<select name="role">${LEADER_ROLE_OPTS.map(o=>`<option value="${o.value}"${o.value===(r.role||'领队')?' selected':''}>${o.label}</option>`).join('')}</select></label>
+      <div class="lf-field"><span class="lf-t">角色</span>${uxChoiceHtml({name:'role',value:r.role||'领队',options:LEADER_ROLE_OPTS})}</div>
       <label>常驻城市<input name="baseCity" value="${esc(r.base_city||'')}" placeholder="如 成都"></label>
       <label>带队年限<input name="yearsExp" type="number" min="0" max="60" step="1" value="${Number(r.years_exp||0)||''}" placeholder="如 9"></label>
-      <label>资质核验<select name="certVerified">${[['1','已核验（C 端显示「资质已核验」）'],['0','未核验']].map(([v,l])=>`<option value="${v}"${String(Number(r.cert_verified||0))===v?' selected':''}>${l}</option>`).join('')}</select></label>
-      <label>状态<select name="status">${['active','inactive'].map(v=>`<option value="${v}"${v===(r.status||'active')?' selected':''}>${v==='active'?'在岗':'停用'}</option>`).join('')}</select></label>
+      <div class="lf-field"><span class="lf-t">资质核验</span>${uxChoiceHtml({name:'certVerified',value:String(Number(r.cert_verified||0)),options:[{value:'1',label:'已核验（C 端显示「资质已核验」）'},{value:'0',label:'未核验'}]})}</div>
+      <div class="lf-field"><span class="lf-t">状态</span>${uxChoiceHtml({name:'status',value:r.status||'active',options:[{value:'active',label:'在岗'},{value:'inactive',label:'停用'}]})}</div>
       <label class="full">擅长方向<input name="specialties" value="${esc((r.specialties||[]).join(','))}" placeholder="从这些里选：${esc(specs.join('、'))}"></label>
       <label class="full">领队简介（C 端显示）<textarea name="bio" rows="3" placeholder="一两句说清 TA 是什么样的人、擅长带什么线、带团风格。例：8 年川西带队经验，走过 40 多次高原线路，节奏偏稳，擅长照顾第一次上高原的队员。">${esc(r.bio||'')}</textarea></label>
       <label class="full">备注（仅内部可见）<textarea name="note" rows="2" placeholder="证件编号、紧急联系人、内部约定等，不会出现在 C 端">${esc(r.note||'')}</textarea></label>
@@ -3122,13 +3122,13 @@ function mpStaffForm(id){
   const box=$('#mpStaffFormBox');if(!box)return;
   api(`/api/club/${CLUB}/mp/staff`,{cache:'no-store'}).then(d=>{
     const st=(d.staff||[]).find(x=>x.id===id)||{};
-    const opts=(d.roles||[]).map(r=>`<option value="${r.id}" ${st.roleId===r.id?'selected':''}>${esc(r.name)}</option>`).join('');
+    const roleOpts=[{value:'',label:'（暂不分配）'},...(d.roles||[]).map(r=>({value:String(r.id),label:r.name}))];
     box.innerHTML=`<div class="card section"><div class="panel-title"><h3>${id?'编辑员工权限':'绑定管理员'}</h3></div>
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
       <label style="display:block"><span class="sub">姓名 *</span><input id="mpStName" maxlength="20" style="width:100%;margin-top:4px" value="${esc(st.name||'')}" placeholder="员工姓名"></label>
       <label style="display:block"><span class="sub">微信号</span><input id="mpStWx" maxlength="64" style="width:100%;margin-top:4px" value="${esc(st.wxid||'')}" placeholder="微信号（用于后续微信侧绑定）"></label>
       <label style="display:block"><span class="sub">手机号</span><input id="mpStPhone" maxlength="11" inputmode="numeric" style="width:100%;margin-top:4px" value="${esc(st.phone||'')}" placeholder="11 位手机号"></label>
-      <label style="display:block"><span class="sub">用户角色</span><select id="mpStRole" style="width:100%;margin-top:4px"><option value="">（暂不分配）</option>${opts}</select></label>
+      <div style="display:block"><span class="sub">用户角色</span>${uxChoiceHtml({id:'mpStRole',value:st.roleId!=null?String(st.roleId):'',options:roleOpts})}</div>
     </div>
     <div style="margin-top:14px;display:flex;gap:10px"><button class="btn" type="button" onclick="saveMpStaff(${id||0})">${id?'保存':'绑定'}</button><button class="btn ghost" type="button" onclick="$('#mpStaffFormBox').innerHTML=''">取消</button></div></div>`;
   }).catch(e=>showAlert({title:'读取失败',message:e.message||'请重试'}));
@@ -3227,8 +3227,8 @@ async function loadMpSettings(){
       ${sw('base','phoneRequired','预留电话必填','收集手机号须在隐私保护指引中声明')}
     </div>
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px;margin-top:8px">
-      <label style="display:block"><span class="sub">门店排列模式</span><select data-mpset="base.listMode" style="width:100%;margin-top:4px"><option value="default" ${b.listMode!=='city'?'selected':''}>传统排列</option><option value="city" ${b.listMode==='city'?'selected':''}>按城市排列</option></select></label>
-      <label style="display:block"><span class="sub">手机号码前缀</span><select data-mpset="base.phonePrefix" style="width:100%;margin-top:4px">${['中国大陆','中国香港','中国澳门','中国台湾'].map(x=>`<option ${b.phonePrefix===x?'selected':''}>${x}</option>`).join('')}</select></label>
+      <div style="display:block"><span class="sub">门店排列模式</span>${uxChoiceHtml({value:b.listMode==='city'?'city':'default',options:[{value:'default',label:'传统排列'},{value:'city',label:'按城市排列'}],attrs:'data-mpset="base.listMode"'})}</div>
+      <div style="display:block"><span class="sub">手机号码前缀</span>${uxChoiceHtml({value:b.phonePrefix||'中国大陆',options:['中国大陆','中国香港','中国澳门','中国台湾'].map(x=>({value:x,label:x})),attrs:'data-mpset="base.phonePrefix"'})}</div>
     </div>
     <div style="margin-top:12px"><button class="btn" type="button" onclick="saveMpSetGroup('base')">保存基础设置</button></div>
   </div>
@@ -3782,12 +3782,9 @@ function homeItemDialog(mode,i){
       +'<input id="homeDlgBadge" type="text" maxlength="20" value="'+esc(it.badge||'')+'" placeholder="HOT / 限时"></div>'
       +'<div class="ux-field"><label for="homeDlgBtn">按钮文案（可空）</label>'
       +'<input id="homeDlgBtn" type="text" maxlength="20" value="'+esc(it.buttonText||'')+'" placeholder="即刻探索"></div>'
-      +'<div class="ux-field"><label for="homeDlgTarget">跳转目标</label>'
-      +'<select id="homeDlgTarget">'
-      +'<option value=""'+(String(it.targetType||'')===''?' selected':'')+'>不跳转（纯展示）</option>'
-      +'<option value="activity"'+(String(it.targetType||'')==='activity'?' selected':'')+'>跳转到活动</option>'
-      +'<option value="product"'+(String(it.targetType||'')==='product'?' selected':'')+'>跳转到商品</option>'
-      +'</select></div>'
+      +'<div class="ux-field"><div class="ux-field__t">跳转目标</div>'
+      +uxChoiceHtml({id:'homeDlgTarget',value:String(it.targetType||''),options:[{value:'',label:'不跳转（纯展示）'},{value:'activity',label:'跳转到活动'},{value:'product',label:'跳转到商品'}]})
+      +'</div>'
       +'<div class="ux-field" id="homeDlgTargetIdWrap" style="'+(String(it.targetType||'')? '':'display:none')+'"><label for="homeDlgTargetId">目标 ID（活动或商品的数字 id）</label>'
       +'<input id="homeDlgTargetId" type="number" min="1" style="width:160px" value="'+(it.targetId?esc(String(it.targetId)):'')+'" placeholder="例如 42"></div>',
     foot:'<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>'+(mode==='edit'?'保存':'添加')+'</button>',
