@@ -240,6 +240,8 @@ async function loadActivities(){
   skel('#activityRows',6);
   try{
   const s=$('#activitySearch'); if(s&&!s.__wired){s.__wired=true;s.oninput=()=>renderActivityList()}
+  const soW=$('#activitySortWrap'); /* #830 排序改直接点选（占位容器在 index.html，这里填充） */
+  if(soW&&!soW.__wired){soW.__wired=true;soW.innerHTML=uxChoiceHtml({id:'activitySort',name:'activitySort',value:'date-asc',options:[{value:'date-asc',label:'团期最近优先'},{value:'date-desc',label:'团期最远优先'},{value:'new',label:'最近创建优先'},{value:'title',label:'按名称'},{value:'status',label:'已发布优先'}],row:true});}
   const so=$('#activitySort'); if(so&&!so.__wired){so.__wired=true;so.onchange=()=>renderActivityList()}
   const cf=$('#activityCity'); if(cf&&!cf.__wired){cf.__wired=true;cf.onchange=()=>renderActivityList()}
   _acts=await api(`/api/club/${CLUB}/activities`);
@@ -1747,6 +1749,9 @@ function biTrend(d){
   return legend+`<div style="display:flex;align-items:end;gap:4px;height:150px;overflow:hidden;border-bottom:1px solid var(--line)">${groups.map(x=>`<div title="${esc(x.label)} 实收 ${money(x.activity)} / 退款 ${money(x.refund)} / 商城 ${money(x.gear)}" style="min-width:2px;flex:1;height:100%;display:flex;align-items:end;gap:1px"><div style="flex:1;height:${Math.max(0,x.activity/max*100)}%;background:#315a48;border-radius:3px 3px 0 0"></div><div style="flex:1;height:${Math.max(0,x.refund/max*100)}%;background:#bf7b42;border-radius:3px 3px 0 0"></div><div style="flex:1;height:${Math.max(0,x.gear/max*100)}%;background:#8cc2a8;border-radius:3px 3px 0 0"></div></div>`).join('')}</div><div class="sub" style="margin-top:6px;display:flex;justify-content:space-between"><span>${esc(groups[0]?.label||'')}</span><span>${esc(groups[groups.length-1]?.label||'')}</span></div>`;
 }
 async function loadClubBI(){
+ /* #830 统计周期改直接点选（占位容器在 index.html） */
+ const bw=$('#clubBIWindowWrap');
+ if(bw&&!bw.__wired){bw.__wired=true;bw.innerHTML=uxChoiceHtml({id:'clubBIWindow',name:'clubBIWindow',value:'30',options:[{value:'7',label:'近7天'},{value:'30',label:'近30天'},{value:'90',label:'近90天'},{value:'365',label:'近365天'}],onchange:'loadClubBI()'});}
  const w=Number($('#clubBIWindow')?.value||30);
  $('#analyticsMetrics').innerHTML='<div class="card">正在读取真实经营数据…</div>';
  try{

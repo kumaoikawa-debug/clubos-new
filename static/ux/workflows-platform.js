@@ -58,14 +58,14 @@ async function quickCreateProduct(unitCost,supplierId){
     const ov=uxDialog({title:'新商品入库 · 完善基础信息',wide:true,
       desc:'品牌按所选供应商带出；品类可直接新增。规格按颜色分组：一个颜色下加多个尺码和数量，组头自动小计，底部汇总总件数并带回采购单 —— 总数不用手填。后续运营只负责在「从仓库上架」里补图片与营销信息。',
       body:`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-        <label style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:13px">供应商 *<select id="qcSupplier" style="padding:8px;border:1px solid #cdd5cf;border-radius:8px">${optsHtml(supOpts,'请选择供应商')}</select></label>
+        <div style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:13px"><span>供应商 *</span>${uxChoiceHtml({id:'qcSupplier',value:supplierId?String(supplierId):'',options:[{value:'',label:'请选择供应商'},...supOpts]})}</div>
         <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">商品名称 *<input id="qcName" style="padding:8px;border:1px solid #cdd5cf;border-radius:8px"></label>
         <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">货号 / 款号<small style="color:#8a958c">留空自动生成 GEAR-…</small><input id="qcSku" placeholder="例如 SUP-2026-001" style="padding:8px;border:1px solid #cdd5cf;border-radius:8px"></label>
-        <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">品牌（按所选供应商带出）<select id="qcBrand" style="padding:8px;border:1px solid #cdd5cf;border-radius:8px">${optsHtml(brandOpts,supplierId?(brandEmpty?'该供应商暂未关联品牌':'暂不设品牌'):'请先选择供应商')}</select>${supplierId&&brandEmpty?'<small style="color:#a06a00">该供应商还没在「品牌管理」里关联品牌 —— 可先去关联，或先留空完成入库。</small>':(supplierId?'':'<small style="color:#8a958c">选好供应商后，品牌会自动从品牌库带出。</small>')}</label>
-        <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">类别<div style="display:flex;gap:6px"><select id="qcCat" style="flex:1;padding:8px;border:1px solid #cdd5cf;border-radius:8px">${optsHtml(catOpts,'暂不设类别')}</select><button type="button" id="qcAddCat" title="新增品类" style="padding:6px 12px;border:1px solid #cfe3d4;background:#f2f7f3;border-radius:8px;white-space:nowrap">＋ 新增</button></div></label>
+        <div style="display:flex;flex-direction:column;gap:4px;font-size:13px"><span>品牌（按所选供应商带出）</span><div id="qcBrandWrap">${uxChoiceHtml({id:'qcBrand',value:'',options:[{value:'',label:supplierId?(brandEmpty?'该供应商暂未关联品牌':'暂不设品牌'):'请先选择供应商'},...brandOpts]})}</div>${supplierId&&brandEmpty?'<small style="color:#a06a00">该供应商还没在「品牌管理」里关联品牌 —— 可先去关联，或先留空完成入库。</small>':(supplierId?'':'<small style="color:#8a958c">选好供应商后，品牌会自动从品牌库带出。</small>')}</div>
+        <div style="display:flex;flex-direction:column;gap:4px;font-size:13px"><span>类别</span><div id="qcCatWrap">${uxChoiceHtml({id:'qcCat',value:'',options:[{value:'',label:'暂不设类别'},...catOpts]})}</div><div><button type="button" id="qcAddCat" title="新增品类" style="padding:6px 12px;border:1px solid #cfe3d4;background:#f2f7f3;border-radius:8px;white-space:nowrap">＋ 新增品类</button></div></div>
         <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">零售价（可由运营上架时填写）<input id="qcPrice" type="number" min="0" step="0.01" style="padding:8px;border:1px solid #cdd5cf;border-radius:8px"></label>
         <label style="display:flex;flex-direction:column;gap:4px;font-size:13px">成本价 / 采购单价（¥）<small style="color:#8a958c">同时作为本次采购单价</small><input id="qcCost" type="number" min="0" step="0.01" value="${unitCost!=null?unitCost:''}" style="padding:8px;border:1px solid #cdd5cf;border-radius:8px"></label>
-        <label style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:13px">入的仓库${whOpts.length?'':'<small style="color:#8a958c">（未配置仓库，可留空）</small>'}<select id="qcWh" style="padding:8px;border:1px solid #cdd5cf;border-radius:8px">${whOpts.length?optsHtml(whOpts):'<option value="">暂不指定</option>'}</select></label>
+        <div style="grid-column:1/-1;display:flex;flex-direction:column;gap:4px;font-size:13px"><span>入的仓库${whOpts.length?'':'<small style="color:#8a958c">（未配置仓库，可留空）</small>'}</span>${uxChoiceHtml({id:'qcWh',value:(whOpts.find(o=>o.def)||{}).value||'',options:[{value:'',label:'暂不指定'},...whOpts]})}</div>
       </div>
       <div style="border-top:1px solid #eee;padding-top:10px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><b style="font-size:14px">颜色 × 尺码 × 数量</b><button type="button" class="btn ghost" id="qcAddGroup" style="padding:4px 10px">＋ 加一个颜色</button></div>
@@ -127,19 +127,19 @@ async function quickCreateProduct(unitCost,supplierId){
       refresh();};
     ov.querySelector('#qcAddGroup').onclick=()=>addGroup();
     addGroup();refresh();
-    /* ① 供应商选择：切换时按所选供应商重新带出品牌（品牌按供应商库筛选） */
-    const supSel=ov.querySelector('#qcSupplier');
-    const brandSel=ov.querySelector('#qcBrand');
+    /* ① 供应商选择：切换时按所选供应商重新带出品牌（品牌按供应商库筛选）。
+       点选控件重建容器即可 —— 重建后的 hidden input 仍带 #qcBrand，读取逻辑不变。
+       change 走事件委托（点选 hidden input 与原生 select 回退分支都冒泡）。 */
     const reloadBrands=async sid=>{
-      if(!sid){ brandSel.innerHTML=optsHtml([],'请先选择供应商'); return; }
+      const wrap=ov.querySelector('#qcBrandWrap'); if(!wrap)return;
+      const build=opts=>{wrap.innerHTML=uxChoiceHtml({id:'qcBrand',value:'',options:[{value:'',label:sid?(opts.length?'暂不设品牌':'该供应商暂未关联品牌'):'请先选择供应商'},...opts]});};
+      if(!sid){build([]);return;}
       try{
         const sb=await api('/api/platform/suppliers/'+Number(sid)+'/brands');
-        const bo=(sb||[]).filter(b=>b.status!=='inactive').map(b=>({value:b.brand_id!=null?b.brand_id:b.id,label:b.name+(b.is_primary?'（主供应商）':'')}));
-        brandSel.innerHTML=optsHtml(bo, bo.length?'暂不设品牌':'该供应商暂未关联品牌');
-      }catch(e){ brandSel.innerHTML=optsHtml([],'加载品牌失败'); }
+        build((sb||[]).filter(b=>b.status!=='inactive').map(b=>({value:b.brand_id!=null?b.brand_id:b.id,label:b.name+(b.is_primary?'（主供应商）':'')})));
+      }catch(e){ toast('加载品牌失败'); build([]); }
     };
-    if(supplierId) supSel.value=String(supplierId);
-    supSel.addEventListener('change',()=>reloadBrands(supSel.value));
+    ov.addEventListener('change',e=>{ if(e.target&&e.target.id==='qcSupplier') reloadBrands(e.target.value); });
     /* ② 品类现场新增：名称 + 可选上级（两层品类），成功后刷新字典并选中新值 */
     ov.querySelector('#qcAddCat').onclick=async()=>{
       try{
@@ -152,9 +152,8 @@ async function quickCreateProduct(unitCost,supplierId){
         const r=await post('/api/platform/product-categories',body);
         try{ if(typeof loadProductDicts==='function'){ await loadProductDicts(true); } }catch(e){}
         if(typeof prodCatOptions==='function'){ try{ catOpts=prodCatOptions()||[]; }catch(e){} }
-        const sel=ov.querySelector('#qcCat');
-        sel.innerHTML=optsHtml(catOpts,'暂不设类别');
-        if(r&&r.id)sel.value=String(r.id);
+        const wrap=ov.querySelector('#qcCatWrap');
+        if(wrap)wrap.innerHTML=uxChoiceHtml({id:'qcCat',value:(r&&r.id)?String(r.id):'',options:[{value:'',label:'暂不设类别'},...catOpts]});
         toast('品类已创建并选中');
       }catch(e){toast('创建品类失败：'+e.message);}
     };
@@ -279,7 +278,7 @@ async function quickCreateProduct(unitCost,supplierId){
   }
   const ov=uxDialog({title:'确认到货入库',desc:'先选择入仓，再扫条码 / 输入货号确认颜色尺码，然后填实收数量；数量合计不能超过未到货量。',
     body:`<div style="position:sticky;top:0;background:#fff;z-index:2;padding-bottom:6px;border-bottom:1px solid #eee;margin-bottom:8px">`
-      + (whOpts.length?`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><label style="font-size:13px;white-space:nowrap;color:#3a4651">入仓</label><select id="poLoc" style="flex:1;padding:8px;border:1px solid #cdd5cf;border-radius:8px">${whOpts.map(o=>`<option value="${o.value}"${o.def?' selected':''}>${esc(o.label)}</option>`).join('')}</select></div>`:'')
+      + (whOpts.length?`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><span style="font-size:13px;white-space:nowrap;color:#3a4651">入仓</span><div style="flex:1">${uxChoiceHtml({id:'poLoc',value:(whOpts.find(o=>o.def)||{}).value||'',options:whOpts})}</div></div>`:'')
       +`<div style="display:flex;gap:8px;align-items:center"><input id="poScanInput" placeholder="扫条码或输入货号/SKU 后回车，系统确认颜色尺码" style="flex:1;padding:9px;border:1px solid #cdd5cf;border-radius:8px" autocomplete="off">`
       +`<button class="btn ghost" type="button" id="poScanCam">📷 扫一扫</button></div>`
       +`<div id="poScanResult" style="font-size:13px;margin-top:6px;min-height:18px"></div></div>`

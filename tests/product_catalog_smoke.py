@@ -219,7 +219,10 @@ def main():
     wjs = (ROOT / 'static/web/web.js').read_text(encoding='utf-8')
     wcss = (ROOT / 'static/web/web.css').read_text(encoding='utf-8')
     wfjs = (ROOT / 'static/ux/workflows-platform.js').read_text(encoding='utf-8')
-    ok('id="prodFilterBrand"' in idx and 'id="prodFilterCat"' in idx and 'id="prodFilterGender"' in idx,
+    # #830 人群筛选改为直接点选（uxChoiceHtml）：HTML 里是占位容器 prodFilterGenderWrap，
+    # 控件本体由 platform.js paintProductFilters 运行时渲染（id='prodFilterGender'）。
+    ok('id="prodFilterBrand"' in idx and 'id="prodFilterCat"' in idx and 'id="prodFilterGenderWrap"' in idx
+       and "id:'prodFilterGender'" in pjs,
        '平台端商品视图有三维筛选条')
     ok('onclick="manageBrands()"' in idx and 'onclick="manageCategories()"' in idx, '品牌/品类管理入口')
     ok('onclick="exportProducts()"' in idx and 'onclick="importProducts()"' in idx, 'CSV 导入导出入口')

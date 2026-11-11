@@ -282,6 +282,8 @@ function prodCatLabel(c){const p=(PROD_DICTS.categories||[]).find(x=>Number(x.id
 function prodCatOptions(sel){return (PROD_DICTS.categories||[]).filter(c=>c.status!=='inactive'||Number(c.id)===Number(sel)).map(c=>({value:c.id,label:prodCatLabel(c)}))}
 function prodBrandOptions(sel){return (PROD_DICTS.brands||[]).filter(b=>b.status!=='inactive'||Number(b.id)===Number(sel)).map(b=>({value:b.id,label:b.name}))}
 function paintProductFilters(){
+  const gw=$('#prodFilterGenderWrap'); /* #830 人群筛选改直接点选（占位容器在 index.html） */
+  if(gw&&!gw.__wired){gw.__wired=true;gw.innerHTML=uxChoiceHtml({id:'prodFilterGender',name:'prodFilterGender',value:'',options:[{value:'',label:'全部人群'},{value:'male',label:'男款'},{value:'female',label:'女款'},{value:'unisex',label:'中性'},{value:'kids',label:'儿童'}],onchange:'applyProductFilter()'});}
   const bs=$('#prodFilterBrand');
   if(bs){const keep=bs.value;bs.innerHTML='<option value="">全部品牌</option>'+prodBrandOptions().map(b=>`<option value="${b.value}">${esc(b.label)}</option>`).join('');if(keep)bs.value=keep}
   const cs=$('#prodFilterCat');
@@ -315,7 +317,7 @@ function prodStatusChips(){
     return `<button class="btn ${on?'secondary':'ghost'}" style="padding:3px 14px;border-radius:999px;font-size:12px" onclick="setProdStatus('${s[0]}')">${s[1]}</button>`}).join('');
 }
 function setProdStatus(s){prodStatusFilter=s;prodStatusChips();applyProductFilter()}
-function clearProductFilter(){['#prodFilterBrand','#prodFilterCat','#prodFilterGender','#prodFilterQ'].forEach(s=>{const el=$(s);if(el)el.value=''});prodStatusFilter='';prodStatusChips();applyProductFilter()}
+function clearProductFilter(){['#prodFilterBrand','#prodFilterCat','#prodFilterQ'].forEach(s=>{const el=$(s);if(el)el.value=''});if(window.uxChoiceSet)uxChoiceSet('#prodFilterGender','');else{const el=$('#prodFilterGender');if(el)el.value=''}prodStatusFilter='';prodStatusChips();applyProductFilter()}
 function prodRowHtml(x){
   const brand=x.brand_name?esc(x.brand_name):'<span class="sub">未设品牌</span>';
   const cat=x.category_name?esc(x.category_name)+(x.parent_category_name?`<div class="sub">${esc(x.parent_category_name)}</div>`:''):'<span class="sub">未分类</span>';

@@ -653,7 +653,10 @@ def t_gp_024():
     assert 'function gearRefundRow' in js and "managed_by==='platform'" in js, '缺少装备退款只读分支'
     assert '本端仅可查看' in js, '缺少只读提示'
     assert 'approveRefund(' not in js.split('function gearRefundRow')[1].split('\nfunction ')[0], '只读行出现了审核按钮'
-    assert '/static/club/club.js?v=20261108a' in html, 'club.js 缓存版本未 bump，浏览器会吃旧代码'
+    # 缓存版本护栏：不钉死具体值（每次改动都会 bump），只要求存在且 >= 20261108a
+    import re as _re
+    _m = _re.search(r'/static/club/club\.js\?v=([0-9]{8}[a-z]+)', html)
+    assert _m and _m.group(1) >= '20261108a', 'club.js 缓存版本未 bump，浏览器会吃旧代码'
     assert '装备退款由总平台统管，本端仅可查看进度' in html, '退款审核页副标题未同步只读语义'
     return 'club.js 只读行 + 页面副标题 + index.html?v=20261108a 已生效（node --check 通过）'
 
