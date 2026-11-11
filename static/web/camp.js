@@ -22,7 +22,7 @@ let CAMP_MY_VOUCHERS=null,CAMP_CONTACTS=null,CAMP_VOUCHER_AUTO=false; /* #811 �
 let CAMP_CAL={in:'',out:'',anchor:''};
 let CAMP_DETAIL=null,CAMP_DETAIL_QTY=1;
 let CAMP_HERO_IDX=0,CAMP_TOAST_T=null,CAMP_PAY_TIMER=null,CAMP_PAY_LEFT=0;
-let CAMP_BUSY=false,CAMP_LV=null;
+let CAMP_BUSY=false,CAMP_LV=null,CAMP_INTRO=null;
 
 /* ── 小工具 ─────────────────────────────────────────────────────────────── */
 function _iso(d){const z=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+z(d.getMonth()+1)+'-'+z(d.getDate());}
@@ -41,7 +41,7 @@ function _guest(){return {name:CAMP_GUEST.name||((typeof PAYER_NAME!=='undefined
 function _safeUrl(u){const s=String(u||'');
   if(/^(https?:\/\/|\/static\/|\/uploads\/|data:image\/)/i.test(s))return s;
   /* #809 修复「后台传图前端不显示」：营地素材工作台的公开代理路径（服务端 _camp_safe_url 已放行同一形状） */
-  if(s.startsWith('/api/public/clubs/')&&s.includes('/camp-media-file/'))return s;
+  if(s.startsWith('/api/public/clubs/')&&(s.includes('/camp-media-file/')||s.includes('/camp-src-file/')))return s;
   return '';}
 function _curCamp(){return CAMP_LIST.find(c=>String(c.id)===String(CAMP_CAMP_ID))||CAMP_LIST[0]||{};}
 function _cpToast(msg){
@@ -200,15 +200,16 @@ function _render(){
       + (hero?'<img class="cp-hero__img" src="'+esc(hero)+'" alt="'+esc(c.name||'营地')+'"'+_focalStyle((c.focalPoints||[])[CAMP_HERO_IDX]||c.coverFocal)+'>':'<div class="cp-hero__fallback"></div>')
       + '<div class="cp-hero__shade"></div>'
       + '<div class="cp-hero__rail"><span class="cp-hero__tag">'+CP_ICON.tent+' CAMP · 营地预订</span>'
-      + (CAMP_LIST.length>1?'<select id="campSel" onchange="campOnChange()" class="cp-hero__sel">'+selOpts+'</select>'
-          :'<span class="cp-hero__count">'+(gallery.length>1?(CAMP_HERO_IDX+1)+' / '+gallery.length:'营地实景')+'</span>')
+      + (CAMP_LIST.length>1?'<select id="campSel" onchange="campOnChange()" class="cp-hero__sel">'+selOpts+'</select>':'')
+      + '<button type="button" class="cp-hero__enter" onclick="campOpenIntro()">营地介绍 ›</button>'
       + '</div>'
       + '<div class="cp-hero__cap"><h1 class="cp-hero__name">'+esc(c.name||'山野营地')+'</h1>'
-      + '<p class="cp-hero__slogan">'+esc(c.introText||'选一处营位，把日子过成山野的样子')+'</p></div>'
+      + '<p class="cp-hero__slogan">'+esc(_shortSlogan(c))+'</p></div>'
       + (gallery.length>1?'<div class="cp-hero__dots">'+gallery.map((_,i)=>'<i class="cp-hero__dot '+(i===CAMP_HERO_IDX?'on':'')+'" onclick="campHero('+i+')"></i>').join('')+'</div>':'')
     + '</div>'
     + '<div class="cp-info"><div class="cp-info__row"><div class="cp-info__main">'
-      + '<div class="cp-info__name">'+esc(c.name||'营地')+' <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></div>'
+      + '<div class="cp-info__name" role="button" tabindex="0" onclick="campOpenIntro()">'+esc(c.name||'营地')
+        +' <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg><em>查看详细介绍 ›</em></div>'
       + '<div class="cp-info__addr">'+esc(c.address||'地址待补充')+'</div></div>'
       + '<div class="cp-info__acts"><a class="cp-ibtn" href="'+esc(mapUrl)+'" target="_blank" rel="noopener" aria-label="导航">'+CP_ICON.nav+'</a>'
       + (c.contactPhone?'<a class="cp-ibtn" href="tel:'+esc(c.contactPhone)+'" aria-label="电话">'+CP_ICON.phone+'</a>':'')
@@ -517,7 +518,22 @@ function _detailPolicies(d){
     return '<div class="cp-dt__pol"><b>'+esc(t)+'</b>'+(x?'<p>'+esc(x)+'</p>':'')+'</div>';
   }).join('');
 }
-/* AI 图文详情（营地 v4）：sections=[{headline,body,mediaRefs:[idx]}]，mediaRefs 指向图廊 */
+/* ── #814 图文详情：资料图统一媒体池 + 可复用版式模板 ──────────────────────── */
+function _shortSlogan(c){
+  const s=String((c&&(c.slogan||c.subtitle||c.introText))||'选一处营位，把日子过成山野的样子')
+    .replace(/\s+/g,' ').trim();
+  return s.length>30?s.slice(0,30)+'…':s;
+}
+function _tplName(id){return ({classic:'经典图文',magazine:'杂志大图',spec:'参数优先'}[id]||'经典图文');}
+function _aiMedia(d){
+  /* 优先用 AI 生成时登记的媒体池（含上传资料图）；老数据回退到商品图廊 */
+  const ai=d&&d.aiDetail;
+  if(ai&&Array.isArray(ai.media)&&ai.media.length){
+    return ai.media.map(m=>({u:_safeUrl(m&&m.url),f:(m&&m.focal)||null,
+      cap:String((m&&m.caption)||''),source:(m&&m.source)||'reference'})).filter(p=>p.u);
+  }
+  return _focalPairs(d);
+}
 function _paintHighlights(d){
   const ai=d.aiDetail;
   if(!ai||!Array.isArray(ai.highlights)||!ai.highlights.length)return '';
@@ -526,19 +542,86 @@ function _paintHighlights(d){
 function _paintAiSections(d){
   const ai=d.aiDetail;
   if(!ai||!Array.isArray(ai.sections)||!ai.sections.length)return '';
-  const pairs=_focalPairs(d);
-  const blocks=(ai.sections||[]).map(s=>{
-    const refs=Array.isArray(s.mediaRefs)?s.mediaRefs:[];
-    const imgs=refs.map(i=>pairs[Number(i)]).filter(Boolean)
-      .map(x=>'<img src="'+esc(x.u)+'" alt="" loading="lazy"'+_focalStyle(x.f)+'>').join('');
-    return '<div class="cp-dt__sec">'
-      + (s.headline?'<h4>'+esc(String(s.headline))+'</h4>':'')
-      + (s.body?'<p>'+esc(String(s.body))+'</p>':'')
+  const tpl=['classic','magazine','spec'].indexOf(String(ai.templateId||'classic'))>=0?String(ai.templateId):'classic';
+  const media=_aiMedia(d);
+  const blocks=(ai.sections||[]).map(sec=>{
+    const refs=Array.isArray(sec.mediaRefs)?sec.mediaRefs:[];
+    const imgs=refs.map(i=>media[Number(i)]).filter(Boolean)
+      .map(x=>'<figure class="cp-dt__fig"><img src="'+esc(x.u)+'" alt="" loading="lazy"'+_focalStyle(x.f)+'>'
+        +(x.cap?'<figcaption>'+esc(String(x.cap).slice(0,56))+'</figcaption>':'')+'</figure>').join('');
+    const layout=['full','split','grid','text'].indexOf(sec.layout)>=0?sec.layout:'grid';
+    return '<section class="cp-dt__sec cp-dt__sec--'+layout+'">'
+      + '<div class="cp-dt__sectxt">'
+      + (sec.headline?'<h4>'+esc(String(sec.headline))+'</h4>':'')
+      + (sec.body?'<p>'+esc(String(sec.body))+'</p>':'')
+      + '</div>'
       + (imgs?'<div class="cp-dt__secimgs">'+imgs+'</div>':'')
-      + '</div>';
+      + '</section>';
   }).join('');
-  return '<div class="cp-dt__block"><h3>图文详情</h3><div class="cp-dt__ai">'+blocks+'</div></div>';
+  const meta='<div class="cp-dt__meta">版式 · '+esc(_tplName(tpl))
+    +(ai.visualSummary?'　'+esc(String(ai.visualSummary).slice(0,58)):'')+'</div>';
+  return '<div class="cp-dt__block"><h3>图文详情</h3>'+meta
+    + '<div class="cp-dt__ai cp-dt__ai--'+tpl+'">'+blocks+'</div></div>';
 }
+
+/* ── #814 独立「营地详细介绍」页（body 级浮层，参照双商城二级页） ──────────── */
+window.campOpenIntro=async function(){
+  // 重新拉一次 /camps，保证后台刚生成的 AI 详情立刻可见
+  try{const fresh=await _get('/camps');if(Array.isArray(fresh)&&fresh.length)CAMP_LIST=fresh;}catch(e){}
+  const c=_curCamp();
+  if(!c||!c.id){_cpToast('营地信息尚未加载');return;}
+  CAMP_INTRO=c;
+  _paintIntro();
+};
+function _introRules(c,ai){
+  const arr=(c.rules&&c.rules.length)?c.rules:(ai.policies||[]);
+  return (arr||[]).map(r=>{
+    if(typeof r==='string')return '<div class="cp-intro__rule"><p>'+esc(r)+'</p></div>';
+    return '<div class="cp-intro__rule"><b>'+esc(r.label||r.title||'')+'</b><p>'+esc(r.text||'')+'</p></div>';
+  }).join('');
+}
+function _paintIntro(){
+  const c=CAMP_INTRO||_curCamp();
+  const ai=c.aiDetail||{};
+  const pairs=_aiMedia(c);
+  const gallery=(c.gallery||[]).map(_safeUrl).filter(Boolean);
+  const pool=pairs.length?pairs:gallery.map(u=>({u,f:null,cap:''}));
+  const hero=(c.coverUrl&&_safeUrl(c.coverUrl))||pool[0]&&pool[0].u||'';
+  const figs=pool.slice(0,12).map(x=>'<figure class="cp-intro__fig"><img src="'+esc(x.u)+'" alt="" loading="lazy"'+_focalStyle(x.f)+'>'
+    +(x.cap?'<figcaption>'+esc(String(x.cap).slice(0,52))+'</figcaption>':'')+'</figure>').join('');
+  const hl=(ai.highlights||[]).map(h=>'<span class="cp-chip">'+esc(String(h))+'</span>').join('');
+  const fac=(c.facilities||[]).map(f=>'<span class="cp-chip">'+esc(String(f))+'</span>').join('');
+  const rules=_introRules(c,ai);
+  const hasAi=!!(ai.sections&&ai.sections.length);
+  const html='<div class="cp-intro" id="cpIntro">'
+    + '<div class="cp-lv__bar"><button class="cp-lv__back" type="button" onclick="campCloseIntro()">'+CP_ICON.back+'</button>'
+      + '<span class="cp-lv__title">营地介绍</span><span class="cp-intro__barspace"></span></div>'
+    + '<div class="cp-intro__scroll">'
+      + (hero?'<div class="cp-intro__hero"><img src="'+esc(hero)+'" alt=""'+_focalStyle(c.coverFocal||(pool[0]&&pool[0].f))+'>'
+        + '<div class="cp-intro__herocap"><h1>'+esc(c.name||'营地')+'</h1><p>'+esc(_shortSlogan(c))+'</p></div></div>':'')
+      + '<div class="cp-intro__body">'
+        + (hl?'<div class="cp-intro__chips">'+hl+'</div>':'')
+        + (ai.description?'<p class="cp-intro__lead">'+esc(String(ai.description))+'</p>':'')
+        + (figs?'<div class="cp-intro__block"><h3>营地实景 · '+pool.length+' 张</h3><div class="cp-intro__gallery">'+figs+'</div></div>':'')
+        + _paintAiSections(c)
+        + (fac?'<div class="cp-intro__block"><h3>设施与服务</h3><div class="cp-dt__chips">'+fac+'</div></div>':'')
+        + (rules?'<div class="cp-intro__block"><h3>营地须知</h3>'+rules+'</div>':'')
+        + (!hasAi?'<div class="cp-intro__block"><p class="cp-intro__empty">营地方还没有生成详细介绍。上传照片与资料后，可在后台用「AI 生成图文详情」一键补齐。</p></div>':'')
+        + (c.address?'<div class="cp-intro__block"><h3>到店信息</h3><p class="cp-intro__addr">'+esc(c.address)+'</p></div>':'')
+      + '</div>'
+    + '</div>'
+    + '<div class="cp-intro__bar"><button type="button" onclick="campCloseIntro()">返回挑营位</button></div>'
+    + '</div>';
+  let node=document.querySelector('#cpIntroHost');
+  if(!node){node=document.createElement('div');node.id='cpIntroHost';document.body.appendChild(node);}
+  node.innerHTML=html;
+  document.body.classList.add('cp-lock');
+}
+window.campCloseIntro=function(){
+  const n=document.querySelector('#cpIntroHost');if(n)n.remove();
+  document.body.classList.remove('cp-lock');CAMP_INTRO=null;
+};
+
 function _paintDetail(){
   const d=CAMP_DETAIL;if(!d)return;
   const pairs=_focalPairs(d);

@@ -272,6 +272,36 @@ def _run_compat_migrations(c):
         _ensure_column(c, 'camp_media_assets', _col, _ddl)
     for _t in ('camp_profiles', 'camp_pitches', 'camp_rental_items', 'camp_store_products'):
         _ensure_column(c, _t, 'media_focal_json', 'media_focal_json TEXT')
+    # 2026-11-11 营地 v4.3 #814：资料图片公开白名单 + 版式模板学习样本。
+    # 资料图落在 static/uploads/{club}/camp_src/，必须登记后 C 端代理才放行；
+    # 每次生成留一条模板样本，供后续按实际使用与画面效果迭代模板库。
+    # ★ 必须排在所有写这两张表 / template_id 列的 INSERT 之前。
+    c.execute("""CREATE TABLE IF NOT EXISTS camp_ai_source_assets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        club_id INTEGER NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id INTEGER NOT NULL,
+        job_id TEXT,
+        url TEXT NOT NULL,
+        name TEXT,
+        kind TEXT NOT NULL DEFAULT 'image',
+        caption TEXT,
+        tags_json TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_camp_src_url ON camp_ai_source_assets(club_id,url)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_camp_src_target ON camp_ai_source_assets(club_id,target_kind,target_id)")
+    c.execute("""CREATE TABLE IF NOT EXISTS camp_ai_template_samples (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        club_id INTEGER NOT NULL,
+        target_kind TEXT NOT NULL,
+        target_id INTEGER NOT NULL,
+        template_id TEXT NOT NULL,
+        job_id TEXT,
+        media_count INTEGER NOT NULL DEFAULT 0,
+        summary TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_camp_tpl_samples ON camp_ai_template_samples(club_id,template_id,created_at DESC)")
+    _ensure_column(c, 'camp_detail_jobs', 'template_id', "template_id TEXT NOT NULL DEFAULT 'classic'")
     # 「注册成为该俱乐部会员 → 自动成为总平台会员」用触发器兜住所有写入路径
     # （报名 / 邀请码 / 买会员卡 / 会员中心 refresh_member），不漏任何一个调用点。
     c.execute("""CREATE TRIGGER IF NOT EXISTS trg_club_member_platform

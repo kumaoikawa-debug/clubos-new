@@ -444,15 +444,19 @@ function _detailPayload(ov){
    =============================================================================== */
 let CAMP_MWB_QUEUE=[];                       // 新建态待上传：[{qid,file,url,params}]
 let CAMP_MWB_SEQ=1;
-let CAMP_MWB_DRAFT={prompt:'',docs:[]};      // 重绘时保留用户已写的说明与已选资料
+let CAMP_MWB_DRAFT={prompt:'',docs:[],template:'classic'};  // 重绘时保留说明 / 资料 / 版式选择
+let CAMP_MWB_TPLS=[{id:'classic',name:'经典图文'},{id:'magazine',name:'杂志大图'},{id:'spec',name:'参数优先'}];
+function _mwbTplName(id){const t=(CAMP_MWB_TPLS||[]).find(x=>x.id===id);return t?t.name:(id||'经典图文');}
 function _campMediaSectionHtml(kind,id){return `<div class="ca-mwb" id="caMwb" data-kind="${kind}" data-id="${id}"></div>`;}
 function _mwbCaptureDraft(){
   const p=document.getElementById('caMwbPrompt'); if(p)CAMP_MWB_DRAFT.prompt=p.value;
+  const t=document.getElementById('caMwbTpl'); if(t)CAMP_MWB_DRAFT.template=t.value||'classic';
   const d=document.getElementById('caMwbDocs');
   if(d&&d.files&&d.files.length)CAMP_MWB_DRAFT.docs=[...d.files];
 }
 function _mwbRestoreDraft(){
   const p=document.getElementById('caMwbPrompt'); if(p)p.value=CAMP_MWB_DRAFT.prompt||'';
+  const t=document.getElementById('caMwbTpl'); if(t)t.value=CAMP_MWB_DRAFT.template||'classic';
   const d=document.getElementById('caMwbDocs');
   if(d&&CAMP_MWB_DRAFT.docs.length){
     try{const dt=new DataTransfer();CAMP_MWB_DRAFT.docs.forEach(f=>dt.items.add(f));d.files=dt.files;}catch(e){}
@@ -506,6 +510,9 @@ window.caMwbRemoveQueued=function(qid){
 async function _campRenderMwb(kind,id){
   const box=document.getElementById('caMwb'); if(!box)return;
   _mwbCaptureDraft();
+  // #814 版式模板从后端拉取（含各模板历史使用样本数），失败时用内置三套兜底
+  try{const t=await api(`/api/club/${CLUB}/camp-ai/templates`,{cache:'no-store'});
+      if(t&&t.templates&&t.templates.length)CAMP_MWB_TPLS=t.templates;}catch(e){}
   box.setAttribute('data-kind',kind); box.setAttribute('data-id',id||0);
   const pending=!id;
   let res={max:5,ratios:['4:3','1:1','16:9'],items:[]};
@@ -522,6 +529,7 @@ async function _campRenderMwb(kind,id){
       <button type="button" class="ca-btn ghost xs" title="后移" ${idx===arr.length-1?'disabled':''} onclick="caMwbMove(${a.id},'right')">→</button></div></div>`).join('');
   const full=(arr.length+CAMP_MWB_QUEUE.length)>=res.max;
   box.setAttribute('data-max',res.max||5);
+  const tplOpts=(CAMP_MWB_TPLS||[]).map(t=>`<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
   box.innerHTML=`${pending?`<div class="ca-mwb__pending">新建对象也能直接选照片、手动裁剪并填写详情说明：点底部「保存基础信息」后，照片会自动上传、可用 AI 一键生成图文详情，无需二次打开。</div>`:''}
     <div class="ca-mwb__hint">本地照片（最多 ${res.max} 张，可一次多选；支持手动拖拽裁剪 / 自动识别主体避开大片天空；首张默认封面，← → 可调顺序）</div>
     <div class="ca-mwb__bar">
@@ -536,13 +544,14 @@ async function _campRenderMwb(kind,id){
     <div class="ca-mwb__queue" id="caMwbQueue">${_mwbQueueHtml()}</div>
     <div class="ca-mwb__grid">${items||'<div class="ca-mwb__empty">还没有照片。上传后可逐张点「裁剪」调整取景，或用「一键自动适配」交给系统识别主体。</div>'}</div>
     <div class="ca-mwb__ai">
-      <div class="ca-mwb__ail">一个文本框写清照片说明、设施要点、退改与经营规则；还可上传参考资料（PDF / Word / PPT / 图片，可选），模型会把多种资料统一排版成规格 / 设施 / 须知 / 图文段落，无需手填。</div>
+      <div class="ca-mwb__ail">写清照片说明、设施要点与退改规则；上传的 PDF / Word / PPT / 图片都会被解析，<b>照片会逐张识别画面内容</b>并可作为图文详情配图。选好版式模板后一键生成规格 / 设施 / 须知 / 图文段落。</div>
       <textarea id="caMwbPrompt" rows="3" placeholder="例如：湖景木屋，两张床，可住 2 大 1 小；含独立卫浴、空调、充电桩；18:00 后安静；退订需提前 2 天。"></textarea>
       <div class="ca-mwb__aibar">
         <label class="ca-btn sm" style="position:relative;overflow:hidden;display:inline-flex;align-items:center">上传资料
           <input type="file" id="caMwbDocs" multiple accept=".pdf,.doc,.docx,.ppt,.pptx,.txt,.md,image/*" style="position:absolute;inset:0;opacity:0;cursor:pointer">
         </label>
         <span id="caMwbDocsName" class="ca-mwb__tip"></span>
+        <select id="caMwbTpl" class="ca-mwb__tpl" title="图文详情版式模板">${tplOpts}</select>
         <button type="button" class="ca-btn" id="caMwbGen" onclick="caMwbGenerate()">AI 生成图文详情</button><span id="caMwbGenTip" class="ca-mwb__tip"></span></div>
       <div id="caMwbResult" class="ca-mwb__result"></div>
     </div>`;
@@ -653,11 +662,14 @@ window.caMwbGenerate=async function(){
   const kind=box.getAttribute('data-kind'), id=Number(box.getAttribute('data-id'));
   if(!id){toast('请先保存基础信息再生成详情');return;}
   const prompt=document.getElementById('caMwbPrompt')?document.getElementById('caMwbPrompt').value:'';
+  const tplSel=document.getElementById('caMwbTpl');
+  const tpl=tplSel?tplSel.value:'classic';
   const gen=document.getElementById('caMwbGen'); if(gen)gen.disabled=true;
   const tip=document.getElementById('caMwbGenTip'); if(tip)tip.textContent='生成中…';
   try{
-    const fd=new FormData(); fd.append('target_kind',kind); fd.append('target_id',id); fd.append('prompt',prompt);
-    // #809：参考资料（PDF / Word / PPT / 图片）随生成一起提交，模型统一排版
+    const fd=new FormData(); fd.append('target_kind',kind); fd.append('target_id',id);
+    fd.append('prompt',prompt); fd.append('template',tpl);
+    // #814：资料文件随生成提交，服务端逐张识别画面并登记为 C 端可用配图
     const docs=document.getElementById('caMwbDocs');
     if(docs&&docs.files){ [...docs.files].forEach(df=>fd.append('files',df)); }
     const r=await fetch(`/api/club/${CLUB}/camp-ai/generate`,{method:'POST',body:fd});
@@ -672,10 +684,12 @@ window.caMwbGenerate=async function(){
     }
     if(!st||st.status!=='done'){ toast('生成未完成，请稍后重试'); return; }
     await api(`/api/club/${CLUB}/camp-ai/apply`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetKind:kind,targetId:id,jobId:job})});
-    const d=st.result||{};
+    const d=st.result||{}, media=d.media||[];
+    const refN=media.filter(m=>m&&m.source==='reference').length;
     const res=document.getElementById('caMwbResult');
-    if(res)res.innerHTML=`<div class="ca-mwb__ok">已生成图文详情（规格 ${d.specs?d.specs.length:0} · 设施 ${d.facilities?d.facilities.length:0} · 须知 ${d.policies?d.policies.length:0} 条），已写入并可在 C 端查看。</div>
-      <div class="ca-mwb__preview"><b>${esc(d.subtitle||'')}</b><p>${esc(d.description||'')}</p>${(d.sections||[]).map(s=>`<div class="ca-mwb__sec"><b>${esc(s.headline||'')}</b><p>${esc(s.body||'')}</p></div>`).join('')}</div>`;
+    if(res)res.innerHTML=`<div class="ca-mwb__ok">已生成图文详情（规格 ${d.specs?d.specs.length:0} · 设施 ${d.facilities?d.facilities.length:0} · 须知 ${d.policies?d.policies.length:0} 条）· 版式「${esc(_mwbTplName(d.templateId))}」· ${d.aiMode==='model'?'视觉模型复核':'本地画面分析'}。</div>
+      <div class="ca-mwb__visual">${esc(d.visualSummary||'')} 其中 ${refN} 张资料图片已写入 C 端配图，可在「营地介绍 / 商品详情」查看。</div>
+      <div class="ca-mwb__preview"><b>${esc(d.subtitle||'')}</b><p>${esc(d.description||'')}</p>${(d.sections||[]).map(sec=>`<div class="ca-mwb__sec"><b>${esc(sec.headline||'')}</b><p>${esc(sec.body||'')}</p><div class="ca-mwb__secimgs">${(sec.mediaRefs||[]).map(i=>media[i]?`<img src="${esc(media[i].url)}" alt="" title="${esc(String(media[i].caption||'').slice(0,70))}">`:'').join('')}</div><span class="ca-mwb__layout">版式 ${esc(sec.layout||'text')}</span></div>`).join('')}</div>`;
     if(tip)tip.textContent='完成 ✓';
     toast('AI 图文详情已生成并写入');
   }catch(e){toast('生成失败：'+(e.message||''));}

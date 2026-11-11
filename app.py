@@ -10988,7 +10988,12 @@ def _camp_profile_out(r):
     gal=[x for x in (_camp_safe_url(u) for u in raw_gal) if x]
     cover=_camp_safe_url(r.get('cover_url')) or (gal[0] if gal else '')
     foc=_camp_focal_list(r.get('media_focal_json'),len(gal))
+    ai=jload(r.get('ai_detail_json'), None)
+    ai=ai if isinstance(ai,dict) else {}
+    short=str(r.get('intro_text') or ai.get('subtitle') or '').strip().replace('\n',' ')[:40]
     return {'id':r['id'],'clubId':r['club_id'],'name':r['name'],'introText':r.get('intro_text'),
+            'subtitle':str(ai.get('subtitle') or '')[:60],'slogan':short,
+            'aiDetail':ai or None,'detailAvailable':bool(ai.get('sections')),
             'gallery':raw_gal,'coverUrl':cover,'focalPoints':foc,
             'coverFocal':_camp_cover_focal(cover,gal,foc),
             'facilities':_arr('facilities_json'),'rules':_arr('rules_json'),
@@ -11522,7 +11527,7 @@ def _camp_safe_url(u):
         return s
     # 2026-11-11 营地 v4：本地上传的素材走公开代理（生产 /static/uploads/* 被网关挡），
     # 只放行 camp-media-file 这一种形状，避免把 /api/public 变成任意路径白名单。
-    if s.startswith('/api/public/clubs/') and '/camp-media-file/' in s:
+    if s.startswith('/api/public/clubs/') and ('/camp-media-file/' in s or '/camp-src-file/' in s):
         return s
     return ''
 
@@ -12091,6 +12096,7 @@ def public_camp_product_detail(club_id:int,kind:str,pid:int):
 # 在一个文本框里写照片说明与经营规则；规格/设施/须知/图文详情全部由模型生成。
 # ===========================================================================
 from clubos_domain.camp_detail_ai import generate_camp_detail as _camp_ai_detail
+from clubos_domain import camp_ai_kit as _camp_ai_kit   # #814 资料图片视觉观察 + 版式模板库
 
 _CAMP_TARGET_TABLE = {
     'profile': 'camp_profiles', 'pitch': 'camp_pitches',
@@ -12468,6 +12474,37 @@ def public_camp_media_file(club_id: int, asset_path: str):
         raise HTTPException(404, 'not found')
     return _camp_media_serve(club_id, asset_path, public=True)
 
+@app.get('/api/club/{club_id}/camp-src-file/{asset_path:path}')
+def club_camp_src_file(club_id: int, asset_path: str):
+    """#814 后台预览：上传的参考资料图片（PDF/PPT 预览页亦登记在此表）。"""
+    return _camp_src_serve(club_id, asset_path, public=False)
+
+
+@app.get('/api/public/clubs/{club_id}/camp-src-file/{asset_path:path}')
+def public_camp_src_file(club_id: int, asset_path: str):
+    """#814 C 端公开读取：只放行生成时登记过的资料图，防止任意读 uploads。"""
+    x = club_or_404(club_id)
+    if IS_PROD and x['status'] != 'active':
+        raise HTTPException(404, 'not found')
+    return _camp_src_serve(club_id, asset_path, public=True)
+
+
+def _camp_src_serve(club_id: int, asset_path: str, *, public: bool):
+    from fastapi.responses import FileResponse
+    original = '/static/' + unquote(asset_path)
+    with conn() as c:
+        hit = c.execute('SELECT 1 FROM camp_ai_source_assets WHERE club_id=? AND url=?',
+                        (club_id, original)).fetchone()
+    if not hit:
+        raise HTTPException(404, '资料图片不存在')
+    p = _safe_media_path(original)
+    if not p or not p.is_file():
+        raise HTTPException(404, '资料图片不存在')
+    r = FileResponse(p)
+    r.headers['Cache-Control'] = 'public, max-age=300' if public else 'private, max-age=300'
+    return r
+
+
 
 def _camp_ai_base(c, club_id: int, kind: str, tid: int):
     tbl = _CAMP_TARGET_TABLE[kind]
@@ -12492,56 +12529,129 @@ def _camp_ai_base(c, club_id: int, kind: str, tid: int):
             'facilities': _camp_arr(d.get('facilities_json'))}
 
 
+# ---- #814 资料图片：统一媒体池 + 本地画面观察 --------------------------------
+def _camp_src_public(club_id: int, p: Path) -> str:
+    try:
+        rel = p.relative_to(STATIC).as_posix()
+    except Exception:
+        return ''
+    return f'/api/public/clubs/{club_id}/camp-src-file/{rel}'
+
+
+def _camp_build_media(c, club_id: int, kind: str, tid: int, job_id: str,
+                      assets: list, source_images: list) -> tuple[list, list]:
+    """商品照片（gallery 真源）+ 本次上传的资料图片 → 统一媒体池。
+
+    每张图都经 camp_ai_kit.describe_image() 生成画面观察：观察结果既是写作素材，
+    也作为 media[].caption 下发 C 端。资料图同时登记进 camp_ai_source_assets，
+    才能被公开代理白名单放行（旧版资料图只落 camp_src/，C 端永远取不到）。
+    """
+    media, paths = [], []
+    for a in assets:
+        fp = UPLOAD / str(club_id) / 'camp' / str(a['url']).rsplit('/', 1)[-1]
+        if not fp.is_file():
+            continue
+        obs = _camp_ai_kit.describe_image(fp, source='gallery', name=fp.name) or {}
+        media.append({
+            'url': _camp_media_public(club_id, a['url']), 'name': fp.name,
+            'source': 'gallery', 'caption': str(obs.get('caption') or ''),
+            'tags': obs.get('tags') or [], 'usable': True,
+            'focal': {'x': _camp_focal_clamp(a['focal_x']), 'y': _camp_focal_clamp(a['focal_y'])},
+        })
+        paths.append(str(fp))
+    seen = set()
+    for raw in source_images:
+        pp = Path(str(raw))
+        if not pp.is_file() or pp.suffix.lower() not in _IMAGE_UPLOAD_EXTS:
+            continue
+        key = str(pp)
+        if key in seen:
+            continue
+        seen.add(key)
+        obs = _camp_ai_kit.describe_image(pp, source='reference')
+        if not obs:
+            continue
+        url = _camp_src_public(club_id, pp)
+        if not url:
+            continue
+        try:
+            stored = '/static/' + pp.relative_to(STATIC).as_posix()
+        except Exception:
+            continue
+        c.execute("""INSERT OR IGNORE INTO camp_ai_source_assets
+                     (club_id,target_kind,target_id,job_id,url,name,kind,caption,tags_json)
+                     VALUES (?,?,?,?,?,?,?,?,?)""",
+                  (club_id, kind, tid, job_id, stored, pp.name, 'image',
+                   obs['caption'], jdump(obs['tags'])))
+        media.append({
+            'url': url, 'name': pp.name, 'source': 'reference',
+            'caption': obs['caption'], 'tags': obs['tags'],
+            'focal': obs['focal'], 'usable': obs['usable'],
+        })
+        paths.append(str(pp))
+    return media, paths
+
+
 async def _run_camp_detail_job(job_id: str, club_id: int, kind: str, tid: int,
-                               source_text: str, media_paths: list, saved_paths: list):
+                               source_text: str, assets: list, saved_paths: list,
+                               template_id: str):
     from document_parser import parse_sources
     try:
         with conn() as c:
             c.execute('UPDATE camp_detail_jobs SET status="running" WHERE id=?', (job_id,))
-        # 老板上传的文件（PDF / Word / 图片…）走活动详情同一条资料解析链，
-        # 文本并入那一个文本框，图片并入视觉素材，成本数据由 cost_guard 在解析期剔除。
-        extra_text, extra_images = '', []
+        # #814：parse_sources 不再重复接收 source_text（旧版文本框内容被拼了两遍）；
+        # 资料里的图片（含 PDF/PPT 内页渲染图）全部取出做画面观察。
+        extra_text, source_images = '', []
         if saved_paths:
-            # #809 修复：parse_sources 期望 Path（p.name/p.suffix/p.relative_to），此前传 str 导致资料解析必然失败
-            src = parse_sources([Path(p) for p in saved_paths], source_text, STATIC)
+            src = parse_sources([Path(p) for p in saved_paths], '', STATIC)
             extra_text = str(src.get('text') or '')
-            extra_images = [str(m.get('path') or '') for m in (src.get('images') or []) if m.get('path')]
+            source_images = [m.get('path') for m in (src.get('images') or []) if m.get('path')]
         with conn() as c:
             base = _camp_ai_base(c, club_id, kind, tid) or {'name': '', 'hardSpecs': {}, 'facilities': []}
+            media, media_paths = _camp_build_media(c, club_id, kind, tid, job_id,
+                                                   assets, source_images)
         result, usage = await _camp_ai_detail(
             club_id=club_id, target_kind=kind, base=base,
             source_text=(source_text + '\n\n' + extra_text).strip(),
-            media_paths=media_paths + extra_images)
+            media_paths=media_paths, media=media, template_id=template_id)
         try:
             charge_credits(club_id, 'detail', getattr(usage, 'usage_id', None))
         except Exception:
             pass
         with conn() as c:
-            c.execute('''UPDATE camp_detail_jobs SET status="done",result_json=?,
-                         finished_at=CURRENT_TIMESTAMP WHERE id=?''', (jdump(result), job_id))
+            c.execute("""UPDATE camp_detail_jobs SET status="done",result_json=?,
+                         finished_at=CURRENT_TIMESTAMP WHERE id=?""", (jdump(result), job_id))
+            # 模板样本：后续可据此统计各版式的实际使用与效果，逐步沉淀成学习样本
+            c.execute("""INSERT INTO camp_ai_template_samples
+                         (club_id,target_kind,target_id,template_id,job_id,media_count,summary)
+                         VALUES (?,?,?,?,?,?,?)""",
+                      (club_id, kind, tid, _camp_ai_kit.get_template(template_id)['id'], job_id,
+                       len(result.get('media') or []), str(result.get('visualSummary') or '')[:200]))
     except Exception as e:
         with conn() as c:
-            c.execute('''UPDATE camp_detail_jobs SET status="failed",error=?,
-                         finished_at=CURRENT_TIMESTAMP WHERE id=?''', (str(e)[:300], job_id))
+            c.execute("""UPDATE camp_detail_jobs SET status="failed",error=?,
+                         finished_at=CURRENT_TIMESTAMP WHERE id=?""", (str(e)[:300], job_id))
 
 
 @app.post('/api/club/{club_id}/camp-ai/generate')
 async def camp_ai_generate(club_id: int, background_tasks: BackgroundTasks,
                            target_kind: str = Form(...), target_id: int = Form(0),
-                           prompt: str = Form(''), files: list[UploadFile] = File(default=[])):
-    """一个文本框 + 已上传照片 + 可选资料文件 → 异步生成结构化图文详情。"""
+                           prompt: str = Form(''), template: str = Form('classic'),
+                           files: list[UploadFile] = File(default=[])):
+    """一个文本框 + 已上传照片 + 可选资料文件 + 版式模板 → 异步生成结构化图文详情。"""
     from document_parser import save_uploads
     club_or_404(club_id)
     if target_kind not in _CAMP_TARGET_TABLE:
         raise HTTPException(400, '对象类型不存在')
     ensure_credits(club_id, 'detail')
+    tid_tpl = _camp_ai_kit.get_template(template)['id']
     with conn() as c:
-        running = c.execute('''SELECT COUNT(*) FROM camp_detail_jobs
-                               WHERE club_id=? AND status IN ("queued","running")''', (club_id,)).fetchone()[0]
+        running = c.execute("""SELECT COUNT(*) FROM camp_detail_jobs
+                               WHERE club_id=? AND status IN ("queued","running")""", (club_id,)).fetchone()[0]
         if running:
             raise HTTPException(409, '已有一次 AI 生成正在进行中，请等它完成再提交新的')
-        assets = rows(c.execute('''SELECT * FROM camp_media_assets
-                                   WHERE club_id=? AND target_kind=? AND target_id=? ORDER BY sort_no,id''',
+        assets = rows(c.execute("""SELECT * FROM camp_media_assets
+                                   WHERE club_id=? AND target_kind=? AND target_id=? ORDER BY sort_no,id""",
                                 (club_id, target_kind, target_id)))
     media_paths = [str(UPLOAD / str(club_id) / 'camp' / str(a['url']).rsplit('/', 1)[-1]) for a in assets]
     media_paths = [p for p in media_paths if Path(p).is_file()]
@@ -12553,12 +12663,14 @@ async def camp_ai_generate(club_id: int, background_tasks: BackgroundTasks,
         raise HTTPException(400, '先上传照片、资料文件，或在文本框里写几句说明')
     job_id = 'campai_' + uuid.uuid4().hex[:16]
     with conn() as c:
-        c.execute('''INSERT INTO camp_detail_jobs(id,club_id,target_kind,target_id,status,
-                       source_text,media_json) VALUES(?,?,?,?,"queued",?,?)''',
-                  (job_id, club_id, target_kind, target_id, str(prompt or '')[:6000], jdump(media_paths + saved)))
+        c.execute("""INSERT INTO camp_detail_jobs(id,club_id,target_kind,target_id,status,
+                       source_text,media_json,template_id) VALUES(?,?,?,?,"queued",?,?,?)""",
+                  (job_id, club_id, target_kind, target_id, str(prompt or '')[:6000],
+                   jdump(media_paths + saved), tid_tpl))
     background_tasks.add_task(_run_camp_detail_job, job_id, club_id, target_kind, target_id,
-                              str(prompt or '')[:6000], media_paths, saved)
-    return {'ok': True, 'jobId': job_id, 'status': 'queued', 'mediaCount': len(media_paths)}
+                              str(prompt or '')[:6000], assets, saved, tid_tpl)
+    return {'ok': True, 'jobId': job_id, 'status': 'queued',
+            'mediaCount': len(media_paths), 'templateId': tid_tpl}
 
 
 @app.get('/api/club/{club_id}/camp-ai/jobs/{job_id}')
@@ -12598,15 +12710,45 @@ def camp_ai_apply(club_id: int, payload: dict = Body(...)):
         if not row(c.execute(f'SELECT 1 FROM {tbl} WHERE id=? AND club_id=?', (tid, club_id))):
             raise HTTPException(404, '对象不存在')
         if kind == 'profile':
-            c.execute('''UPDATE camp_profiles SET intro_text=?,facilities_json=?,rules_json=?,
-                         ai_detail_json=? WHERE id=? AND club_id=?''',
-                      (str(detail.get('description') or ''), jdump(facilities), jdump(policies),
-                       jdump(detail), tid, club_id))
+            # #814：intro_text 是头图上的一句话 slogan，绝不能再写整段规则/说明。
+            # 完整介绍留在 ai_detail_json，由 C 端独立「营地详细介绍」页消费。
+            short = str(detail.get('subtitle') or detail.get('description') or '').strip()
+            short = short.replace('\n', ' ')[:40]
+            c.execute("""UPDATE camp_profiles SET intro_text=?,facilities_json=?,rules_json=?,
+                         ai_detail_json=? WHERE id=? AND club_id=?""",
+                      (short, jdump(facilities), jdump(policies), jdump(detail), tid, club_id))
         else:
-            c.execute(f'''UPDATE {tbl} SET subtitle=?,description=?,detail_text=?,specs_json=?,
-                          facilities_json=?,policies_json=?,ai_detail_json=? WHERE id=? AND club_id=?''',
-                      (str(detail.get('subtitle') or '')[:80], str(detail.get('description') or ''),
+            c.execute(f"""UPDATE {tbl} SET subtitle=?,description=?,detail_text=?,specs_json=?,
+                          facilities_json=?,policies_json=?,ai_detail_json=? WHERE id=? AND club_id=?""",
+                      (str(detail.get('subtitle') or '')[:80], str(detail.get('description') or '')[:60],
                        jdump(detail.get('sections') or []), jdump(specs), jdump(facilities),
                        jdump(policies), jdump(detail), tid, club_id))
         return {'ok': True, 'targetKind': kind, 'targetId': tid,
                 'specs': len(specs), 'facilities': len(facilities), 'policies': len(policies)}
+
+
+# ---- #814 版式模板：可选、可列举、可沉淀使用样本（供后续学习与迭代） ----------
+@app.get('/api/club/{club_id}/camp-ai/templates')
+def camp_ai_templates(club_id: int):
+    club_or_404(club_id)
+    with conn() as c:
+        counts = {r['template_id']: r['n'] for r in rows(c.execute(
+            """SELECT template_id,COUNT(*) n FROM camp_ai_template_samples
+               WHERE club_id=? GROUP BY template_id""", (club_id,)))}
+    out = []
+    for t in _camp_ai_kit.list_templates():
+        t = dict(t)
+        t['samples'] = int(counts.get(t['id'], 0))
+        out.append(t)
+    return {'ok': True, 'default': _camp_ai_kit.DEFAULT_TEMPLATE, 'templates': out}
+
+
+@app.get('/api/club/{club_id}/camp-ai/templates/samples')
+def camp_ai_template_samples(club_id: int, limit: int = 20):
+    """模板学习样本：每次生成留一条（模板 / 对象 / 识别图片数 / 画面摘要）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        return {'ok': True, 'items': [dict(r) for r in rows(c.execute(
+            """SELECT id,target_kind,target_id,template_id,job_id,media_count,summary,created_at
+               FROM camp_ai_template_samples WHERE club_id=?
+               ORDER BY id DESC LIMIT ?""", (club_id, max(1, min(100, limit)))))]}

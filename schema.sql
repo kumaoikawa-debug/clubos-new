@@ -2150,9 +2150,42 @@ CREATE TABLE IF NOT EXISTS camp_detail_jobs (
   status TEXT NOT NULL DEFAULT 'queued',   -- queued | running | done | failed
   source_text TEXT,                   -- 老板填的那一个文本框（照片/文件/规则说明）
   media_json TEXT NOT NULL DEFAULT '[]',
-  result_json TEXT,                   -- 模型产出的结构化图文详情
+  template_id TEXT NOT NULL DEFAULT 'classic',  -- #814 版式模板 id
+  result_json TEXT,                   -- 模型产出的结构化图文详情（含 media[] / templateId / visualSummary）
   error TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_camp_detail_jobs_club ON camp_detail_jobs(club_id,status,created_at DESC);
+
+-- #814 上传的参考资料图片：落盘在 static/uploads/{club}/camp_src/，
+-- 只有登记进这张表，C 端 /camp-src-file/ 代理才会放行（绝不对 uploads 通配开放）。
+CREATE TABLE IF NOT EXISTS camp_ai_source_assets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_id INTEGER NOT NULL,
+  job_id TEXT,
+  url TEXT NOT NULL,                  -- /static/uploads/{club}/camp_src/{batch}/{file}
+  name TEXT,
+  kind TEXT NOT NULL DEFAULT 'image',
+  caption TEXT,                       -- 系统对画面的真实观察（不是文件名）
+  tags_json TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_camp_src_url ON camp_ai_source_assets(club_id,url);
+CREATE INDEX IF NOT EXISTS idx_camp_src_target ON camp_ai_source_assets(club_id,target_kind,target_id);
+
+-- #814 模板学习样本：每次生成留一条，供后续按版式实际使用情况迭代模板库。
+CREATE TABLE IF NOT EXISTS camp_ai_template_samples (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  target_kind TEXT NOT NULL,
+  target_id INTEGER NOT NULL,
+  template_id TEXT NOT NULL,
+  job_id TEXT,
+  media_count INTEGER NOT NULL DEFAULT 0,
+  summary TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_camp_tpl_samples ON camp_ai_template_samples(club_id,template_id,created_at DESC);
