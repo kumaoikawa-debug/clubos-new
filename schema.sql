@@ -793,6 +793,27 @@ CREATE TABLE IF NOT EXISTS member_benefits (
   claimed_count INTEGER NOT NULL DEFAULT 0,     -- 已发放/已领取张数
   share_enabled INTEGER NOT NULL DEFAULT 1,    -- 是否允许分享给他人
   face_json TEXT,                              -- 2026-10-26 券面自定义：{"c1","c2","ink"} 覆盖模板渐变色（null=用模板色）
+  -- ↓ 与 db.py::_run_compat_migrations 一一对应（新库直接建全，旧库靠幂等补列）
+  applies_to TEXT NOT NULL DEFAULT 'activity', -- #795 适用大类 all/activity/camp/product/category
+  store_scope TEXT NOT NULL DEFAULT 'this_club', -- #856 历史字段，#860 起停用（餐饮语义）
+  dining_modes TEXT,                          -- #856 历史字段，#860 起停用（餐饮语义）
+  wechat_delivery INTEGER NOT NULL DEFAULT 0, -- #856 历史字段，#860 起停用
+  discount_coupon_type TEXT NOT NULL DEFAULT 'single',
+  max_discount_amount REAL,
+  threshold_scope TEXT NOT NULL DEFAULT 'all', -- #856 历史字段，#860 起停用
+  deduction_scope TEXT NOT NULL DEFAULT 'all', -- #856 历史字段，#860 起停用
+  redeemable_product_type TEXT NOT NULL DEFAULT 'all', -- #856 历史字段，#860 起停用
+  selected_product TEXT,                      -- #856 历史字段，#860 起停用
+  -- ↓ #860 券体系重构：真实适用范围 / 多营地 / 效期 / 领用限制
+  scope_ref_kind TEXT NOT NULL DEFAULT '',    -- activity/camp/pitch/product/category，空=不限具体对象
+  scope_ref_id INTEGER,                       -- 指定对象的真实 ID（来自下拉，不是手填文本）
+  camp_scope TEXT NOT NULL DEFAULT 'all',     -- all=全部营地 / specified=仅指定营地
+  camp_scope_ids TEXT,                        -- JSON 数组，camp_scope=specified 时生效
+  validity_type TEXT NOT NULL DEFAULT 'fixed',-- fixed=固定有效期 / relative=领券后 N 天内可用
+  valid_days INTEGER NOT NULL DEFAULT 0,      -- validity_type=relative 时的天数
+  claim_audience TEXT NOT NULL DEFAULT 'all', -- all/member/non_member/new_user
+  per_user_daily_limit INTEGER NOT NULL DEFAULT 0, -- 0=不限
+  new_user_only INTEGER NOT NULL DEFAULT 0,   -- 1=仅限从未下过单的新用户
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(owner_club_id) REFERENCES clubs(id),
@@ -816,6 +837,9 @@ CREATE TABLE IF NOT EXISTS benefit_redemptions (
   held_checkout_id TEXT,
   used_order_kind TEXT,
   used_order_id TEXT,
+  gift_note TEXT,                              -- 与 db.py 补列一致（发放说明）
+  issued_valid_from TEXT,                      -- #860 领券后 N 天券：本张券的实际生效日
+  issued_valid_to TEXT,                        -- #860 领券后 N 天券：本张券的实际失效日
   UNIQUE(voucher_code),
   FOREIGN KEY(benefit_id) REFERENCES member_benefits(id),
   FOREIGN KEY(user_id) REFERENCES users(id),

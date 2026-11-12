@@ -144,3 +144,48 @@ body.admin-workspace{background:linear-gradient(125deg,#d4ebdd 0%,#c7e6da 26%,#d
 .act-cats__save{padding:6px 12px!important;font-size:11.5px!important;border-radius:9px;flex:0 0 auto}
 .act-cats .actcat-pick{padding:4px 10px!important;font-size:11.5px!important;border-radius:999px}
 .act-cats .actcat-pick input{width:13px;height:13px}
+
+/* ── #3 手机端后台可操作化（2026-11-12）──────────────────────────────────────
+   根因：上面 L117 的 .act-shell{300px 1fr} 没有 @media，而本文件是 club 端
+   第 7 个（最后一批）加载的 CSS，按加载顺序压过了 clubos-ux.css 在 1180px
+   断点里写的「单列」规则 → 390px 视口下右列被挤到 ~44px，操作按钮、
+   活动分类 chip 逐项换行成竖排，表格 nowrap 横向溢出，整页点不动。
+   这里用 .admin-workspace 前缀收口（本文件只在 club 端加载，不动四端共用
+   的 shared.css / clubos-ux.css，也不影响 platform 端）。 */
+@media (max-width:900px){
+  .admin-workspace .act-shell{grid-template-columns:minmax(0,1fr);gap:12px}
+  .admin-workspace .act-rail{position:relative;top:auto;max-height:none}
+  .admin-workspace .act-rail__list{grid-template-columns:repeat(auto-fill,minmax(min(100%,236px),1fr))}
+  .admin-workspace .act-pane{width:100%;min-width:0}
+}
+@media (max-width:650px){
+  /* 抽屉是 overlay，主内容不必给侧栏留白；留足可点宽度 */
+  .admin-workspace .main{padding:12px 10px 64px}
+  .admin-workspace .view.active{max-width:100%}
+  /* 标题不再被 nowrap 压成竖排；操作按钮整行排布且 ≥40px 高 */
+  .admin-workspace .act-head{flex-direction:column;gap:8px}
+  .admin-workspace .act-head__id{flex:1 1 auto;width:100%;min-width:0}
+  .admin-workspace .act-head__id h2,
+  .admin-workspace .act-head__id .sub{white-space:normal;word-break:keep-all;overflow-wrap:anywhere;text-overflow:clip}
+  .admin-workspace .act-head__ops{width:100%;justify-content:flex-start;gap:7px}
+  .admin-workspace .act-head__ops .btn{min-height:40px;padding:8px 12px;font-size:12px}
+  /* 锚点导航保持单行横滚，不撑破容器 */
+  .admin-workspace .detail-nav{width:100%;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+  .admin-workspace .detail-nav__item{min-height:38px}
+  /* 活动分类 chips 改一行横滚，避免每个 chip 独占一行 */
+  .admin-workspace .act-cats__row{flex-direction:column;align-items:stretch;gap:8px}
+  .admin-workspace .act-cats__chips{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain;padding-bottom:4px}
+  .admin-workspace .act-cats__chips .actcat-pick{flex:0 0 auto;min-height:36px}
+  .admin-workspace .act-cats__save{align-self:flex-start;min-height:40px}
+  /* 表格：抵消 admin-workspace.css 在 650px 下强制的 nowrap（用同/更高特异性 + 靠后加载） */
+  .admin-workspace .view .table th,
+  .admin-workspace .view .table td{white-space:normal;overflow-wrap:anywhere;padding:8px 6px;font-size:12px}
+  .admin-workspace .view .table{width:100%;table-layout:auto}
+  /* 通用面板一律单列，输入/按钮达到触屏点击尺寸 */
+  .admin-workspace .g4,.admin-workspace .g3,.admin-workspace .g2,
+  .admin-workspace .form-row,.admin-workspace .ux-fields-2{grid-template-columns:minmax(0,1fr)}
+  .admin-workspace .btn{min-height:40px}
+  .admin-workspace .card{padding:14px 12px}
+  .admin-workspace .panel-title{flex-wrap:wrap;gap:8px}
+  .admin-workspace .ux-dialog{max-height:94dvh}
+}

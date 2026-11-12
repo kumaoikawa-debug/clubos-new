@@ -156,7 +156,11 @@ window.campTab=async function(t){
   const fn={overview:loadOverview,pitches:loadCampPitches,profiles:loadCampProfiles,
             rental:loadCampRental,store:loadCampStore,
             orders:loadCampOrders,benefits:loadCampBenefits}[t];
-  if(fn)await fn();
+  if(fn){try{await fn();}catch(e){
+    console.error('campTab '+t,e);
+    const box=document.querySelector('#campPane');
+    if(box)box.innerHTML='<div class="ca-empty">加载失败：'+esc(e.message||'')+'</div>';
+  }}
 };
 window.caSetCamp=async function(v){CA_CAMP_ID=Number(v)||0;CA_SEL.clear();await campTab(CAMP_TAB);};
 window.caReload=async function(){await _loadCamps();await campTab(CAMP_TAB);toast('已刷新');};
@@ -227,7 +231,7 @@ function _chartHtml(){
       <label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#4a5b51;cursor:pointer;margin-left:6px">
         <input type="checkbox" id="caMulti" ${CA_MULTI?'checked':''} onchange="caToggleMulti(this.checked)"> 批量选择</label>
     </div>
-    <div class="ca-chart-wrap"><table class="ca-chart"><thead><tr><th class="ca-rowh" style="position:sticky;left:0;z-index:4;min-width:132px;text-align:left">营位 / 日期</th>${head}</tr></thead>
+    <div class="ca-chart-wrap"><table class="ca-chart"><thead><tr><th class="ca-rowh" style="position:sticky;left:0;z-index:4;text-align:left">营位 / 日期</th>${head}</tr></thead>
       <tbody>${rows}</tbody></table></div>
     ${CA_SEL.size?`<div class="ca-batchbar"><span>已选 ${CA_SEL.size} 个营位日</span><span class="sp"></span>
       <button class="ca-btn sm" type="button" onclick="caBatch('blocked')">批量封锁</button>
@@ -1021,7 +1025,7 @@ async function loadCampPitches(){
       [`<span class="ca-tag">${_typeName(p.pitch_type)}</span>`,p.is_overnight?'<span class="ca-tag grey">过夜 · 跨日锁</span>':'<span class="ca-tag grey">日间当天</span>',
        Number(p.unit_qty||1)>1?`<span class="ca-tag">${Number(p.unit_qty)} 个单元</span>`:'',
        p.status==='active'?'':'<span class="ca-tag red">已停用</span>'].join(''),
-      `编码 <b>${esc(p.code||'-')}</b> · 适用 ${p.capacity||1} 人${Number(p.unit_qty||1)>1?(' · '+esc(_camp_arr(p.unit_codes_json).slice(0,3).join('、'))+(Number(p.unit_qty)>3?' …':'')):''}<br>平日 ¥${_money(p.base_price)} / 天${p.weekend_price!=null?' · 周末 ¥'+_money(p.weekend_price):''}${p.holiday_price!=null?' · 节假日 ¥'+_money(p.holiday_price):''}`,
+      `编码 <b>${esc(p.code||'-')}</b> · 适用 ${p.capacity||1} 人${Number(p.unit_qty||1)>1?(' · '+esc(_jarr(p.unit_codes_json).slice(0,3).join('、'))+(Number(p.unit_qty)>3?' …':'')):''}<br>平日 ¥${_money(p.base_price)} / 天${p.weekend_price!=null?' · 周末 ¥'+_money(p.weekend_price):''}${p.holiday_price!=null?' · 节假日 ¥'+_money(p.holiday_price):''}`,
       `editPitch(${p.id})`,`deletePitch(${p.id})`)).join(''),
     emptyTitle:'这个营地还没有营位',emptySub:'点「新增营位」建第一个营位，之后去「工作台 · 房态」就能看到 tape chart。'});
 }

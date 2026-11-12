@@ -593,6 +593,9 @@ function _listFallback(kind,id){
 window.campOpenDetail=async function(kind,id){
   let d=null;
   try{d=await _get('/camp-products/'+kind+'/'+id);}catch(e){}
+  /* #821 请求在途时用户可能已切走 tab，别把全屏详情层挂到别的视图上 */
+  const v=document.getElementById('wcamp');
+  if(!v||v.style.display==='none')return;
   CAMP_DETAIL=d||_listFallback(kind,id);
   CAMP_DETAIL_QTY=1;
   CAMP_DETAIL_PLAN=0;CAMP_DETAIL_UNITS=0;
@@ -856,6 +859,9 @@ function _paintDetail(){
 window.campCloseDetail=function(){
   const n=document.querySelector('#cpDetailHost');if(n)n.remove();
   document.body.classList.remove('cp-lock');CAMP_DETAIL=null;
+  /* #821 清干净详情态，避免下次打开带着上一次的规格/数量；顺带收起可能叠加的清单抽屉 */
+  CAMP_DETAIL_QTY=1;CAMP_DETAIL_PLAN=0;CAMP_DETAIL_UNITS=0;
+  if(window.campCloseSheet)window.campCloseSheet();
 };
 window.campDetailQty=function(delta){
   const d=CAMP_DETAIL||{};
@@ -1045,7 +1051,19 @@ function _autoPickVoucher(){
 async function _loadBookingAssist(){
   const uid=_uid();
   if(uid){try{CAMP_CONTACTS=await api('/api/public/users/'+uid+'/camp-contacts?club_id='+CLUB,{cache:'no-store'});}catch(e){CAMP_CONTACTS=null;}}
-  try{CAMP_MY_VOUCHERS=await api('/api/public/clubs/'+CLUB+'/vouchers?user_id='+uid+'&kind=camp',{cache:'no-store'});}catch(e){CAMP_MY_VOUCHERS=null;}
+  /* #860：把当前清单里的真实营地/营位/商品 ID 传给券列表，让「可用券」与
+     下单 hold 用同一份适用范围判据，避免列表可抵、选中后却被拒。 */
+  const _sw=new URLSearchParams();
+  if(Number(CAMP_CAMP_ID))_sw.set('campIds',String(Number(CAMP_CAMP_ID)));
+  const _pids=[],_gids=[];
+  (CAMP_CART||[]).forEach(x=>{
+    const id=Number(x.id);if(!id)return;
+    if(x.kind==='pitch')_pids.push(id);else _gids.push(id);
+  });
+  if(_pids.length)_sw.set('pitchIds',[...new Set(_pids)].join(','));
+  if(_gids.length)_sw.set('productIds',[...new Set(_gids)].join(','));
+  const _qs=_sw.toString()?('&'+_sw.toString()):'';
+  try{CAMP_MY_VOUCHERS=await api('/api/public/clubs/'+CLUB+'/vouchers?user_id='+uid+'&kind=camp'+_qs,{cache:'no-store'});}catch(e){CAMP_MY_VOUCHERS=null;}
   if(CAMP_CONTACTS&&CAMP_CONTACTS.length&&!CAMP_GUEST.name&&!CAMP_GUEST.phone)
     CAMP_GUEST={name:String(CAMP_CONTACTS[0].name||''),phone:String(CAMP_CONTACTS[0].phone||'')};
   _autoPickVoucher();
@@ -1195,11 +1213,10 @@ function _ordersHtml(orders){
     const isNew=(o.id!=null&&!seen.has(String(o.id)));
     const items=(o.items||[]).map(it=>'<div class="cp-order__it"><span>'+esc(it.title||'')+' × '+it.qty+'</span>'
       +'<b>¥'+_money(it.subtotal)+'</b></div>').join('');
-    /* #837 左滑删除：终态订单（已取消/已过期）卡片支持左滑露出删除按钮 */
-    const canDel=(st==='cancelled'||st==='expired');
+    /* #821 删除按钮默认隐藏，所有订单都能左滑露出 */
     return '<div class="cp-order-wrap">'
-      +'<div class="cp-order-del" onclick="campDeleteOrder('+o.id+')">删除</div>'
-      +'<div class="cp-order'+(canDel?' cp-order--swipe':'')+'" data-oid="'+o.id+'"><div class="cp-order__hd"><b>'+esc(o.orderNo||'')+'</b>'
+      +'<div class="cp-order-del" onclick="campDeleteOrder('+o.id+',\''+st+'\')">删除</div>'
+      +'<div class="cp-order" data-oid="'+o.id+'"><div class="cp-order__hd"><b>'+esc(o.orderNo||'')+'</b>'
       +'<span class="cp-order__st '+esc(st)+'">'+esc(CAMP_ST_CN[st]||CAMP_ST[st]||st)+'</span>'
       +(isNew?'<i class="cp-order__dot" aria-label="新订单"></i>':'')+'</div>'
       +'<div class="cp-order__date">'+esc(o.createdAt||'')+' · 联系人 '+esc(o.guestName||'')+'</div>'
@@ -1221,28 +1238,39 @@ function _ordersHtml(orders){
       +'</div></div>';
   }).join('')+'</div>';
 }
-/* #837 左滑手势：touchstart/touchmove 平移卡片，滑过阈值露出删除按钮；松手按位移吸附 */
-function _bindOrderSwipe(root){
-  (root||document).querySelectorAll('.cp-order--swipe').forEach(card=>{
-    if(card.dataset.sw)return;card.dataset.sw='1';
-    let sx=0,dx=0,open=false;
-    card.addEventListener('touchstart',e=>{sx=e.touches[0].clientX;dx=0;},{passive:true});
-    card.addEventListener('touchmove',e=>{
-      dx=e.touches[0].clientX-sx;
-      /* 只响应左滑（dx<0），右滑视为收起 */
-      const t=Math.max(-72,Math.min(0,dx));
-      card.style.transform='translateX('+t+'px)';
-      card.style.transition='none';
-    },{passive:true});
-    card.addEventListener('touchend',()=>{
-      open=dx<-36;
-      card.style.transition='transform .18s ease';
-      card.style.transform=open?'translateX(-72px)':'translateX(0)';
-    });
-    card.addEventListener('click',()=>{ if(open){card.style.transform='translateX(0)';open=false;} },true);
-  });
-}
-window.campDeleteOrder=async function(oid){
+/* #821 左滑删除委托版：抽屉每次 innerHTML 重建也不会丢手势 */
+let _cpSw={x:0,dx:0,wrap:null};
+function _cpSwCard(w){return w?w.querySelector('.cp-order'):null;}
+document.addEventListener('touchstart',function(e){
+  const w=e.target.closest&&e.target.closest('.cp-order-wrap');
+  if(!w)return;
+  _cpSw={x:e.touches[0].clientX,dx:0,wrap:w};
+},{passive:true});
+document.addEventListener('touchmove',function(e){
+  if(!_cpSw.wrap)return;
+  _cpSw.dx=e.touches[0].clientX-_cpSw.x;
+  const card=_cpSwCard(_cpSw.wrap);
+  if(card){card.style.transition='none';card.style.transform='translateX('+Math.max(-72,Math.min(0,_cpSw.dx))+'px)';}
+},{passive:true});
+document.addEventListener('touchend',function(){
+  const w=_cpSw.wrap;if(!w)return;
+  const open=_cpSw.dx<-36,card=_cpSwCard(w);
+  if(card){card.style.transition='transform .18s ease';card.style.transform=open?'translateX(-72px)':'translateX(0)';}
+  w.classList.toggle('is-open',open);
+  _cpSw={x:0,dx:0,wrap:null};
+},{passive:true});
+document.addEventListener('click',function(e){
+  const w=e.target.closest&&e.target.closest('.cp-order-wrap.is-open');
+  if(!w||e.target.closest('.cp-order-del'))return;
+  w.classList.remove('is-open');
+  const card=_cpSwCard(w);if(card)card.style.transform='translateX(0)';
+  e.stopPropagation();e.preventDefault();
+},true);
+/* 兼容旧调用点 */
+function _bindOrderSwipe(root){}
+
+window.campDeleteOrder=async function(oid,st){
+  if(st&&st!=='cancelled'&&st!=='expired'){_cpToast('该订单尚在进行中，请先取消订单再删除');return;}
   const ok=await (window.uxConfirm?uxConfirm({title:'删除订单',message:'删除后该订单不再显示，且无法恢复。确定删除？',confirmText:'删除',danger:true}):confirm('删除后不可恢复，确定？'));
   if(!ok)return;
   try{

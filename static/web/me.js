@@ -750,11 +750,11 @@ function meCampOrdersHtml(list){
     const guest=(o.guestName||o.guestPhone)?`<div class="me-camp__guest">${esc(o.guestName||'')} ${esc(o.guestPhone||'')}</div>`:'';
     const head=(its[0]&&its[0].title)||'营地订单';
     const isNew=(o.id!=null&&!seen.has(String(o.id)));
-    /* #837 左滑删除：终态订单（已取消/已过期）支持左滑露出删除 */
-    const canDel=(o.status==='cancelled'||o.status==='expired');
+    /* #821 删除按钮默认隐藏，所有订单都能左滑露出 */
+    const st=String(o.status||'');
     return `<div class="me-camp-wrap">
-      <div class="me-camp-del" onclick="event.stopPropagation();meCampOrderDelete(${Number(o.id)})">删除</div>
-      <div class="me-card2 me-camp${isNew?' is-new':''}${canDel?' me-swipeable':''}" role="button" tabindex="0" data-oid="${Number(o.id)}" onclick="meCampOrderDetail(${Number(o.id)})">
+      <div class="me-camp-del" onclick="event.stopPropagation();meCampOrderDelete(${Number(o.id)},'${st}')">删除</div>
+      <div class="me-card2 me-camp${isNew?' is-new':''}" role="button" tabindex="0" data-oid="${Number(o.id)}" onclick="meCampOrderDetail(${Number(o.id)})">
       <div class="me-card2__hd"><b>${esc(head)}</b><span class="me-card2__hdR">${meBadge(meCampOrderSt(o.status),meCampOrderTone(o.status))}${isNew?'<i class="me-camp__dot" aria-label="新订单"></i>':''}</span></div>
       ${guest}
       ${itemsHtml?`<div class="me-camp__items">${itemsHtml}</div>`:''}
@@ -769,25 +769,41 @@ function meCampOrdersHtml(list){
     </div></div>`;
   }).join('');
 }
-/* #837 左滑删除（me 页）：与营地页同一套手势与后端 */
-function meBindSwipe(){
-  document.querySelectorAll('.me-swipeable').forEach(card=>{
-    if(card.dataset.sw)return;card.dataset.sw='1';
-    let sx=0,dx=0,open=false;
-    card.addEventListener('touchstart',e=>{sx=e.touches[0].clientX;dx=0;},{passive:true});
-    card.addEventListener('touchmove',e=>{
-      dx=e.touches[0].clientX-sx;
-      card.style.transform='translateX('+Math.max(-72,Math.min(0,dx))+'px)';card.style.transition='none';
-    },{passive:true});
-    card.addEventListener('touchend',()=>{
-      open=dx<-36;
-      card.style.transition='transform .18s ease';
-      card.style.transform=open?'translateX(-72px)':'translateX(0)';
-    });
-    card.addEventListener('click',()=>{if(open){card.style.transform='translateX(0)';open=false;}},true);
-  });
-}
-async function meCampOrderDelete(oid){
+/* #821 左滑删除改为 document 级事件委托：列表多次重渲染也不用手势重绑。
+   删除按钮默认由 CSS 藏在右侧外面，只有按住左滑越过 36px 才吸附展开。 */
+let _meSw={x:0,dx:0,wrap:null};
+function _meSwCard(w){return w?w.querySelector('.me-card2.me-camp'):null;}
+document.addEventListener('touchstart',function(e){
+  const w=e.target.closest&&e.target.closest('.me-camp-wrap');
+  if(!w)return;
+  _meSw={x:e.touches[0].clientX,dx:0,wrap:w};
+},{passive:true});
+document.addEventListener('touchmove',function(e){
+  if(!_meSw.wrap)return;
+  _meSw.dx=e.touches[0].clientX-_meSw.x;
+  const card=_meSwCard(_meSw.wrap);
+  if(card){card.style.transition='none';card.style.transform='translateX('+Math.max(-72,Math.min(0,_meSw.dx))+'px)';}
+},{passive:true});
+document.addEventListener('touchend',function(){
+  const w=_meSw.wrap;if(!w)return;
+  const open=_meSw.dx<-36,card=_meSwCard(w);
+  if(card){card.style.transition='transform .18s ease';card.style.transform=open?'translateX(-72px)':'translateX(0)';}
+  w.classList.toggle('is-open',open);
+  _meSw={x:0,dx:0,wrap:null};
+},{passive:true});
+/* 展开态再点卡片任意处先收起，并且不能穿透进订单详情 */
+document.addEventListener('click',function(e){
+  const w=e.target.closest&&e.target.closest('.me-camp-wrap.is-open');
+  if(!w||e.target.closest('.me-camp-del'))return;
+  w.classList.remove('is-open');
+  const card=_meSwCard(w);if(card)card.style.transform='translateX(0)';
+  e.stopPropagation();e.preventDefault();
+},true);
+/* 兼容旧调用点：委托已常驻，无需逐卡片重绑 */
+function meBindSwipe(){}
+
+async function meCampOrderDelete(oid,st){
+  if(st&&st!=='cancelled'&&st!=='expired'){toast('该订单尚在进行中，请先取消订单再删除');return;}
   const ok=await uxConfirm({title:'删除订单',message:'删除后该订单不再显示，且无法恢复。确定删除？',confirmText:'删除',danger:true});
   if(!ok)return;
   try{
@@ -955,14 +971,15 @@ SUB_ME.member=function(){
       <div class="me-tier-row__cond">${esc(t.qualification_mode==='ANY'?'满足其一即可':'需同时满足')} · 消费满 ${money(t.min_activity_spend||0)} 或 参加 ${t.min_activity_count||0} 场</div>
     </div>`;
   }).join('');
+  /* #860：券不带积分价，这里只展示权益本身；要用积分兑换请进积分商城。 */
   const bHtml=ben.length?ben.map(b=>`<div class="me-bnf">
       <div class="me-bnf__hd"><b>${esc(b.title)}</b></div>
       ${b.description?`<p>${esc(b.description)}</p>`:''}
       <div class="me-bnf__ft">
-        <div class="me-bnf__cost"><b>${b.points_cost}</b> ${b.points_type==='club'?'活动积分':'装备积分'}${b.cash_value?` · 价值 ${money(b.cash_value)}`:''}</div>
-        <button class="me-btn" onclick="redeemBenefit(${b.id})">兑换</button>
+        <div class="me-bnf__cost">${b.cash_value?`价值 ${money(b.cash_value)}`:'会员权益'}</div>
+        <button class="me-btn" onclick="pushMe('pointsmall')">去积分商城</button>
       </div>
-    </div>`).join(''):empty('暂无可兑换福利','');
+    </div>`).join(''):empty('暂无会员权益','');
   return `${gdHtml}<div class="me-sec-t">会员等级</div>${tHtml||empty('暂无等级')}<div class="me-sec-t">会员权益</div>${bHtml}`;
 };
 
@@ -1334,7 +1351,7 @@ function meMallPaint(d){
     return `<div class="me-bnf">
       <div class="me-bnf__hd"><b>${esc(x.title)}</b>${meBadge(meMallType(x.item_type),'info')}</div>
       ${x.description?`<p>${esc(x.description)}</p>`:''}
-      ${x.item_type==='coupon'&&x.refTitle?`<p>关联券：${esc(x.refTitle)}</p>`:''}
+      ${x.item_type==='coupon'&&x.refTitle?`<p>兑换后发放券：${esc(x.refTitle)}</p>`:''}
       <div class="me-bnf__ft">
         <div class="me-bnf__cost"><b>${x.points_cost}</b> 活动积分${x.stock!=null?` · 剩 ${x.stock}`:''}</div>
         ${off?meBadge('已兑完','off'):`<button class="me-btn" ${can?'':'disabled'} onclick="meRedeemMall(${x.id},'${esc(x.title)}',${Number(x.points_cost||0)})">兑换</button>`}

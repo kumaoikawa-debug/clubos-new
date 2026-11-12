@@ -219,6 +219,18 @@
     var cfg = opts || {};
     var cid = cfg.id ? Number(cfg.id) : null;
     await ensureMeta();
+    /* #860 适用范围真实下拉：候选项全部来自库里真实业务对象，前端不编造条目。 */
+    var scopeData = null;
+    try { scopeData = await api('/api/platform/coupon-scope-options'); }
+    catch (e) { scopeData = { activities: [], camps: [], pitches: [], products: [], categories: [] }; }
+    var scopeOptions = [{ value: 'all', label: '全平台通用（活动 + 营地 + 装备）' }];
+    [['activities','activity','指定活动'],['camps','camp','指定营地'],['pitches','pitch','指定营位'],
+     ['products','product','指定商品'],['categories','category','指定分类']].forEach(function (g) {
+      (scopeData[g[0]] || []).forEach(function (x) {
+        scopeOptions.push({ value: g[1] + ':' + x.id, label: g[2] + ' · ' + (x.name || ('#' + x.id)) });
+      });
+    });
+    var campList = scopeData.camps || [];
 
     /* 编辑模式：拉最新数据回填（benefit_type 后端不可改，只读展示） */
     var cur = null;
@@ -252,11 +264,31 @@
       validFrom: cur ? toLocalInput(cur.valid_from) : '',
       validTo: cur ? toLocalInput(cur.valid_to) : '',
       perUserLimit: cur ? num(cur.per_user_limit, 1) : 1,
+      scopeRef: cur ? ((cur.scope_ref_kind && cur.scope_ref_id) ? (cur.scope_ref_kind + ':' + cur.scope_ref_id) : (cur.applies_to || 'all')) : 'all',
+      campScope: cur ? (cur.camp_scope || 'all') : 'all',
+      campScopeIds: (function () {
+        if (!cur || !cur.camp_scope_ids) return [];
+        try { var a = typeof cur.camp_scope_ids === 'string' ? JSON.parse(cur.camp_scope_ids) : cur.camp_scope_ids; return (a || []).map(Number).filter(Boolean); }
+        catch (e) { return []; }
+      })(),
+      validityType: cur ? (cur.validity_type || 'fixed') : 'fixed',
+      validDays: cur ? num(cur.valid_days, 7) : 7,
+      claimAudience: cur ? (cur.claim_audience || 'all') : 'all',
+      perUserDailyLimit: cur ? num(cur.per_user_daily_limit, 0) : 0,
+      newUserOnly: cur ? !!cur.new_user_only : false,
       shareEnabled: cur ? !!cur.share_enabled : true,
       description: cur ? (cur.description || '') : ''
     };
 
     var titleText = isEdit ? ('编辑优惠券 · ' + st.title) : '新建优惠券';
+    /* 多营地勾选区：单独拼好再插进模板，避免 ?: 与字符串 + 的优先级坑。 */
+    var campChecksHtml = campList.length
+      ? campList.map(function (c) {
+          return '<label class="plat-cpe__radio"><input type="checkbox" value="' + Number(c.id) + '"' +
+            (st.campScopeIds.indexOf(Number(c.id)) >= 0 ? ' checked' : '') + '>' +
+            '<span>' + esc(c.name || ('营地 #' + c.id)) + '</span></label>';
+        }).join('')
+      : '<em class="plat-cpe__hint">暂无营地数据，请先到营地档案创建营地</em>';
 
     /* ---------- 骨架 ---------- */
     var root = document.createElement('div');
@@ -329,7 +361,23 @@
             '</section>' +
 
             '<section class="plat-cpe__sec" id="cpeSec-cond">' +
-              '<div class="plat-cpe__sec-h"><h3>使用条件</h3><p>谁能领这张券。全部俱乐部 = 所有俱乐部的用户；指定城市按注册城市圈人；指定俱乐部只给该俱乐部成员。</p></div>' +
+              '<div class="plat-cpe__sec-h"><h3>使用条件</h3><p>券能在哪里用、谁能领。全部俱乐部 = 所有俱乐部的用户；指定城市按注册城市圈人；指定俱乐部只给该俱乐部成员。</p></div>' +
+              '<div class="plat-cpe__row"><span>适用范围 <i>*</i></span><div>' +
+                selectHtml('cpeScopeRef', scopeOptions, st.scopeRef) +
+                '<em class="plat-cpe__hint">可全平台通用，也可指定某一场活动、某个营地 / 营位、某一件商品或某一类商品；选择项来自真实业务数据，后端报价与核销会按它过滤。</em>' +
+              '</div></div>' +
+              '<div class="plat-cpe__row"><span>多营地适用</span><div>' +
+                radiosHtml('campScope', [
+                  { value: 'all', label: '全部营地通用' },
+                  { value: 'specified', label: '仅指定营地可用' }
+                ], st.campScope) +
+                '<em class="plat-cpe__hint">一家俱乐部有多处营地时才需要指定；这里不是门店，是营地。</em>' +
+              '</div></div>' +
+              '<div class="plat-cpe__cond" data-when="campSpecified">' +
+                '<div class="plat-cpe__row"><span>选择适用营地 <i>*</i></span><div>' +
+                  '<div class="plat-cpe__radios" id="cpeCampIds">' + campChecksHtml + '</div>' +
+                '</div></div>' +
+              '</div>' +
               '<div class="plat-cpe__row"><span>投放范围 <i>*</i></span><div>' +
                 radiosHtml('targetType', [
                   { value: 'all_clubs', label: '全部俱乐部（所有用户可领）' },
@@ -345,13 +393,20 @@
             '</section>' +
 
             '<section class="plat-cpe__sec" id="cpeSec-valid">' +
-              '<div class="plat-cpe__sec-h"><h3>效期设置</h3><p>固定有效期内可用 = 到点自动失效；长期有效 = 只要不下架就一直能领。</p></div>' +
+              '<div class="plat-cpe__sec-h"><h3>效期设置</h3><p>固定有效期 = 到点自动失效；领券后有效期内可用 = 每位顾客从领券当日起各自计算 N 天；长期有效 = 只要不下架就一直能领。</p></div>' +
               '<div class="plat-cpe__row"><span>有效期类型</span><div>' +
                 radiosHtml('validType', [
                   { value: 'fixed', label: '固定有效期内可用' },
+                  { value: 'relative', label: '领券后有效期内可用' },
                   { value: 'forever', label: '长期有效' }
-                ], st.fixedValid ? 'fixed' : 'forever') +
+                ], st.validityType === 'relative' ? 'relative' : (st.fixedValid ? 'fixed' : 'forever')) +
               '</div></div>' +
+              '<div class="plat-cpe__cond" data-when="relative">' +
+                '<div class="plat-cpe__row"><span>领券后有效天数 <i>*</i></span><div>' +
+                  '<input id="cpeValidDays" type="number" min="1" step="1" value="' + st.validDays + '">' +
+                  '<em class="plat-cpe__hint">例：填 7 表示领券当日起 7 天内可用，每张券各自计算</em>' +
+                '</div></div>' +
+              '</div>' +
               '<div class="plat-cpe__cond" data-when="fixed">' +
                 '<div class="plat-cpe__row plat-cpe__row--2">' +
                   '<div><span>生效时间</span><input id="cpeValidFrom" type="datetime-local" value="' + st.validFrom + '"></div>' +
@@ -362,9 +417,25 @@
             '</section>' +
 
             '<section class="plat-cpe__sec" id="cpeSec-limit">' +
-              '<div class="plat-cpe__sec-h"><h3>领用限制</h3><p>同一个用户最多能领几张，防止羊毛党把券囤完。</p></div>' +
-              '<div class="plat-cpe__row"><span>每人限领（张） <i>*</i></span><div>' +
-                '<input id="cpePerUser" type="number" min="1" step="1" value="' + st.perUserLimit + '">' +
+              '<div class="plat-cpe__sec-h"><h3>领用限制</h3><p>可领取人群、每人累计与每日限领，防止羊毛党把券囤完。</p></div>' +
+              '<div class="plat-cpe__row"><span>可领取人群</span><div>' +
+                selectHtml('cpeAudience', [
+                  { value: 'all', label: '所有人（会员 + 非会员）' },
+                  { value: 'member', label: '仅会员' },
+                  { value: 'non_member', label: '仅非会员' },
+                  { value: 'new_user', label: '仅新用户' }
+                ], st.claimAudience) +
+              '</div></div>' +
+              '<div class="plat-cpe__row plat-cpe__row--2">' +
+                '<div><span>每人限领（张） <i>*</i></span><input id="cpePerUser" type="number" min="1" step="1" value="' + st.perUserLimit + '"></div>' +
+                '<div><span>每人每日限领（张）</span><input id="cpeDailyLimit" type="number" min="0" step="1" value="' + st.perUserDailyLimit + '">' +
+                '<em class="plat-cpe__hint">0 = 不限</em></div>' +
+              '</div>' +
+              '<div class="plat-cpe__row"><span>仅限新用户</span><div>' +
+                radiosHtml('newUserOnly', [
+                  { value: '0', label: '否' }, { value: '1', label: '是' }
+                ], st.newUserOnly ? '1' : '0') +
+                '<em class="plat-cpe__hint">新用户 = 从未下过任何活动 / 装备 / 营地订单</em>' +
               '</div></div>' +
             '</section>' +
 
@@ -437,6 +508,10 @@
     var validFromInput = $('#cpeValidFrom');
     var validToInput = $('#cpeValidTo');
     var perUserInput = $('#cpePerUser');
+    var scopeRefSel = $('#cpeScopeRef');
+    var validDaysInput = $('#cpeValidDays');
+    var audienceSel = $('#cpeAudience');
+    var dailyLimitInput = $('#cpeDailyLimit');
     var descInput = $('#cpeDesc');
 
     /* 编辑模式下券用途只读 */
@@ -472,7 +547,7 @@
       }
       /* 单选胶囊组 + 券面样式组都要跟着 checked 换 is-on（两组结构不同，一起刷） */
       root.querySelectorAll('.plat-cpe__radios, .plat-cpe__tpls').forEach(function (group) {
-        group.querySelectorAll('input[type=radio]').forEach(function (r) {
+        group.querySelectorAll('input[type=radio], input[type=checkbox]').forEach(function (r) {
           var lab = r.closest('.plat-cpe__radio') || r.closest('.plat-cpe__tpl');
           if (lab) lab.classList.toggle('is-on', r.checked);
         });
@@ -482,6 +557,8 @@
         var w = box.getAttribute('data-when');
         var show = (w === 'city' && tt === 'city') || (w === 'club' && tt === 'club') ||
           (w === 'fixed' && vt === 'fixed') ||
+          (w === 'relative' && vt === 'relative') ||
+          (w === 'campSpecified' && radioVal('campScope') === 'specified') ||
           (w === 'amount' && (mode === 'fixed' || mode === 'threshold')) ||
           (w === 'threshold' && mode === 'threshold') ||
           (w === 'discount' && mode === 'discount');
@@ -565,9 +642,40 @@
       var targetClubId = clubSel.value;
       if (targetType === 'city' && !targetCity) { msgBox.textContent = '请选择投放城市'; citySel.focus(); return; }
       if (targetType === 'club' && !targetClubId) { msgBox.textContent = '请选择投放俱乐部'; clubSel.focus(); return; }
+      /* #860 适用范围 / 效期 / 领用限制 */
+      var scopeRaw = String((scopeRefSel && scopeRefSel.value) || 'all');
+      var scopeParts = scopeRaw.indexOf(':') >= 0 ? scopeRaw.split(':') : ['', ''];
+      var scopeKind = scopeParts[0] || '', scopeId = parseInt(scopeParts[1], 10) || null;
+      if (scopeKind && !scopeId) { msgBox.textContent = '请选择具体的适用对象'; if (scopeRefSel) scopeRefSel.focus(); return; }
+      var scopeMap = { activity: 'activity', camp: 'camp', pitch: 'camp', product: 'product', category: 'category' };
+      var appliesTo = scopeKind ? (scopeMap[scopeKind] || 'all') : (scopeRaw === 'all' ? 'all' : 'activity');
+      var vType = radioVal('validType');
+      var validityType = vType === 'relative' ? 'relative' : 'fixed';
+      var validDays = Math.max(0, parseInt((validDaysInput && validDaysInput.value) || '0', 10) || 0);
+      if (validityType === 'relative' && validDays < 1) {
+        msgBox.textContent = '「领券后有效期内可用」请填写有效天数'; if (validDaysInput) validDaysInput.focus(); return;
+      }
+      var claimAudience = (audienceSel && audienceSel.value) || 'all';
+      var perUserDailyLimit = Math.max(0, parseInt((dailyLimitInput && dailyLimitInput.value) || '0', 10) || 0);
+      var newUserOnly = radioVal('newUserOnly') === '1';
+      /* #860 多营地适用：勾选了的营地 ID 才写进券；未选任何营地则回落「全部营地」，
+         避免产生一张谁都用不了的死券。 */
+      var campScope = radioVal('campScope') === 'specified' ? 'specified' : 'all';
+      var campScopeIds = [];
+      var campBox = root.querySelector('#cpeCampIds');
+      if (campScope === 'specified' && campBox) {
+        campBox.querySelectorAll('input[type=checkbox]:checked').forEach(function (n) {
+          var v = parseInt(n.value, 10); if (v > 0) campScopeIds.push(v);
+        });
+        if (!campScopeIds.length) {
+          msgBox.textContent = '请选择至少一个适用营地，或改回「全部营地通用」';
+          if (campBox.scrollIntoView) campBox.scrollIntoView({ block: 'center' });
+          return;
+        }
+      }
       var stockRaw = (stockInput.value || '').trim();
-      /* PATCH 的 allowed 白名单按列名（snake_case）匹配，必须发列名 —— 发驼峰会被
-         静默丢弃（旧版「改投放没反应」就是这个坑）。POST 走 benefits.py 的驼峰约定。 */
+      /* PATCH 发 snake_case 列名；POST 走 benefits.py 的驼峰约定。后端两个通道都做了
+         alias 映射，两种键名都收。 */
       var patch = {
         title: title,
         mode: mode,
@@ -583,8 +691,14 @@
         image_key: radioVal('imageKey'),
         per_user_limit: Math.max(1, parseInt(perUserInput.value, 10) || 1),
         share_enabled: radioVal('shareEnabled') === '1',
-        valid_from: radioVal('validType') === 'fixed' ? toDbInput(validFromInput.value) : null,
-        valid_to: radioVal('validType') === 'fixed' ? toDbInput(validToInput.value) : null,
+        valid_from: vType === 'fixed' ? toDbInput(validFromInput.value) : null,
+        valid_to: vType === 'fixed' ? toDbInput(validToInput.value) : null,
+        applies_to: appliesTo,
+        scope_ref_kind: scopeKind, scope_ref_id: scopeId,
+        camp_scope: campScope, camp_scope_ids: campScopeIds,
+        validity_type: validityType, valid_days: validDays,
+        claim_audience: claimAudience, per_user_daily_limit: perUserDailyLimit,
+        new_user_only: newUserOnly,
         description: (descInput.value || '').trim()
       };
       msgBox.textContent = '';
@@ -607,7 +721,12 @@
             targetCity: patch.target_city, targetClubId: patch.target_club_id,
             imageKey: patch.image_key, perUserLimit: patch.per_user_limit,
             shareEnabled: patch.share_enabled, validFrom: patch.valid_from,
-            validTo: patch.valid_to, description: patch.description
+            validTo: patch.valid_to, description: patch.description,
+            appliesTo: appliesTo, scopeRefKind: scopeKind, scopeRefId: scopeId,
+            campScope: campScope, campScopeIds: campScopeIds,
+            validityType: validityType, validDays: validDays,
+            claimAudience: claimAudience, perUserDailyLimit: perUserDailyLimit,
+            newUserOnly: newUserOnly
           };
           await api('/api/platform/coupons', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },

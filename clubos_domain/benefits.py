@@ -95,10 +95,10 @@ class BenefitEngine:
         title=str(payload.get('title') or '').strip()
         if not title: raise ValueError('福利名称不能为空')
         cost=max(0,int(payload.get('pointsCost') or 0))
-        # 平台券允许 0 积分门槛（真优惠券：直接抵或满减，成本平台承担）；
-        # 俱乐部福利仍然是「用活动积分兑换」，必须有积分成本。
-        if cost<=0 and owner_type!='PLATFORM':
-            raise ValueError('兑换积分必须大于0')
+        # #860 券与积分解耦：券就是券，建券不再要求「用积分兑换」。
+        # points_cost 列保留只是为了兼容存量数据与历史发券记录（存量测试仍可传值），
+        # 新建券不传即 0；「用积分换券」统一走积分商城，积分价由老板在
+        # points_mall_items.points_cost 自定义，与券本身无关。
         stock=payload.get('stock')
         stock=None if stock in (None,'') else max(0,int(stock))
         benefit_type=str(payload.get('benefitType') or 'gift')
@@ -106,8 +106,10 @@ class BenefitEngine:
         # 营地商品复用「活动券」这一券种（benefit_type='activity_coupon'），靠 applies_to 区分适用范围，
         # 这样俱乐部既能发「活动专用券」，也能发「营地专用券」或「通用券」，互不串味。
         applies_to=str(payload.get('appliesTo') or 'activity').strip().lower()
-        if applies_to not in ('activity', 'camp', 'all'):
-            raise ValueError('适用品类只能是活动报名、营地消费或通用')
+        # #860 扩展：product=指定单个商品 / category=指定商品分类。
+        # 这两个值只说明「大类」，具体指定到哪一个对象由 scope_ref_kind + scope_ref_id 决定。
+        if applies_to not in ('activity', 'camp', 'all', 'product', 'category'):
+            raise ValueError('适用范围只能是全平台通用、活动报名、营地消费、指定商品或指定分类')
         # 券形态：直接抵 / 满减 / 折扣（2026-10-26）
         # 折扣券只允许活动报名券 —— 券的适用边界就是俱乐部活动，不涉及装备商城。
         mode=str(payload.get('mode') or 'fixed').strip()
@@ -179,13 +181,60 @@ class BenefitEngine:
         if redeemable_product_type not in ('all','category','specified'):
             redeemable_product_type='all'
         selected_product=str(payload.get('selectedProduct') or '').strip() or None
+        # ── #860 真实适用范围：下拉选出来的必须是库里真实存在的对象 ID ──────────────
+        scope_ref_kind=str(payload.get('scopeRefKind') or '').strip().lower()
+        if scope_ref_kind not in ('','activity','camp','pitch','product','category'):
+            scope_ref_kind=''
+        _srid=payload.get('scopeRefId')
+        scope_ref_id=None
+        try:
+            if _srid not in (None,'',0,'0'): scope_ref_id=int(_srid)
+        except (TypeError,ValueError):
+            scope_ref_id=None
+        if scope_ref_id and not scope_ref_kind:
+            scope_ref_kind={'activity':'activity','camp':'camp','product':'product',
+                            'category':'category'}.get(applies_to,'')
+        if not scope_ref_id: scope_ref_kind=''
+        # 指定商品/分类时，applies_to 必须与对象类型对齐，避免「选了商品但大类写通用」。
+        if scope_ref_kind in ('product','category') and applies_to not in ('product','category','all'):
+            applies_to=scope_ref_kind
+        # 多营地适用：只有老板名下有多家营地时才会有 specified，存 JSON 数组。
+        camp_scope=str(payload.get('campScope') or 'all').strip().lower()
+        if camp_scope not in ('all','specified'): camp_scope='all'
+        _cids=payload.get('campScopeIds')
+        if isinstance(_cids,str):
+            try: _cids=json.loads(_cids)
+            except Exception: _cids=[]
+        if not isinstance(_cids,list): _cids=[]
+        _camp_ids=[]
+        for _x in _cids:
+            try: _camp_ids.append(int(_x))
+            except (TypeError,ValueError): pass
+        camp_scope_ids=json.dumps(_camp_ids,ensure_ascii=False) if _camp_ids else None
+        if camp_scope=='specified' and not camp_scope_ids: camp_scope='all'
+        # 有效期：fixed 沿用模板上的 valid_from/valid_to；relative 在发券时按领券日折算。
+        validity_type=str(payload.get('validityType') or 'fixed').strip().lower()
+        if validity_type not in ('fixed','relative'): validity_type='fixed'
+        valid_days=max(0,int(payload.get('validDays') or 0))
+        if validity_type=='relative' and valid_days<=0:
+            raise ValueError('「领券后 N 天内可用」必须填写有效天数')
+        if validity_type=='relative': valid_from=None; valid_to=None
+        # 领用限制
+        claim_audience=str(payload.get('claimAudience') or 'all').strip().lower()
+        if claim_audience not in ('all','member','non_member','new_user'): claim_audience='all'
+        per_user_daily_limit=max(0,int(payload.get('perUserDailyLimit') or 0))
+        _nu=payload.get('newUserOnly')
+        new_user_only=1 if (_nu in (True,1,'1','true','是','yes') or claim_audience=='new_user') else 0
         c.execute('''INSERT INTO member_benefits(owner_type,owner_club_id,target_club_id,title,description,
                      benefit_type,applies_to,points_type,points_cost,cash_value,stock,status,rules_json,
                      mode,discount_percent,threshold_amount,image_key,valid_from,valid_to,claim_mode,
                      target_type,target_city,per_user_limit,claimed_count,share_enabled,face_json,
                      store_scope,dining_modes,wechat_delivery,discount_coupon_type,max_discount_amount,
-                     threshold_scope,deduction_scope,redeemable_product_type,selected_product)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                     threshold_scope,deduction_scope,redeemable_product_type,selected_product,
+                     scope_ref_kind,scope_ref_id,camp_scope,camp_scope_ids,validity_type,valid_days,
+                     claim_audience,per_user_daily_limit,new_user_only)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                            ?,?,?,?,?,?,?,?,?)''',(
             owner_type,owner_club_id,target_club_id,title,payload.get('description'),benefit_type,
             applies_to,
             points_type,cost,cash_value,stock,payload.get('status','active'),
@@ -193,7 +242,9 @@ class BenefitEngine:
             mode,discount_percent,threshold,image_key,valid_from,valid_to,claim_mode,
             target_type,target_city,per_user_limit,0,share_enabled,face_json,
             store_scope,dining_modes_json,wechat_delivery,discount_coupon_type,max_discount_amount,
-            threshold_scope,deduction_scope,redeemable_product_type,selected_product))
+            threshold_scope,deduction_scope,redeemable_product_type,selected_product,
+            scope_ref_kind,scope_ref_id,camp_scope,camp_scope_ids,validity_type,valid_days,
+            claim_audience,per_user_daily_limit,new_user_only))
         return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
 
     def list_for_club(self,c,*,club_id:int,include_inactive:bool=False)->list[dict[str,Any]]:
@@ -207,6 +258,12 @@ class BenefitEngine:
         benefit=c.execute('SELECT * FROM member_benefits WHERE id=? AND status="active"',(benefit_id,)).fetchone()
         if not benefit: raise LookupError('福利不存在或已下架')
         b=dict(benefit)
+        # #860 券与积分解耦：新券 points_cost 固定为 0，绝不能从这个老「积分兑换福利」
+        # 入口被零成本反复兑换（只受 stock 限制会变成无限刷券）。存量带积分价的
+        # 福利/券保持兼容；新券请用「领券中心」或「积分商城」上架后兑换。
+        if (str(b.get('benefit_type') or '') in ('activity_coupon','gear_coupon')
+                and int(b.get('points_cost') or 0)==0):
+            raise ValueError('该优惠券不支持积分直接兑换，请在领券中心领取或到积分商城兑换')
         if b['owner_type']=='CLUB':
             if int(b['owner_club_id']) != int(display_club_id):
                 raise ValueError('该俱乐部不可兑换此福利')
@@ -240,9 +297,13 @@ class BenefitEngine:
         if b['stock'] is not None:
             c.execute('UPDATE member_benefits SET stock=stock-1,updated_at=CURRENT_TIMESTAMP WHERE id=?',(benefit_id,))
         code='BEN-'+secrets.token_hex(4).upper()
+        # #860：老「积分兑换会员福利」入口也要写相对效期实发日期。
+        # 不写的话模板日期被清空（_create 对 relative 券置 None），这张券会永不过期。
+        ivf,ivt=self.relative_validity_window(b)
         c.execute('''INSERT INTO benefit_redemptions(benefit_id,user_id,display_club_id,point_type,points_spent,
-                     funding_owner,cash_value,status,voucher_code) VALUES(?,?,?,?,?,?,?,?,?)''',
-                  (benefit_id,user_id,display_club_id,b['points_type'],points,funding,float(b['cash_value'] or 0),'issued',code))
+                     funding_owner,cash_value,status,voucher_code,issued_valid_from,issued_valid_to)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                  (benefit_id,user_id,display_club_id,b['points_type'],points,funding,float(b['cash_value'] or 0),'issued',code,ivf,ivt))
         rid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         return {'redemptionId':rid,'voucherCode':code,'title':b['title'],'pointsType':b['points_type'],
                 'pointsSpent':points,'fundingOwner':funding,'benefitType':b['benefit_type'],'cashValue':float(b['cash_value'] or 0)}
@@ -250,36 +311,103 @@ class BenefitEngine:
     def user_redemptions(self,c,*,user_id:int,club_id:int)->list[dict[str,Any]]:
         # 券包是「用户维度的钱包」，不再按俱乐部切：平台券可以跨俱乐部用，
         # 定向发到某俱乐部的券也该在用户自己的券包里看到。
+        # #860：券包展示要用「这张券实发时算出来的日期」，相对效期券的模板日期是空的，
+        # 直接展示 b.valid_from/valid_to 会显示成无有效期；同时下发适用范围字段供 C 端标注。
         return [dict(r) for r in c.execute('''SELECT r.*,b.title,b.description,b.benefit_type,b.owner_type,b.target_club_id,
-                     b.mode,b.discount_percent,b.threshold_amount,b.image_key,b.valid_from,b.valid_to,b.share_enabled,b.target_type,b.target_city,b.face_json
+                     b.mode,b.discount_percent,b.threshold_amount,b.image_key,
+                     COALESCE(r.issued_valid_from,b.valid_from) AS valid_from,
+                     COALESCE(r.issued_valid_to,b.valid_to) AS valid_to,
+                     b.share_enabled,b.target_type,b.target_city,b.face_json,
+                     b.applies_to,b.scope_ref_kind,b.scope_ref_id,b.camp_scope,b.camp_scope_ids,
+                     b.validity_type,b.valid_days,b.claim_audience,b.per_user_daily_limit,b.new_user_only
                     FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
                     WHERE r.user_id=? ORDER BY r.id DESC''',(user_id,)).fetchall()]
 
-    def eligible_vouchers(self,c,*,user_id:int,club_id:int,kind:str)->list[dict[str,Any]]:
+    @staticmethod
+    def _scope_ids(ctx,key):
+        """把 context 里的单个 ID 或 ID 列表统一成 set[int]（脏值直接丢弃）。"""
+        v=(ctx or {}).get(key)
+        if v is None: return set()
+        if not isinstance(v,(list,tuple,set)): v=[v]
+        out=set()
+        for i in v:
+            try:
+                if i not in (None,'',0,'0'): out.add(int(i))
+            except (TypeError,ValueError): pass
+        return out
+
+    def coupon_scope_matches(self,x,*,kind:str,context:dict|None)->bool:
+        """#860：券的「适用范围」是否覆盖当前订单。
+
+        context 形如 {'activityId','campId','pitchIds','productIds','categoryIds'}。
+        ★ 这是纯函数，报价与核销共用同一份判据；调用方不传 context 时只按大类过滤
+        （保持 /vouchers 列表等旧调用的行为完全不变），传了才做「指定对象」严格匹配。
+        """
+        ctx=context or {}
+        at=str(x.get('applies_to') or 'activity').lower()
+        if at not in ('activity','camp','all','product','category'): at='activity'
+        # 1) 大类：保持旧语义（指定商品/分类的券允许跨 activity/gear/camp，靠下面的对象匹配收口）
+        if at=='activity' and kind=='camp': return False
+        if at=='camp' and kind=='activity': return False
+        # 2) 多营地适用：只在「确实带了营地维度」时才收口。
+        #    活动报名 / 装备订单不下发 campIds，此时不能因为券配了多营地就把它否掉，
+        #    否则「全平台通用 + 多营地」的券在活动/装备结算里会莫名不可用。
+        if str(x.get('camp_scope') or 'all').lower()=='specified' and kind=='camp':
+            try: allowed=set(int(i) for i in json.loads(x.get('camp_scope_ids') or '[]'))
+            except Exception: allowed=set()
+            camps=self._scope_ids(ctx,'campIds')|self._scope_ids(ctx,'campId')
+            if not allowed or not (allowed & camps): return False
+        # 3) 指定到真实对象：必须有 context 才判；没传 context 时只按大类（向后兼容）
+        rk=str(x.get('scope_ref_kind') or '').lower()
+        rid=x.get('scope_ref_id')
+        if not rk or not rid or not context: return True
+        try: rid=int(rid)
+        except (TypeError,ValueError): return True
+        if rk=='activity':  return rid in (self._scope_ids(ctx,'activityIds')|self._scope_ids(ctx,'activityId'))
+        if rk=='camp':      return rid in (self._scope_ids(ctx,'campIds')|self._scope_ids(ctx,'campId'))
+        if rk=='pitch':     return rid in self._scope_ids(ctx,'pitchIds')
+        if rk=='product':   return rid in self._scope_ids(ctx,'productIds')
+        if rk=='category':  return rid in self._scope_ids(ctx,'categoryIds')
+        return True
+
+    def eligible_vouchers(self,c,*,user_id:int,club_id:int,kind:str,context:dict|None=None)->list[dict[str,Any]]:
         kind=str(kind).lower()
         if kind not in {'activity','gear','camp'}: raise ValueError('kind must be activity, gear or camp')
         # 营地商品复用「活动券」这一券种（benefit_type='activity_coupon'），
         # 靠 applies_to 区分适用范围：camp 订单只能用 applies_to∈{camp,all} 的券。
         benefit_type='gear_coupon' if kind=='gear' else 'activity_coupon'
         rows=c.execute('''SELECT r.*,b.title,b.description,b.benefit_type,b.owner_type,b.owner_club_id,b.target_club_id,
-                                 b.mode,b.discount_percent,b.threshold_amount,b.image_key,b.valid_from,b.valid_to,
-                                 b.target_type,b.target_city,b.share_enabled,b.face_json,b.applies_to
+                                 b.mode,b.discount_percent,b.threshold_amount,b.image_key,
+                                 b.valid_from AS benefit_valid_from,b.valid_to AS benefit_valid_to,
+                                 b.target_type,b.target_city,b.share_enabled,b.face_json,b.applies_to,
+                                 b.scope_ref_kind,b.scope_ref_id,b.camp_scope,b.camp_scope_ids,b.validity_type,
+                                 b.max_discount_amount
                           FROM benefit_redemptions r JOIN member_benefits b ON b.id=r.benefit_id
                           WHERE r.user_id=? AND r.status='issued' AND b.status='active' AND b.benefit_type=?
                           ORDER BY r.id DESC''',(user_id,benefit_type)).fetchall()
         out=[]
         for rr in rows:
             x=dict(rr)
+            # #860 相对效期：优先用「这张券实发时算出来的日期」，没有才回落到模板日期。
+            x['valid_from']=x.get('issued_valid_from') or x.get('benefit_valid_from')
+            x['valid_to']=x.get('issued_valid_to') or x.get('benefit_valid_to')
             if self._expired(x):
                 continue  # 过期 / 未生效的券不参与报价
-            # 适用范围过滤（2026-11-11 营地 v4 S5）
+            # 适用范围过滤（2026-11-11 营地 v4 S5 + #860 指定对象）
             at=str(x.get('applies_to') or 'activity').lower()
-            if at not in ('activity','camp','all'):
+            if at not in ('activity','camp','all','product','category'):
                 at='activity'
-            if kind=='camp' and at not in ('camp','all'):
-                continue
-            if kind=='activity' and at not in ('activity','all'):
-                continue
+            if at in ('product','category'):
+                # 指定商品/分类的券跨品类有效，但必须命中订单里的真实对象
+                if context and not self.coupon_scope_matches(x,kind=kind,context=context):
+                    continue
+            else:
+                if kind=='camp' and at not in ('camp','all'):
+                    continue
+                if kind=='activity' and at not in ('activity','all'):
+                    continue
+                if not self.coupon_scope_matches(x,kind=kind,context=context):
+                    continue
             if kind=='gear':
                 # Gear storefront is platform-owned. Only platform-funded gear coupons can reduce gear orders.
                 if x['owner_type']!='PLATFORM':
@@ -305,14 +433,14 @@ class BenefitEngine:
             out.append(x)
         return out
 
-    def quote_vouchers(self,c,*,voucher_codes:list[str],user_id:int,club_id:int,kind:str,amount_available:float)->dict[str,Any]:
+    def quote_vouchers(self,c,*,voucher_codes:list[str],user_id:int,club_id:int,kind:str,amount_available:float,context:dict|None=None)->dict[str,Any]:
         codes=[]
         for code in voucher_codes or []:
             code=str(code or '').strip()
             if code and code not in codes: codes.append(code)
         if not codes:
             return {'clubDiscount':0.0,'platformSubsidy':0.0,'totalDiscount':0.0,'applied':[]}
-        eligible={x['voucher_code']:x for x in self.eligible_vouchers(c,user_id=user_id,club_id=club_id,kind=kind)}
+        eligible={x['voucher_code']:x for x in self.eligible_vouchers(c,user_id=user_id,club_id=club_id,kind=kind,context=context)}
         remaining=max(0.0,float(amount_available or 0))
         club_discount=0.0; platform_subsidy=0.0; applied=[]
         for code in codes:
@@ -327,6 +455,12 @@ class BenefitEngine:
                 # 一张折扣券只对剩余金额生效一次，剩余金额继续参与后续券的满减判断。
                 dp=max(1.0,min(99.0,float(v.get('discount_percent') or 0)))
                 value=min(remaining,round(remaining*(100.0-dp)/100.0,2))
+                # #860：后台可给折扣券设「最高抵扣金额」，0 / 空 / NULL = 不封顶。
+                # 之前 SELECT 了该列却没用，导致设置了上限的券实际按全额折扣计算。
+                mda=v.get('max_discount_amount')
+                if mda not in (None,'',0,'0'):
+                    try: value=min(value,max(0.0,float(mda)))
+                    except (TypeError,ValueError): pass
             else:
                 value=min(remaining,max(0.0,float(v['cash_value'] or 0)))
             if value<=0: continue
@@ -340,8 +474,8 @@ class BenefitEngine:
         return {'clubDiscount':round(club_discount,2),'platformSubsidy':round(platform_subsidy,2),
                 'totalDiscount':round(club_discount+platform_subsidy,2),'applied':applied}
 
-    def hold_vouchers(self,c,*,intent_id:str,voucher_codes:list[str],user_id:int,club_id:int,kind:str,amount_available:float)->dict[str,Any]:
-        quoted=self.quote_vouchers(c,voucher_codes=voucher_codes,user_id=user_id,club_id=club_id,kind=kind,amount_available=amount_available)
+    def hold_vouchers(self,c,*,intent_id:str,voucher_codes:list[str],user_id:int,club_id:int,kind:str,amount_available:float,context:dict|None=None)->dict[str,Any]:
+        quoted=self.quote_vouchers(c,voucher_codes=voucher_codes,user_id=user_id,club_id=club_id,kind=kind,amount_available=amount_available,context=context)
         for a in quoted['applied']:
             cur=c.execute('''UPDATE benefit_redemptions SET status='held',held_checkout_id=?
                              WHERE id=? AND status='issued' AND user_id=?''',(intent_id,a['redemptionId'],user_id))
@@ -377,6 +511,35 @@ class BenefitEngine:
         return int(c.execute("SELECT COUNT(*) FROM benefit_redemptions WHERE benefit_id=? AND user_id=?",
                              (benefit_id, user_id)).fetchone()[0] or 0)
 
+    @staticmethod
+    def _claim_audience_state(c, user_id:int):
+        """#860 领取人群判定。新用户 = 活动报名 / 装备订单 / 营地订单三张表都没有记录。
+        用「有没有下过单」而不是注册天数，口径确定、可离线复现，也不会因时间流逝漂移。"""
+        uid=int(user_id)
+        is_member=bool(c.execute('SELECT 1 FROM club_members WHERE user_id=? LIMIT 1',(uid,)).fetchone())
+        has_order=any(bool(c.execute('SELECT 1 FROM %s WHERE user_id=? LIMIT 1'%t,(uid,)).fetchone())
+                      for t in ('registrations','gear_orders','camp_orders'))
+        return is_member, not has_order
+
+    def _claim_limit_error(self, c, b, user_id:int):
+        """#860 领用限制统一判据：返回 None=可领，否则是给顾客的拒绝原因。
+        claimable_coupons（列表）与 claim_coupon（提交）共用，避免「列表能看见、点进去被拒」。"""
+        aud=str(b.get('claim_audience') or 'all').lower()
+        new_only=int(b.get('new_user_only') or 0)
+        if aud!='all' or new_only:
+            is_member,is_new=self._claim_audience_state(c,user_id)
+            if new_only and not is_new: return '该券仅限新用户领取'
+            if aud=='member' and not is_member: return '该券仅限会员领取'
+            if aud=='non_member' and is_member: return '该券仅限非会员领取'
+            if aud=='new_user' and not is_new: return '该券仅限新用户领取'
+        daily=int(b.get('per_user_daily_limit') or 0)
+        if daily>0:
+            n=int(c.execute("""SELECT COUNT(*) FROM benefit_redemptions
+                               WHERE benefit_id=? AND user_id=? AND date(created_at)=date('now')""",
+                            (int(b['id']),int(user_id))).fetchone()[0] or 0)
+            if n>=daily: return '每人每日限领 %d 张'%daily
+        return None
+
     def _coupon_row(self, c, benefit_id: int):
         r = c.execute('SELECT * FROM member_benefits WHERE id=?', (benefit_id,)).fetchone()
         return dict(r) if r else None
@@ -399,22 +562,45 @@ class BenefitEngine:
                 continue
             if self._user_claimed_count(c, b['id'], user_id) >= int(b['per_user_limit'] or 1):
                 continue
+            # #860 领取人群 / 每人每日限领 / 仅新用户：列表与提交同一判据
+            if self._claim_limit_error(c, b, user_id):
+                continue
             b['remain'] = None if stock is None else int(stock)
             b['claimedCount'] = int(b['claimed_count'] or 0)
             out.append(b)
         return out
+
+    @staticmethod
+    def relative_validity_window(benefit: dict[str, Any]):
+        """#860「领券后 N 天内可用」：把相对效期折算成这张券实发当天的绝对起止时刻。
+
+        返回 (issued_valid_from, issued_valid_to)；固定效期券返回 (None, None)。
+        失效时刻固定到当天 23:59:59，否则只写 YYYY-MM-DD 会被 _parse_dt 当成 00:00
+        而当天即过期。★ 所有往 benefit_redemptions 写行的入口都必须调用本函数，
+        漏掉一处就会让相对效期券变成永不过期券（模板日期被清空 + 回落拿不到）。
+        """
+        if str((benefit or {}).get('validity_type') or 'fixed').lower()!='relative':
+            return None, None
+        try: days=max(1,int((benefit or {}).get('valid_days') or 0))
+        except (TypeError,ValueError): days=1
+        d0=datetime.date.today()
+        return (d0.strftime('%Y-%m-%d 00:00:00'),
+                (d0+datetime.timedelta(days=days-1)).strftime('%Y-%m-%d 23:59:59'))
 
     def _issue(self, c, benefit: dict[str, Any], user_id: int, display_club_id: int,
                *, funding: str = 'PLATFORM', note: str | None = None) -> dict[str, Any]:
         """发一张券到用户券包（积分成本为 0；平台券成本总平台承担，俱乐部券成本俱乐部承担）。"""
         funding = 'CLUB' if funding == 'CLUB' else 'PLATFORM'
         code = 'CPN-' + secrets.token_hex(4).upper()
+        ivf,ivt=self.relative_validity_window(benefit)
         c.execute("""INSERT INTO benefit_redemptions(benefit_id,user_id,display_club_id,point_type,points_spent,
-                     funding_owner,cash_value,status,voucher_code,gift_note) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                     funding_owner,cash_value,status,voucher_code,gift_note,issued_valid_from,issued_valid_to)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                    (int(benefit['id']), int(user_id), (int(display_club_id) if display_club_id else None),
                     str(benefit.get('points_type') or 'gear'), 0, funding,
                     float(benefit.get('cash_value') or 0), 'issued', code,
-                    note or ('总平台发放；成本由总平台承担' if funding == 'PLATFORM' else '俱乐部发放；成本由俱乐部承担')))
+                    note or ('总平台发放；成本由总平台承担' if funding == 'PLATFORM' else '俱乐部发放；成本由俱乐部承担'),
+                    ivf, ivt))
         rid = int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
         c.execute('UPDATE member_benefits SET claimed_count=claimed_count+1,updated_at=CURRENT_TIMESTAMP WHERE id=?',
                   (int(benefit['id']),))
@@ -442,12 +628,21 @@ class BenefitEngine:
             raise ValueError('该券已领完')
         if self._user_claimed_count(c, b['id'], user_id) >= int(b['per_user_limit'] or 1):
             raise ValueError('每人限领 %d 张' % int(b['per_user_limit'] or 1))
+        _lim=self._claim_limit_error(c, b, user_id)
+        if _lim: raise ValueError(_lim)
         # 定向俱乐部的券记在该俱乐部名下，其余（城市 / 全平台）记 0 = 平台直发，
         # display_club_id=0 的平台券在所有俱乐部都能用。
         return self._issue(c, b, user_id, int(b.get('target_club_id') or 0))
 
     def grant_coupon(self, c, *, benefit_id: int, user_ids: list[int], club_id: int = 0) -> dict[str, Any]:
-        """后台群发：给一批用户各发一张（成本总平台承担）。"""
+        """后台群发：给一批用户各发一张（成本总平台承担）。
+
+        #860 边界（复查结论）：claim_audience / new_user_only / per_user_daily_limit
+        约束的是「用户自己领取」这一条通道，由 _claim_limit_error 在
+        claimable_coupons 与 claim_coupon 两处共用。后台定向发放是管理员显式指定
+        收件人、积分商城兑换是花积分购买，两者都不是「领」，故不走该限制 ——
+        否则老板把券上架积分商城后，老用户会被「仅新用户可领」误挡。
+        """
         b = self._coupon_row(c, benefit_id)
         if not b or b['status'] != 'active':
             raise ValueError('优惠券不存在或已下架')

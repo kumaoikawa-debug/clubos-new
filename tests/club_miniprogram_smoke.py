@@ -147,7 +147,7 @@ r = delete(f'/api/club/1/mp/roles/{sys_admin["id"]}')
 check('系统预置角色禁删', r.status_code == 400)
 
 # ── ② 管理助手：员工 ────────────────────────────────────────────────────────
-r = post('/api/club/1/mp/staff', json={'name': 'oikawa', 'wxid': 'oikawa_wx', 'phone': '13811112222', 'roleId': rid})
+r = post('/api/club/1/mp/staff', json={'name': 'oikawa', 'wxid': 'oikawa_wx', 'phone': '13811112222', 'roleId': rid, 'loginAccount': 'oikawa.wz', 'password': 'Init#2026'})
 check('绑定员工成功', r.status_code == 200 and r.json()['staff']['roleName'] == '客服专员')
 sid = r.json()['staff']['id']
 r = delete(f'/api/club/1/mp/roles/{rid}')

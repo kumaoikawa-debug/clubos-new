@@ -102,9 +102,14 @@
   font-weight:700;color:var(--ca-ink2);border-bottom:1px solid var(--ca-line)}
 .ca-chart thead th small{display:block;font-weight:500;color:var(--ca-muted);font-size:9.5px;margin-top:2px}
 .ca-chart thead th.today{background:var(--ca-green-l);color:var(--ca-green)}
-.ca-chart .ca-rowh{position:sticky;left:0;z-index:2;min-width:132px;max-width:132px;text-align:left;
-  background:#fff;padding:6px 10px;border-right:1px solid var(--ca-line);font-weight:700;color:var(--ca-ink)}
-.ca-chart .ca-rowh small{display:block;font-weight:500;color:var(--ca-muted);font-size:9.5px;margin-top:2px}
+.ca-chart .ca-rowh{position:sticky;left:0;z-index:2;min-width:188px;max-width:188px;width:188px;text-align:left;
+  background:#fff;padding:6px 10px;border-right:1px solid var(--ca-line);font-weight:700;color:var(--ca-ink);
+  white-space:normal;word-break:keep-all;overflow-wrap:anywhere;line-height:1.35}
+.ca-chart .ca-rowh small{display:block;font-weight:500;color:var(--ca-muted);font-size:9.5px;margin-top:2px;
+  white-space:normal;word-break:keep-all;overflow-wrap:anywhere;line-height:1.4}
+/* #1 行头里的「单元情况」是文字按钮，不能套用 .ca-mini 的 28px 图标按钮尺寸 */
+.ca-chart .ca-rowh .ca-mini{width:auto;height:auto;min-height:24px;padding:2px 9px;
+  white-space:nowrap;font-size:11px;line-height:1.4}
 .ca-cell{height:38px;min-width:44px;border:0;border-radius:5px;font-size:10px;font-weight:700;
   line-height:1.25;transition:transform .12s,outline .12s;position:relative;padding:3px 1px}
 .ca-cell span{display:block;font-size:9px;font-weight:600;opacity:.8}
@@ -151,6 +156,24 @@
 @media (max-width:900px){.ca-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
   .ca-form,.ca-sw-grid{grid-template-columns:1fr}.ca-form .full,.ca-form__hint{grid-column:auto}}
 @media (max-width:560px){.ca-kpis{grid-template-columns:1fr 1fr}.ca-kpi__v{font-size:23px}}
+/* #3 营地后台手机端：把固定 px 网格/裁剪台收进视口，避免整页横向溢出。
+   tape chart 本身有 .ca-chart-wrap{overflow:auto} 内部横滚，不要去掉。 */
+@media (max-width:650px){
+  .ca-search input{min-width:0;width:100%}
+  .ca-tabs{flex-wrap:nowrap;overflow-x:auto;overscroll-behavior-x:contain}
+  .ca-tab{flex:0 0 auto;min-height:40px;padding:9px 13px}
+  .ca-list,.ca-units,.ca-sw-grid,.ca-form{grid-template-columns:minmax(0,1fr)}
+  .ca-mwb__grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .ca-mwb__barinfo{flex:1 1 100%}
+  .ca-mwb__drop{width:100%;flex:1 1 100%;height:110px}
+  .ca-zone__vis{white-space:normal}
+  .ca-plan__price{width:100%}
+  .ca-btn{min-height:38px}
+  .ca-chart .ca-rowh{min-width:150px;max-width:150px;width:150px}
+  /* 裁剪台固定 460px 是 390px 视口最大的溢出源；按比例缩但保留内部画布 */
+  .ccrop__stage{width:100%;max-width:460px;height:auto;aspect-ratio:460/320}
+  .ccrop__bar{width:100%}
+}
 
 /* ── 营地 v4 素材工作台（本地上传 + AI 图文详情） ───────────────────────────── */
 .ca-mwb{margin-top:4px;border-top:1px dashed #e1e8e3;padding-top:14px}

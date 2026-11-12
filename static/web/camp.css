@@ -616,10 +616,17 @@ body.cp-lock{overflow:hidden}
    钉死为不透明，杜绝任何宿主/层级异常导致的透底。 ══ */
 .cp-detail,.cp-lv,.cp-intro,.cp-sheet{background:#f3f7f4 !important}
 .cp-detail{background:#fff !important}
-#cpDetailHost,#cpIntroHost,#cpLvHost,.cp-lv-host{isolation:isolate}
+/* #821 详情层必须是真正的全屏层级：宿主一旦 isolation:isolate 就创建局部堆叠上下文，
+   .cp-detail 的 z-index:70 会被关进 0 级，反被 .web-top(30)/.web-nav(40) 压住 →
+   返回按钮与底部结算栏点不到。背景不透明由上面的 !important 规则保证。 */
+#cpIntroHost,#cpLvHost,.cp-lv-host{isolation:isolate}
 
 /* ══ #837 订单左滑删除 ══ */
 .cp-order-wrap{position:relative;overflow:hidden;border-radius:16px}
 .cp-order-del{position:absolute;top:0;right:0;bottom:0;width:72px;display:grid;place-items:center;
-  background:#e5484d;color:#fff;font-size:13px;font-weight:700;border-radius:0 16px 16px 0;cursor:pointer}
+  background:#e5484d;color:#fff;font-size:13px;font-weight:700;border-radius:0 16px 16px 0;cursor:pointer;
+  transform:translateX(72px);transition:transform .18s ease;z-index:0}
+.cp-order-wrap.is-open .cp-order-del{transform:translateX(0)}
+/* #821 所有订单卡片都要压住底层删除按钮 */
+.cp-order{position:relative;z-index:1;transition:transform .18s ease;touch-action:pan-y;will-change:transform}
 .cp-order--swipe{position:relative;transition:transform .18s ease;touch-action:pan-y;will-change:transform}

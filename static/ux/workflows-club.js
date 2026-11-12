@@ -96,127 +96,163 @@ window.addTier=async mode=>{
     loadMembers();
   });
 };
-/* 券中心（#856 对齐 Word 三型券：满减 / 折扣 / 商品兑换，2026-11-12）。
-   每种券独立入口 + 表单，字段严格照搬 Word：可用门店 / 就餐方式 / 微信投放 /
-   指定门槛·抵扣商品 / 折扣券类型·最大抵扣 / 可兑换商品·选择商品。
-   两步创建：先填业务信息，再进券面设计器。就餐方式 ClubOS 无原生多选控件，
-   以逗号分隔文本框等价录入，落库为 JSON 数组。 */
-function couponAppliesOpts(){return [{value:'activity',label:'活动报名（仅活动报名可用）'},{value:'camp',label:'营地消费（仅营地商品可用）'},{value:'all',label:'通用（活动报名 + 营地消费均可）'}]}
-function couponScopeFields(d={},opts={}){
-  d=d||{};
-  const dm=d.dining_modes?JSON.parse(typeof d.dining_modes==='string'?d.dining_modes:'[]'):null;
-  const out=[
-    {name:'storeScope',label:'可用门店',type:'select',full:true,required:true,value:d.store_scope||'this_club',
-      options:[{value:'this_club',label:'仅本店可用'},{value:'all_clubs',label:'全部门店'},{value:'specified',label:'指定门店可用'}]},
-    {name:'diningModes',label:'就餐方式（逗号分隔；户外场景可留空）',full:true,value:dm&&dm.length?dm.join(','):'',
-      help:'可选值：堂食,自取,配送,快递，直接填逗号分隔即可。'},
-    {name:'wechatDelivery',label:'微信投放',type:'select',full:true,required:true,value:d.wechat_delivery?'开启':'关闭',
-      options:[{value:'关闭',label:'关闭'},{value:'开启',label:'开启（在微信支付营销场景免费曝光）'}]}
-  ];
-  if(opts.threshold)out.push({name:'thresholdScope',label:'指定门槛商品',type:'select',full:true,required:true,value:d.threshold_scope||'all',
-    options:[{value:'all',label:'全部商品参与计算门槛'},{value:'category',label:'指定分类参与计算门槛'},{value:'product',label:'指定商品参与计算门槛'}]});
-  if(opts.deduction)out.push({name:'deductionScope',label:'指定抵扣商品',type:'select',full:true,required:true,value:d.deduction_scope||'all',
-    options:[{value:'all',label:'全部商品可用'},{value:'category',label:'指定分类可用'},{value:'product',label:'指定商品可用'}]});
+/* 券中心（#860 重构，2026-11-12）：券就是券，与积分完全解耦。
+   · 建券表单不再出现任何「积分兑换 / 兑换所需积分」字段与提示。要用积分换券，
+     去「积分商城」把已生成的券上架，所需积分由老板自定义（addMallItem）。
+   · 「使用门店」改为「多营地适用」；餐饮语义（就餐方式 / 堂食 / 自取 /
+     配送 / 快递 / 微信支付营销投放）全部移除 —— 我们不是做餐饮的。
+   · 适用范围用一个真实下拉：全平台通用 / 指定活动 / 指定营地 / 指定营位 /
+     指定商品 / 指定分类。候选项来自 /api/club/{club}/coupon-scope-options，
+     值是 `kind:真实ID`，绝不手填文本；后端报价与核销都会真的按它过滤。
+   · 有效期：领券后 N 天内可用 / 固定有效期。
+   · 领用限制：可领取人群 / 每人每日限领 / 仅新用户。 */
+let _cpnScopeCache=null;
+async function couponScopeOptions(){
+  if(_cpnScopeCache)return _cpnScopeCache;
+  try{_cpnScopeCache=await api(`/api/club/${CLUB}/coupon-scope-options`);}
+  catch(e){_cpnScopeCache={activities:[],camps:[],pitches:[],products:[],categories:[]};}
+  return _cpnScopeCache;
+}
+/* 下拉值统一编码 `kind:id`。一个控件覆盖「指定某一类 / 某一个商品」两种诉求，
+   也避开 uxForm 没有「按上一项联动下一项」能力的限制。 */
+function couponScopeOpts(o){
+  const mk=(arr,prefix,label)=>(arr||[]).map(x=>({value:prefix+':'+x.id,label:label+' · '+(x.name||('#'+x.id))}));
+  return [{value:'all',label:'全平台通用（活动 + 营地 + 装备）'},
+    ...mk(o.activities,'activity','指定活动'),
+    ...mk(o.camps,'camp','指定营地'),
+    ...mk(o.pitches,'pitch','指定营位'),
+    ...mk(o.products,'product','指定商品'),
+    ...mk(o.categories,'category','指定分类')];
+}
+function couponScopeValue(b){
+  if(!b)return 'all';
+  if(b.scope_ref_kind&&b.scope_ref_id)return b.scope_ref_kind+':'+b.scope_ref_id;
+  return b.applies_to||'all';
+}
+function couponScopeParse(v){
+  const s=String(v||'all');
+  if(s==='all'||s.indexOf(':')<0)return {appliesTo:(['activity','camp','all'].indexOf(s)>=0?s:'all'),scopeRefKind:'',scopeRefId:null};
+  const p=s.split(':'),k=p[0],id=Number(p[1])||null;
+  const map={activity:'activity',camp:'camp',pitch:'camp',product:'product',category:'category'};
+  if(!id)return {appliesTo:'all',scopeRefKind:'',scopeRefId:null};
+  return {appliesTo:map[k]||'all',scopeRefKind:k,scopeRefId:id};
+}
+/* 多营地适用：只有老板名下确实有多家营地时才给「仅指定营地」选项（用户明确要求）。 */
+function couponCampFields(o,d={}){
+  const camps=o.camps||[],multi=camps.length>1;
+  let cur=[];try{cur=JSON.parse(d.camp_scope_ids||'[]')}catch(e){cur=[]}
+  const out=[{name:'campScope',label:'多营地适用',type:'select',full:true,value:d.camp_scope||'all',
+    options:[{value:'all',label:'全部营地适用'},...(multi?[{value:'specified',label:'仅指定营地适用'}]:[])],
+    help:multi?'你名下有多家营地，可以限定这张券只能在其中一家使用。':'当前只有一家营地，默认全部营地适用。'}];
+  if(multi)out.push({name:'campScopeId',label:'选择适用营地',type:'select',full:true,
+    value:String(cur[0]||camps[0].id||''),options:camps.map(x=>({value:String(x.id),label:x.name||('#'+x.id)}))});
   return out;
+}
+function couponValidityFields(d={}){
+  return [
+    {name:'validityType',label:'有效期类型',type:'select',full:true,required:true,value:d.validity_type||'fixed',
+      options:[{value:'fixed',label:'固定有效期内可用'},{value:'relative',label:'领券后有效期内可用'}]},
+    {name:'validDays',label:'领券后有效天数（选「领券后有效期内可用」时填）',type:'number',min:1,step:1,value:d.valid_days||7,
+      help:'例：填 7 表示顾客领券当日起 7 天内可用，每张券各自计算。'},
+    {name:'validFrom',label:'固定有效期 · 开始日期（YYYY-MM-DD，留空 = 立即生效）',value:d.valid_from||''},
+    {name:'validTo',label:'固定有效期 · 结束日期（YYYY-MM-DD，留空 = 长期有效）',value:d.valid_to||''}
+  ];
+}
+function couponClaimFields(d={}){
+  return [
+    {name:'claimAudience',label:'可领取人群',type:'select',full:true,required:true,value:d.claim_audience||'all',
+      options:[{value:'all',label:'所有人（会员 + 非会员）'},{value:'member',label:'仅会员'},
+               {value:'non_member',label:'仅非会员'},{value:'new_user',label:'仅新用户'}]},
+    {name:'perUserDailyLimit',label:'每人每日限领（张，0 = 不限）',type:'number',min:0,step:1,value:d.per_user_daily_limit||0},
+    {name:'newUserOnly',label:'仅限新用户领取',type:'select',value:d.new_user_only?'是':'否',
+      options:[{value:'否',label:'否'},{value:'是',label:'是'}],help:'新用户 = 从未下过任何活动 / 装备 / 营地订单。'},
+    {name:'perUserLimit',label:'每人累计限领（张）',type:'number',min:1,step:1,value:d.per_user_limit||1}
+  ];
 }
 function couponBuildBase(d,mode,extra){
   extra=extra||{};
-  const dm=(d.diningModes||'').split(',').map(s=>s.trim()).filter(Boolean);
+  const sp=couponScopeParse(d.scopeRef||d.appliesTo);
+  const specified=d.campScope==='specified';
   return Object.assign({
-    title:d.title,benefitType:'activity_coupon',appliesTo:d.appliesTo||'activity',mode,
+    title:d.title,benefitType:'activity_coupon',appliesTo:sp.appliesTo,mode,
+    scopeRefKind:sp.scopeRefKind,scopeRefId:sp.scopeRefId,
+    campScope:specified?'specified':'all',
+    campScopeIds:specified&&d.campScopeId?[Number(d.campScopeId)]:[],
+    validityType:d.validityType||'fixed',
+    validDays:Number(d.validDays||0),
+    validFrom:d.validFrom||null,validTo:d.validTo||null,
+    claimAudience:d.claimAudience||'all',
+    perUserDailyLimit:Number(d.perUserDailyLimit||0),
+    newUserOnly:d.newUserOnly==='是',
+    perUserLimit:Math.max(1,Number(d.perUserLimit||1)),
     thresholdAmount:Number(d.thresholdAmount||0)||0,
     cashValue:(mode==='discount')?0:Number(d.cashValue||0),
     discountPercent:(mode==='discount')?Number(d.discountPercent||0):0,
-    pointsCost:Number(d.pointsCost||0),
+    maxDiscountAmount:Number(d.maxDiscountAmount||0)||0,
+    discountCouponType:d.discountCouponType||'single',
+    /* #860：券本身不带任何积分门槛。pointsCost 固定 0，仅为兼容历史列。 */
+    pointsCost:0,
     stock:(d.stock===''||d.stock==null)?null:Number(d.stock),
-    description:d.description||'',pointsType:'club',claimMode:'grant',
-    storeScope:d.storeScope||'this_club',
-    diningModes:dm,
-    wechatDelivery:d.wechatDelivery==='开启',
-    thresholdScope:d.thresholdScope||'all',
-    deductionScope:d.deductionScope||'all'
+    description:d.description||'',pointsType:'club',claimMode:'grant'
   },extra);
 }
-async function couponCreateFlow(title,mode,fields){
-  const d=await uxForm({title,subtitle:'券用于本俱乐部活动报名或营地消费（由「适用品类」决定），不能涉及装备商城；成本由本俱乐部承担。',fields,submitText:'下一步：设计券面'});
+async function couponCreateFlow(title,mode,buildFields){
+  const o=await couponScopeOptions();
+  const d=await uxForm({title,
+    subtitle:'券用于活动报名 / 营地消费 / 装备购买，按「适用范围」生效；成本由本俱乐部承担。券不消耗积分，如需用积分兑换请到「积分商城」上架。',
+    fields:buildFields(o),submitText:'下一步：设计券面'});
   if(!d)return;
   const base=couponBuildBase(d,mode);
   const ok=await cpnFaceDialog(base);
   if(ok){toast('优惠券已创建');loadMembers()}
 }
-window.addThresholdCoupon=()=>uxTask(()=>couponCreateFlow('添加满减优惠券','threshold',[
-  {name:'title',label:'优惠券名称',required:true,full:true,value:'满 200 减 30 券',maxLength:30},
-  {name:'appliesTo',label:'适用品类',type:'select',full:true,required:true,value:'activity',options:couponAppliesOpts()},
+function couponCommonFields(o,d={},extra=[]){
+  return [
+    {name:'title',label:'优惠券名称',required:true,full:true,value:d.title||'',maxLength:30},
+    {name:'scopeRef',label:'适用范围',type:'select',full:true,required:true,value:couponScopeValue(d),
+      options:couponScopeOpts(o),help:'可全平台通用，也可指定某一场活动、某个营地 / 营位、某一件商品或某一类商品；选择项来自真实业务数据。'},
+    ...extra,
+    ...couponCampFields(o,d),
+    ...couponValidityFields(d),
+    ...couponClaimFields(d),
+    {name:'stock',label:'券库存',type:'number',min:0,step:1,value:d.stock==null?50:d.stock,required:true},
+    {name:'description',label:'使用说明',full:true,value:d.description||''}
+  ];
+}
+window.addThresholdCoupon=()=>uxTask(()=>couponCreateFlow('添加满减优惠券','threshold',o=>couponCommonFields(o,{},[
   {name:'thresholdAmount',label:'满减金额 · 满（元）',type:'number',min:0,step:.01,value:200,required:true},
-  {name:'cashValue',label:'满减金额 · 减（元）',type:'number',min:0,step:.01,value:30,required:true},
-  {name:'pointsCost',label:'兑换所需活动积分（留空 = 0，顾客无需积分即可领取）',type:'number',min:0,step:1,value:0,required:false,help:'顾客用活动积分兑换此券；也可由「消费送券 / 升级赠券」自动赠送。填 0 则该券免费发放，顾客直接领取。'},
-  {name:'stock',label:'券库存',type:'number',min:0,step:1,value:50,required:true},
-  ...couponScopeFields({}, {threshold:true,deduction:true}),
-  {name:'description',label:'使用说明',full:true,value:'本俱乐部活动报名专用'}
-]));
-window.addDiscountCoupon=()=>uxTask(()=>couponCreateFlow('添加折扣券','discount',[
-  {name:'title',label:'优惠券名称',required:true,full:true,value:'会员折扣券',maxLength:30},
-  {name:'appliesTo',label:'适用品类',type:'select',full:true,required:true,value:'activity',options:couponAppliesOpts()},
-  {name:'discountCouponType',label:'折扣券类型',type:'select',full:true,required:true,value:'single',options:[{value:'single',label:'单次折扣券'},{value:'stored',label:'储值折扣券'}]},
+  {name:'cashValue',label:'满减金额 · 减（元）',type:'number',min:0,step:.01,value:30,required:true}
+])));
+window.addDiscountCoupon=()=>uxTask(()=>couponCreateFlow('添加折扣券','discount',o=>couponCommonFields(o,{},[
+  {name:'discountCouponType',label:'折扣券类型',type:'select',full:true,required:true,value:'single',
+    options:[{value:'single',label:'单次折扣券'},{value:'stored',label:'储值折扣券'}]},
   {name:'discountPercent',label:'折扣（填折后百分比：90 = 9 折）',type:'number',min:1,max:99,step:1,value:90,required:true},
   {name:'thresholdAmount',label:'使用门槛（元，满此金额可用；0 = 无门槛）',type:'number',min:0,step:.01,value:0},
-  {name:'maxDiscountAmount',label:'最大抵扣金额（元，0 = 不限制）',type:'number',min:0,step:.01,value:0},
-  {name:'pointsCost',label:'兑换所需活动积分（留空 = 0，顾客无需积分即可领取）',type:'number',min:0,step:1,value:0,required:false},
-  {name:'stock',label:'券库存',type:'number',min:0,step:1,value:50,required:true},
-  ...couponScopeFields({}, {deduction:true}),
-  {name:'description',label:'使用说明',full:true,value:'本俱乐部活动报名专用'}
-]));
-window.addRedeemCoupon=()=>uxTask(()=>couponCreateFlow('添加商品兑换券','fixed',[
-  {name:'title',label:'优惠券名称',required:true,full:true,value:'营位费兑换券',maxLength:30},
-  {name:'appliesTo',label:'适用品类',type:'select',full:true,required:true,value:'camp',options:couponAppliesOpts()},
+  {name:'maxDiscountAmount',label:'最大抵扣金额（元，0 = 不限制）',type:'number',min:0,step:.01,value:0}
+])));
+window.addRedeemCoupon=()=>uxTask(()=>couponCreateFlow('添加商品兑换券','fixed',o=>couponCommonFields(o,{},[
   {name:'cashValue',label:'券价值（元，兑换时抵扣的金额）',type:'number',min:0,step:.01,value:68,required:true},
-  {name:'thresholdAmount',label:'使用门槛（元，满此金额可用；0 = 无门槛）',type:'number',min:0,step:.01,value:0},
-  {name:'redeemableProductType',label:'可兑换商品',type:'select',full:true,required:true,value:'all',options:[{value:'all',label:'全部商品可用'},{value:'category',label:'指定分类可用'},{value:'specified',label:'指定商品可用'}]},
-  {name:'selectedProduct',label:'选择商品（可兑换商品选「指定商品可用」时填写）',full:true,value:'',help:'填写商品名称 / 编号；微信投放开启时，可用商品数量建议不超过 50 个。'},
-  {name:'pointsCost',label:'兑换所需活动积分（留空 = 0，顾客无需积分即可领取）',type:'number',min:0,step:1,value:0,required:false},
-  {name:'stock',label:'券库存',type:'number',min:0,step:1,value:50,required:true},
-  ...couponScopeFields({}),
-  {name:'description',label:'使用说明',full:true,value:'凭券到店兑换对应商品'}
-]));
-/* 编辑（#856）：按券形态回填表单，提交走 PATCH（couponBuildBase 含全部 Word 字段）。 */
+  {name:'thresholdAmount',label:'使用门槛（元，满此金额可用；0 = 无门槛）',type:'number',min:0,step:.01,value:0}
+])));
+/* 编辑（#860）：三型券共用一套字段，提交走 PATCH（cpnFaceDialog 透传全部新字段）。 */
 window.editCoupon=async id=>uxTask(async()=>{
   const b=(window._clubBenefits||[]).find(x=>Number(x.id)===Number(id));
   if(!b){showAlert({title:'读取失败',message:'请重新打开「俱乐部营销」再试'});return;}
-  const mode=String(b.mode||'fixed');
-  const opts=(mode==='threshold')?{threshold:true,deduction:true}:(mode==='discount')?{deduction:true}:{};
-  const fields=(mode==='threshold')?[
-      {name:'title',label:'优惠券名称',required:true,full:true,value:b.title||'',maxLength:30},
-      {name:'appliesTo',label:'适用品类',type:'select',full:true,required:true,value:b.applies_to||'activity',options:couponAppliesOpts()},
-      {name:'thresholdAmount',label:'满减金额 · 满（元）',type:'number',min:0,step:.01,value:b.threshold_amount||0,required:true},
-      {name:'cashValue',label:'满减金额 · 减（元）',type:'number',min:0,step:.01,value:b.cash_value||0,required:true},
-      {name:'pointsCost',label:'兑换所需活动积分（0 = 免积分领取）',type:'number',min:0,step:1,value:b.points_cost||0,required:false},
-      {name:'stock',label:'券库存',type:'number',min:0,step:1,value:b.stock==null?'':b.stock,required:true},
-      ...couponScopeFields(b,opts),
-      {name:'description',label:'使用说明',full:true,value:b.description||''}
-    ]:(mode==='discount')?[
-      {name:'title',label:'优惠券名称',required:true,full:true,value:b.title||'',maxLength:30},
-      {name:'appliesTo',label:'适用品类',type:'select',full:true,required:true,value:b.applies_to||'activity',options:couponAppliesOpts()},
-      {name:'discountCouponType',label:'折扣券类型',type:'select',full:true,required:true,value:b.discount_coupon_type||'single',options:[{value:'single',label:'单次折扣券'},{value:'stored',label:'储值折扣券'}]},
-      {name:'discountPercent',label:'折扣（填折后百分比：90 = 9 折）',type:'number',min:1,max:99,step:1,value:b.discount_percent||0,required:true},
-      {name:'thresholdAmount',label:'使用门槛（元，0 = 无门槛）',type:'number',min:0,step:.01,value:b.threshold_amount||0},
-      {name:'maxDiscountAmount',label:'最大抵扣金额（元，0 = 不限制）',type:'number',min:0,step:.01,value:b.max_discount_amount||0},
-      {name:'pointsCost',label:'兑换所需活动积分（0 = 免积分领取）',type:'number',min:0,step:1,value:b.points_cost||0,required:false},
-      {name:'stock',label:'券库存',type:'number',min:0,step:1,value:b.stock==null?'':b.stock,required:true},
-      ...couponScopeFields(b,opts),
-      {name:'description',label:'使用说明',full:true,value:b.description||''}
-    ]:[
-      {name:'title',label:'优惠券名称',required:true,full:true,value:b.title||'',maxLength:30},
-      {name:'appliesTo',label:'适用品类',type:'select',full:true,required:true,value:b.applies_to||'camp',options:couponAppliesOpts()},
-      {name:'cashValue',label:'券价值（元）',type:'number',min:0,step:.01,value:b.cash_value||0,required:true},
-      {name:'thresholdAmount',label:'使用门槛（元，0 = 无门槛）',type:'number',min:0,step:.01,value:b.threshold_amount||0},
-      {name:'redeemableProductType',label:'可兑换商品',type:'select',full:true,required:true,value:b.redeemable_product_type||'all',options:[{value:'all',label:'全部商品可用'},{value:'category',label:'指定分类可用'},{value:'specified',label:'指定商品可用'}]},
-      {name:'selectedProduct',label:'选择商品',full:true,value:b.selected_product||'',help:'填写商品名称 / 编号。'},
-      {name:'pointsCost',label:'兑换所需活动积分（0 = 免积分领取）',type:'number',min:0,step:1,value:b.points_cost||0,required:false},
-      {name:'stock',label:'券库存',type:'number',min:0,step:1,value:b.stock==null?'':b.stock,required:true},
-      ...couponScopeFields(b),
-      {name:'description',label:'使用说明',full:true,value:b.description||''}
-    ];
-  const d=await uxForm({title:'编辑优惠券 · '+(b.title||''),fields,submitText:'保存修改'});
+  const mode=String(b.mode||'fixed'),o=await couponScopeOptions();
+  let extra;
+  if(mode==='threshold')extra=[
+    {name:'thresholdAmount',label:'满减金额 · 满（元）',type:'number',min:0,step:.01,value:b.threshold_amount||0,required:true},
+    {name:'cashValue',label:'满减金额 · 减（元）',type:'number',min:0,step:.01,value:b.cash_value||0,required:true}];
+  else if(mode==='discount')extra=[
+    {name:'discountCouponType',label:'折扣券类型',type:'select',full:true,required:true,value:b.discount_coupon_type||'single',
+      options:[{value:'single',label:'单次折扣券'},{value:'stored',label:'储值折扣券'}]},
+    {name:'discountPercent',label:'折扣（填折后百分比：90 = 9 折）',type:'number',min:1,max:99,step:1,value:b.discount_percent||0,required:true},
+    {name:'thresholdAmount',label:'使用门槛（元，0 = 无门槛）',type:'number',min:0,step:.01,value:b.threshold_amount||0},
+    {name:'maxDiscountAmount',label:'最大抵扣金额（元，0 = 不限制）',type:'number',min:0,step:.01,value:b.max_discount_amount||0}];
+  else extra=[
+    {name:'cashValue',label:'券价值（元，兑换时抵扣的金额）',type:'number',min:0,step:.01,value:b.cash_value||0,required:true},
+    {name:'thresholdAmount',label:'使用门槛（元，0 = 无门槛）',type:'number',min:0,step:.01,value:b.threshold_amount||0}];
+  const d=await uxForm({title:'编辑优惠券 · '+(b.title||''),fields:couponCommonFields(o,b,extra),submitText:'保存修改'});
   if(!d)return;
   const base=couponBuildBase(d,mode);
   base._editId=b.id;
@@ -233,26 +269,28 @@ window.delCoupon=async id=>uxTask(async()=>{
 window.couponDetail=async id=>{
   const b=(window._clubBenefits||[]).find(x=>Number(x.id)===Number(id));
   if(!b){showAlert({title:'读取失败',message:'请重新打开「俱乐部营销」再试'});return;}
-  const dm=b.dining_modes?(JSON.parse(typeof b.dining_modes==='string'?b.dining_modes:'[]').join('、')||'—'):'—';
+  const scopeCn=({all:'全平台通用',activity:'活动报名',camp:'营地消费',product:'指定商品',category:'指定分类'})[b.applies_to]||b.applies_to;
+  const kindCn=({activity:'活动',camp:'营地',pitch:'营位',product:'商品',category:'商品分类'})[b.scope_ref_kind]||'';
+  const audienceCn=({all:'所有人（会员 + 非会员）',member:'仅会员',non_member:'仅非会员',new_user:'仅新用户'})[b.claim_audience]||'所有人';
+  const validCn=b.validity_type==='relative'?('领券后 '+(b.valid_days||0)+' 天内可用'):couponValidCn(b);
   const rows=[
     ['ID',b.id],['名称',b.title],
     ['券形态',({threshold:'满减优惠券',discount:'折扣券',fixed:'商品兑换券'})[b.mode]||b.mode],
-    ['适用品类',({activity:'活动报名',camp:'营地消费',all:'通用'})[b.applies_to]||b.applies_to],
+    ['适用范围',scopeCn+(kindCn?(' · 指定' + kindCn + ' #' + b.scope_ref_id):'')],
+    ['多营地适用',b.camp_scope==='specified'?('仅指定营地 · '+(b.camp_scope_ids||'[]')):'全部营地适用'],
     ['权益',b.mode==='threshold'?`满 ${money(b.threshold_amount)} 减 ${money(b.cash_value)}`:(b.mode==='discount'?`${Number(b.discount_percent||0)}%（最高抵 ${b.max_discount_amount?money(b.max_discount_amount):'不限'}）`:`价值 ${money(b.cash_value)}`)],
-    ['可用门店',couponStoreCn(b.store_scope)],
-    ['就餐方式',dm],
-    ['微信投放',b.wechat_delivery?'开启':'关闭'],
-    ['可兑换商品',({all:'全部商品',category:'指定分类',specified:'指定商品'})[b.redeemable_product_type]||'全部商品'],
-    ['选择商品',b.selected_product||'—'],
-    ['兑换积分',b.points_cost],
+    ['有效期',validCn],
+    ['可领取人群',audienceCn+(b.new_user_only?' · 仅新用户':'')],
+    ['每人每日限领',b.per_user_daily_limit?b.per_user_daily_limit+' 张':'不限'],
+    ['每人累计限领',(b.per_user_limit||1)+' 张'],
     ['库存',b.stock==null?'不限':b.stock],
-    ['有效期',couponValidCn(b)],
     ['状态',b.status==='active'?'上架中':'已下架']
   ];
   const body='<div class="kv-list">'+rows.map(r=>`<div class="kv"><span class="k">${esc(r[0])}</span><span class="v">${esc(String(r[1]))}</span></div>`).join('')+'</div>';
   const ov=uxDialog({title:'优惠券详情 · '+(b.title||''),body,foot:'<button class="btn ghost" type="button" data-close>关闭</button>'});
   ov.querySelector('[data-close]').onclick=()=>ov.uxClose();
 };
+
 /* 券面设计器（2026-10-26）：内置模板一键选色，或手填 #RRGGBB 自定义渐变双色 + 文字色，
    实时预览最终券面。手填色失焦自动补 # 前缀，写错标红保留原值 —— 与规格色值同一套交互。
    返回 true=已创建；false/undefined=取消。 */
@@ -367,17 +405,19 @@ window.setReferralCoupon=async()=>{
   toast(Number(d.benefitId)?'邀请优惠券已设定':'已关闭邀请券奖励');loadMembers();
 };
 window.togglePurchaseEnabled=async enabled=>uxTask(async()=>{await post('/api/club/'+CLUB+'/membership/purchase-enabled',{enabled:!!enabled});toast(enabled?'已开通「购买会员」：C 端会员中心会出现可购买的会员卡':'已关闭「购买会员」');loadMembers()});
-/* 积分商城（2026-10-26）：顾客在 C 端用活动积分兑换优惠券/活动/服务/实物。 */
+/* 积分商城（#860 注释更新）：券与积分解耦后，**这里是唯一「用积分换券」的入口**。
+   券本身没有积分价；老板先建券，再把已生成的券上架到这里，自己定所需积分。
+   例：一张 50 元券可以定 1000 积分兑换，也可以改成 800 积分，与券面无关。 */
 window.addMallItem=async()=>uxTask(async()=>{
   let benefits=[];try{benefits=await api(`/api/club/${CLUB}/benefits`)}catch(e){benefits=[]}
   const coupons=(benefits||[]).filter(b=>b.owner_type==='CLUB'&&b.benefit_type==='activity_coupon'&&b.status==='active');
   const d=await uxForm({title:'上架积分兑换商品',
-    subtitle:'顾客在 C 端点「可用积分」进入积分商城，用活动积分兑换。优惠券需提前在「俱乐部营销 · 优惠券」中设计好；活动/服务/实物兑换后生成核销码，在本页核销。',
+    subtitle:'把已生成的优惠券上架到这里，由你自定义兑换所需积分（例：50 元券 = 1000 积分）。券本身与积分无关，积分价只属于这条商城商品。活动/服务/实物兑换后生成核销码，在本页核销。',
     fields:[
       {name:'itemType',label:'兑换类型',type:'select',full:true,required:true,value:'coupon',options:[{value:'coupon',label:'优惠券（兑换即发到顾客券包）'},{value:'activity',label:'活动（生成核销码）'},{value:'service',label:'一次服务（生成核销码）'},{value:'goods',label:'实物（生成核销码）'}]},
       {name:'refId',label:'关联优惠券（仅优惠券类型）',type:'select',full:true,options:coupons.length?coupons.map(b=>({value:b.id,label:b.title})):[]},
       {name:'title',label:'商品名称',required:true,full:true,value:'露营灯兑换'},
-      {name:'pointsCost',label:'所需活动积分',type:'number',min:1,step:1,value:500,required:true,help:'积分商城按固定积分标价，不按现金比例换算；报名抵扣的换算比例在「积分策略」里设置。'},
+      {name:'pointsCost',label:'兑换所需积分（由老板自定义）',type:'number',min:1,step:1,value:1000,required:true,help:'例：50 元优惠券可定 1000 积分。这个积分价只作用于本条商城商品，不会写回券本身；随时可改。'},
       {name:'stock',label:'库存（留空 = 不限）',type:'number',min:0,step:1,value:20},
       {name:'description',label:'兑换说明',full:true,value:'凭核销码到店领取'}
     ],submitText:'上架'});

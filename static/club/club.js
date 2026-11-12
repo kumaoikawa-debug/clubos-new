@@ -1169,17 +1169,28 @@ window.cpnSwitch=tab=>{
   document.querySelectorAll('#cpnTabs .cpn-tab').forEach(b=>b.classList.toggle('active',b.dataset.cpn===tab));
   ['threshold','discount','redeem'].forEach(m=>{const p=document.getElementById('cpnPanel-'+m);if(p)p.style.display=m===tab?'':'none';});
 };
-function couponStoreCn(s){return ({this_club:'仅本店可用',all_clubs:'全部门店',specified:'指定门店'})[s]||'仅本店可用';}
+/* ── 券中心（#860）：券与积分解耦，列表列同步去掉「门店 / 就餐 / 微信投放」等餐饮语义 ── */
+function couponScopeCn(x){
+  const base=({all:'全平台通用',activity:'活动报名',camp:'营地消费',product:'指定商品',category:'指定分类'})[x.applies_to]||'全平台通用';
+  const k=({activity:'活动',camp:'营地',pitch:'营位',product:'商品',category:'分类'})[x.scope_ref_kind]||'';
+  return k&&x.scope_ref_id?(base+' · #'+x.scope_ref_id):base;
+}
+function couponStoreCn(x){return couponScopeCn(x||{});}   /* 兼容历史调用点，语义已换成适用范围 */
 function couponDcTypeCn(t){return ({single:'单次折扣券',stored:'储值折扣券'})[t]||'单次折扣券';}
 function couponClaimCn(m){return ({grant:'手动赠送',auto:'自动领取',code:'兑换码领取'})[m]||'手动赠送';}
 function couponValidCn(x){
+  if(x.validity_type==='relative')return `领券后 ${Number(x.valid_days||0)} 天内可用`;
   const a=(x.valid_from||'').slice(0,10),b=(x.valid_to||'').slice(0,10);
   if(a&&b)return `${a} 至 ${b}`;
   if(a)return `自 ${a} 起`;
   if(b)return `至 ${b}`;
   return '长期有效';
 }
-function couponWx(x){return x.wechat_delivery?`<span class="cpn-wx">已开启</span>`:`<span class="cpn-wx off">未开启</span>`;}
+function couponCampCn(x){return x.camp_scope==='specified'?'仅指定营地':'全部营地';}
+function couponAudienceCn(x){
+  const a=({all:'所有人',member:'仅会员',non_member:'仅非会员',new_user:'仅新用户'})[x.claim_audience]||'所有人';
+  return a+(x.new_user_only?' · 仅新用户':'')+(x.per_user_daily_limit?(' · 每日 '+x.per_user_daily_limit+' 张'):'');
+}
 function couponStock(x){return x.stock==null?'不限':x.stock;}
 function couponOps(x){return `<button class="btn ghost" onclick="editCoupon(${x.id})">编辑</button><button class="btn ghost" onclick="couponDetail(${x.id})">详情</button><button class="btn ghost danger" onclick="delCoupon(${x.id})">删除</button>`;}
 
@@ -1261,37 +1272,38 @@ function renderCouponCenter(benefits){
 }
 function renderThresholdList(rows){
   if(!rows.length)return couponEmpty('还没有满减优惠券，点上方「＋ 添加满减优惠券」创建');
-  return `<table class="table"><thead><tr><th>ID</th><th>名称</th><th>使用门槛</th><th>券类型</th><th>有效期</th><th>微信投放</th><th>领取数</th><th>操作</th></tr></thead><tbody>`
+  return `<table class="table"><thead><tr><th>ID</th><th>名称</th><th>使用门槛</th><th>适用范围</th><th>多营地适用</th><th>有效期</th><th>可领取人群</th><th>领取数</th><th>操作</th></tr></thead><tbody>`
     +rows.map(x=>`<tr><td>${x.id}</td><td>${esc(x.title)}${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</td>`
       +`<td>满 ${money(x.threshold_amount)} 减 ${money(x.cash_value)}</td>`
-      +`<td>${couponStoreCn(x.store_scope)}</td>`
-      +`<td>${couponValidCn(x)}</td>`
-      +`<td>${couponWx(x)}</td>`
+      +`<td>${esc(couponScopeCn(x))}</td>`
+      +`<td>${couponCampCn(x)}</td>`
+      +`<td>${esc(couponValidCn(x))}</td>`
+      +`<td>${esc(couponAudienceCn(x))}</td>`
       +`<td>${x.claimed_count!=null?x.claimed_count:'—'}</td>`
       +`<td class="row-ops">${couponOps(x)}</td></tr>`).join('')+`</tbody></table>`;
 }
 function renderDiscountList(rows){
   if(!rows.length)return couponEmpty('还没有折扣券，点上方「＋ 添加折扣券」创建');
-  return `<table class="table"><thead><tr><th>ID</th><th>名称</th><th>券类型</th><th>券面额</th><th>使用门槛</th><th>折扣率(%)</th><th>有效期</th><th>微信投放</th><th>领取数</th><th>剩余/库</th><th>操作</th></tr></thead><tbody>`
+  return `<table class="table"><thead><tr><th>ID</th><th>名称</th><th>券类型</th><th>使用门槛</th><th>折扣率(%)</th><th>适用范围</th><th>有效期</th><th>可领取人群</th><th>剩余/库</th><th>操作</th></tr></thead><tbody>`
     +rows.map(x=>`<tr><td>${x.id}</td><td>${esc(x.title)}${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</td>`
       +`<td>${couponDcTypeCn(x.discount_coupon_type)}</td>`
-      +`<td>—</td>`
       +`<td>${Number(x.threshold_amount)>0?`满 ${money(x.threshold_amount)} 可用`:'无门槛'}</td>`
       +`<td>${Number(x.discount_percent||0)}% <span class="cpn-sub">（${(Number(x.discount_percent||0)/10).toFixed(1)} 折${x.max_discount_amount?` · 最高抵 ${money(x.max_discount_amount)}`:''}）</span></td>`
-      +`<td>${couponValidCn(x)}</td>`
-      +`<td>${couponWx(x)}</td>`
-      +`<td>${x.claimed_count!=null?x.claimed_count:'—'}</td>`
+      +`<td>${esc(couponScopeCn(x))}</td>`
+      +`<td>${esc(couponValidCn(x))}</td>`
+      +`<td>${esc(couponAudienceCn(x))}</td>`
       +`<td>${couponStock(x)}</td>`
       +`<td class="row-ops">${couponOps(x)}</td></tr>`).join('')+`</tbody></table>`;
 }
 function renderRedeemList(rows){
   if(!rows.length)return couponEmpty('还没有商品兑换券，点上方「＋ 添加商品兑换券」创建');
-  return `<table class="table"><thead><tr><th>ID</th><th>名称</th><th>有效期</th><th>微信投放</th><th>领取数</th><th>用户领取方式</th><th>剩余/库存</th><th>操作</th></tr></thead><tbody>`
+  return `<table class="table"><thead><tr><th>ID</th><th>名称</th><th>券价值</th><th>适用范围</th><th>有效期</th><th>可领取人群</th><th>领取数</th><th>剩余/库存</th><th>操作</th></tr></thead><tbody>`
     +rows.map(x=>`<tr><td>${x.id}</td><td>${esc(x.title)}${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</td>`
-      +`<td>${couponValidCn(x)}</td>`
-      +`<td>${couponWx(x)}</td>`
+      +`<td>${money(x.cash_value)}</td>`
+      +`<td>${esc(couponScopeCn(x))}</td>`
+      +`<td>${esc(couponValidCn(x))}</td>`
+      +`<td>${esc(couponAudienceCn(x))}</td>`
       +`<td>${x.claimed_count!=null?x.claimed_count:'—'}</td>`
-      +`<td>${couponClaimCn(x.claim_mode)}</td>`
       +`<td>${couponStock(x)}</td>`
       +`<td class="row-ops">${couponOps(x)}</td></tr>`).join('')+`</tbody></table>`;
 }

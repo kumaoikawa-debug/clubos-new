@@ -1238,6 +1238,29 @@ function bindProductGallery(){
    真实接口，但「最终以服务端结算为准」这句话必须写在页面上 —— 支付面板与收据里
    的服务端数字才是准的。 */
 let CO_ITEMS=[],CO_ADDRS=[],CO_ADDR_ID=null,CO_VOUCHERS=[],CO_POINTS=0,CO_VOUCHER='',CO_POINTS_MAX=0,CO_FROM_CART=false;
+/* #860：结算页券列表必须与下单 hold 用同一份「订单真实对象」判据。
+   装备订单带商品/分类 ID，活动报名带活动 ID；否则指定商品/分类的券会在列表里
+   显示可抵、选中后下单却被拒（列表与 hold 口径漂移）。 */
+function _vchScopeQS(parts){
+  const q=new URLSearchParams();
+  Object.keys(parts||{}).forEach(k=>{
+    const v=parts[k];
+    if(v==null||v==='')return;
+    const a=(Array.isArray(v)?v:[v]).map(Number).filter(n=>Number.isFinite(n)&&n>0);
+    if(a.length)q.set(k,[...new Set(a)].join(','));
+  });
+  const s=q.toString();return s?('&'+s):'';
+}
+function _gearVchScope(){
+  const pids=[],cats=[];
+  (CO_ITEMS||[]).forEach(it=>{
+    const p=it.p||{};
+    if(p.id)pids.push(Number(p.id));
+    const cid=p.category_id||p.categoryId;
+    if(cid)cats.push(Number(cid));
+  });
+  return _vchScopeQS({productIds:pids,categoryIds:cats});
+}
 function coAddr(){return (CO_ADDRS||[]).find(a=>String(a.id)===String(CO_ADDR_ID))||(CO_ADDRS||[]).find(a=>Number(a.is_default))||(CO_ADDRS||[])[0]||null}
 function coFull(a){return [a.province,a.city,a.district,a.detail].filter(Boolean).join(' ')}
 /* 购物车结算：把每一行都核对一遍库存再进确认单 —— 让顾客在确认单上看到「有商品缺货」
@@ -1267,7 +1290,7 @@ async function openGearCheckout(items,fromCart){
   try{wallet=await api(`/api/public/users/${USER}/wallet?club_id=${CLUB}`)}catch(e){}
   CO_POINTS_MAX=Number(wallet.gearPoints||0);
   try{CO_ADDRS=await api(`/api/public/users/${USER}/addresses`)||[]}catch(e){}
-  try{CO_VOUCHERS=await api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=gear`)||[]}catch(e){}
+  try{CO_VOUCHERS=await api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=gear`+_gearVchScope())||[]}catch(e){}
   box.innerHTML=gearCheckoutHtml();
   window.scrollTo({top:0,behavior:'instant'});
 }
@@ -1649,6 +1672,8 @@ function bindWebEvents(){
    回源拉数据，这些都不该在打开详情时发生。顺序依赖太脆，所以只共用这一段。 */
 function wviewShow(id,tab){
   const view=$('#'+id);if(!view)return false;
+  /* #821 切 tab 时关掉挂在 body 上的营地全屏详情层；只切 .wview 会让它一直盖住内容 */
+  if(window.campCloseDetail)window.campCloseDetail();
   $$('.wview').forEach(x=>x.style.display='none');view.style.display='block';
   tab=tab||document.querySelector('.web-nav button[data-wv="'+id+'"]');
   $$('.web-nav button').forEach(x=>x.classList.remove('active'));tab?.classList.add('active');
@@ -2563,7 +2588,8 @@ function paxClearAllErrors(){
 }
 async function loadActivityVouchers(){
   if(!currentAct||!$('#activityBenefitArea'))return;
-  try{activityVouchers=await api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=activity`)}catch(e){activityVouchers=[]}
+  try{activityVouchers=await api(`/api/public/clubs/${CLUB}/vouchers?user_id=${USER}&kind=activity`
+    +_vchScopeQS({activityId:currentAct&&currentAct.id}))}catch(e){activityVouchers=[]}
   const box=$('#activityBenefitArea');
   if(!activityVouchers.length){box.innerHTML='';return}
   /* 福利券同样不写成本归属：顾客要判断的只是「用哪张更划算」。 */
@@ -2771,20 +2797,19 @@ async function loadMemberCenter(){
       : '装备商城按原价结算；装备折扣由平台按俱乐部订阅的套餐提供。');
     $('#memberTierPerks').innerHTML=lines.join(' ');
   }
-  /* 福利条目做成「成本归属 + 积分成本 + 权益价值 + 兑换」四段，
-     而不是一句话糊在一起 —— 顾客要判断的是「这个值不值这么多积分」。 */
+  /* #860 券与积分解耦：券就是券，顾客侧不再显示「X 积分可兑换这张券」。
+     用积分换券只有「积分商城」一条路，那里的积分价由俱乐部自定义、与券本身无关。 */
   if($('#memberBenefits'))$('#memberBenefits').innerHTML=(d.benefits||[]).map(x=>{
-    const pt=x.points_type==='club'?'活动积分':'装备积分';
     return `<div class="w-bnf">
       <div class="w-bnf__hd"><b>${esc(x.title)}</b></div>
       ${x.description?`<p class="w-bnf__desc">${esc(x.description)}</p>`:''}
       <div class="w-bnf__ft">
-        <div class="w-bnf__cost"><b>${x.points_cost}</b><span>${pt}</span>${x.cash_value?`<em>权益价值 ${money(x.cash_value)}</em>`:''}</div>
-        <button class="w-bnf__btn" type="button" onclick="redeemBenefit(${x.id})">兑换</button>
-      </div></div>`}).join('')||'<div class="w-empty">'+WI.gift+'<div>暂无可兑换福利</div></div>';
+        <div class="w-bnf__cost">${x.cash_value?`<em>权益价值 ${money(x.cash_value)}</em>`:'<em>会员权益</em>'}</div>
+        <button class="w-bnf__btn" type="button" onclick="wv('wme');pushMe('pointsmall')">去积分商城</button>
+      </div></div>`}).join('')||'<div class="w-empty">'+WI.gift+'<div>暂无会员权益</div></div>';
   if($('#memberRedemptions'))$('#memberRedemptions').innerHTML=(d.redemptions||[]).map(x=>`<div class="w-rdm">
       <div class="w-rdm__hd"><b>${esc(x.title)}</b>${badge(x.status==='issued'?'可使用':x.status==='held'?'结算中':x.status==='used'?'已使用':x.status,stTone(x.status))}</div>
-      <div class="w-rdm__meta">${x.points_spent} ${x.point_type==='club'?'活动积分':'装备积分'}</div>
+      <div class="w-rdm__meta">${esc(String(x.created_at||'').slice(0,10))}</div>
       ${x.voucher_code?`<div class="w-rdm__code">券码 <code>${esc(x.voucher_code)}</code></div>`:''}
     </div>`).join('')||'<div class="w-empty">'+WI.ticket+'<div>还没有兑换记录</div></div>';
 }catch(e){loaderError('#memberBenefits',e,'loadMemberCenter 加载失败')}}

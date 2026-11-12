@@ -2971,5 +2971,9 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 /* ══ #837 me 页订单左滑删除 ══ */
 .me-camp-wrap{position:relative;overflow:hidden;border-radius:18px}
 .me-camp-del{position:absolute;top:0;right:0;bottom:0;width:72px;display:grid;place-items:center;
-  background:#e5484d;color:#fff;font-size:13px;font-weight:700;border-radius:0 18px 18px 0;cursor:pointer}
+  background:#e5484d;color:#fff;font-size:13px;font-weight:700;border-radius:0 18px 18px 0;cursor:pointer;
+  transform:translateX(72px);transition:transform .18s ease;z-index:0}
+.me-camp-wrap.is-open .me-camp-del{transform:translateX(0)}
+/* #821 所有订单卡片都要压住底层删除按钮（原实现只给终态卡片 relative，其余红色按钮常驻） */
+.me-card2.me-camp{position:relative;z-index:1;transition:transform .18s ease;touch-action:pan-y;will-change:transform}
 .me-swipeable{position:relative;transition:transform .18s ease;touch-action:pan-y;will-change:transform}

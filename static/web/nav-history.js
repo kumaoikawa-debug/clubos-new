@@ -28,6 +28,8 @@ function clearFwd(){ forwardStack.length=0; }
 function isSheetOpen(){
   if(document.documentElement.classList.contains('w-sheet-open')) return true;
   if(d('wNoticeSheet')||d('wLeaderSheet')) return true;
+  /* #821 营地商品详情是挂在 body 上的全屏层，手势要让它自己处理返回 */
+  if(d('cpDetailHost')) return true;
   if(document.querySelector('.ux-overlay:not([hidden])')) return true;
   var dg=document.querySelector('[role="dialog"]');
   if(dg && dg.offsetParent!==null) return true;
@@ -45,6 +47,8 @@ function inHScroller(el){
 
 /* ── 返回：复刻各上下文的「返回」按钮 ───────────────────────────────────── */
 function appBack(){
+  /* 0) #821 营地商品详情全屏层，优先于所有其它返回通路 */
+  if(d('cpDetailHost')){ if(window.campCloseDetail)window.campCloseDetail(); return true; }
   /* 1) me 子页（覆盖层，最上层） */
   var ms=d('meStack');
   if(ms && !ms.hidden){

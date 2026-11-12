@@ -458,6 +458,30 @@ def _run_compat_migrations(c):
     # 商品兑换券专用：可兑换商品范围 all / category / specified，以及选中的商品。
     _ensure_column(c,'member_benefits','redeemable_product_type',"redeemable_product_type TEXT NOT NULL DEFAULT 'all'")
     _ensure_column(c,'member_benefits','selected_product','selected_product TEXT')
+    # ── #860 券体系重构（2026-11-12）：券与积分解耦 + 真实适用范围 / 效期 / 领用限制 ──
+    # 旧库全部靠下面这些幂等补列升级；新库在 schema.sql 里已直接建好，两处落点必须一致。
+    # ★ 餐饮/门店语义（#856 的 store_scope / dining_modes / wechat_delivery / *_scope /
+    #   selected_product）保留列只为兼容存量数据，自 #860 起前端不再展示、不再写入，
+    #   也不要再拿它们做业务判断。
+    # 适用范围：applies_to 说明大类（all/activity/camp/product/category），
+    #   scope_ref_kind + scope_ref_id 说明「指定到哪一个真实对象」，二者一起才生效。
+    _ensure_column(c,'member_benefits','scope_ref_kind',"scope_ref_kind TEXT NOT NULL DEFAULT ''")
+    _ensure_column(c,'member_benefits','scope_ref_id','scope_ref_id INTEGER')
+    # 多营地适用：all=全部营地 / specified=仅指定营地（camp_scope_ids 是 JSON 数组）。
+    _ensure_column(c,'member_benefits','camp_scope',"camp_scope TEXT NOT NULL DEFAULT 'all'")
+    _ensure_column(c,'member_benefits','camp_scope_ids','camp_scope_ids TEXT')
+    # 有效期：fixed=固定起止日期（沿用 valid_from/valid_to）/ relative=领券后 N 天内可用。
+    _ensure_column(c,'member_benefits','validity_type',"validity_type TEXT NOT NULL DEFAULT 'fixed'")
+    _ensure_column(c,'member_benefits','valid_days','valid_days INTEGER NOT NULL DEFAULT 0')
+    # 领用限制：all/member/non_member/new_user；每日限领 0=不限；new_user_only 仅新用户。
+    _ensure_column(c,'member_benefits','claim_audience',"claim_audience TEXT NOT NULL DEFAULT 'all'")
+    _ensure_column(c,'member_benefits','per_user_daily_limit','per_user_daily_limit INTEGER NOT NULL DEFAULT 0')
+    _ensure_column(c,'member_benefits','new_user_only','new_user_only INTEGER NOT NULL DEFAULT 0')
+    # 领券后 N 天生效的券，实发时把绝对起止日落到发放记录上（模板上不能写死，
+    # 否则所有顾客共用同一天）。列名特意避开 valid_from/valid_to，防止 eligible_vouchers
+    # 里 r.* 与 b.valid_from 同名被 dict() 覆盖。
+    _ensure_column(c,'benefit_redemptions','issued_valid_from','issued_valid_from TEXT')
+    _ensure_column(c,'benefit_redemptions','issued_valid_to','issued_valid_to TEXT')
     # 用户注册城市：城市定向投放（成都区域的用户在 11 月都能领一张券）要按它圈人。
     _ensure_column(c,'users','city','city TEXT')
     # 2026-10-31 C 端头像：自定义上传（avatar_url）+ 微信授权头像（wechat_avatar_url，自动同步入口）

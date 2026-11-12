@@ -4064,23 +4064,29 @@ def club_update_benefit(club_id:int,benefit_id:int,payload:dict=Body(...)):
         'discountCouponType':'discount_coupon_type','maxDiscountAmount':'max_discount_amount',
         'thresholdScope':'threshold_scope','deductionScope':'deduction_scope',
         'redeemableProductType':'redeemable_product_type','selectedProduct':'selected_product',
-        'mode':'mode','discountPercent':'discount_percent','thresholdAmount':'threshold_amount'})
+        'mode':'mode','discountPercent':'discount_percent','thresholdAmount':'threshold_amount',
+        'face':'face_json'})
     # 允许更新的列（含基础列与新 Word 列）；不在白名单内的键静默忽略，避免误改内部字段。
     _ALLOWED={'title','description','points_cost','cash_value','stock','status','threshold_amount',
         'discount_percent','valid_from','valid_to','mode','applies_to','benefit_type',
         'store_scope','dining_modes','wechat_delivery','discount_coupon_type','max_discount_amount',
         'threshold_scope','deduction_scope','redeemable_product_type','selected_product',
-        'target_type','target_city','claim_mode','image_key','per_user_limit','share_enabled'}
-    sets=[];vals=[]
+        'target_type','target_city','claim_mode','image_key','per_user_limit','share_enabled',
+        'face_json',*_COUPON_NEW_COLS}
+    sets=[];vals=[];merged_patch={}
     for k,v in (payload or {}).items():
         col=_ALIAS.get(k,k)
         if col in _ALLOWED:
             if col=='dining_modes' and isinstance(v,list): v=json.dumps(v,ensure_ascii=False)
-            sets.append(f'{col}=?'); vals.append(v)
+            if col=='face_json' and isinstance(v,dict): v=json.dumps(v,ensure_ascii=False)
+            if col in _COUPON_NEW_COLS: v=_normalize_coupon_col(col,v)
+            sets.append(f'{col}=?'); vals.append(v); merged_patch[col]=v
     if not sets: return {'ok':True}
     with conn() as c:
         b=row(c.execute("SELECT * FROM member_benefits WHERE id=? AND owner_type='CLUB' AND owner_club_id=?",(benefit_id,club_id)))
         if not b: raise HTTPException(404,'优惠券不存在或不属于本俱乐部')
+        # #860：合并态校验，防止写出「relative 效期却没天数」的永不过期券
+        _validate_coupon_patch(dict(b,**merged_patch))
         vals.append(benefit_id)
         c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?",vals)
     return {'ok':True}
@@ -4095,6 +4101,60 @@ def club_delete_benefit(club_id:int,benefit_id:int):
         if not b: raise HTTPException(404,'优惠券不存在或不属于本俱乐部')
         c.execute("UPDATE member_benefits SET status='inactive',updated_at=CURRENT_TIMESTAMP WHERE id=?",(benefit_id,))
     return {'ok':True}
+
+def _coupon_scope_options(c, club_id=None):
+    """#860 建券表单「真实下拉」的唯一数据源：只列库里真实存在的业务对象。
+    设计约束（见 clubos-new-ui-change 技能 §8）：模型/前端都不许编造条目，
+    下拉里的每一项都必须能反查到一张真实表。任何一项查询失败就降级为空列表，
+    不让建券表单因为某张历史表结构不同而整个打不开。"""
+    def q(sql,args,kind):
+        try:
+            return [{'id':int(r[0]),'name':str(r[1] or ''),'kind':kind,
+                     'extra':(int(r[2]) if len(r)>2 and r[2] is not None else None)}
+                    for r in c.execute(sql,args).fetchall()]
+        except Exception:
+            return []
+    w='WHERE club_id=?' if club_id is not None else ''
+    a=(club_id,) if club_id is not None else ()
+    acts=q('SELECT id,title,NULL FROM activities '+w+' ORDER BY id DESC LIMIT 200',a,'activity')
+    camps=q('SELECT id,name,NULL FROM camp_profiles '+w+' ORDER BY id DESC LIMIT 100',a,'camp')
+    pitches=q("SELECT id,COALESCE(NULLIF(code,''),name),camp_id FROM camp_pitches "+w+
+              ' ORDER BY id DESC LIMIT 200',a,'pitch')
+    prods=q('SELECT id,name,category_id FROM products ORDER BY id DESC LIMIT 200',(),'product')
+    cats=q("SELECT id,name,parent_id FROM product_categories WHERE status='active' ORDER BY sort,id LIMIT 200",
+           (),'category')
+    # 营地小站 / 租赁 / 门票同样是「某一个单一商品」，必须进同一个下拉
+    for t,label,col in (('camp_store_products','营地小站','name'),
+                        ('camp_rental_items','装备租赁','name'),
+                        ('camp_activity_tickets','营地门票','title')):
+        try:
+            for r in c.execute('SELECT id,%s,NULL FROM %s %s ORDER BY id DESC LIMIT 60'%(col,t,w),a).fetchall():
+                prods.append({'id':int(r[0]),'name':label+' · '+str(r[1] or ''),
+                              'kind':'product','extra':None})
+        except Exception:
+            pass
+    if club_id is not None:
+        try:
+            for r in c.execute('SELECT id,name,NULL FROM activity_categories WHERE club_id=? ORDER BY sort_order,id',
+                               (club_id,)).fetchall():
+                cats.append({'id':int(r[0]),'name':'活动分类 · '+str(r[1] or ''),
+                             'kind':'category','extra':None})
+        except Exception:
+            pass
+    return {'activities':acts,'camps':camps,'pitches':pitches,'products':prods,'categories':cats}
+
+@app.get('/api/club/{club_id}/coupon-scope-options')
+def club_coupon_scope_options(club_id:int):
+    """俱乐部建券：全平台通用 / 指定活动 / 指定营地 / 指定营位 / 指定商品 / 指定分类。"""
+    club_or_404(club_id)
+    with conn() as c:
+        return _coupon_scope_options(c, club_id)
+
+@app.get('/api/platform/coupon-scope-options')
+def platform_coupon_scope_options():
+    """总平台装备券：与俱乐部端同一份下拉数据（全平台口径）。"""
+    with conn() as c:
+        return _coupon_scope_options(c, None)
 
 @app.get('/api/club/{club_id}/benefits/redemptions')
 def club_benefit_redemptions(club_id:int):
@@ -4555,11 +4615,15 @@ def club_gift_member_voucher(club_id:int,user_id:int,payload:dict=Body(...)):
             if int(b['stock'])<=0: raise HTTPException(409,'该优惠券库存不足')
             c.execute('UPDATE member_benefits SET stock=stock-1,updated_at=CURRENT_TIMESTAMP WHERE id=?',(benefit_id,))
         code='BEN-'+secrets.token_hex(4).upper()
+        # #860：后台手工赠券同样要写相对效期实发日期，否则 relative 券会变成永不过期券。
+        ivf,ivt=benefit_engine.relative_validity_window(b)
         c.execute('''INSERT INTO benefit_redemptions(benefit_id,user_id,display_club_id,point_type,points_spent,
-                     funding_owner,cash_value,status,voucher_code,gift_note) VALUES(?,?,?,?,?,?,?,?,?,?)''',
+                     funding_owner,cash_value,status,voucher_code,gift_note,issued_valid_from,issued_valid_to)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?)''',
                   (benefit_id,user_id,club_id,b['points_type'],0,
                    ('CLUB' if b['owner_type']=='CLUB' else 'PLATFORM'),
-                   float(b['cash_value'] or 0),'issued',code,note))
+                   float(b['cash_value'] or 0),'issued',code,note,ivf,ivt))
+        c.execute('UPDATE member_benefits SET claimed_count=claimed_count+1 WHERE id=?',(benefit_id,))
         rid=int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
     return {'ok':True,'redemptionId':rid,'voucherCode':code,'title':b['title'],
             'benefitType':b['benefit_type'],'cashValue':float(b['cash_value'] or 0)}
@@ -5959,7 +6023,7 @@ def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_
             q.points['memberDiscount']=_md; q.points['memberDiscountRate']=_mrate
             if _md>0:
                 q.points['payable']=round(float(q.points['payable'])-_md,2)
-            benefits=benefit_engine.quote_vouchers(c,voucher_codes=codes,user_id=user_id,club_id=int(q.occurrence['club_id']),kind='activity',amount_available=float(q.points['payable']))
+            benefits=benefit_engine.quote_vouchers(c,voucher_codes=codes,user_id=user_id,club_id=int(q.occurrence['club_id']),kind='activity',amount_available=float(q.points['payable']),context={'activityId':int(activity_id)})
         except ValueError as e:
             raise HTTPException(409,str(e))
     out=q.points; out['wallet']=q.wallet; out['occurrence']=q.occurrence; out['pointsPolicy']=q.points_policy
@@ -6849,11 +6913,34 @@ def create_gear_order(club_id:int,payload:dict=Body(...)):
             ai_credit_engine.grant(c,club_id=club_id,amount=reward,ledger_type='mall_reward',source_type='gear_order',source_id=str(oid),note='装备商城销售奖励')
     return {'ok':True,'orderId':oid,'total':total,'gearPointsEarned':pts,'clubCommission':round(commission,2),'clubAIReward':reward}
 
+def _voucher_scope_ids(raw):
+    """把逗号分隔的查询串解析成 int 列表，脏值丢弃，绝不让字符串进 SQL。"""
+    out=[]
+    for p in str(raw or '').split(','):
+        p=p.strip()
+        if p:
+            try: out.append(int(p))
+            except ValueError: pass
+    return out
+
 @app.get('/api/public/clubs/{club_id}/vouchers')
-def public_vouchers(club_id:int,user_id:int=1,kind:str='activity'):
+def public_vouchers(club_id:int,user_id:int=1,kind:str='activity',
+                    activityId:int=0,
+                    productIds:str='',categoryIds:str='',
+                    campIds:str='',pitchIds:str=''):
+    """C 端券列表。#860：结算页必须把当前订单的真实对象 ID 传进来，让「可用券列表」
+    与下单 hold 共用同一份 context 判据 —— 否则指定商品/分类/营位的券会列表里显示
+    可抵、选中后下单却被拒。券包/我的页不带这些参数，仍展示用户持有的全部券。"""
     club_or_404(club_id)
+    ctx={}
+    if activityId: ctx['activityId']=int(activityId)
+    for key,raw in (('productIds',productIds),('categoryIds',categoryIds),
+                    ('campIds',campIds),('pitchIds',pitchIds)):
+        ids=_voucher_scope_ids(raw)
+        if ids: ctx[key]=ids
     with conn() as c:
-        try:return benefit_engine.eligible_vouchers(c,user_id=user_id,club_id=club_id,kind=kind)
+        try:return benefit_engine.eligible_vouchers(c,user_id=user_id,club_id=club_id,
+                                                    kind=kind,context=(ctx or None))
         except ValueError as e: raise HTTPException(400,str(e))
 
 @app.get('/api/public/users/{user_id}/camp-contacts')
@@ -7564,13 +7651,24 @@ def platform_add_benefit(payload:dict=Body(...)):
 
 @app.patch('/api/platform/benefits/{benefit_id}')
 def platform_update_benefit(benefit_id:int,payload:dict=Body(...)):
-    allowed=['title','description','points_cost','cash_value','stock','status','target_club_id','benefit_type','applies_to'];sets=[];vals=[]
+    """老「平台福利」编辑入口（保留兼容）。#860 起与 /api/platform/coupons 共用同一份
+    alias + 新列白名单，避免旧页面/脚本调它时把适用范围、效期、领用限制静默丢弃。"""
+    p={_COUPON_PATCH_ALIAS.get(k,k):v for k,v in (payload or {}).items()}
+    allowed=['title','description','points_cost','cash_value','stock','status','target_club_id',
+             'benefit_type','applies_to',*_COUPON_NEW_COLS]
+    sets=[];vals=[];merged_patch={}
     for k in allowed:
-        if k in payload: sets.append(f'{k}=?'); vals.append(payload[k])
+        if k in p:
+            v=_normalize_coupon_col(k,p[k]) if k in _COUPON_NEW_COLS else p[k]
+            sets.append(f'{k}=?'); vals.append(v); merged_patch[k]=v
     with conn() as c:
         b=row(c.execute("SELECT * FROM member_benefits WHERE id=? AND owner_type='PLATFORM'",(benefit_id,)))
         if not b: raise HTTPException(404,'平台福利不存在')
         if sets:
+            # 只在本次确实改了 #860 新字段时才做合并态校验，避免历史脏数据
+            # 让「只改个标题」这种无关编辑也失败。
+            if any(k in merged_patch for k in _COUPON_NEW_COLS):
+                _validate_coupon_patch(dict(b,**merged_patch))
             vals.append(benefit_id); c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?",vals)
     return {'ok':True}
 
@@ -7588,7 +7686,57 @@ _COUPON_PATCH_ALIAS = {
     'validTo': 'valid_to', 'perUserLimit': 'per_user_limit', 'shareEnabled': 'share_enabled',
     'pointsCost': 'points_cost', 'pointsType': 'points_type',
     'discountPercent': 'discount_percent', 'maxDiscountAmount': 'max_discount_amount',
+    # #860 券与积分解耦 + 适用范围 / 效期 / 领用限制
+    'scopeRefKind': 'scope_ref_kind', 'scopeRefId': 'scope_ref_id',
+    'campScope': 'camp_scope', 'campScopeIds': 'camp_scope_ids',
+    'validityType': 'validity_type', 'validDays': 'valid_days',
+    'claimAudience': 'claim_audience', 'perUserDailyLimit': 'per_user_daily_limit',
+    'newUserOnly': 'new_user_only',
 }
+
+# #860：PATCH 时把前端下拉/选择值归一成数据库列的类型，避免 list 直接进 TEXT 列、
+# 或者「是/否」字符串被当成布尔真值写进 INTEGER。俱乐部券与平台券共用。
+_COUPON_NEW_COLS = ('scope_ref_kind','scope_ref_id','camp_scope','camp_scope_ids',
+                    'validity_type','valid_days','claim_audience','per_user_daily_limit','new_user_only')
+
+def _normalize_coupon_col(col, v):
+    if col == 'camp_scope_ids':
+        if isinstance(v, (list, tuple)): return json.dumps(list(v), ensure_ascii=False)
+        return v
+    if col in ('scope_ref_id','valid_days','per_user_daily_limit'):
+        try: return int(v) if v not in (None, '') else (None if col == 'scope_ref_id' else 0)
+        except (TypeError,ValueError): return None if col == 'scope_ref_id' else 0
+    if col == 'new_user_only':
+        return 1 if v in (True, 1, '1', 'true', '是', 'yes') else 0
+    return v
+
+# #860：PATCH 与 _create 必须同口径校验，否则「改了效期类型却没填天数」会写出
+# 模板日期为空、发券时又不折算的永不过期券。两个 PATCH 端点共用这一份判据。
+_COUPON_ENUM_COLS = {
+    'applies_to': ('activity','camp','all','product','category'),
+    'scope_ref_kind': ('','activity','camp','pitch','product','category'),
+    'camp_scope': ('all','specified'),
+    'validity_type': ('fixed','relative'),
+    'claim_audience': ('all','member','non_member','new_user'),
+}
+
+def _validate_coupon_patch(merged):
+    for col, allowed in _COUPON_ENUM_COLS.items():
+        v = merged.get(col)
+        if v is not None and str(v).strip().lower() not in allowed:
+            raise HTTPException(400, '券字段 %s 取值不合法：%s' % (col, v))
+    if str(merged.get('validity_type') or 'fixed').strip().lower() == 'relative':
+        try: days = int(merged.get('valid_days') or 0)
+        except (TypeError, ValueError): days = 0
+        if days <= 0:
+            raise HTTPException(400, '「领券后 N 天内可用」必须填写有效天数')
+    if str(merged.get('camp_scope') or 'all').strip().lower() == 'specified':
+        ids = merged.get('camp_scope_ids')
+        if isinstance(ids, str):
+            try: ids = json.loads(ids)
+            except Exception: ids = []
+        if not ids:
+            raise HTTPException(400, '指定多营地适用时必须选择至少一个营地')
 
 @app.get('/api/platform/coupon-images')
 def platform_coupon_images():
@@ -7628,7 +7776,8 @@ def platform_update_coupon(coupon_id: int, payload: dict = Body(...)):
     allowed = ['title', 'description', 'status', 'stock', 'cash_value', 'mode', 'threshold_amount',
                'discount_percent', 'max_discount_amount',
                'image_key', 'valid_from', 'valid_to', 'claim_mode', 'target_type', 'target_city',
-               'target_club_id', 'per_user_limit', 'share_enabled', 'applies_to']
+               'target_club_id', 'per_user_limit', 'share_enabled', 'applies_to',
+               *_COUPON_NEW_COLS]
     sets = []
     vals = []
     for k in allowed:
@@ -7638,6 +7787,8 @@ def platform_update_coupon(coupon_id: int, payload: dict = Body(...)):
                 v = int(v) if v not in (None, '') else None
             elif k == 'per_user_limit' and v not in (None, ''):
                 v = max(1, int(v))
+            elif k in _COUPON_NEW_COLS:
+                v = _normalize_coupon_col(k, v)
             sets.append(f'{k}=?')
             vals.append(v)
     with conn() as c:
@@ -7662,6 +7813,9 @@ def platform_update_coupon(coupon_id: int, payload: dict = Body(...)):
         # 防止 PATCH 把装备券改成折扣形态（前端也会置灰，这里兜底）。
         if merged.get('mode') == 'discount' and merged.get('benefit_type') == 'gear_coupon':
             raise HTTPException(400, '折扣券只支持活动报名券，装备券不能设为折扣券')
+        # #860：与 _create 同口径校验适用范围 / 效期 / 领用限制，防止 PATCH 写出
+        # 「relative 效期却没有天数」这类会让券永不过期的脏数据。
+        _validate_coupon_patch(merged)
         if sets:
             vals.append(coupon_id)
             c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?", vals)

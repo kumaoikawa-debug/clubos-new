@@ -175,7 +175,9 @@ class CheckoutEngine:
         if self.benefits and voucher_codes:
             benefit_quote=self.benefits.hold_vouchers(
                 c,intent_id=intent_id,voucher_codes=voucher_codes,user_id=user_id,
-                club_id=int(activity['club_id']),kind='activity',amount_available=quote.payable)
+                club_id=int(activity['club_id']),kind='activity',amount_available=quote.payable,
+                # #860 指定活动的券必须真的命中这场活动（与 price-quote 同一判据）
+                context={'activityId':int(activity['id'])})
         cash_amount=max(0.0,float(quote.payable)-float(benefit_quote['totalDiscount']))
         # 成交时生效的换算比例进快照：以后运营改比例，历史订单仍能解释「当时几分抵一块」。
         policy_snapshot={**policy.as_dict(),'pointsRedeemRate':redeem_rate}
@@ -233,7 +235,11 @@ class CheckoutEngine:
         if self.benefits and voucher_codes:
             benefit_quote=self.benefits.hold_vouchers(
                 c,intent_id=intent_id,voucher_codes=voucher_codes,user_id=user_id,
-                club_id=club_id,kind='gear',amount_available=quote.payable)
+                club_id=club_id,kind='gear',amount_available=quote.payable,
+                # #860 指定商品/分类的券必须真的命中购物车里的商品或其分类
+                context={'productIds':[int(p['id']) for p,_ in resolved_products],
+                         'categoryIds':[int(p['category_id']) for p,_ in resolved_products
+                                        if p.get('category_id') not in (None,'')]})
         if benefit_quote['clubDiscount']:
             raise ValueError('装备订单不能使用俱乐部承担的福利券')
         cash_amount=max(0.0,float(quote.payable)-float(benefit_quote['platformSubsidy']))

@@ -147,6 +147,42 @@ class CampPricingEngine:
             'gearPoints': int(wallet.get('gearPoints') or 0),
         }
 
+    @staticmethod
+    def _scope_context(lines: list[dict]) -> dict:
+        """#860 从服务端重算过的订单规范行里抽出「真实对象 ID」。
+        报价与下单共用这一个函数，保证「券在报价页能抵、下单时也能抵」不会漂移。
+
+        注意：营地商品（小站/租赁）只有文本 category 字段、没有分类 ID，所以
+        规范行里通常不带 categoryIds；「指定装备商品分类」的券因此不适用于营地订单
+        —— 这是数据模型事实，不是漏传。C 端券列表现在会带同一份 context，所以这类券
+        在营地结算页就不会出现（列表与 hold 一致），不会「显示可抵、下单被拒」。
+        """
+        camps, pitches, products, categories, activities = set(), set(), set(), set(), set()
+        for x in lines or []:
+            try:
+                cid = x.get('campId')
+                if cid: camps.add(int(cid))
+            except (TypeError, ValueError):
+                pass
+            # 规范行将来若带分类/活动归属，直接并入，报价与 hold 自动同时生效。
+            for key, bucket in (('categoryId', categories), ('categoryIds', categories),
+                                ('activityId', activities), ('activityIds', activities)):
+                v = x.get(key)
+                if v is None: continue
+                if not isinstance(v, (list, tuple, set)): v = [v]
+                for i in v:
+                    try:
+                        if i not in (None, '', 0, '0'): bucket.add(int(i))
+                    except (TypeError, ValueError): pass
+            try: rid = int(x.get('id') or 0)
+            except (TypeError, ValueError): rid = 0
+            if not rid: continue
+            if str(x.get('kind') or '') == 'pitch': pitches.add(rid)
+            else: products.add(rid)
+        return {'campIds': sorted(camps), 'pitchIds': sorted(pitches),
+                'productIds': sorted(products), 'categoryIds': sorted(categories),
+                'activityIds': sorted(activities)}
+
     def quote(self, c, *, club_id: int, user_id: int | None, items: list[dict],
               club_points: int = 0, gear_points: int = 0,
               voucher_codes: list[str] | None = None) -> dict:
@@ -249,7 +285,8 @@ class CampPricingEngine:
                 v_avail = round(max(0.0, (after_points - out['memberDiscount']) * promo_share), 2)
                 vb = self.benefits.quote_vouchers(
                     c, voucher_codes=codes, user_id=uid, club_id=int(club_id),
-                    kind='camp', amount_available=v_avail)
+                    kind='camp', amount_available=v_avail,
+                    context=self._scope_context(lines))
                 out['voucherDiscount'] = round(float(vb.get('totalDiscount') or 0), 2)
                 out['vouchersApplied'] = vb.get('applied') or []
                 out['_voucherClubDiscount'] = float(vb.get('clubDiscount') or 0)
@@ -288,7 +325,8 @@ class CampPricingEngine:
             self.benefits.hold_vouchers(
                 c, intent_id=checkout_id, voucher_codes=voucher_codes,
                 user_id=uid, club_id=club_id, kind='camp',
-                amount_available=float(quote.get('payable') or 0) + float(quote.get('voucherDiscount') or 0))
+                amount_available=float(quote.get('payable') or 0) + float(quote.get('voucherDiscount') or 0),
+                context=self._scope_context(quote.get('items') or []))
 
     def finalize(self, c, *, checkout_id: str, order_id: int, club_id: int,
                  user_id: int, quote: dict) -> int:
