@@ -101,7 +101,8 @@ CREATE TABLE IF NOT EXISTS club_mp_staff (
   status TEXT NOT NULL DEFAULT 'active',
   bound_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_mp_staff_login ON club_mp_staff(club_id,login_account);
+-- idx_mp_staff_login 唯一索引不在这里建：旧库已有旧结构的 club_mp_staff（缺 login_account），
+-- executescript 在这里建索引会报「no such column」。补列 + 建索引统一走 db._run_compat_migrations。
 
 -- 小程序标准设置（基础 / 转发 / 支付三组，JSON 归一存取）
 CREATE TABLE IF NOT EXISTS club_mp_settings (

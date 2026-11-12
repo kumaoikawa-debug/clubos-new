@@ -214,6 +214,24 @@ def _run_compat_migrations(c):
     # （A001-A010，老板自定义编号）。房态按单元数累计判定，满员不可订。
     # unit_qty=1 时行为与旧版完全一致（一号一位）。
     _ensure_column(c,'camp_pitches','unit_qty','unit_qty INTEGER NOT NULL DEFAULT 1')
+    # 2026-11-12 #857 小程序管理助手：club_mp_staff / club_mp_roles 旧库补列。
+    # 旧库早期版本已有这两张表但缺「登录账号/密码/门店权限/页面权限」等新列；
+    # schema.sql 的建表是 IF NOT EXISTS（旧表跳过），唯一索引已从 schema 移到这里，
+    # 必须先补列再建索引，否则旧库 executescript 会因 login_account 不存在直接崩。
+    for _col, _ddl in (
+            ('login_account', 'login_account TEXT'),
+            ('password', 'password TEXT'),
+            ('account_source', "account_source TEXT NOT NULL DEFAULT 'manual'"),
+            ('store_scope', 'store_scope TEXT'),
+            ('store_detail', 'store_detail TEXT'),
+            ('page_perms_json', "page_perms_json TEXT NOT NULL DEFAULT '{}'")):
+        _ensure_column(c, 'club_mp_staff', _col, _ddl)
+    for _col, _ddl in (
+            ('store_scope', "store_scope TEXT NOT NULL DEFAULT 'this_club'"),
+            ('store_detail', 'store_detail TEXT'),
+            ('page_perms_json', "page_perms_json TEXT NOT NULL DEFAULT '{}'")):
+        _ensure_column(c, 'club_mp_roles', _col, _ddl)
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_mp_staff_login ON club_mp_staff(club_id, login_account)')
     # #858 优惠邀请 · 邀请奖励（2026-11-12）：邀请奖励配置 + 邀请记录。
     # 新表，CREATE TABLE IF NOT EXISTS 幂等；新库由 schema.sql 直接建，旧库靠这里补建。
     c.execute('''CREATE TABLE IF NOT EXISTS invite_reward_settings (
