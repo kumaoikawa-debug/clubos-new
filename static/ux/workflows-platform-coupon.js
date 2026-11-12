@@ -5,8 +5,8 @@
  *      （标题 / 用途 / 有效期 / 状态行 / 操作行）—— 一张卡看清一张券的全部状态；
  *   ② 建券与改券同一页「分栏编辑器」：右侧栏目导航（基本信息 / 使用条件 /
  *      效期设置 / 领用限制 / 其他设置），左侧内容区自己滚，顶部实时预览券卡；
- *   ③ 逻辑不变：字段全部映射既有 member_benefits 列，mode 由门槛反推
- *      （门槛 > 0 → threshold 满减，否则 fixed 无门槛直抵），提交格式与旧版一致；
+ *   ③ 字段全部映射既有 member_benefits 列；券形态三型显式选择
+ *      （fixed 直抵 / threshold 满减 / discount 折扣），提交格式与旧版一致；
  *   ④ 四个快捷模板保留一键创建，覆盖八成场景。
  * 本文件是平台端最后一个脚本：window.onView 在这里再包一层，保证点「优惠券」时能加载。
  */
@@ -237,8 +237,11 @@
     var st = {
       benefitType: cur ? cur.benefit_type : 'activity_coupon',
       title: cur ? cur.title : '新客报名立减 ¥30',
+      mode: cur ? (cur.mode || 'fixed') : 'fixed',
       cashValue: cur ? num(cur.cash_value, 30) : 30,
       thresholdAmount: cur ? num(cur.threshold_amount, 0) : 0,
+      discountPercent: cur ? num(cur.discount_percent, 0) : 90,
+      maxDiscountAmount: cur ? num(cur.max_discount_amount, 0) : 0,
       stock: cur && cur.stock != null ? cur.stock : 200,
       claimMode: cur ? cur.claim_mode : 'claim',
       imageKey: cur ? cur.image_key : 'sunrise',
@@ -273,7 +276,7 @@
             '<div class="plat-cpe__preview" id="cpePreview"></div>' +
 
             '<section class="plat-cpe__sec" id="cpeSec-basic">' +
-              '<div class="plat-cpe__sec-h"><h3>基本信息</h3><p>券用途创建后不可改；面额与门槛决定 C 端看到的样子（门槛大于 0 即为满减券）。</p></div>' +
+              '<div class="plat-cpe__sec-h"><h3>基本信息</h3><p>券用途创建后不可改；券形态决定 C 端看到的样子（直抵 / 满减 / 折扣）。</p></div>' +
               '<div class="plat-cpe__row"><span>券用途 <i>*</i></span><div>' +
                 radiosHtml('benefitType', [
                   { value: 'activity_coupon', label: '活动报名券（报名时抵）' },
@@ -284,10 +287,32 @@
               '<div class="plat-cpe__row"><span>券名称 <i>*</i></span><div>' +
                 '<input id="cpeTitle" type="text" maxlength="60" placeholder="例如：新客报名立减 ¥30" value="' + esc(st.title) + '">' +
               '</div></div>' +
-              '<div class="plat-cpe__row plat-cpe__row--2">' +
-                '<div><span>抵扣金额（元） <i>*</i></span><input id="cpeCash" type="number" min="0.01" step="1" value="' + st.cashValue + '"></div>' +
-                '<div><span>使用门槛（元）</span><input id="cpeThreshold" type="number" min="0" step="1" value="' + st.thresholdAmount + '">' +
-                '<em class="plat-cpe__hint">0 = 无门槛直接抵</em></div>' +
+              '<div class="plat-cpe__row"><span>券形态 <i>*</i></span><div>' +
+                radiosHtml('mode', [
+                  { value: 'fixed', label: '直抵券（无门槛直接抵）' },
+                  { value: 'threshold', label: '满减券（满 X 减 Y）' },
+                  { value: 'discount', label: '折扣券（如 9 折）', disabled: st.benefitType === 'gear_coupon' }
+                ], st.mode) +
+                '<em class="plat-cpe__hint">折扣券只支持活动报名券；装备购买券不能设为折扣券</em>' +
+              '</div></div>' +
+              '<div class="plat-cpe__cond" data-when="amount">' +
+                '<div class="plat-cpe__row plat-cpe__row--2">' +
+                  '<div><span>抵扣金额（元） <i>*</i></span><input id="cpeCash" type="number" min="0.01" step="1" value="' + st.cashValue + '"></div>' +
+                  '<div data-when="threshold"><span>使用门槛（元） <i>*</i></span><input id="cpeThreshold" type="number" min="0.01" step="1" value="' + st.thresholdAmount + '">' +
+                  '<em class="plat-cpe__hint">满减券必须设置门槛</em></div>' +
+                '</div>' +
+              '</div>' +
+              '<div class="plat-cpe__cond" data-when="discount">' +
+                '<div class="plat-cpe__row plat-cpe__row--2">' +
+                  '<div><span>折扣力度 <i>*</i></span><input id="cpeDiscount" type="number" min="1" max="99" step="1" value="' + st.discountPercent + '">' +
+                  '<em class="plat-cpe__hint">填折后百分比：90 = 9 折</em></div>' +
+                  '<div><span>最大抵扣金额（元）</span><input id="cpeMaxDiscount" type="number" min="0" step="1" value="' + st.maxDiscountAmount + '">' +
+                  '<em class="plat-cpe__hint">0 = 不限制</em></div>' +
+                '</div>' +
+                '<div class="plat-cpe__row"><span>使用门槛（元）</span><div>' +
+                  '<input id="cpeDiscountThreshold" type="number" min="0" step="1" value="' + st.thresholdAmount + '">' +
+                  '<em class="plat-cpe__hint">满此金额才可用；0 = 无门槛</em>' +
+                '</div></div>' +
               '</div>' +
               '<div class="plat-cpe__row plat-cpe__row--2">' +
                 '<div><span>发行数量</span><input id="cpeStock" type="number" min="1" step="1" value="' + (st.stock == null ? '' : st.stock) + '">' +
@@ -403,6 +428,9 @@
     var titleInput = $('#cpeTitle');
     var cashInput = $('#cpeCash');
     var thresholdInput = $('#cpeThreshold');
+    var discountInput = $('#cpeDiscount');
+    var maxDiscountInput = $('#cpeMaxDiscount');
+    var discountThresholdInput = $('#cpeDiscountThreshold');
     var stockInput = $('#cpeStock');
     var citySel = $('#cpeCity');
     var clubSel = $('#cpeClub');
@@ -425,6 +453,23 @@
       return el ? el.value : '';
     }
     function syncRadios() {
+      var tt = radioVal('targetType');
+      var vt = radioVal('validType');
+      var bt = radioVal('benefitType');
+      var mode = radioVal('mode');
+      /* 折扣形态只在活动报名券下可选；装备券下若当前是折扣，自动切回直抵 */
+      var dRadio = root.querySelector('input[name=mode][value=discount]');
+      if (dRadio) {
+        var lockDiscount = bt === 'gear_coupon';
+        dRadio.disabled = lockDiscount;
+        var dLab = dRadio.closest('.plat-cpe__radio');
+        if (dLab) dLab.classList.toggle('is-locked', lockDiscount);
+        if (lockDiscount && mode === 'discount') {
+          var fRadio = root.querySelector('input[name=mode][value=fixed]');
+          if (fRadio) fRadio.checked = true;
+          mode = 'fixed';
+        }
+      }
       /* 单选胶囊组 + 券面样式组都要跟着 checked 换 is-on（两组结构不同，一起刷） */
       root.querySelectorAll('.plat-cpe__radios, .plat-cpe__tpls').forEach(function (group) {
         group.querySelectorAll('input[type=radio]').forEach(function (r) {
@@ -433,22 +478,28 @@
         });
       });
       /* 条件字段显隐 */
-      var tt = radioVal('targetType');
-      var vt = radioVal('validType');
-      root.querySelectorAll('.plat-cpe__cond[data-when]').forEach(function (box) {
+      root.querySelectorAll('[data-when]').forEach(function (box) {
         var w = box.getAttribute('data-when');
         var show = (w === 'city' && tt === 'city') || (w === 'club' && tt === 'club') ||
-          (w === 'fixed' && vt === 'fixed');
+          (w === 'fixed' && vt === 'fixed') ||
+          (w === 'amount' && (mode === 'fixed' || mode === 'threshold')) ||
+          (w === 'threshold' && mode === 'threshold') ||
+          (w === 'discount' && mode === 'discount');
         box.style.display = show ? '' : 'none';
       });
     }
 
     function paintPreview() {
+      var mode = radioVal('mode');
+      var discount = mode === 'discount';
       var like = {
         title: titleInput.value || '优惠券名称',
         image_key: radioVal('imageKey'),
-        cash_value: num(cashInput.value, 0),
-        threshold_amount: num(thresholdInput.value, 0),
+        mode: mode,
+        discount_percent: discount ? num(discountInput.value, 0) : 0,
+        cash_value: discount ? 0 : num(cashInput.value, 0),
+        threshold_amount: discount ? num(discountThresholdInput.value, 0)
+          : (mode === 'threshold' ? num(thresholdInput.value, 0) : 0),
         status: 'active',
         claim_mode: radioVal('claimMode'),
         target_type: radioVal('targetType'),
@@ -493,9 +544,22 @@
     async function save() {
       var title = (titleInput.value || '').trim();
       if (!title) { msgBox.textContent = '请填写券名称'; titleInput.focus(); return; }
+      var benefitType = radioVal('benefitType');
+      var mode = radioVal('mode');
+      var discountPercent = num(discountInput.value, 0);
+      var maxDiscountAmount = num(maxDiscountInput.value, 0);
+      if (mode === 'discount') {
+        if (benefitType !== 'activity_coupon') { msgBox.textContent = '折扣券只支持活动报名券'; return; }
+        if (!(discountPercent >= 1 && discountPercent < 100)) {
+          msgBox.textContent = '折扣力度必须在 1~99 之间（如 90 表示 9 折）'; discountInput.focus(); return;
+        }
+        if (!(maxDiscountAmount >= 0)) { msgBox.textContent = '最大抵扣金额不能为负'; maxDiscountInput.focus(); return; }
+      }
       var cashValue = num(cashInput.value, 0);
-      if (!(cashValue > 0)) { msgBox.textContent = '抵扣金额必须大于 0'; cashInput.focus(); return; }
-      var thresholdAmount = num(thresholdInput.value, 0);
+      if (mode !== 'discount' && !(cashValue > 0)) { msgBox.textContent = '抵扣金额必须大于 0'; cashInput.focus(); return; }
+      var thresholdAmount = mode === 'threshold' ? num(thresholdInput.value, 0)
+        : (mode === 'discount' ? num(discountThresholdInput.value, 0) : 0);
+      if (mode === 'threshold' && !(thresholdAmount > 0)) { msgBox.textContent = '满减券必须设置使用门槛'; thresholdInput.focus(); return; }
       var targetType = radioVal('targetType');
       var targetCity = citySel.value;
       var targetClubId = clubSel.value;
@@ -506,9 +570,11 @@
          静默丢弃（旧版「改投放没反应」就是这个坑）。POST 走 benefits.py 的驼峰约定。 */
       var patch = {
         title: title,
-        mode: thresholdAmount > 0 ? 'threshold' : 'fixed',
+        mode: mode,
         threshold_amount: thresholdAmount,
-        cash_value: cashValue,
+        cash_value: mode === 'discount' ? 0 : cashValue,
+        discount_percent: mode === 'discount' ? discountPercent : 0,
+        max_discount_amount: mode === 'discount' ? (maxDiscountAmount > 0 ? maxDiscountAmount : null) : null,
         stock: stockRaw === '' ? null : Math.max(0, parseInt(stockRaw, 10) || 0),
         claim_mode: radioVal('claimMode'),
         target_type: targetType,
@@ -534,8 +600,9 @@
         } else {
           /* POST 侧是 benefits.py 的驼峰约定（benefitType / cashValue / …） */
           var post = {
-            title: patch.title, benefitType: radioVal('benefitType'), mode: patch.mode,
+            title: patch.title, benefitType: benefitType, mode: patch.mode,
             thresholdAmount: patch.threshold_amount, cashValue: patch.cash_value,
+            discountPercent: patch.discount_percent, maxDiscountAmount: patch.max_discount_amount,
             stock: patch.stock, claimMode: patch.claim_mode, targetType: patch.target_type,
             targetCity: patch.target_city, targetClubId: patch.target_club_id,
             imageKey: patch.image_key, perUserLimit: patch.per_user_limit,

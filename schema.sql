@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS club_miniprogram (
 );
 
 -- 小程序管理助手 · 角色管理（权限点清单见 app.py MP_PERMS）
+-- 角色即「权限模版」：门店权限 + 页面权限（8 模块 × 查看/编辑）可复用。
 CREATE TABLE IF NOT EXISTS club_mp_roles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   club_id INTEGER NOT NULL,
@@ -74,10 +75,15 @@ CREATE TABLE IF NOT EXISTS club_mp_roles (
   perms_json TEXT NOT NULL DEFAULT '[]',
   remark TEXT,
   system INTEGER NOT NULL DEFAULT 0,
+  store_scope TEXT NOT NULL DEFAULT 'this_club',
+  store_detail TEXT,
+  page_perms_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 小程序管理助手 · 员工管理（绑定台账；员工登录体系后续接入）
+-- 登录账号/密码（哈希）/账号来源：台账先行，登录体系后续接入。
+-- 门店权限/页面权限：缺省继承所绑角色（store_scope/page_perms_json 为 NULL/空 = 继承）。
 CREATE TABLE IF NOT EXISTS club_mp_staff (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   club_id INTEGER NOT NULL,
@@ -86,9 +92,16 @@ CREATE TABLE IF NOT EXISTS club_mp_staff (
   phone TEXT,
   avatar_url TEXT,
   role_id INTEGER,
+  login_account TEXT,
+  password TEXT,
+  account_source TEXT NOT NULL DEFAULT 'manual',
+  store_scope TEXT,
+  store_detail TEXT,
+  page_perms_json TEXT NOT NULL DEFAULT '{}',
   status TEXT NOT NULL DEFAULT 'active',
   bound_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_mp_staff_login ON club_mp_staff(club_id,login_account);
 
 -- 小程序标准设置（基础 / 转发 / 支付三组，JSON 归一存取）
 CREATE TABLE IF NOT EXISTS club_mp_settings (
@@ -2202,3 +2215,39 @@ CREATE TABLE IF NOT EXISTS camp_ai_template_samples (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_camp_tpl_samples ON camp_ai_template_samples(club_id,template_id,created_at DESC);
+
+
+-- ===========================================================================
+-- #858 优惠邀请 · 邀请奖励（2026-11-12）：三 Tab（基本设置 / 分享设置 / 邀请记录）。
+-- 双边权益：被邀请人领券 → 邀请人得奖励券（可与被邀请人券不同）+ 邀请人额外活动积分。
+-- 旧的 clubs.referral_coupon_benefit_id 仅作降级兼容：未开启本模块时沿用（双方同券）。
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS invite_reward_settings (
+  club_id INTEGER PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  invitee_benefit_id INTEGER,            -- 被邀请人领的券（本俱乐部活动券）
+  inviter_benefit_id INTEGER,            -- 邀请人奖励券（NULL = 与被邀请人相同）
+  inviter_points INTEGER NOT NULL DEFAULT 0,  -- 邀请人额外活动积分（100 分 = ¥1，成本俱乐部承担）
+  share_title TEXT,                       -- 分享卡片标题
+  share_desc TEXT,                        -- 分享卡片副文案
+  share_image_key TEXT NOT NULL DEFAULT 'sunrise',  -- 分享卡配图（复用券面模板 key）
+  updated_at TEXT,
+  FOREIGN KEY(club_id) REFERENCES clubs(id),
+  FOREIGN KEY(invitee_benefit_id) REFERENCES member_benefits(id),
+  FOREIGN KEY(inviter_benefit_id) REFERENCES member_benefits(id)
+);
+
+CREATE TABLE IF NOT EXISTS invite_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  inviter_user_id INTEGER NOT NULL,       -- 邀请人
+  invitee_user_id INTEGER NOT NULL,       -- 被邀请人
+  invite_code TEXT,                       -- 本次使用的邀请码
+  invitee_redemption_id INTEGER,          -- 被邀请人领券记录（benefit_redemptions.id）
+  inviter_redemption_id INTEGER,          -- 邀请人奖励券记录
+  inviter_points_awarded INTEGER NOT NULL DEFAULT 0,  -- 邀请人实得活动积分
+  status TEXT NOT NULL DEFAULT 'done',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(club_id) REFERENCES clubs(id)
+);
+CREATE INDEX IF NOT EXISTS idx_invite_records_club ON invite_records(club_id, created_at DESC);

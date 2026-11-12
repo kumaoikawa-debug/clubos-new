@@ -214,6 +214,32 @@ def _run_compat_migrations(c):
     # （A001-A010，老板自定义编号）。房态按单元数累计判定，满员不可订。
     # unit_qty=1 时行为与旧版完全一致（一号一位）。
     _ensure_column(c,'camp_pitches','unit_qty','unit_qty INTEGER NOT NULL DEFAULT 1')
+    # #858 优惠邀请 · 邀请奖励（2026-11-12）：邀请奖励配置 + 邀请记录。
+    # 新表，CREATE TABLE IF NOT EXISTS 幂等；新库由 schema.sql 直接建，旧库靠这里补建。
+    c.execute('''CREATE TABLE IF NOT EXISTS invite_reward_settings (
+        club_id INTEGER PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        invitee_benefit_id INTEGER,
+        inviter_benefit_id INTEGER,
+        inviter_points INTEGER NOT NULL DEFAULT 0,
+        share_title TEXT,
+        share_desc TEXT,
+        share_image_key TEXT NOT NULL DEFAULT 'sunrise',
+        updated_at TEXT,
+        FOREIGN KEY(club_id) REFERENCES clubs(id))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS invite_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        club_id INTEGER NOT NULL,
+        inviter_user_id INTEGER NOT NULL,
+        invitee_user_id INTEGER NOT NULL,
+        invite_code TEXT,
+        invitee_redemption_id INTEGER,
+        inviter_redemption_id INTEGER,
+        inviter_points_awarded INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'done',
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(club_id) REFERENCES clubs(id))''')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_invite_records_club ON invite_records(club_id, created_at DESC)')
     _ensure_column(c,'camp_pitches','unit_codes_json','unit_codes_json TEXT')
     # 自动/人工分配落位：预订记录里存实际占用的单元编号数组（如 ["A003"] 或 ["A001","A002"]）。
     _ensure_column(c,'camp_pitch_bookings','assigned_units_json','assigned_units_json TEXT')
@@ -396,6 +422,24 @@ def _run_compat_migrations(c):
     _ensure_column(c,'member_benefits','per_user_limit','per_user_limit INTEGER NOT NULL DEFAULT 1')
     _ensure_column(c,'member_benefits','claimed_count','claimed_count INTEGER NOT NULL DEFAULT 0')
     _ensure_column(c,'member_benefits','share_enabled','share_enabled INTEGER NOT NULL DEFAULT 1')
+    # 2026-11-12 券中心 UI 对齐 Word 设计稿（#856）：照搬 Word 券配置的展示字段，
+    # 全部可空/有默认值，存量券继续按原语义工作，不回填。
+    # 可用门店：this_club=仅本店可用 / all_clubs=全部门店 / specified=指定门店可用（展示用，实际归属仍由 owner/target 决定）。
+    _ensure_column(c,'member_benefits','store_scope',"store_scope TEXT NOT NULL DEFAULT 'this_club'")
+    # 就餐方式（堂食/自取/配送/快递），JSON 数组，展示用。
+    _ensure_column(c,'member_benefits','dining_modes','dining_modes TEXT')
+    # 微信投放开关（0 关闭 / 1 开启）。
+    _ensure_column(c,'member_benefits','wechat_delivery','wechat_delivery INTEGER NOT NULL DEFAULT 0')
+    # 折扣券类型：single=单次折扣券 / stored=储值折扣券。
+    _ensure_column(c,'member_benefits','discount_coupon_type',"discount_coupon_type TEXT NOT NULL DEFAULT 'single'")
+    # 最大抵扣金额（REAL，NULL=不限制）。
+    _ensure_column(c,'member_benefits','max_discount_amount','max_discount_amount REAL')
+    # 指定门槛商品 / 指定抵扣商品：all=全部商品 / category=指定分类 / product=指定商品。
+    _ensure_column(c,'member_benefits','threshold_scope',"threshold_scope TEXT NOT NULL DEFAULT 'all'")
+    _ensure_column(c,'member_benefits','deduction_scope',"deduction_scope TEXT NOT NULL DEFAULT 'all'")
+    # 商品兑换券专用：可兑换商品范围 all / category / specified，以及选中的商品。
+    _ensure_column(c,'member_benefits','redeemable_product_type',"redeemable_product_type TEXT NOT NULL DEFAULT 'all'")
+    _ensure_column(c,'member_benefits','selected_product','selected_product TEXT')
     # 用户注册城市：城市定向投放（成都区域的用户在 11 月都能领一张券）要按它圈人。
     _ensure_column(c,'users','city','city TEXT')
     # 2026-10-31 C 端头像：自定义上传（avatar_url）+ 微信授权头像（wechat_avatar_url，自动同步入口）
@@ -527,6 +571,20 @@ def _run_compat_migrations(c):
     _ensure_column(c,'product_brands','cooperation_status',"cooperation_status TEXT NOT NULL DEFAULT 'pending'")
     _ensure_column(c,'product_brands','source_type',"source_type TEXT NOT NULL DEFAULT 'platform_self'")
     _ensure_column(c,'product_brands','mall_display_status',"mall_display_status TEXT NOT NULL DEFAULT 'show'")
+    # 2026-11-12 #857：小程序管理助手 · 员工管理 + 权限模版（角色即权限模版）。
+    # 角色/员工新增：门店权限（this_club/all_clubs/specified）、页面权限（8 模块 × 查看/编辑）、
+    # 登录账号、密码（哈希）、账号来源。全部可空 + 有默认值，存量角色/员工不回填、继续按原语义工作。
+    _ensure_column(c,'club_mp_roles','store_scope',"store_scope TEXT NOT NULL DEFAULT 'this_club'")
+    _ensure_column(c,'club_mp_roles','store_detail','store_detail TEXT')
+    _ensure_column(c,'club_mp_roles','page_perms_json',"page_perms_json TEXT NOT NULL DEFAULT '{}'")
+    _ensure_column(c,'club_mp_staff','login_account','login_account TEXT')
+    _ensure_column(c,'club_mp_staff','password','password TEXT')
+    _ensure_column(c,'club_mp_staff','account_source',"account_source TEXT NOT NULL DEFAULT 'manual'")
+    _ensure_column(c,'club_mp_staff','store_scope','store_scope TEXT')
+    _ensure_column(c,'club_mp_staff','store_detail','store_detail TEXT')
+    _ensure_column(c,'club_mp_staff','page_perms_json',"page_perms_json TEXT NOT NULL DEFAULT '{}'")
+    # 登录账号按俱乐部唯一（NULL 不受 UNIQUE 约束，多个未设账号的员工互不冲突）。
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_mp_staff_login ON club_mp_staff(club_id,login_account)')
     # 进销存 V1.2（2026-10-31 第二批）：品牌结算模式配置（按销售额比例 / 固定结算价）
     #   sales_ratio：品牌应结 = 销售额 × settlement_ratio%（0 = 沿用结算单生成时的 platformFeeRate 口径）
     #   fixed_price：品牌应结 = Σ(件数 × 规格 settlement_price)，逐 SKU 在规格里定价

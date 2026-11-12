@@ -1090,7 +1090,7 @@ async function showParticipants(regId){
 
 async function loadMembers(){skel('#tierList',3);
   try{
-  let [a,tiers,benefits,reds,gd,pe,orders,rules,mall,mallReds,tierGifts,referral]=await Promise.all([
+  let [a,tiers,benefits,reds,gd,pe,orders,rules,mall,mallReds,tierGifts,inviteReward]=await Promise.all([
     api(`/api/club/${CLUB}/members`),api(`/api/club/${CLUB}/membership/tiers`),
     api(`/api/club/${CLUB}/benefits`),api(`/api/club/${CLUB}/benefits/redemptions`),
     api(`/api/club/${CLUB}/gear-discount`),
@@ -1100,8 +1100,9 @@ async function loadMembers(){skel('#tierList',3);
     api(`/api/club/${CLUB}/points-mall`).catch(()=>[]),
     api(`/api/club/${CLUB}/points-mall/redemptions`).catch(()=>[]),
     api(`/api/club/${CLUB}/tier-reward-rules`).catch(()=>[]),
-    api(`/api/club/${CLUB}/referral-coupon`).catch(()=>null)
+    api(`/api/club/${CLUB}/invite-reward`).catch(()=>({settings:{enabled:0},pool:[],records:[],stats:{}}))
   ]);
+  _inviteReward=inviteReward||{settings:{enabled:0},pool:[],records:[],stats:{}};
   $('#memberRows').innerHTML=a.map(x=>`<tr class="member-row" onclick="openMember(${x.user_id})"><td>${esc(x.name)}</td><td><strong>${esc(x.level)}</strong></td><td>${x.activity_count||0}</td><td>${money(x.lifetime_activity_spend||0)}</td><td>${x.club_points_balance}</td><td>${x.gear_points}</td><td>${esc(x.phone||'')}</td><td><span class="sub">查看详情 ›</span></td></tr>`).join('')||'<tr><td colspan="8" class="empty">暂无会员</td></tr>';
   _tiers=tiers;_gearDiscount=gd||null;
   _tierRewards=tierGifts||[];
@@ -1151,19 +1152,148 @@ async function loadMembers(){skel('#tierList',3);
     if(m==='threshold')return `满 ${money(x.threshold_amount)} 减 ${money(x.cash_value)}`;
     return `活动直抵 ${money(x.cash_value)}`;
   };
-  $('#clubBenefitList').innerHTML=benefits.filter(x=>x.owner_type==='CLUB').map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</div><div class="list-row__sub">${couponText(x)} · 兑换 ${x.points_cost} 活动积分 · 库存 ${x.stock==null?'不限':x.stock} · 成本由俱乐部承担</div></div></div>`).join('')||'<div class="empty">还没有优惠券，点右上角「＋ 优惠券」创建</div>';
+  renderCouponCenter(benefits);
   $('#giftRuleList').innerHTML=(rules||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">单笔消费满 <b>${money(x.threshold_amount)}</b> 送「${esc(x.benefit_title||'')}」${x.enabled?'':' <span class="tag orange">已停用</span>'}</div><div class="list-row__sub">每人限送 ${x.per_user_limit} 次 · 券库存 ${x.benefit_stock==null?'不限':x.benefit_stock}${x.enabled&&x.benefit_stock!=null&&Number(x.benefit_stock)<=0?' · <b>库存为 0，暂不会触发赠送</b>':''}</div></div><div class="list-row__end"><button class="btn ghost" onclick="toggleGiftRule(${x.id},${x.enabled?0:1})">${x.enabled?'停用':'启用'}</button><button class="btn ghost" onclick="delGiftRule(${x.id})">删除</button></div></div>`).join('')||'<div class="empty">还没有送券规则</div>';
   /* 升级奖励已并入等级编辑（2026-10-27），上面的 tierRewardList 只是汇总视图。 */
-  /* 拉新设定（2026-10-26）：注册自动发邀请券 */
-  if(referral){const rb=referral.benefit;
-    $('#referralState').innerHTML=rb?`<div class="list-row"><div class="list-row__main"><div class="list-row__title">新会员注册自动送「${esc(rb.title)}」</div><div class="list-row__sub">好友凭会员邀请码注册，双方各得一张；券在 C 端「邀请好友」页展示</div></div><div class="list-row__end"><button class="btn ghost" onclick="setReferralCoupon()">更改</button></div></div>`
-      :`<div class="list-row"><div class="list-row__main"><div class="list-row__title">未开启邀请券奖励</div><div class="list-row__sub">设定后，新会员注册即得券，好友凭邀请码注册双方都得券</div></div><div class="list-row__end"><button class="btn ghost" onclick="setReferralCoupon()">去设定</button></div></div>`;}
+  /* #858 优惠邀请 · 邀请奖励：三 Tab 渲染（基本设置 / 分享设置 / 邀请记录） */
+  renderInviteReward();
   $('#mallItemList').innerHTML=(mall||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)} <span class="tag">${esc(x.typeName||x.item_type)}</span>${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</div><div class="list-row__sub">${x.points_cost} 活动积分 · 库存 ${x.stock==null?'不限':x.stock}${x.item_type==='coupon'&&x.refTitle?` · 关联券「${esc(x.refTitle)}」`:''}${x.description?` · ${esc(x.description)}`:''}</div></div><div class="list-row__end"><button class="btn ghost" onclick="editMallItem(${x.id})">编辑</button><button class="btn ghost" onclick="delMallItem(${x.id})">删除</button></div></div>`).join('')||'<div class="empty">还没有兑换商品，点「＋ 兑换商品」上架</div>';
   $('#memberOrderList').innerHTML=(orders||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name||'用户')} · 「${esc(x.tier_name)}」会员卡 <span class="tag">${money(x.amount)}</span></div><div class="list-row__sub">有效期 ${esc((x.valid_from||'').slice(0,10))} 至 ${esc((x.valid_to||'').slice(0,10))} · ${x.months} 个月 · 订单 #${x.id}</div></div></div>`).join('')||'<div class="empty">还没有购买记录（开通「购买会员」并为等级设置购买开通后，顾客即可在 C 端购买）</div>';
   $('#clubBenefitRedemptions').innerHTML=reds.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name)} · ${esc(x.title)}</div><div class="list-row__sub">${x.points_spent?`${x.points_spent} 活动积分 · `:''}${x.funding_owner==='CLUB'?'俱乐部承担':'平台承担'} · ${esc(x.voucher_code||'')}${x.gift_note?` · ${esc(x.gift_note)}`:''}</div></div></div>`).join('')
     +(mallReds||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name||'顾客')} · 积分商城「${esc(x.item_title)}」<span class="tag">${x.status==='verified'?'已核销':'待核销'}</span></div><div class="list-row__sub">${x.points_spent} 活动积分 · ${esc(String(x.created_at||'').slice(0,10))} · 核销码 <b>${esc(x.code||'')}</b>${x.verified_at?` · 核销于 ${esc(String(x.verified_at).slice(0,16))}`:''}</div></div></div>`).join('')
     ||'<div class="empty">暂无兑换记录</div>';
   }catch(e){loaderError('#tierList',e,'客户与会员加载失败')}
+}
+/* ── 券中心（#856 对齐 Word 三型券：满减 / 折扣 / 商品兑换）── */
+window.cpnSwitch=tab=>{
+  document.querySelectorAll('#cpnTabs .cpn-tab').forEach(b=>b.classList.toggle('active',b.dataset.cpn===tab));
+  ['threshold','discount','redeem'].forEach(m=>{const p=document.getElementById('cpnPanel-'+m);if(p)p.style.display=m===tab?'':'none';});
+};
+function couponStoreCn(s){return ({this_club:'仅本店可用',all_clubs:'全部门店',specified:'指定门店'})[s]||'仅本店可用';}
+function couponDcTypeCn(t){return ({single:'单次折扣券',stored:'储值折扣券'})[t]||'单次折扣券';}
+function couponClaimCn(m){return ({grant:'手动赠送',auto:'自动领取',code:'兑换码领取'})[m]||'手动赠送';}
+function couponValidCn(x){
+  const a=(x.valid_from||'').slice(0,10),b=(x.valid_to||'').slice(0,10);
+  if(a&&b)return `${a} 至 ${b}`;
+  if(a)return `自 ${a} 起`;
+  if(b)return `至 ${b}`;
+  return '长期有效';
+}
+function couponWx(x){return x.wechat_delivery?`<span class="cpn-wx">已开启</span>`:`<span class="cpn-wx off">未开启</span>`;}
+function couponStock(x){return x.stock==null?'不限':x.stock;}
+function couponOps(x){return `<button class="btn ghost" onclick="editCoupon(${x.id})">编辑</button><button class="btn ghost" onclick="couponDetail(${x.id})">详情</button><button class="btn ghost danger" onclick="delCoupon(${x.id})">删除</button>`;}
+
+/* ── #858 优惠邀请 · 邀请奖励：三 Tab（基本设置 / 分享设置 / 邀请记录）── */
+let _inviteReward={settings:{enabled:0},pool:[],records:[],stats:{}};
+const INVITE_IMG_KEYS=['sunrise','forest','alpine','dusk','sand','mono'];
+function inviteTab(tab){
+  document.querySelectorAll('#inviteTabs .seg-btn').forEach(b=>b.classList.toggle('active',b.dataset.itab===tab));
+  ['basic','share','records'].forEach(t=>{const p=document.getElementById('invitePanel-'+t);if(p)p.style.display=t===tab?'':'none';});
+}
+function inviteCouponLabel(b){
+  if(!b)return '未设置';
+  const m=String(b.mode||'fixed');
+  if(m==='discount')return `${b.title}（${Number(b.discount_percent||0)/10} 折）`;
+  if(m==='threshold')return `${b.title}（满 ${money(b.threshold_amount)} 减 ${money(b.cash_value)}）`;
+  return `${b.title}（直抵 ${money(b.cash_value)}）`;
+}
+function renderInviteReward(){
+  const s=_inviteReward.settings||{},pool=_inviteReward.pool||[],recs=_inviteReward.records||[],st=_inviteReward.stats||{};
+  const tag=document.getElementById('inviteRewardTag');
+  if(tag)tag.textContent=Number(s.enabled)?'已开启':'未开启';
+  const eb=pool.find(x=>Number(x.id)===Number(s.invitee_benefit_id));
+  const ib=pool.find(x=>Number(x.id)===Number(s.inviter_benefit_id));
+  // 基本设置
+  $('#invitePanel-basic').innerHTML=`
+    <div class="list-row"><div class="list-row__main"><div class="list-row__title">模块状态</div><div class="list-row__sub">${Number(s.enabled)?'已开启：邀请链路按下方配置双向发券':'未开启：不自动发券（降级沿用旧「拉新」设定）'}</div></div><div class="list-row__end"><b>${Number(s.enabled)?'开启中':'已关闭'}</b></div></div>
+    <div class="list-row"><div class="list-row__main"><div class="list-row__title">被邀请人券</div><div class="list-row__sub">好友凭邀请码注册后，自动领到这张券</div></div><div class="list-row__end">${esc(inviteCouponLabel(eb))}</div></div>
+    <div class="list-row"><div class="list-row__main"><div class="list-row__title">邀请人奖励券</div><div class="list-row__sub">${ib?'邀请人得这张（可与被邀请人不同）':'未单独设置 → 与被邀请人同券'}</div></div><div class="list-row__end">${esc(ib?inviteCouponLabel(ib):(eb?'同被邀请人券':'未设置'))}</div></div>
+    <div class="list-row"><div class="list-row__main"><div class="list-row__title">邀请人额外活动积分</div><div class="list-row__sub">每成功邀请 1 人，邀请人再得的活动积分（100 分 = ¥1）</div></div><div class="list-row__end"><b>${Number(s.inviter_points||0)}</b> 分</div></div>
+    <div class="sub" style="margin-top:10px">累计邀请 ${Number(st.total||0)} 人 · 发出被邀请人券 ${Number(st.invitee_coupons||0)} 张 · 邀请人券 ${Number(st.inviter_coupons||0)} 张 · 奖励积分 ${Number(st.points_awarded||0)} 分</div>`;
+  // 分享设置
+  $('#invitePanel-share').innerHTML=`
+    <div class="list-row"><div class="list-row__main"><div class="list-row__title">分享卡片标题</div></div><div class="list-row__end">${esc(s.share_title||'（使用默认标题）')}</div></div>
+    <div class="list-row"><div class="list-row__main"><div class="list-row__title">分享卡片副文案</div></div><div class="list-row__end">${esc(s.share_desc||'（未设置）')}</div></div>
+    <div class="list-row"><div class="list-row__main"><div class="list-row__title">分享卡配图</div></div><div class="list-row__end"><b>${(s.share_image_key||'sunrise')}</b></div></div>
+    <div class="sub" style="margin-top:10px">C 端「邀请好友」页按以上配置生成分享卡，会员转发到微信/朋友圈拉新。</div>`;
+  // 邀请记录
+  $('#invitePanel-records').innerHTML=recs.length?`<table class="table"><thead><tr><th>邀请人</th><th>被邀请人</th><th>邀请码</th><th>被邀请人券</th><th>邀请人券</th><th>积分</th><th>时间</th></tr></thead><tbody>${recs.map(r=>`<tr><td>${esc(r.inviter_name||'')}</td><td>${esc(r.invitee_name||'')}</td><td><b>${esc(r.invite_code||'')}</b></td><td>${r.invitee_redemption_id?'已发':'—'}</td><td>${r.inviter_redemption_id?'已发':'—'}</td><td>${Number(r.inviter_points_awarded||0)}</td><td class="sub">${esc(String(r.created_at||'').slice(0,16))}</td></tr>`).join('')}</tbody></table>`
+    :'<div class="empty">还没有邀请记录。开启模块并让会员分享邀请码后即可看到。</div>';
+}
+window.inviteRewardEdit=async which=>{
+  const s=_inviteReward.settings||{},pool=_inviteReward.pool||[];
+  if(!pool.length){showAlert({title:'先创建优惠券',message:'被邀请人券 / 邀请人奖励券都必须是本俱乐部创建的活动优惠券，请先在「俱乐部营销 · 优惠券」里建券并备好库存。'});return}
+  const opt0=[{value:0,label:'不送券'}];
+  const opts=opt0.concat(pool.map(b=>({value:b.id,label:`${b.title} · 库存 ${b.stock==null?'不限':b.stock}`})));
+  if(which==='share'){
+    const d=await uxForm({title:'邀请奖励 · 分享设置',subtitle:'配置 C 端「邀请好友」页的分享卡样式。',fields:[
+      {name:'shareTitle',label:'分享卡片标题',full:true,value:s.share_title||'',placeholder:'例如：邀好友，一起出发'},
+      {name:'shareDesc',label:'分享卡片副文案',full:true,value:s.share_desc||'',placeholder:'例如：注册即得券，报名立减'},
+      {name:'shareImageKey',label:'分享卡配图',type:'select',full:true,value:s.share_image_key||'sunrise',options:INVITE_IMG_KEYS.map(k=>({value:k,label:k}))}
+    ],submitText:'保存分享设置'});
+    if(!d)return;
+    await uxFlow('inviteRewardShare',async()=>{
+      await api(`/api/club/${CLUB}/invite-reward`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!Number(s.enabled),inviteeBenefitId:Number(s.invitee_benefit_id||0),inviterBenefitId:Number(s.inviter_benefit_id||0),inviterPoints:Number(s.inviter_points||0),shareTitle:d.shareTitle,shareDesc:d.shareDesc,shareImageKey:d.shareImageKey})});
+      toast('分享设置已保存');await loadMembers();
+    });
+    return;
+  }
+  const d=await uxForm({title:'邀请奖励 · 基本设置',subtitle:'被邀请人注册领券；邀请人得奖励券（可不同）+ 额外活动积分。',fields:[
+    {name:'enabled',label:'开启邀请奖励',type:'select',full:true,value:Number(s.enabled)?1:0,options:[{value:1,label:'开启'},{value:0,label:'关闭（不自动发券）'}]},
+    {name:'inviteeBenefitId',label:'被邀请人券',type:'select',required:true,full:true,options:opts.map(o=>({value:o.value,label:o.label})),value:Number(s.invitee_benefit_id||0)},
+    {name:'inviterBenefitId',label:'邀请人奖励券（留 0 = 与被邀请人同券）',type:'select',full:true,options:opts.map(o=>({value:o.value,label:o.label})),value:Number(s.inviter_benefit_id||0)},
+    {name:'inviterPoints',label:'邀请人额外活动积分',type:'number',min:0,step:1,value:Number(s.inviter_points||0),help:'每成功邀请 1 人，邀请人额外获得的活动积分（100 分 = ¥1）'}
+  ],submitText:'保存基本设置'});
+  if(!d)return;
+  await uxFlow('inviteRewardBasic',async()=>{
+    await api(`/api/club/${CLUB}/invite-reward`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!Number(d.enabled),inviteeBenefitId:Number(d.inviteeBenefitId||0),inviterBenefitId:Number(d.inviterBenefitId||0),inviterPoints:Number(d.inviterPoints||0),shareTitle:s.share_title||'',shareDesc:s.share_desc||'',shareImageKey:s.share_image_key||'sunrise'})});
+    toast(Number(d.enabled)?'邀请奖励已开启':'邀请奖励已关闭');await loadMembers();
+  });
+};
+function couponEmpty(txt){return `<div class="empty">${txt}</div>`;}
+function renderCouponCenter(benefits){
+  const cp=(benefits||[]).filter(x=>x.owner_type==='CLUB'&&x.benefit_type==='activity_coupon');
+  const byMode=m=>cp.filter(x=>String(x.mode||'fixed')===m);
+  const t=$('#couponList-threshold'),d=$('#couponList-discount'),r=$('#couponList-redeem');
+  if(t)t.innerHTML=renderThresholdList(byMode('threshold'));
+  if(d)d.innerHTML=renderDiscountList(byMode('discount'));
+  if(r)r.innerHTML=renderRedeemList(byMode('fixed'));
+}
+function renderThresholdList(rows){
+  if(!rows.length)return couponEmpty('还没有满减优惠券，点上方「＋ 添加满减优惠券」创建');
+  return `<table class="table"><thead><tr><th>ID</th><th>名称</th><th>使用门槛</th><th>券类型</th><th>有效期</th><th>微信投放</th><th>领取数</th><th>操作</th></tr></thead><tbody>`
+    +rows.map(x=>`<tr><td>${x.id}</td><td>${esc(x.title)}${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</td>`
+      +`<td>满 ${money(x.threshold_amount)} 减 ${money(x.cash_value)}</td>`
+      +`<td>${couponStoreCn(x.store_scope)}</td>`
+      +`<td>${couponValidCn(x)}</td>`
+      +`<td>${couponWx(x)}</td>`
+      +`<td>${x.claimed_count!=null?x.claimed_count:'—'}</td>`
+      +`<td class="row-ops">${couponOps(x)}</td></tr>`).join('')+`</tbody></table>`;
+}
+function renderDiscountList(rows){
+  if(!rows.length)return couponEmpty('还没有折扣券，点上方「＋ 添加折扣券」创建');
+  return `<table class="table"><thead><tr><th>ID</th><th>名称</th><th>券类型</th><th>券面额</th><th>使用门槛</th><th>折扣率(%)</th><th>有效期</th><th>微信投放</th><th>领取数</th><th>剩余/库</th><th>操作</th></tr></thead><tbody>`
+    +rows.map(x=>`<tr><td>${x.id}</td><td>${esc(x.title)}${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</td>`
+      +`<td>${couponDcTypeCn(x.discount_coupon_type)}</td>`
+      +`<td>—</td>`
+      +`<td>${Number(x.threshold_amount)>0?`满 ${money(x.threshold_amount)} 可用`:'无门槛'}</td>`
+      +`<td>${Number(x.discount_percent||0)}% <span class="cpn-sub">（${(Number(x.discount_percent||0)/10).toFixed(1)} 折${x.max_discount_amount?` · 最高抵 ${money(x.max_discount_amount)}`:''}）</span></td>`
+      +`<td>${couponValidCn(x)}</td>`
+      +`<td>${couponWx(x)}</td>`
+      +`<td>${x.claimed_count!=null?x.claimed_count:'—'}</td>`
+      +`<td>${couponStock(x)}</td>`
+      +`<td class="row-ops">${couponOps(x)}</td></tr>`).join('')+`</tbody></table>`;
+}
+function renderRedeemList(rows){
+  if(!rows.length)return couponEmpty('还没有商品兑换券，点上方「＋ 添加商品兑换券」创建');
+  return `<table class="table"><thead><tr><th>ID</th><th>名称</th><th>有效期</th><th>微信投放</th><th>领取数</th><th>用户领取方式</th><th>剩余/库存</th><th>操作</th></tr></thead><tbody>`
+    +rows.map(x=>`<tr><td>${x.id}</td><td>${esc(x.title)}${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</td>`
+      +`<td>${couponValidCn(x)}</td>`
+      +`<td>${couponWx(x)}</td>`
+      +`<td>${x.claimed_count!=null?x.claimed_count:'—'}</td>`
+      +`<td>${couponClaimCn(x.claim_mode)}</td>`
+      +`<td>${couponStock(x)}</td>`
+      +`<td class="row-ops">${couponOps(x)}</td></tr>`).join('')+`</tbody></table>`;
 }
 async function recalcMembership(){await api(`/api/club/${CLUB}/membership/recalculate`,{method:'POST'});toast('会员等级已重新计算');loadMembers()}
 
@@ -2995,6 +3125,22 @@ let clubLogoUrl='';
 const MP_PERMS={activities:'活动管理',registrations:'报名管理',content:'内容生成',
   members:'会员管理',mall:'商城查看',finance:'数据与结算',settings:'俱乐部设置',miniprogram:'小程序管理'};
 let MP_STAFF_TAB='staff';
+const MP_STORE_SCOPE_LABEL={this_club:'本俱乐部',all_clubs:'全平台',specified:'指定门店'};
+const MP_ACCOUNT_SOURCE_LABEL={manual:'手动创建',import:'批量导入'};
+/* 页面权限粒度控件：8 模块 × 无/查看/编辑（无=不单独设置，继承角色）。 */
+function mpPermGrid(cur){
+  cur=cur||{};
+  return '<div class="mp-pg-grid" style="margin-top:6px">'+Object.entries(MP_PERMS).map(([k,label])=>{
+    const v=cur[k]||'';
+    const seg=(val,txt,active)=>`<label style="padding:6px 12px;cursor:pointer;font-size:13px;${active?'background:var(--brand);color:#fff':'background:var(--bg-soft,#f2f0ea)'}"><input type="radio" class="mp-pg" data-mod="${k}" name="mp-pg-${k}" value="${val}" ${v===val?'checked':''} style="display:none">${txt}</label>`;
+    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px dashed var(--line)"><span>${esc(label)}</span><div style="display:inline-flex;border:1px solid var(--line);border-radius:10px;overflow:hidden">${seg('','无',v==='')}${seg('view','查看',v==='view')}${seg('edit','编辑',v==='edit')}</div></div>`;
+  }).join('')+'</div>';
+}
+function mpCollectPagePerms(scope){
+  const out={};
+  document.querySelectorAll(`${scope||''} .mp-pg:checked`).forEach(el=>{ if(el.value) out[el.dataset.mod]=el.value; });
+  return out;
+}
 
 /* ── 小程序信息 ─────────────────────────────────────────────────────────── */
 /* 设计原则（2026-10-26 用户反馈）：老板只填「名字、简介、AppID、主体、类目、
@@ -3117,10 +3263,12 @@ async function loadMpStaff(){
   let d;
   try{d=await api(`/api/club/${CLUB}/mp/staff`,{cache:'no-store'})}
   catch(e){loaderError('#mpStaffBody',e,'员工读取失败');return}
-  const rows=d.staff.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.name)}</strong><div class="sub">${[x.wxid,x.phone].filter(Boolean).map(esc).join(' · ')||'—'}</div></td><td>${esc(x.roleName||'—')}${x.roleName?'':`<div class="sub">未分配角色</div>`}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${x.status==='active'?'已启用':'已停用'}</span></td><td class="sub">${esc(String(x.boundAt||'').slice(0,16))}</td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" onclick="mpStaffForm(${x.id})">编辑权限</button><button class="btn ghost sm" onclick="mpStaffDel(${x.id})" style="color:var(--orange)">删除</button></div></td></tr>`).join('');
+  const storeTxt=x=>{const s=x.storeScope||'this_club';if(s==='specified')return '指定门店（'+(x.storeDetail||[]).length+'）';return MP_STORE_SCOPE_LABEL[s]||s;};
+  const pgTxt=x=>{const n=Object.keys(x.pagePerms||{}).length;return n?`<span class="tag">自定义 ${n} 项</span>`:`<span class="sub">继承角色</span>`;};
+  const rows=d.staff.map((x,i)=>`<tr><td>${i+1}</td><td><strong>${esc(x.name)}</strong><div class="sub">${[x.wxid,x.phone].filter(Boolean).map(esc).join(' · ')||'—'}</div></td><td>${esc(x.loginAccount||'—')}</td><td>${esc(MP_ACCOUNT_SOURCE_LABEL[x.accountSource]||x.accountSource||'—')}</td><td>${storeTxt(x)}</td><td>${pgTxt(x)}</td><td><div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn ghost sm" onclick="mpStaffForm(${x.id})">编辑</button><button class="btn ghost sm" onclick="mpStaffDel(${x.id})" style="color:var(--orange)">删除</button></div></td></tr>`).join('');
   box.innerHTML=`
-  <div style="margin:4px 0 10px"><button class="btn" type="button" onclick="mpStaffForm()">绑定管理员</button><span class="sub" style="margin-left:10px">按角色分配权限；同一员工只绑一个角色</span></div>
-  <div class="card"><table class="table"><thead><tr><th>#</th><th>员工</th><th>用户角色</th><th>状态</th><th>绑定时间</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="6" class="empty">还没有绑定员工，点上方「绑定管理员」</td></tr>'}</tbody></table></div>
+  <div style="margin:4px 0 10px"><button class="btn" type="button" onclick="mpStaffForm()">＋ 添加员工</button><span class="sub" style="margin-left:10px">按角色分配权限；同一员工只绑一个角色</span></div>
+  <div class="card"><table class="table"><thead><tr><th>序号</th><th>名称</th><th>登录账号</th><th>账号来源</th><th>门店权限</th><th>页面权限</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="7" class="empty">还没有员工，点上方「添加员工」</td></tr>'}</tbody></table></div>
   <div id="mpStaffFormBox"></div>`;
 }
 function mpStaffForm(id){
@@ -3128,23 +3276,47 @@ function mpStaffForm(id){
   api(`/api/club/${CLUB}/mp/staff`,{cache:'no-store'}).then(d=>{
     const st=(d.staff||[]).find(x=>x.id===id)||{};
     const roleOpts=[{value:'',label:'（暂不分配）'},...(d.roles||[]).map(r=>({value:String(r.id),label:r.name}))];
-    box.innerHTML=`<div class="card section"><div class="panel-title"><h3>${id?'编辑员工权限':'绑定管理员'}</h3></div>
+    const storeOpts=[{value:'',label:'继承角色'},{value:'this_club',label:'本俱乐部'},{value:'all_clubs',label:'全平台'},{value:'specified',label:'指定门店'}];
+    const srcOpts=[{value:'manual',label:'手动创建'},{value:'import',label:'批量导入'}];
+    const isSpec=st.storeScope==='specified';
+    const detailTxt=(st.storeDetail||[]).join('\n');
+    box.innerHTML=`<div class="card section"><div class="panel-title"><h3>${id?'编辑员工':'添加员工'}</h3></div>
     <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
       <label style="display:block"><span class="sub">姓名 *</span><input id="mpStName" maxlength="20" style="width:100%;margin-top:4px" value="${esc(st.name||'')}" placeholder="员工姓名"></label>
-      <label style="display:block"><span class="sub">微信号</span><input id="mpStWx" maxlength="64" style="width:100%;margin-top:4px" value="${esc(st.wxid||'')}" placeholder="微信号（用于后续微信侧绑定）"></label>
+      <label style="display:block"><span class="sub">登录账号 *</span><input id="mpStLogin" maxlength="64" style="width:100%;margin-top:4px" value="${esc(st.loginAccount||'')}" placeholder="4-64 位字母/数字/._@-"></label>
+      <div style="display:block"><span class="sub">登录密码 ${id?'' :''}</span><div style="display:flex;gap:6px;margin-top:4px"><input id="mpStPwd" type="password" style="flex:1;min-width:0" placeholder="${id?'留空则保持原密码':'设置登录密码'}"><button class="btn ghost sm" type="button" onclick="mpTogglePwd()">显示</button></div></div>
+      <div style="display:block"><span class="sub">账号来源</span>${uxChoiceHtml({id:'mpStSrc',value:st.accountSource||'manual',options:srcOpts})}</div>
       <label style="display:block"><span class="sub">手机号</span><input id="mpStPhone" maxlength="11" inputmode="numeric" style="width:100%;margin-top:4px" value="${esc(st.phone||'')}" placeholder="11 位手机号"></label>
+      <label style="display:block"><span class="sub">微信号</span><input id="mpStWx" maxlength="64" style="width:100%;margin-top:4px" value="${esc(st.wxid||'')}" placeholder="微信号（用于后续微信侧绑定）"></label>
       <div style="display:block"><span class="sub">用户角色</span>${uxChoiceHtml({id:'mpStRole',value:st.roleId!=null?String(st.roleId):'',options:roleOpts})}</div>
+      <div style="display:block"><span class="sub">门店权限</span>${uxChoiceHtml({id:'mpStStore',value:st.storeScope||'',options:storeOpts,attrs:'onchange="mpStaffStoreChange()"',})}</div>
     </div>
-    <div style="margin-top:14px;display:flex;gap:10px"><button class="btn" type="button" onclick="saveMpStaff(${id||0})">${id?'保存':'绑定'}</button><button class="btn ghost" type="button" onclick="$('#mpStaffFormBox').innerHTML=''">取消</button></div></div>`;
+    <label style="display:block;margin-top:10px${isSpec?'':';display:none'}" id="mpStDetailWrap"><span class="sub">指定门店（每行一个门店名/ID）</span><textarea id="mpStDetail" rows="3" style="width:100%;margin-top:4px" placeholder="杭州西湖营地&#10;千岛湖营地">${esc(detailTxt)}</textarea></label>
+    <div style="margin-top:14px"><div style="display:flex;align-items:center;justify-content:space-between"><b>页面权限</b><span class="sub">留空=继承所绑角色的权限粒度</span></div>${mpPermGrid(st.pagePerms)}</div>
+    <div style="margin-top:14px;display:flex;gap:10px"><button class="btn" type="button" onclick="saveMpStaff(${id||0})">${id?'保存':'添加'}</button><button class="btn ghost" type="button" onclick="$('#mpStaffFormBox').innerHTML=''">取消</button></div></div>`;
   }).catch(e=>showAlert({title:'读取失败',message:e.message||'请重试'}));
+}
+function mpStaffStoreChange(){
+  const w=$('#mpStDetailWrap');if(!w)return;
+  w.style.display=($('#mpStStore')?.value==='specified')?'':'none';
+}
+function mpTogglePwd(){
+  const e=$('#mpStPwd');if(!e)return;const show=e.type==='password';
+  e.type=show?'text':'password';const b=event&&event.target;if(b)b.textContent=show?'隐藏':'显示';
 }
 async function saveMpStaff(id){
   const roleId=$('#mpStRole')?.value||null;
-  const payload={name:$('#mpStName')?.value||'',wxid:$('#mpStWx')?.value||'',phone:$('#mpStPhone')?.value||''};
+  const storeScope=$('#mpStStore')?.value||'';
+  const storeDetail=(storeScope==='specified')?(String($('#mpStDetail')?.value||'').split('\n').map(x=>x.trim()).filter(Boolean)):[];
+  const payload={name:$('#mpStName')?.value||'',wxid:$('#mpStWx')?.value||'',phone:$('#mpStPhone')?.value||'',
+    loginAccount:$('#mpStLogin')?.value||'',accountSource:$('#mpStSrc')?.value||'manual',
+    storeScope,storeDetail,pagePerms:mpCollectPagePerms('#mpStaffFormBox')};
+  const pwd=String($('#mpStPwd')?.value||'');
+  if(pwd)payload.password=pwd;
   if(roleId!==null)payload.roleId=roleId?Number(roleId):null;
   try{
-    if(id){await api(`/api/club/${CLUB}/mp/staff/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('员工权限已更新')}
-    else{await api(`/api/club/${CLUB}/mp/staff`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('管理员已绑定')}
+    if(id){await api(`/api/club/${CLUB}/mp/staff/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('员工已更新')}
+    else{await api(`/api/club/${CLUB}/mp/staff`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('员工已添加')}
     loadMpStaff();
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'})}
 }
@@ -3167,17 +3339,20 @@ function mpRoleForm(id){
   const box=$('#mpRoleFormBox');if(!box)return;
   api(`/api/club/${CLUB}/mp/roles`,{cache:'no-store'}).then(d=>{
     const r=(d.roles||[]).find(x=>x.id===id)||{};
-    const checks=Object.entries(d.perms||MP_PERMS).map(([k,v])=>`<label style="display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:10px;padding:7px 12px;margin:0 8px 8px 0;cursor:pointer"><input type="checkbox" class="mp-perm" value="${k}" ${(r.perms||[]).includes(k)?'checked':''}><span>${esc(v)}</span></label>`).join('');
+    const storeOpts=[{value:'this_club',label:'本俱乐部'},{value:'all_clubs',label:'全平台'},{value:'specified',label:'指定门店'}];
     box.innerHTML=`<div class="card section"><div class="panel-title"><h3>${id?'编辑角色':'新建角色'}</h3></div>
     <label style="display:block;max-width:320px"><span class="sub">角色名称 *</span><input id="mpRoleName" maxlength="20" style="width:100%;margin-top:4px" value="${esc(r.name||'')}" placeholder="例如：客服 / 财务"></label>
-    <div style="margin-top:12px"><span class="sub">权限点</span><div style="margin-top:6px">${checks}</div></div>
+    <div style="margin-top:12px"><div class="sub">权限点（无 / 查看 / 编辑）</div>${mpPermGrid(r.pagePerms)}</div>
+    <div style="display:block;margin-top:12px;max-width:320px"><span class="sub">门店权限（该角色模板默认适用门店）</span>${uxChoiceHtml({id:'mpRoleStore',value:r.storeScope||'this_club',options:storeOpts})}</div>
     <label style="display:block;margin-top:10px;max-width:520px"><span class="sub">备注</span><input id="mpRoleRemark" maxlength="100" style="width:100%;margin-top:4px" value="${esc(r.remark||'')}" placeholder="这个角色负责什么"></label>
     <div style="margin-top:14px;display:flex;gap:10px"><button class="btn" type="button" onclick="saveMpRole(${id||0})">${id?'保存':'创建'}</button><button class="btn ghost" type="button" onclick="$('#mpRoleFormBox').innerHTML=''">取消</button></div></div>`;
   }).catch(e=>showAlert({title:'读取失败',message:e.message||'请重试'}));
 }
 async function saveMpRole(id){
-  const perms=[...document.querySelectorAll('#mpRoleFormBox .mp-perm:checked')].map(x=>x.value);
-  const payload={name:$('#mpRoleName')?.value||'',perms,remark:$('#mpRoleRemark')?.value||''};
+  const pagePerms=mpCollectPagePerms('#mpRoleFormBox');
+  const perms=Object.keys(pagePerms);
+  const payload={name:$('#mpRoleName')?.value||'',perms,pagePerms,remark:$('#mpRoleRemark')?.value||'',
+    storeScope:$('#mpRoleStore')?.value||'this_club'};
   try{
     if(id){await api(`/api/club/${CLUB}/mp/roles/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('角色已更新')}
     else{await api(`/api/club/${CLUB}/mp/roles`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});toast('角色已创建')}

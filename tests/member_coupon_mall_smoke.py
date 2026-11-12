@@ -192,9 +192,10 @@ def main():
 
     print('\n── ⑤ 前端护栏 ──')
     club_html = (ROOT / 'static/club/index.html').read_text(encoding='utf-8')
-    ok('俱乐部营销 · 优惠券' in club_html, 'club 端「俱乐部福利」已改「俱乐部营销 · 优惠券」')
-    ok('addClubCoupon' in club_html and 'addGiftRule' in club_html and 'addMallItem' in club_html,
-       '营销三入口挂上（券/送券规则/积分商城）')
+    ok('券中心' in club_html, 'club 端「俱乐部福利」已改为三型券中心（满减/折扣/商品兑换）')
+    ok(('addThresholdCoupon' in club_html and 'addDiscountCoupon' in club_html and 'addRedeemCoupon' in club_html)
+       and 'addGiftRule' in club_html and 'addMallItem' in club_html,
+       '营销三入口挂上（券三型/送券规则/积分商城）')
     ok('purchaseEnabled' in club_html and 'memberOrderList' in club_html, '购买会员开关 + 购买订单区块')
     club_js = (ROOT / 'static/club/club.js').read_text(encoding='utf-8')
     ok('accessMode' in club_js and 'validMonths' in club_js, '等级编辑带开通方式/价格/有效期')

@@ -163,7 +163,9 @@ def main():
     info = c.get(f'/api/public/clubs/1/membership/invite-info?user_id={uid1}').json()
     code = info.get('inviteCode') or ''
     ok(code.startswith('IV'), '老会员拿到邀请码', code)
-    ok((info.get('reward') or {}).get('title') == '邀请专享券', '邀请卡下发奖励说明')
+    rwd = info.get('reward') or {}
+    ok(rwd.get('inviteeTitle') == '邀请专享券' and rwd.get('inviterTitle') == '邀请专享券'
+       and rwd.get('inviterPoints') == 0, '邀请卡下发奖励说明（降级：双方同券、无积分）')
     r = c.post('/api/public/clubs/1/membership/join', json={'userId': uid3, 'inviteCode': code})
     body = r.json()
     ok(r.status_code == 200 and body.get('alreadyBound') is False, '新会员填码绑定成功', r.text[:120])
@@ -243,8 +245,8 @@ def main():
     webjs = (ROOT / 'static' / 'web' / 'web.js').read_text()
     ok('memberDiscount' in webjs, 'web.js：订单摘要会员折扣行')
     clubhtml = (ROOT / 'static' / 'club' / 'index.html').read_text()
-    ok('tierRewardList' in clubhtml and 'cardList' in clubhtml and 'referralState' in clubhtml and 'coupon-faces.js?v=' in clubhtml,
-       'club/index.html：升级奖励卡 + 会员卡块 + 设计器脚本引用')
+    ok('tierRewardList' in clubhtml and 'cardList' in clubhtml and 'inviteTabs' in clubhtml and 'coupon-faces.js?v=' in clubhtml,
+       'club/index.html：升级奖励卡 + 会员卡块 + 邀请奖励三 Tab + 设计器脚本引用')
     webhtml = (ROOT / 'static' / 'web' / 'index.html').read_text()
     ok("pushMe('invite')" in webhtml and 'me.js?v=' in webhtml, 'web/index.html：邀请入口 + 带版本号')
     plathtml = (ROOT / 'static' / 'platform' / 'index.html').read_text()

@@ -2647,7 +2647,55 @@ def _mp_role_public(r):
     try: perms=json.loads(r['perms_json']) if isinstance(r['perms_json'],str) else (r['perms_json'] or [])
     except Exception: perms=[]
     return {'id':int(r['id']),'name':r['name'],'perms':[p for p in perms if p in MP_PERMS],
-            'remark':r['remark'] or '','system':bool(r['system']),'createdAt':r['created_at']}
+            'remark':r['remark'] or '','system':bool(r['system']),'createdAt':r['created_at'],
+            'storeScope':r.get('store_scope') or 'this_club',
+            'storeDetail':_mp_json_list(r.get('store_detail')),
+            'pagePerms':_mp_page_perms(r)}
+
+def _mp_json_list(v):
+    try:
+        v=json.loads(v) if isinstance(v,str) else (v or [])
+        return v if isinstance(v,list) else []
+    except Exception: return []
+
+def _mp_page_perms(r):
+    try:
+        v=json.loads(r['page_perms_json']) if isinstance(r['page_perms_json'],str) else (r['page_perms_json'] or {})
+        return v if isinstance(v,dict) else {}
+    except Exception: return {}
+
+def _mp_store_scope_of(x,role=None):
+    s=(x.get('store_scope') if x else None) or (role.get('store_scope') if role else None)
+    return s or 'this_club'
+
+def _mp_store_detail_of(x,role=None):
+    raw=(x.get('store_detail') if (x and x.get('store_scope')) else None)
+    if raw is None and role is not None: raw=role.get('store_detail')
+    return _mp_json_list(raw)
+
+def _mp_page_perms_of(x,role=None):
+    sp=_mp_page_perms(x) if x else {}
+    if sp: return sp
+    return _mp_page_perms(role) if role else {}
+
+def _mp_staff_public(x):
+    """员工序列化：暴露登录账号/账号来源/门店权限/页面权限（缺省继承所绑角色）。"""
+    role=None
+    if x.get('role_store_scope') is not None or x.get('role_page_perms'):
+        role={'store_scope':x.get('role_store_scope'),'page_perms_json':x.get('role_page_perms')}
+    return {'id':int(x['id']),'name':x['name'],'wxid':x['wxid'] or '','phone':x['phone'] or '',
+            'avatarUrl':x['avatar_url'] or '',
+            'loginAccount':x.get('login_account') or '','accountSource':x.get('account_source') or 'manual',
+            'storeScope':_mp_store_scope_of(x,role),'storeDetail':_mp_store_detail_of(x,role),
+            'pagePerms':_mp_page_perms(x),
+            'roleId':x['role_id'],'roleName':x.get('role_name') or '',
+            'status':x['status'],'boundAt':x['bound_at']}
+
+def _hash_staff_pwd(p):
+    """员工登录密码：salt + sha256，存储格式 sha256$salt$hash（登录体系后续接入）。"""
+    if not p: return None
+    salt=secrets.token_hex(8)
+    return 'sha256$'+salt+'$'+hashlib.sha256((salt+p).encode('utf-8')).hexdigest()
 
 @app.get('/api/club/{club_id}/miniprogram')
 def club_miniprogram_get(club_id:int):
@@ -2850,9 +2898,13 @@ def club_mp_roles_add(club_id:int,payload:dict=Body(...)):
     if len(name)>20: raise HTTPException(400,'角色名称过长（上限 20 字）')
     perms=[p for p in (payload.get('perms') or []) if p in MP_PERMS]
     remark=str(payload.get('remark') or '').strip()[:100]
+    store_scope=str(payload.get('storeScope') or 'this_club').strip().lower()
+    if store_scope not in ('this_club','all_clubs','specified'): store_scope='this_club'
+    store_detail=jdump(_mp_json_list(payload.get('storeDetail')))
+    page_perms=_mp_clean_page_perms(payload.get('pagePerms'))
     with conn() as c:
-        cur=c.execute('INSERT INTO club_mp_roles(club_id,name,perms_json,remark) VALUES(?,?,?,?)',
-                      (club_id,name,json.dumps(perms,ensure_ascii=False),remark))
+        cur=c.execute('INSERT INTO club_mp_roles(club_id,name,perms_json,remark,store_scope,store_detail,page_perms_json) VALUES(?,?,?,?,?,?,?)',
+                      (club_id,name,json.dumps(perms,ensure_ascii=False),remark,store_scope,store_detail,json.dumps(page_perms,ensure_ascii=False)))
         rid=int(cur.lastrowid)
         r=row(c.execute('SELECT * FROM club_mp_roles WHERE id=?',(rid,)))
     return {'ok':True,'role':_mp_role_public(r)}
@@ -2872,10 +2924,32 @@ def club_mp_roles_update(club_id:int,role_id:int,payload:dict=Body(...)):
             # 兜底：系统「管理员」角色不允许被摘成空权限（保底小程序管理权）
             if r['system'] and r['name']=='管理员' and not perms: perms=list(MP_PERMS.keys())
         remark=str(payload.get('remark') if 'remark' in payload else (r['remark'] or '')).strip()[:100]
-        c.execute('UPDATE club_mp_roles SET name=?,perms_json=?,remark=? WHERE id=?',
-                  (name,json.dumps(perms if perms is not None else json.loads(r['perms_json'] or '[]'),ensure_ascii=False),remark,role_id))
+        store_scope=None
+        if 'storeScope' in payload:
+            store_scope=str(payload.get('storeScope') or 'this_club').strip().lower()
+            if store_scope not in ('this_club','all_clubs','specified'): store_scope='this_club'
+        if 'storeDetail' in payload:
+            store_detail=jdump(_mp_json_list(payload.get('storeDetail')))
+        else:
+            store_detail=r['store_detail']
+        if 'pagePerms' in payload:
+            page_perms=_mp_clean_page_perms(payload.get('pagePerms'))
+        else:
+            page_perms=json.loads(r['page_perms_json'] or '{}')
+        c.execute('UPDATE club_mp_roles SET name=?,perms_json=?,remark=?,store_scope=?,store_detail=?,page_perms_json=? WHERE id=?',
+                  (name,json.dumps(perms if perms is not None else json.loads(r['perms_json'] or '[]'),ensure_ascii=False),remark,
+                   store_scope if store_scope is not None else r['store_scope'],store_detail,json.dumps(page_perms,ensure_ascii=False),role_id))
         r2=row(c.execute('SELECT * FROM club_mp_roles WHERE id=?',(role_id,)))
     return {'ok':True,'role':_mp_role_public(r2)}
+
+def _mp_clean_page_perms(v):
+    """页面权限：8 模块 × 查看/编辑，只保留合法键与合法值（view/edit），其余丢弃。"""
+    out={}
+    if isinstance(v,dict):
+        for k,lv in v.items():
+            if k in MP_PERMS and lv in ('view','edit'):
+                out[k]=lv
+    return out
 
 @app.delete('/api/club/{club_id}/mp/roles/{role_id}')
 def club_mp_roles_delete(club_id:int,role_id:int):
@@ -2895,13 +2969,12 @@ def club_mp_staff_get(club_id:int):
     club_or_404(club_id)
     with conn() as c:
         _mp_seed_roles(c,club_id)
-        data=rows(c.execute('''SELECT s.*,r.name role_name FROM club_mp_staff s
+        data=rows(c.execute('''SELECT s.*,r.name role_name,r.store_scope role_store_scope,r.page_perms_json role_page_perms
+                               FROM club_mp_staff s
                                LEFT JOIN club_mp_roles r ON r.id=s.role_id
                                WHERE s.club_id=? ORDER BY s.id''',(club_id,)))
         roles=rows(c.execute('SELECT * FROM club_mp_roles WHERE club_id=? ORDER BY system DESC,id',(club_id,)))
-    return {'staff':[{'id':int(x['id']),'name':x['name'],'wxid':x['wxid'] or '','phone':x['phone'] or '',
-                      'avatarUrl':x['avatar_url'] or '','roleId':x['role_id'],'roleName':x['role_name'] or '',
-                      'status':x['status'],'boundAt':x['bound_at']} for x in data],
+    return {'staff':[_mp_staff_public(x) for x in data],
             'roles':[_mp_role_public(r) for r in roles],'perms':MP_PERMS}
 
 @app.post('/api/club/{club_id}/mp/staff')
@@ -2914,17 +2987,32 @@ def club_mp_staff_add(club_id:int,payload:dict=Body(...)):
     if phone and not re.match(r'^1[3-9]\d{9}$',phone): raise HTTPException(400,'手机号格式不正确')
     wxid=str(payload.get('wxid') or '').strip()[:64]
     role_id=payload.get('roleId')
+    login_account=str(payload.get('loginAccount') or '').strip()[:64]
+    if not login_account: raise HTTPException(400,'登录账号必填')
+    if not re.match(r'^[A-Za-z0-9_.@-]{4,64}$',login_account): raise HTTPException(400,'登录账号需 4-64 位字母/数字/._@-')
+    password=str(payload.get('password') or '')
+    account_source=str(payload.get('accountSource') or 'manual').strip().lower()
+    if account_source not in ('manual','import'): account_source='manual'
+    store_scope=str(payload.get('storeScope') or '').strip().lower()
+    store_scope=store_scope if store_scope in ('this_club','all_clubs','specified') else None
+    store_detail=jdump(_mp_json_list(payload.get('storeDetail'))) if store_scope=='specified' else None
+    page_perms=_mp_clean_page_perms(payload.get('pagePerms')) if payload.get('pagePerms') else None
     with conn() as c:
         if role_id is not None:
             if not c.execute('SELECT 1 FROM club_mp_roles WHERE id=? AND club_id=?',(int(role_id),club_id)).fetchone():
                 raise HTTPException(400,'角色不存在')
-        cur=c.execute('INSERT INTO club_mp_staff(club_id,name,wxid,phone,role_id) VALUES(?,?,?,?,?)',
-                      (club_id,name,wxid or None,phone or None,int(role_id) if role_id is not None else None))
+        dup=c.execute('SELECT 1 FROM club_mp_staff WHERE club_id=? AND login_account=?',(club_id,login_account)).fetchone()
+        if dup: raise HTTPException(409,'该登录账号已被占用')
+        pwd=_hash_staff_pwd(password) if password else None
+        cur=c.execute('''INSERT INTO club_mp_staff(club_id,name,wxid,phone,role_id,login_account,password,account_source,store_scope,store_detail,page_perms_json)
+                         VALUES(?,?,?,?,?,?,?,?,?,?,?)''',
+                      (club_id,name,wxid or None,phone or None,int(role_id) if role_id is not None else None,
+                       login_account,pwd,account_source,store_scope,store_detail,
+                       json.dumps(page_perms,ensure_ascii=False) if page_perms is not None else '{}'))
         sid=int(cur.lastrowid)
-        r=row(c.execute('''SELECT s.*,r.name role_name FROM club_mp_staff s
-                           LEFT JOIN club_mp_roles r ON r.id=s.role_id WHERE s.id=?''',(sid,)))
-    return {'ok':True,'staff':{'id':sid,'name':name,'wxid':wxid,'phone':phone,
-            'roleId':r['role_id'],'roleName':r['role_name'] or '','status':r['status'],'boundAt':r['bound_at']}}
+        r=row(c.execute('''SELECT s.*,r.name role_name,r.store_scope role_store_scope,r.page_perms_json role_page_perms
+                           FROM club_mp_staff s LEFT JOIN club_mp_roles r ON r.id=s.role_id WHERE s.id=?''',(sid,)))
+    return {'ok':True,'staff':_mp_staff_public(r)}
 
 @app.patch('/api/club/{club_id}/mp/staff/{staff_id}')
 def club_mp_staff_update(club_id:int,staff_id:int,payload:dict=Body(...)):
@@ -2933,6 +3021,8 @@ def club_mp_staff_update(club_id:int,staff_id:int,payload:dict=Body(...)):
         r=row(c.execute('SELECT * FROM club_mp_staff WHERE id=? AND club_id=?',(staff_id,club_id)))
         if not r: raise HTTPException(404,'员工不存在')
         name=r['name'];phone=r['phone'];wxid=r['wxid'];role_id=r['role_id'];status=r['status']
+        login_account=r['login_account'];account_source=r['account_source']
+        store_scope=r['store_scope'];store_detail=r['store_detail'];page_perms_json=r['page_perms_json']
         if 'name' in payload:
             name=str(payload.get('name') or '').strip()
             if not name: raise HTTPException(400,'员工姓名必填')
@@ -2950,12 +3040,32 @@ def club_mp_staff_update(club_id:int,staff_id:int,payload:dict=Body(...)):
         if 'status' in payload:
             status=str(payload.get('status') or '')
             if status not in ('active','disabled'): raise HTTPException(400,'status 不合法')
-        c.execute('UPDATE club_mp_staff SET name=?,phone=?,wxid=?,role_id=?,status=? WHERE id=?',
-                  (name,phone,wxid,role_id,status,staff_id))
-        r2=row(c.execute('''SELECT s.*,r.name role_name FROM club_mp_staff s
-                            LEFT JOIN club_mp_roles r ON r.id=s.role_id WHERE s.id=?''',(staff_id,)))
-    return {'ok':True,'staff':{'id':staff_id,'name':name,'phone':phone or '','wxid':wxid or '',
-            'roleId':role_id,'roleName':r2['role_name'] or '','status':status,'boundAt':r2['bound_at']}}
+        if 'loginAccount' in payload:
+            login_account=str(payload.get('loginAccount') or '').strip()[:64]
+            if not login_account: raise HTTPException(400,'登录账号必填')
+            if not re.match(r'^[A-Za-z0-9_.@-]{4,64}$',login_account): raise HTTPException(400,'登录账号需 4-64 位字母/数字/._@-')
+        if 'password' in payload and payload.get('password'):
+            pwd=_hash_staff_pwd(str(payload.get('password') or ''))
+        else:
+            pwd=r['password']
+        if 'accountSource' in payload:
+            account_source=str(payload.get('accountSource') or 'manual').strip().lower()
+            if account_source not in ('manual','import'): account_source='manual'
+        if 'storeScope' in payload:
+            store_scope=str(payload.get('storeScope') or '').strip().lower()
+            store_scope=store_scope if store_scope in ('this_club','all_clubs','specified') else None
+            if store_scope!='specified': store_detail=None
+        if 'storeDetail' in payload and store_scope=='specified':
+            store_detail=jdump(_mp_json_list(payload.get('storeDetail')))
+        if 'pagePerms' in payload:
+            page_perms=_mp_clean_page_perms(payload.get('pagePerms'))
+            page_perms_json=json.dumps(page_perms,ensure_ascii=False)
+        c.execute('''UPDATE club_mp_staff SET name=?,phone=?,wxid=?,role_id=?,status=?,login_account=?,password=?,account_source=?,store_scope=?,store_detail=?,page_perms_json=?
+                     WHERE id=?''',
+                  (name,phone,wxid,role_id,status,login_account,pwd,account_source,store_scope,store_detail,page_perms_json,staff_id))
+        r2=row(c.execute('''SELECT s.*,r.name role_name,r.store_scope role_store_scope,r.page_perms_json role_page_perms
+                            FROM club_mp_staff s LEFT JOIN club_mp_roles r ON r.id=s.role_id WHERE s.id=?''',(staff_id,)))
+    return {'ok':True,'staff':_mp_staff_public(r2)}
 
 @app.delete('/api/club/{club_id}/mp/staff/{staff_id}')
 def club_mp_staff_delete(club_id:int,staff_id:int):
@@ -3943,6 +4053,49 @@ def club_add_benefit(club_id:int,payload:dict=Body(...)):
         except ValueError as e: raise HTTPException(400,str(e))
     return {'ok':True,'benefitId':bid}
 
+# #856 券中心 UI 对齐 Word（2026-11-12）：俱乐部券支持编辑与下架。
+# PATCH 同时收「驼峰」与「列名」两种键名（与平台券 _COUPON_PATCH_ALIAS 一致），
+# 避免前端弹层发了字段却因键名不匹配而静默落库失败。覆盖三型券的全部 Word 展示字段。
+@app.patch('/api/club/{club_id}/benefits/{benefit_id}')
+def club_update_benefit(club_id:int,benefit_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    _ALIAS=dict(_COUPON_PATCH_ALIAS,**{
+        'storeScope':'store_scope','diningModes':'dining_modes','wechatDelivery':'wechat_delivery',
+        'discountCouponType':'discount_coupon_type','maxDiscountAmount':'max_discount_amount',
+        'thresholdScope':'threshold_scope','deductionScope':'deduction_scope',
+        'redeemableProductType':'redeemable_product_type','selectedProduct':'selected_product',
+        'mode':'mode','discountPercent':'discount_percent','thresholdAmount':'threshold_amount'})
+    # 允许更新的列（含基础列与新 Word 列）；不在白名单内的键静默忽略，避免误改内部字段。
+    _ALLOWED={'title','description','points_cost','cash_value','stock','status','threshold_amount',
+        'discount_percent','valid_from','valid_to','mode','applies_to','benefit_type',
+        'store_scope','dining_modes','wechat_delivery','discount_coupon_type','max_discount_amount',
+        'threshold_scope','deduction_scope','redeemable_product_type','selected_product',
+        'target_type','target_city','claim_mode','image_key','per_user_limit','share_enabled'}
+    sets=[];vals=[]
+    for k,v in (payload or {}).items():
+        col=_ALIAS.get(k,k)
+        if col in _ALLOWED:
+            if col=='dining_modes' and isinstance(v,list): v=json.dumps(v,ensure_ascii=False)
+            sets.append(f'{col}=?'); vals.append(v)
+    if not sets: return {'ok':True}
+    with conn() as c:
+        b=row(c.execute("SELECT * FROM member_benefits WHERE id=? AND owner_type='CLUB' AND owner_club_id=?",(benefit_id,club_id)))
+        if not b: raise HTTPException(404,'优惠券不存在或不属于本俱乐部')
+        vals.append(benefit_id)
+        c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?",vals)
+    return {'ok':True}
+
+# 软删除：置为下架（status='inactive'），保留已赠送 / 已核销记录，避免破坏消费送券规则与核销流水；
+# 列表按 active 过滤，下架即从前台消失，但不物理删除。
+@app.delete('/api/club/{club_id}/benefits/{benefit_id}')
+def club_delete_benefit(club_id:int,benefit_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        b=row(c.execute("SELECT * FROM member_benefits WHERE id=? AND owner_type='CLUB' AND owner_club_id=?",(benefit_id,club_id)))
+        if not b: raise HTTPException(404,'优惠券不存在或不属于本俱乐部')
+        c.execute("UPDATE member_benefits SET status='inactive',updated_at=CURRENT_TIMESTAMP WHERE id=?",(benefit_id,))
+    return {'ok':True}
+
 @app.get('/api/club/{club_id}/benefits/redemptions')
 def club_benefit_redemptions(club_id:int):
     club_or_404(club_id)
@@ -4154,6 +4307,58 @@ def club_set_referral_coupon(club_id:int,payload:dict=Body(...)):
             c.execute('UPDATE clubs SET referral_coupon_benefit_id=0 WHERE id=?',(club_id,))
     return {'ok':True,'benefitId':bid}
 
+# ── #858 优惠邀请 · 邀请奖励（2026-11-12）：三 Tab（基本设置 / 分享设置 / 邀请记录）──
+@app.get('/api/club/{club_id}/invite-reward')
+def club_invite_reward_get(club_id:int):
+    """俱乐部邀请奖励配置 + 可选券池 + 邀请记录 + 汇总统计。"""
+    club_or_404(club_id)
+    with conn() as c:
+        cfg=row(c.execute('SELECT * FROM invite_reward_settings WHERE club_id=?',(club_id,)))
+        if not cfg:
+            cfg={'club_id':club_id,'enabled':0,'invitee_benefit_id':None,'inviter_benefit_id':None,
+                 'inviter_points':0,'share_title':None,'share_desc':None,'share_image_key':'sunrise'}
+        pool=rows(c.execute('''SELECT id,title,mode,cash_value,threshold_amount,discount_percent,stock,status
+                               FROM member_benefits WHERE owner_type='CLUB' AND owner_club_id=? AND benefit_type='activity_coupon'
+                               ORDER BY id DESC''',(club_id,)))
+        recs=rows(c.execute('''SELECT r.*, u1.name inviter_name, u2.name invitee_name
+                               FROM invite_records r
+                               LEFT JOIN users u1 ON u1.id=r.inviter_user_id
+                               LEFT JOIN users u2 ON u2.id=r.invitee_user_id
+                               WHERE r.club_id=? ORDER BY r.id DESC LIMIT 100''',(club_id,)))
+        stat=row(c.execute('''SELECT COUNT(*) total,
+                                     SUM(CASE WHEN invitee_redemption_id IS NOT NULL THEN 1 ELSE 0 END) invitee_coupons,
+                                     SUM(CASE WHEN inviter_redemption_id IS NOT NULL THEN 1 ELSE 0 END) inviter_coupons,
+                                     COALESCE(SUM(inviter_points_awarded),0) points_awarded
+                              FROM invite_records WHERE club_id=?''',(club_id,))) or {}
+    return {'settings':cfg,'pool':pool,'records':recs,'stats':stat}
+
+@app.patch('/api/club/{club_id}/invite-reward')
+def club_invite_reward_set(club_id:int,payload:dict=Body(...)):
+    """保存邀请奖励配置（启用 / 被邀请人券 / 邀请人奖励券 / 邀请人积分 / 分享设置）。"""
+    club_or_404(club_id)
+    enabled=1 if payload.get('enabled') else 0
+    invitee_benefit_id=int(payload.get('inviteeBenefitId') or 0) or None
+    inviter_benefit_id=int(payload.get('inviterBenefitId') or 0) or None
+    inviter_points=max(0,int(payload.get('inviterPoints') or 0))
+    share_title=(payload.get('shareTitle') or '').strip() or None
+    share_desc=(payload.get('shareDesc') or '').strip() or None
+    share_image_key=(payload.get('shareImageKey') or 'sunrise').strip()
+    if share_image_key not in benefit_engine.COUPON_IMAGE_KEYS:
+        share_image_key='sunrise'
+    with conn() as c:
+        for bid,label in ((invitee_benefit_id,'被邀请人券'),(inviter_benefit_id,'邀请人奖励券')):
+            if bid:
+                b=row(c.execute('SELECT id FROM member_benefits WHERE id=? AND owner_type="CLUB" AND owner_club_id=? AND benefit_type="activity_coupon"',(bid,club_id)))
+                if not b: raise HTTPException(400,f'{label}必须是本俱乐部创建的活动优惠券')
+        c.execute('''INSERT INTO invite_reward_settings(club_id,enabled,invitee_benefit_id,inviter_benefit_id,inviter_points,share_title,share_desc,share_image_key,updated_at)
+                     VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)
+                     ON CONFLICT(club_id) DO UPDATE SET enabled=excluded.enabled,
+                     invitee_benefit_id=excluded.invitee_benefit_id,inviter_benefit_id=excluded.inviter_benefit_id,
+                     inviter_points=excluded.inviter_points,share_title=excluded.share_title,share_desc=excluded.share_desc,
+                     share_image_key=excluded.share_image_key,updated_at=CURRENT_TIMESTAMP''',
+                     (club_id,enabled,invitee_benefit_id,inviter_benefit_id,inviter_points,share_title,share_desc,share_image_key))
+    return {'ok':True}
+
 @app.get('/api/public/clubs/{club_id}/membership/invite-info')
 def public_invite_info(request:Request,club_id:int,user_id:int|None=None):
     """C 端邀请卡：我的邀请码 + 已邀请人数 + 奖励说明。"""
@@ -4164,11 +4369,23 @@ def public_invite_info(request:Request,club_id:int,user_id:int|None=None):
         invited=rows(c.execute('''SELECT m.user_id,u.name,m.level,m.created_at
                                   FROM club_members m JOIN users u ON u.id=m.user_id
                                   WHERE m.club_id=? AND m.referred_by=? ORDER BY m.id DESC LIMIT 20''',(club_id,user_id)))
-        cfg=row(c.execute('SELECT referral_coupon_benefit_id FROM clubs WHERE id=?',(club_id,)))
-        b=benefit_engine._coupon_row(c,int((cfg or {}).get('referral_coupon_benefit_id') or 0)) if (cfg or {}).get('referral_coupon_benefit_id') else None
-    return {'inviteCode':code,'invitedCount':len(invited),'invited':invited,
-            'reward':{'title':b['title'],'mode':b.get('mode'),'cashValue':float(b.get('cash_value') or 0),
-                      'discountPercent':float(b.get('discount_percent') or 0)} if b else None}
+        # 新版「邀请奖励」模块开启时，奖励说明取双向配置；否则降级取旧 referral_coupon_benefit_id。
+        cfg=row(c.execute('SELECT * FROM invite_reward_settings WHERE club_id=? AND enabled=1',(club_id,)))
+        reward=None
+        if cfg and (cfg.get('invitee_benefit_id') or cfg.get('inviter_benefit_id')):
+            eb=benefit_engine._coupon_row(c,int(cfg['invitee_benefit_id'])) if cfg.get('invitee_benefit_id') else None
+            ib=benefit_engine._coupon_row(c,int(cfg['inviter_benefit_id'] or cfg['invitee_benefit_id'])) if (cfg.get('inviter_benefit_id') or cfg.get('invitee_benefit_id')) else None
+            reward={'inviteeTitle':(eb or {}).get('title'),'inviterTitle':(ib or {}).get('title'),
+                    'inviterPoints':max(0,int(cfg.get('inviter_points') or 0)),
+                    'shareTitle':cfg.get('share_title'),'shareDesc':cfg.get('share_desc'),
+                    'shareImageKey':cfg.get('share_image_key') or 'sunrise'}
+        else:
+            cfg2=row(c.execute('SELECT referral_coupon_benefit_id FROM clubs WHERE id=?',(club_id,)))
+            b=benefit_engine._coupon_row(c,int((cfg2 or {}).get('referral_coupon_benefit_id') or 0)) if (cfg2 or {}).get('referral_coupon_benefit_id') else None
+            if b:
+                reward={'inviteeTitle':b['title'],'inviterTitle':b['title'],'inviterPoints':0,
+                        'shareTitle':None,'shareDesc':None,'shareImageKey':'sunrise'}
+    return {'inviteCode':code,'invitedCount':len(invited),'invited':invited,'reward':reward}
 
 @app.post('/api/public/clubs/{club_id}/membership/join')
 def public_join_with_invite(request:Request,club_id:int,payload:dict=Body(...)):
@@ -4182,15 +4399,47 @@ def public_join_with_invite(request:Request,club_id:int,payload:dict=Body(...)):
         except ValueError as e: raise HTTPException(400,str(e))
         gifts=[]
         if not info.get('alreadyBound'):
-            cfg=row(c.execute('SELECT referral_coupon_benefit_id FROM clubs WHERE id=?',(club_id,)))
-            if (cfg or {}).get('referral_coupon_benefit_id'):
-                b=benefit_engine._coupon_row(c,int(cfg['referral_coupon_benefit_id']))
-                if b:
-                    try:
-                        for uid,note in ((user_id,'好友邀请注册赠送'),(int(info['inviterUserId']),'成功邀请好友注册赠送')):
-                            gifts.append(benefit_engine._issue(c,b,uid,club_id,funding='CLUB',note=note))
-                    except Exception:
-                        pass
+            inviter_uid=int(info['inviterUserId'])
+            # 新版「邀请奖励」模块开启时走双边逻辑（被邀请人领券 → 邀请人得奖励券 + 积分 + 记录）。
+            cfg=row(c.execute('SELECT * FROM invite_reward_settings WHERE club_id=? AND enabled=1',(club_id,)))
+            if cfg and (cfg.get('invitee_benefit_id') or cfg.get('inviter_benefit_id') or cfg.get('inviter_points')):
+                invitee_rid=None; inviter_rid=None; pts_awarded=0
+                if cfg.get('invitee_benefit_id'):
+                    eb=benefit_engine._coupon_row(c,int(cfg['invitee_benefit_id']))
+                    if eb and str(eb.get('status') or 'active')=='active':
+                        try:
+                            r=benefit_engine._issue(c,eb,user_id,club_id,funding='CLUB',note='好友邀请注册赠送')
+                            invitee_rid=r['redemptionId']; gifts.append(r)
+                        except Exception: pass
+                inv_bid=cfg.get('inviter_benefit_id') or cfg.get('invitee_benefit_id')
+                if inv_bid:
+                    ib=benefit_engine._coupon_row(c,int(inv_bid))
+                    if ib and str(ib.get('status') or 'active')=='active':
+                        try:
+                            r=benefit_engine._issue(c,ib,inviter_uid,club_id,funding='CLUB',note='成功邀请好友注册赠送')
+                            inviter_rid=r['redemptionId']; gifts.append(r)
+                        except Exception: pass
+                pts_awarded=max(0,int(cfg.get('inviter_points') or 0))
+                if pts_awarded>0:
+                    c.execute('UPDATE club_members SET club_points_balance=club_points_balance+? WHERE club_id=? AND user_id=?',(pts_awarded,club_id,inviter_uid))
+                    c.execute('INSERT INTO club_point_ledger(club_id,user_id,type,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?,?)',
+                              (club_id,inviter_uid,'earn',pts_awarded,'invite_reward',str(club_id),'邀请好友奖励活动积分；成本由俱乐部承担'))
+                c.execute('''INSERT INTO invite_records(club_id,inviter_user_id,invitee_user_id,invite_code,
+                             invitee_redemption_id,inviter_redemption_id,inviter_points_awarded,status)
+                             VALUES(?,?,?,?,?,?,?,?)''',
+                          (club_id,inviter_uid,user_id,str(payload.get('inviteCode') or '').upper(),
+                           invitee_rid,inviter_rid,pts_awarded,'done'))
+            else:
+                # 降级：沿用旧 referral_coupon_benefit_id（双方同券）。
+                cfg2=row(c.execute('SELECT referral_coupon_benefit_id FROM clubs WHERE id=?',(club_id,)))
+                if (cfg2 or {}).get('referral_coupon_benefit_id'):
+                    b=benefit_engine._coupon_row(c,int(cfg2['referral_coupon_benefit_id']))
+                    if b:
+                        try:
+                            for uid,note in ((user_id,'好友邀请注册赠送'),(inviter_uid,'成功邀请好友注册赠送')):
+                                gifts.append(benefit_engine._issue(c,b,uid,club_id,funding='CLUB',note=note))
+                        except Exception:
+                            pass
         wallet=wallet_snapshot(c,user_id,club_id)
     return {'ok':True,**info,'gifts':gifts,'wallet':wallet}
 
@@ -7338,6 +7587,7 @@ _COUPON_PATCH_ALIAS = {
     'claimMode': 'claim_mode', 'imageKey': 'image_key', 'validFrom': 'valid_from',
     'validTo': 'valid_to', 'perUserLimit': 'per_user_limit', 'shareEnabled': 'share_enabled',
     'pointsCost': 'points_cost', 'pointsType': 'points_type',
+    'discountPercent': 'discount_percent', 'maxDiscountAmount': 'max_discount_amount',
 }
 
 @app.get('/api/platform/coupon-images')
@@ -7376,6 +7626,7 @@ def platform_update_coupon(coupon_id: int, payload: dict = Body(...)):
     # 发的是驼峰，被 allowed 白名单静默丢弃 —— 表现为「改了投放没反应」。
     payload = {_COUPON_PATCH_ALIAS.get(k, k): v for k, v in (payload or {}).items()}
     allowed = ['title', 'description', 'status', 'stock', 'cash_value', 'mode', 'threshold_amount',
+               'discount_percent', 'max_discount_amount',
                'image_key', 'valid_from', 'valid_to', 'claim_mode', 'target_type', 'target_city',
                'target_club_id', 'per_user_limit', 'share_enabled', 'applies_to']
     sets = []
@@ -7407,6 +7658,10 @@ def platform_update_coupon(coupon_id: int, payload: dict = Body(...)):
         elif merged.get('target_type') == 'city':
             if not str(merged.get('target_city') or '').strip():
                 raise HTTPException(400, '按城市投放必须选择城市')
+        # 折扣券只能用于活动报名券（装备券不能打折），与 _create 的校验口径一致，
+        # 防止 PATCH 把装备券改成折扣形态（前端也会置灰，这里兜底）。
+        if merged.get('mode') == 'discount' and merged.get('benefit_type') == 'gear_coupon':
+            raise HTTPException(400, '折扣券只支持活动报名券，装备券不能设为折扣券')
         if sets:
             vals.append(coupon_id)
             c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?", vals)

@@ -125,14 +125,14 @@ class MembershipEngine:
             return all(checks)
         return any(checks)
 
-    def refresh_member(self, c, *, club_id: int, user_id: int) -> MemberStats:
+    def refresh_member(self, c, *, club_id: int, user_id: int, is_new_member: bool | None = None) -> MemberStats:
         self.ensure_default_tiers(c, club_id)
         existed = c.execute('SELECT current_tier_id FROM club_members WHERE club_id=? AND user_id=?',
                             (club_id, user_id)).fetchone()
-        is_new_member = existed is None
+        _is_new = is_new_member if is_new_member is not None else (existed is None)
         old_tier_id = int(existed['current_tier_id']) if (existed and existed['current_tier_id']) else None
-        if is_new_member:
-            c.execute('INSERT INTO club_members(club_id,user_id) VALUES(?,?)', (club_id,user_id))
+        if _is_new:
+            c.execute('INSERT OR IGNORE INTO club_members(club_id,user_id) VALUES(?,?)', (club_id,user_id))
         # v0.14: after single-participant refunds, membership spend follows active participant
         # allocations instead of the original order total. Platform-funded Gear Points/benefits
         # still count as spend; club-funded discounts do not.
@@ -178,7 +178,7 @@ class MembershipEngine:
         # 回调异常不阻断会员主流程；防重交给回调内部（tier_gift_log 唯一索引）。
         new_tier_id = selected.get('id')
         try:
-            if is_new_member and self.on_member_created is not None:
+            if _is_new and self.on_member_created is not None:
                 self.on_member_created(c, club_id=club_id, user_id=user_id)
             if (self.on_upgrade is not None and new_tier_id
                     and new_tier_id != old_tier_id and self._rank_of(c, new_tier_id) > self._rank_of(c, old_tier_id)):
@@ -223,16 +223,23 @@ class MembershipEngine:
             raise LookupError('邀请码不存在，请核对后重试')
         if int(inviter['user_id']) == int(user_id):
             raise ValueError('不能填写自己的邀请码')
-        self.refresh_member(c, club_id=club_id, user_id=user_id)  # 确保已是会员
+        # 先确认会员行是否存在（用于精确判断「是否新会员」），再确保行存在；
+        # 把 referred_by 在 refresh_member 之前写下去，会员创建钩子（发券）才能识别「被邀请」并跳过，
+        # 避免同一人被发两次邀请券（钩子一次 + 邀请链路一次）。
+        existed_before = c.execute('SELECT 1 FROM club_members WHERE club_id=? AND user_id=?',
+                                   (club_id, user_id)).fetchone() is not None
+        c.execute('INSERT OR IGNORE INTO club_members(club_id,user_id) VALUES(?,?)', (club_id, user_id))
         cur = c.execute('SELECT referred_by FROM club_members WHERE club_id=? AND user_id=?',
                         (club_id, user_id)).fetchone()
         if cur and cur['referred_by']:
             inv = c.execute('SELECT level,invite_code FROM club_members WHERE club_id=? AND user_id=?',
                             (club_id, int(cur['referred_by']))).fetchone()
+            self.refresh_member(c, club_id=club_id, user_id=user_id, is_new_member=existed_before)
             return {'inviterUserId': int(cur['referred_by']), 'inviterLevel': inv['level'] if inv else None,
                     'alreadyBound': True}
         c.execute('UPDATE club_members SET referred_by=? WHERE club_id=? AND user_id=?',
                   (int(inviter['user_id']), club_id, user_id))
+        self.refresh_member(c, club_id=club_id, user_id=user_id, is_new_member=existed_before)
         return {'inviterUserId': int(inviter['user_id']), 'inviterLevel': inviter['level'],
                 'alreadyBound': False}
 

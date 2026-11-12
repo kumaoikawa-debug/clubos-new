@@ -152,17 +152,48 @@ class BenefitEngine:
                 return v.upper() if _re.fullmatch(r'#[0-9a-fA-F]{6}', v) else None
             face_json=json.dumps({k:_hex(face.get(k)) for k in ('c1','c2','ink') if _hex(face.get(k))},
                                  ensure_ascii=False) if any(_hex(face.get(k)) for k in ('c1','c2','ink')) else None
+        # ── #856 Word 设计稿字段（2026-11-12，严格照搬展示字段，纯存储/展示，不参与计费逻辑）──
+        store_scope=str(payload.get('storeScope') or 'this_club').strip().lower()
+        if store_scope not in ('this_club','all_clubs','specified'):
+            store_scope='this_club'
+        _dm=payload.get('diningModes')
+        if isinstance(_dm,list):
+            dining_modes_json=json.dumps(_dm,ensure_ascii=False)
+        elif isinstance(_dm,str) and _dm.strip():
+            dining_modes_json=_dm.strip()
+        else:
+            dining_modes_json=None
+        wechat_delivery=1 if payload.get('wechatDelivery') else 0
+        discount_coupon_type=str(payload.get('discountCouponType') or 'single').strip().lower()
+        if discount_coupon_type not in ('single','stored'):
+            discount_coupon_type='single'
+        _mda=payload.get('maxDiscountAmount')
+        max_discount_amount=None if _mda in (None,'') else float(_mda)
+        threshold_scope=str(payload.get('thresholdScope') or 'all').strip().lower()
+        if threshold_scope not in ('all','category','product'):
+            threshold_scope='all'
+        deduction_scope=str(payload.get('deductionScope') or 'all').strip().lower()
+        if deduction_scope not in ('all','category','product'):
+            deduction_scope='all'
+        redeemable_product_type=str(payload.get('redeemableProductType') or 'all').strip().lower()
+        if redeemable_product_type not in ('all','category','specified'):
+            redeemable_product_type='all'
+        selected_product=str(payload.get('selectedProduct') or '').strip() or None
         c.execute('''INSERT INTO member_benefits(owner_type,owner_club_id,target_club_id,title,description,
                      benefit_type,applies_to,points_type,points_cost,cash_value,stock,status,rules_json,
                      mode,discount_percent,threshold_amount,image_key,valid_from,valid_to,claim_mode,
-                     target_type,target_city,per_user_limit,claimed_count,share_enabled,face_json)
-                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
+                     target_type,target_city,per_user_limit,claimed_count,share_enabled,face_json,
+                     store_scope,dining_modes,wechat_delivery,discount_coupon_type,max_discount_amount,
+                     threshold_scope,deduction_scope,redeemable_product_type,selected_product)
+                     VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',(
             owner_type,owner_club_id,target_club_id,title,payload.get('description'),benefit_type,
             applies_to,
             points_type,cost,cash_value,stock,payload.get('status','active'),
             json.dumps(payload.get('rules') or {},ensure_ascii=False),
             mode,discount_percent,threshold,image_key,valid_from,valid_to,claim_mode,
-            target_type,target_city,per_user_limit,0,share_enabled,face_json))
+            target_type,target_city,per_user_limit,0,share_enabled,face_json,
+            store_scope,dining_modes_json,wechat_delivery,discount_coupon_type,max_discount_amount,
+            threshold_scope,deduction_scope,redeemable_product_type,selected_product))
         return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
 
     def list_for_club(self,c,*,club_id:int,include_inactive:bool=False)->list[dict[str,Any]]:
@@ -775,7 +806,17 @@ class BenefitEngine:
     # ── 拉新邀请（2026-10-26）────────────────────────────────────────────
     def welcome_new_member(self, c, *, club_id: int, user_id: int) -> dict[str, Any] | None:
         """membership.on_member_created 回调：新会员注册即得一张「邀请优惠券」。
-        券由俱乐部在「拉新设定」里选定（clubs.referral_coupon_benefit_id）；未设定时静默跳过。"""
+
+        旧逻辑：发 clubs.referral_coupon_benefit_id 给所有新会员（含被邀请人）。
+        #858：俱乐部开启新版「邀请奖励」模块后，被邀请人的券改由邀请链路（public_join_with_invite）
+        统一发放，这里跳过，避免同一人被发两张；未开启新模块的俱乐部仍走旧逻辑，向后兼容。"""
+        inv = c.execute('SELECT 1 FROM invite_reward_settings WHERE club_id=? AND enabled=1', (club_id,)).fetchone()
+        if inv:
+            return None
+        # 被邀请人已绑定邀请关系 → 券由邀请链路（public_join_with_invite）统一发放，这里不发，避免重复。
+        ref = c.execute('SELECT referred_by FROM club_members WHERE club_id=? AND user_id=?', (club_id, user_id)).fetchone()
+        if ref and ref['referred_by']:
+            return None
         row = c.execute('SELECT referral_coupon_benefit_id FROM clubs WHERE id=?', (club_id,)).fetchone()
         if not row or not row['referral_coupon_benefit_id']:
             return None
