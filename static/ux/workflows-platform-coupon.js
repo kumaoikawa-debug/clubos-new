@@ -219,18 +219,19 @@
     var cfg = opts || {};
     var cid = cfg.id ? Number(cfg.id) : null;
     await ensureMeta();
-    /* #860 适用范围真实下拉：候选项全部来自库里真实业务对象，前端不编造条目。 */
+    /* #869 总平台只管装备产品：下拉只列装备商品与装备分类，不涉及具体活动 / 营地。
+       服务端 /api/platform/coupon-scope-options 已把 activities/camps/pitches 返空，
+       前端这里也不再消费它们，双保险。第一项「不指定」＝适用全部装备商品。 */
     var scopeData = null;
     try { scopeData = await api('/api/platform/coupon-scope-options'); }
-    catch (e) { scopeData = { activities: [], camps: [], pitches: [], products: [], categories: [] }; }
-    var scopeOptions = [{ value: 'all', label: '全平台通用（活动 + 营地 + 装备）' }];
-    [['activities','activity','指定活动'],['camps','camp','指定营地'],['pitches','pitch','指定营位'],
-     ['products','product','指定商品'],['categories','category','指定分类']].forEach(function (g) {
+    catch (e) { scopeData = { products: [], categories: [] }; }
+    var scopeOptions = [{ value: 'all', label: '全部装备商品通用（不指定具体商品）' }];
+    [['products','product','指定装备商品'],['categories','category','指定装备分类']].forEach(function (g) {
       (scopeData[g[0]] || []).forEach(function (x) {
         scopeOptions.push({ value: g[1] + ':' + x.id, label: g[2] + ' · ' + (x.name || ('#' + x.id)) });
       });
     });
-    var campList = scopeData.camps || [];
+    var campList = [];
 
     /* 编辑模式：拉最新数据回填（benefit_type 后端不可改，只读展示） */
     var cur = null;
@@ -362,22 +363,10 @@
 
             '<section class="plat-cpe__sec" id="cpeSec-cond">' +
               '<div class="plat-cpe__sec-h"><h3>使用条件</h3><p>券能在哪里用、谁能领。全部俱乐部 = 所有俱乐部的用户；指定城市按注册城市圈人；指定俱乐部只给该俱乐部成员。</p></div>' +
-              '<div class="plat-cpe__row"><span>适用范围 <i>*</i></span><div>' +
+              '<div class="plat-cpe__row"><span>适用范围</span><div>' +
                 selectHtml('cpeScopeRef', scopeOptions, st.scopeRef) +
-                '<em class="plat-cpe__hint">可全平台通用，也可指定某一场活动、某个营地 / 营位、某一件商品或某一类商品；选择项来自真实业务数据，后端报价与核销会按它过滤。</em>' +
+                '<em class="plat-cpe__hint">总平台只管理装备商品与装备分类，不涉及具体活动 / 营地。不指定具体商品时，这张券适用于全部装备商品；这里不是必填项。</em>' +
               '</div></div>' +
-              '<div class="plat-cpe__row"><span>多营地适用</span><div>' +
-                radiosHtml('campScope', [
-                  { value: 'all', label: '全部营地通用' },
-                  { value: 'specified', label: '仅指定营地可用' }
-                ], st.campScope) +
-                '<em class="plat-cpe__hint">一家俱乐部有多处营地时才需要指定；这里不是门店，是营地。</em>' +
-              '</div></div>' +
-              '<div class="plat-cpe__cond" data-when="campSpecified">' +
-                '<div class="plat-cpe__row"><span>选择适用营地 <i>*</i></span><div>' +
-                  '<div class="plat-cpe__radios" id="cpeCampIds">' + campChecksHtml + '</div>' +
-                '</div></div>' +
-              '</div>' +
               '<div class="plat-cpe__row"><span>投放范围 <i>*</i></span><div>' +
                 radiosHtml('targetType', [
                   { value: 'all_clubs', label: '全部俱乐部（所有用户可领）' },
@@ -642,13 +631,16 @@
       var targetClubId = clubSel.value;
       if (targetType === 'city' && !targetCity) { msgBox.textContent = '请选择投放城市'; citySel.focus(); return; }
       if (targetType === 'club' && !targetClubId) { msgBox.textContent = '请选择投放俱乐部'; clubSel.focus(); return; }
-      /* #860 适用范围 / 效期 / 领用限制 */
+      /* #869 总平台券：适用范围只能是「全部装备商品 / 指定装备商品 / 指定装备分类」。
+         活动、营地、营位属于俱乐部经营，不进总平台口径；也不再写多营地字段。 */
       var scopeRaw = String((scopeRefSel && scopeRefSel.value) || 'all');
       var scopeParts = scopeRaw.indexOf(':') >= 0 ? scopeRaw.split(':') : ['', ''];
       var scopeKind = scopeParts[0] || '', scopeId = parseInt(scopeParts[1], 10) || null;
       if (scopeKind && !scopeId) { msgBox.textContent = '请选择具体的适用对象'; if (scopeRefSel) scopeRefSel.focus(); return; }
-      var scopeMap = { activity: 'activity', camp: 'camp', pitch: 'camp', product: 'product', category: 'category' };
-      var appliesTo = scopeKind ? (scopeMap[scopeKind] || 'all') : (scopeRaw === 'all' ? 'all' : 'activity');
+      if (scopeKind && ['product', 'category'].indexOf(scopeKind) < 0) {
+        msgBox.textContent = '总平台券只能指定装备商品或装备分类'; return;
+      }
+      var appliesTo = scopeKind || 'all';
       var vType = radioVal('validType');
       var validityType = vType === 'relative' ? 'relative' : 'fixed';
       var validDays = Math.max(0, parseInt((validDaysInput && validDaysInput.value) || '0', 10) || 0);
@@ -658,21 +650,7 @@
       var claimAudience = (audienceSel && audienceSel.value) || 'all';
       var perUserDailyLimit = Math.max(0, parseInt((dailyLimitInput && dailyLimitInput.value) || '0', 10) || 0);
       var newUserOnly = radioVal('newUserOnly') === '1';
-      /* #860 多营地适用：勾选了的营地 ID 才写进券；未选任何营地则回落「全部营地」，
-         避免产生一张谁都用不了的死券。 */
-      var campScope = radioVal('campScope') === 'specified' ? 'specified' : 'all';
-      var campScopeIds = [];
-      var campBox = root.querySelector('#cpeCampIds');
-      if (campScope === 'specified' && campBox) {
-        campBox.querySelectorAll('input[type=checkbox]:checked').forEach(function (n) {
-          var v = parseInt(n.value, 10); if (v > 0) campScopeIds.push(v);
-        });
-        if (!campScopeIds.length) {
-          msgBox.textContent = '请选择至少一个适用营地，或改回「全部营地通用」';
-          if (campBox.scrollIntoView) campBox.scrollIntoView({ block: 'center' });
-          return;
-        }
-      }
+      /* #869 总平台不涉及具体营地管理：不再写「多营地适用」，统一 all + 空数组。 */
       var stockRaw = (stockInput.value || '').trim();
       /* PATCH 发 snake_case 列名；POST 走 benefits.py 的驼峰约定。后端两个通道都做了
          alias 映射，两种键名都收。 */
@@ -695,7 +673,7 @@
         valid_to: vType === 'fixed' ? toDbInput(validToInput.value) : null,
         applies_to: appliesTo,
         scope_ref_kind: scopeKind, scope_ref_id: scopeId,
-        camp_scope: campScope, camp_scope_ids: campScopeIds,
+        camp_scope: 'all', camp_scope_ids: [],
         validity_type: validityType, valid_days: validDays,
         claim_audience: claimAudience, per_user_daily_limit: perUserDailyLimit,
         new_user_only: newUserOnly,

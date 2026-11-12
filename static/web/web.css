@@ -2977,3 +2977,10 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 /* #821 所有订单卡片都要压住底层删除按钮（原实现只给终态卡片 relative，其余红色按钮常驻） */
 .me-card2.me-camp{position:relative;z-index:1;transition:transform .18s ease;touch-action:pan-y;will-change:transform}
 .me-swipeable{position:relative;transition:transform .18s ease;touch-action:pan-y;will-change:transform}
+/* #868 删除入口常驻可见：不依赖「必须会左滑」这个隐藏交互，桌面端 / 不习惯手势的
+   顾客也能直接删除；左滑露出的红色按钮仍保留。 */
+.me-camp__more{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.me-camp__delbtn{flex:0 0 auto;border:1px solid #f0d3d4;background:#fff;color:#c0393f;
+  border-radius:999px;padding:4px 12px;font-size:11.5px;font-weight:700;cursor:pointer;
+  font-family:inherit;line-height:1.6}
+.me-camp__delbtn:active{background:#fdecec}

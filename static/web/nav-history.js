@@ -124,6 +124,10 @@ document.addEventListener('touchstart', function(e){
   var ae=document.activeElement;
   if(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)){ edge=null; return; }
   if(inHScroller(e.target)){ edge=null; return; }
+  /* #868 订单卡左滑删除必须优先于全局返回手势。旧实现在任意位置左滑都会 appBack()，
+     在「我的订单」里左滑会直接 popMe() 退回我的主页 —— 订单列表瞬间消失，
+     用户看到的就是「左滑没有删除选项」。起手落在订单卡内时整个手势让给订单组件。 */
+  if(e.target && e.target.closest && e.target.closest('.me-camp-wrap,.cp-order-wrap')){ edge=null; return; }
   var t=e.touches[0];
   sx=t.clientX; sy=t.clientY; edge='any';   // 任意位置起手都进入手势判定
 }, {passive:true});

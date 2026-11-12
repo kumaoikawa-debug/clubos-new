@@ -96,15 +96,14 @@ window.addTier=async mode=>{
     loadMembers();
   });
 };
-/* 券中心（#860 重构，2026-11-12）：券就是券，与积分完全解耦。
-   · 建券表单不再出现任何「积分兑换 / 兑换所需积分」字段与提示。要用积分换券，
-     去「积分商城」把已生成的券上架，所需积分由老板自定义（addMallItem）。
-   · 「使用门店」改为「多营地适用」；餐饮语义（就餐方式 / 堂食 / 自取 /
-     配送 / 快递 / 微信支付营销投放）全部移除 —— 我们不是做餐饮的。
-   · 适用范围用一个真实下拉：全平台通用 / 指定活动 / 指定营地 / 指定营位 /
-     指定商品 / 指定分类。候选项来自 /api/club/{club}/coupon-scope-options，
-     值是 `kind:真实ID`，绝不手填文本；后端报价与核销都会真的按它过滤。
-   · 有效期：领券后 N 天内可用 / 固定有效期。
+/* 券中心（#860 重构 → #869 经营主体隔离，2026-11-12）：券就是券，与积分完全解耦。
+   · 券不消耗积分；要用积分换券去「积分商城」上架，积分价由老板自定义（addMallItem）。
+   · #869 用户明确要求：俱乐部 / 营地后台只涉及活动与营地产品，总平台只管装备产品。
+     本端候选项由 /api/club/{club}/coupon-scope-options 严格下发，服务端已把
+     装备商城的 products / product_categories 整表挡在外面，两端数据绝不混用。
+   · 建券流程：① 券形态（满减 / 折扣）→ ② 适用范围（仅活动 / 仅营地 / 通用，
+     自定义且**非必选**）→ ③ 具体产品（**非必选**，不选 = 适用于该范围内全部产品）。
+   · 有效期用原生日历点选，不再手填日期字符串。
    · 领用限制：可领取人群 / 每人每日限领 / 仅新用户。 */
 let _cpnScopeCache=null;
 async function couponScopeOptions(){
@@ -113,29 +112,36 @@ async function couponScopeOptions(){
   catch(e){_cpnScopeCache={activities:[],camps:[],pitches:[],products:[],categories:[]};}
   return _cpnScopeCache;
 }
-/* 下拉值统一编码 `kind:id`。一个控件覆盖「指定某一类 / 某一个商品」两种诉求，
-   也避开 uxForm 没有「按上一项联动下一项」能力的限制。 */
-function couponScopeOpts(o){
+/* 适用范围只决定「活动 / 营地」两大类，由经营者自定义，系统不设必选项。 */
+function couponAppliesOpts(){
+  return [{value:'all',label:'活动 + 营地通用'},
+          {value:'activity',label:'仅限活动报名'},
+          {value:'camp',label:'仅限营地消费'}];
+}
+/* 具体产品：第一项恒为「不指定」。用户明确要求「经营者不选某一个产品，
+   这个券就适用于所有产品，不要设定为必选项」—— 所以这里没有 required，
+   也没有任何隐藏的兜底选中。候选全部来自俱乐部自己的真实业务对象。 */
+function couponProductOpts(o){
   const mk=(arr,prefix,label)=>(arr||[]).map(x=>({value:prefix+':'+x.id,label:label+' · '+(x.name||('#'+x.id))}));
-  return [{value:'all',label:'全平台通用（活动 + 营地 + 装备）'},
+  return [{value:'',label:'不指定（适用范围内全部产品）'},
     ...mk(o.activities,'activity','指定活动'),
     ...mk(o.camps,'camp','指定营地'),
     ...mk(o.pitches,'pitch','指定营位'),
-    ...mk(o.products,'product','指定商品'),
-    ...mk(o.categories,'category','指定分类')];
+    ...mk(o.products,'product','指定营地商品'),
+    ...mk(o.categories,'category','指定活动分类')];
 }
 function couponScopeValue(b){
-  if(!b)return 'all';
+  if(!b)return '';
   if(b.scope_ref_kind&&b.scope_ref_id)return b.scope_ref_kind+':'+b.scope_ref_id;
-  return b.applies_to||'all';
+  return '';
 }
 function couponScopeParse(v){
-  const s=String(v||'all');
-  if(s==='all'||s.indexOf(':')<0)return {appliesTo:(['activity','camp','all'].indexOf(s)>=0?s:'all'),scopeRefKind:'',scopeRefId:null};
+  const s=String(v||'');
+  if(!s||s.indexOf(':')<0)return {scopeRefKind:'',scopeRefId:null};
   const p=s.split(':'),k=p[0],id=Number(p[1])||null;
-  const map={activity:'activity',camp:'camp',pitch:'camp',product:'product',category:'category'};
-  if(!id)return {appliesTo:'all',scopeRefKind:'',scopeRefId:null};
-  return {appliesTo:map[k]||'all',scopeRefKind:k,scopeRefId:id};
+  const allowed={activity:'activity',camp:'camp',pitch:'pitch',product:'product',category:'category'};
+  if(!id||!allowed[k])return {scopeRefKind:'',scopeRefId:null};
+  return {scopeRefKind:allowed[k],scopeRefId:id};
 }
 /* 多营地适用：只有老板名下确实有多家营地时才给「仅指定营地」选项（用户明确要求）。 */
 function couponCampFields(o,d={}){
@@ -154,8 +160,10 @@ function couponValidityFields(d={}){
       options:[{value:'fixed',label:'固定有效期内可用'},{value:'relative',label:'领券后有效期内可用'}]},
     {name:'validDays',label:'领券后有效天数（选「领券后有效期内可用」时填）',type:'number',min:1,step:1,value:d.valid_days||7,
       help:'例：填 7 表示顾客领券当日起 7 天内可用，每张券各自计算。'},
-    {name:'validFrom',label:'固定有效期 · 开始日期（YYYY-MM-DD，留空 = 立即生效）',value:d.valid_from||''},
-    {name:'validTo',label:'固定有效期 · 结束日期（YYYY-MM-DD，留空 = 长期有效）',value:d.valid_to||''}
+    /* #869 用户要求「有效期不要用手填，需要直接日历式直接选」：原生 date 控件
+       在手机端唤起系统日历点选，桌面端也是下拉日历，不再接受手打 YYYY-MM-DD。 */
+    {name:'validFrom',label:'固定有效期 · 开始日期（点日历选，留空 = 立即生效）',type:'date',value:String(d.valid_from||'').slice(0,10)},
+    {name:'validTo',label:'固定有效期 · 结束日期（点日历选，留空 = 长期有效）',type:'date',value:String(d.valid_to||'').slice(0,10)}
   ];
 }
 function couponClaimFields(d={}){
@@ -171,10 +179,13 @@ function couponClaimFields(d={}){
 }
 function couponBuildBase(d,mode,extra){
   extra=extra||{};
-  const sp=couponScopeParse(d.scopeRef||d.appliesTo);
+  const sp=couponScopeParse(d.scopeRef);
   const specified=d.campScope==='specified';
+  /* #869 适用范围与具体产品彻底解耦：appliesTo 只由经营者自己选的大类决定，
+     不再被「指定对象」反推覆盖；不选具体产品时 scopeRef 为空、大类照常生效。 */
+  const applies=(['activity','camp','all'].indexOf(d.appliesTo)>=0)?d.appliesTo:'all';
   return Object.assign({
-    title:d.title,benefitType:'activity_coupon',appliesTo:sp.appliesTo,mode,
+    title:d.title,benefitType:'activity_coupon',appliesTo:applies,mode,
     scopeRefKind:sp.scopeRefKind,scopeRefId:sp.scopeRefId,
     campScope:specified?'specified':'all',
     campScopeIds:specified&&d.campScopeId?[Number(d.campScopeId)]:[],
@@ -199,7 +210,7 @@ function couponBuildBase(d,mode,extra){
 async function couponCreateFlow(title,mode,buildFields){
   const o=await couponScopeOptions();
   const d=await uxForm({title,
-    subtitle:'券用于活动报名 / 营地消费 / 装备购买，按「适用范围」生效；成本由本俱乐部承担。券不消耗积分，如需用积分兑换请到「积分商城」上架。',
+    subtitle:'俱乐部优惠券只用于本俱乐部的活动报名与营地消费；装备商品由总平台管理，不在这里配置。先定适用范围，再按需指定具体产品（可以不选）。券不消耗积分，如需积分兑换请到「积分商城」上架。',
     fields:buildFields(o),submitText:'下一步：设计券面'});
   if(!d)return;
   const base=couponBuildBase(d,mode);
@@ -209,8 +220,23 @@ async function couponCreateFlow(title,mode,buildFields){
 function couponCommonFields(o,d={},extra=[]){
   return [
     {name:'title',label:'优惠券名称',required:true,full:true,value:d.title||'',maxLength:30},
-    {name:'scopeRef',label:'适用范围',type:'select',full:true,required:true,value:couponScopeValue(d),
-      options:couponScopeOpts(o),help:'可全平台通用，也可指定某一场活动、某个营地 / 营位、某一件商品或某一类商品；选择项来自真实业务数据。'},
+    /* #869 第一步：定「活动 / 营地」大类。不是必填，默认通用，完全由经营者自定义。 */
+    {name:'appliesTo',label:'适用范围',type:'select',full:true,value:d.applies_to||'all',
+      options:couponAppliesOpts(),
+      help:'这张券限活动用、限营地使用，还是活动 / 营地通用，由你自己定；不设置就默认通用，不是必填项。'},
+    /* #869 第二步：选定范围后才选具体产品；不选＝适用于该范围内全部产品。 */
+    {name:'scopeRef',label:'具体产品（可选）',type:'select',full:true,value:couponScopeValue(d),
+      options:couponProductOpts(o),
+      help:'只列本俱乐部的活动与营地业务数据；不指定就适用于上面所选范围内的全部产品，不是必填项。',
+      validate:(v,data)=>{
+        if(!v)return '';
+        const k=String(v).split(':')[0], ap=data.appliesTo||'all';
+        if(ap==='activity'&&['camp','pitch','product'].indexOf(k)>=0)
+          return '「仅限活动报名」的券不能指定营地 / 营位 / 营地商品，请改选活动或清空具体产品';
+        if(ap==='camp'&&['activity','category'].indexOf(k)>=0)
+          return '「仅限营地消费」的券不能指定活动 / 活动分类，请改选营地对象或清空具体产品';
+        return '';
+      }},
     ...extra,
     ...couponCampFields(o,d),
     ...couponValidityFields(d),
@@ -269,7 +295,7 @@ window.delCoupon=async id=>uxTask(async()=>{
 window.couponDetail=async id=>{
   const b=(window._clubBenefits||[]).find(x=>Number(x.id)===Number(id));
   if(!b){showAlert({title:'读取失败',message:'请重新打开「俱乐部营销」再试'});return;}
-  const scopeCn=({all:'全平台通用',activity:'活动报名',camp:'营地消费',product:'指定商品',category:'指定分类'})[b.applies_to]||b.applies_to;
+  const scopeCn=({all:'活动 + 营地通用',activity:'仅限活动报名',camp:'仅限营地消费',product:'指定商品',category:'指定分类'})[b.applies_to]||b.applies_to;
   const kindCn=({activity:'活动',camp:'营地',pitch:'营位',product:'商品',category:'商品分类'})[b.scope_ref_kind]||'';
   const audienceCn=({all:'所有人（会员 + 非会员）',member:'仅会员',non_member:'仅非会员',new_user:'仅新用户'})[b.claim_audience]||'所有人';
   const validCn=b.validity_type==='relative'?('领券后 '+(b.valid_days||0)+' 天内可用'):couponValidCn(b);

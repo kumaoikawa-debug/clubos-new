@@ -765,7 +765,7 @@ function meCampOrdersHtml(list){
         <span class="me-camp__grand">合计 <b>${money(tot)}</b></span>
       </div>
       <div class="me-card2__meta">订单号 #${esc(o.orderNo||o.id)} · ${esc(String(o.createdAt||'').slice(0,16))}</div>
-      <div class="me-camp__more">查看订单详情${o.redeemCode?' · 出示核销码':''} ›</div>
+      <div class="me-camp__more"><span>查看订单详情${o.redeemCode?' · 出示核销码':''} ›</span><button type="button" class="me-camp__delbtn" aria-label="删除订单" onclick="event.stopPropagation();meCampOrderDelete(${Number(o.id)},'${st}')">删除</button></div>
     </div></div>`;
   }).join('');
 }
@@ -794,9 +794,14 @@ document.addEventListener('touchend',function(){
 /* 展开态再点卡片任意处先收起，并且不能穿透进订单详情 */
 document.addEventListener('click',function(e){
   const w=e.target.closest&&e.target.closest('.me-camp-wrap.is-open');
-  if(!w||e.target.closest('.me-camp-del'))return;
+  if(!w)return;
+  const card=_meSwCard(w);
   w.classList.remove('is-open');
-  const card=_meSwCard(w);if(card)card.style.transform='translateX(0)';
+  if(card)card.style.transform='translateX(0)';
+  /* #868：捕获层过去对「展开态里的任意点击」一律 stopPropagation/preventDefault，
+     把新加的常驻「删除」小按钮也拦死了（点了没反应）。删除类按钮必须放行，
+     让它自己的 onclick 正常执行，这里只负责把展开态收起来。 */
+  if(e.target.closest('.me-camp-del,.me-camp__delbtn'))return;
   e.stopPropagation();e.preventDefault();
 },true);
 /* 兼容旧调用点：委托已常驻，无需逐卡片重绑 */

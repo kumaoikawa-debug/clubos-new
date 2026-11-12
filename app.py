@@ -4103,10 +4103,16 @@ def club_delete_benefit(club_id:int,benefit_id:int):
     return {'ok':True}
 
 def _coupon_scope_options(c, club_id=None):
-    """#860 建券表单「真实下拉」的唯一数据源：只列库里真实存在的业务对象。
-    设计约束（见 clubos-new-ui-change 技能 §8）：模型/前端都不许编造条目，
-    下拉里的每一项都必须能反查到一张真实表。任何一项查询失败就降级为空列表，
-    不让建券表单因为某张历史表结构不同而整个打不开。"""
+    """#869 建券下拉的唯一数据源，按**经营主体严格隔离**（用户 2026-11-12 明确要求）。
+
+    · 俱乐部 / 营地后台：只涉及活动、营地、营位、营地商品（小站 / 租赁 / 门票）、
+      俱乐部自建的活动分类 —— 绝不出现总平台管理的装备商品与商品分类。
+    · 总平台后台：只涉及装备商品与商品分类 —— 绝不出现任何具体活动 / 营地 / 营位。
+
+    旧版两端都返回同一份「全平台」数据，俱乐部建券的下拉里混进了「山峰收藏徽章」
+    等平台装备商品（用户截图实证）。这里从服务端掐断数据源，前端再怎么渲染都不会串。
+    下拉里的每一项都必须能反查到一张真实表；单表查询失败只降级为空列表。
+    """
     def q(sql,args,kind):
         try:
             return [{'id':int(r[0]),'name':str(r[1] or ''),'kind':kind,
@@ -4114,45 +4120,48 @@ def _coupon_scope_options(c, club_id=None):
                     for r in c.execute(sql,args).fetchall()]
         except Exception:
             return []
-    w='WHERE club_id=?' if club_id is not None else ''
-    a=(club_id,) if club_id is not None else ()
-    acts=q('SELECT id,title,NULL FROM activities '+w+' ORDER BY id DESC LIMIT 200',a,'activity')
-    camps=q('SELECT id,name,NULL FROM camp_profiles '+w+' ORDER BY id DESC LIMIT 100',a,'camp')
-    pitches=q("SELECT id,COALESCE(NULLIF(code,''),name),camp_id FROM camp_pitches "+w+
-              ' ORDER BY id DESC LIMIT 200',a,'pitch')
-    prods=q('SELECT id,name,category_id FROM products ORDER BY id DESC LIMIT 200',(),'product')
-    cats=q("SELECT id,name,parent_id FROM product_categories WHERE status='active' ORDER BY sort,id LIMIT 200",
-           (),'category')
-    # 营地小站 / 租赁 / 门票同样是「某一个单一商品」，必须进同一个下拉
-    for t,label,col in (('camp_store_products','营地小站','name'),
-                        ('camp_rental_items','装备租赁','name'),
-                        ('camp_activity_tickets','营地门票','title')):
-        try:
-            for r in c.execute('SELECT id,%s,NULL FROM %s %s ORDER BY id DESC LIMIT 60'%(col,t,w),a).fetchall():
-                prods.append({'id':int(r[0]),'name':label+' · '+str(r[1] or ''),
-                              'kind':'product','extra':None})
-        except Exception:
-            pass
     if club_id is not None:
-        try:
-            for r in c.execute('SELECT id,name,NULL FROM activity_categories WHERE club_id=? ORDER BY sort_order,id',
-                               (club_id,)).fetchall():
-                cats.append({'id':int(r[0]),'name':'活动分类 · '+str(r[1] or ''),
-                             'kind':'category','extra':None})
-        except Exception:
-            pass
-    return {'activities':acts,'camps':camps,'pitches':pitches,'products':prods,'categories':cats}
+        out={
+            'activities':q('SELECT id,title,NULL FROM activities WHERE club_id=? ORDER BY id DESC LIMIT 200',
+                           (club_id,),'activity'),
+            'camps':q('SELECT id,name,NULL FROM camp_profiles WHERE club_id=? ORDER BY id DESC LIMIT 100',
+                      (club_id,),'camp'),
+            'pitches':q("SELECT id,COALESCE(NULLIF(code,''),name),camp_id FROM camp_pitches "
+                        'WHERE club_id=? ORDER BY id DESC LIMIT 200',(club_id,),'pitch'),
+            # 这两个键刻意留空：products / product_categories 属于总平台，俱乐部不可见
+            'products':[],
+            'categories':[],
+        }
+        # 营地自己的「单一商品」：小站 / 租赁 / 门票（不是装备商城的商品）
+        for t,label,col in (('camp_store_products','营地小站','name'),
+                            ('camp_rental_items','装备租赁','name'),
+                            ('camp_activity_tickets','营地门票','title')):
+            try:
+                for r in c.execute('SELECT id,%s,NULL FROM %s WHERE club_id=? ORDER BY id DESC LIMIT 60'
+                                   %(col,t),(club_id,)).fetchall():
+                    out['products'].append({'id':int(r[0]),'name':label+' · '+str(r[1] or ''),
+                                            'kind':'camp_product','extra':None})
+            except Exception:
+                pass
+        out['categories']=q('SELECT id,name,NULL FROM activity_categories WHERE club_id=? ORDER BY sort_order,id',
+                            (club_id,),'activity_category')
+        return out
+    # 总平台：只给装备商品与装备分类
+    return {'activities':[],'camps':[],'pitches':[],
+            'products':q('SELECT id,name,category_id FROM products ORDER BY id DESC LIMIT 200',(),'product'),
+            'categories':q("SELECT id,name,parent_id FROM product_categories WHERE status='active' "
+                           'ORDER BY sort,id LIMIT 200',(),'category')}
 
 @app.get('/api/club/{club_id}/coupon-scope-options')
 def club_coupon_scope_options(club_id:int):
-    """俱乐部建券：全平台通用 / 指定活动 / 指定营地 / 指定营位 / 指定商品 / 指定分类。"""
+    """#869 俱乐部建券：只列活动 / 营地 / 营位 / 营地商品 / 活动分类，不含装备商品。"""
     club_or_404(club_id)
     with conn() as c:
         return _coupon_scope_options(c, club_id)
 
 @app.get('/api/platform/coupon-scope-options')
 def platform_coupon_scope_options():
-    """总平台装备券：与俱乐部端同一份下拉数据（全平台口径）。"""
+    """#869 总平台装备券：只列装备商品与商品分类，不含任何活动 / 营地对象。"""
     with conn() as c:
         return _coupon_scope_options(c, None)
 

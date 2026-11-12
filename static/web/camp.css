@@ -619,7 +619,18 @@ body.cp-lock{overflow:hidden}
 /* #821 详情层必须是真正的全屏层级：宿主一旦 isolation:isolate 就创建局部堆叠上下文，
    .cp-detail 的 z-index:70 会被关进 0 级，反被 .web-top(30)/.web-nav(40) 压住 →
    返回按钮与底部结算栏点不到。背景不透明由上面的 !important 规则保证。 */
-#cpIntroHost,#cpLvHost,.cp-lv-host{isolation:isolate}
+#cpLvHost,.cp-lv-host{isolation:isolate}
+/* #867 根因（用户 2026-11-12 手机截图）：#cpIntroHost 绝不能 isolation:isolate。
+   宿主一旦创建 0 级局部堆叠上下文，里面 .cp-intro 的 z-index:74 就被关进去，
+   反被 .web-top(30)/.web-nav(40) 压住 —— 顶部返回栏和底部「返回挑营位」整块
+   看不见也点不到，手机上就变成「进了详细介绍页回不去」。给宿主显式高层级。 */
+#cpIntroHost{position:relative;z-index:90}
+/* 右下角悬浮，避开顶部 .cp-lv__bar 的返回按钮与底部「返回挑营位」，
+   否则两个返回入口叠在同一块 38px 区域里会互相挡住点击。 */
+.cp-intro__floatback{position:absolute;right:16px;bottom:calc(84px + env(safe-area-inset-bottom));z-index:5;
+  width:38px;height:38px;display:grid;place-items:center;border:0;border-radius:50%;
+  background:rgba(8,22,14,.55);color:#fff;cursor:pointer;-webkit-backdrop-filter:blur(6px);backdrop-filter:blur(6px)}
+.cp-intro__floatback svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
 
 /* ══ #837 订单左滑删除 ══ */
 .cp-order-wrap{position:relative;overflow:hidden;border-radius:16px}
@@ -630,3 +641,9 @@ body.cp-lock{overflow:hidden}
 /* #821 所有订单卡片都要压住底层删除按钮 */
 .cp-order{position:relative;z-index:1;transition:transform .18s ease;touch-action:pan-y;will-change:transform}
 .cp-order--swipe{position:relative;transition:transform .18s ease;touch-action:pan-y;will-change:transform}
+/* #868 删除入口常驻可见，左滑红色按钮仍然保留 */
+.cp-order__foot{display:flex;justify-content:flex-end;margin-top:8px;padding-top:8px;
+  border-top:1px dashed var(--cp-line,#e6e9e4)}
+.cp-order__delbtn{border:1px solid #f0d3d4;background:#fff;color:#c0393f;border-radius:999px;
+  padding:4px 12px;font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit;line-height:1.6}
+.cp-order__delbtn:active{background:#fdecec}

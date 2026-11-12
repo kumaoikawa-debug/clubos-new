@@ -761,6 +761,10 @@ function _paintIntro(){
   const rules=_introRules(c,ai);
   const hasAi=!!(ai.sections&&ai.sections.length);
   const html='<div class="cp-intro" id="cpIntro">'
+    /* #867：除顶部返回栏外，再给一个压在头图上的悬浮返回点。手机上头图占满首屏，
+       用户不必先滚回顶部找返回；两个入口都走 campCloseIntro()。 */
+    + '<button class="cp-intro__floatback" type="button" aria-label="返回" onclick="campCloseIntro()">'
+      + '<svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg></button>'
     + '<div class="cp-lv__bar"><button class="cp-lv__back" type="button" onclick="campCloseIntro()">'+CP_ICON.back+'</button>'
       + '<span class="cp-lv__title">营地介绍</span><span class="cp-intro__barspace"></span></div>'
     + '<div class="cp-intro__scroll">'
@@ -1235,6 +1239,8 @@ function _ordersHtml(orders){
            +'<div class="cp-order__rc">核销码 <b>'+esc(o.redeemCode)+'</b><em>到营地出示此码，工作人员扫码核销</em></div>')
         +'</div>':'')
       +(st==='paid'?'<div class="cp-order__earn">已获得 '+Number(o.pointsEarned||0)+' 活动积分</div>':'')
+      /* #868 显式删除入口：不要求顾客必须知道「左滑」这个隐藏手势。 */
+      +'<div class="cp-order__foot"><button type="button" class="cp-order__delbtn" onclick="campDeleteOrder('+o.id+',\''+st+'\')">删除订单</button></div>'
       +'</div></div>';
   }).join('')+'</div>';
 }
@@ -1261,9 +1267,12 @@ document.addEventListener('touchend',function(){
 },{passive:true});
 document.addEventListener('click',function(e){
   const w=e.target.closest&&e.target.closest('.cp-order-wrap.is-open');
-  if(!w||e.target.closest('.cp-order-del'))return;
+  if(!w)return;
+  const card=_cpSwCard(w);
   w.classList.remove('is-open');
-  const card=_cpSwCard(w);if(card)card.style.transform='translateX(0)';
+  if(card)card.style.transform='translateX(0)';
+  /* #868 同 me.js：常驻「删除订单」按钮不能被展开态的捕获层吞掉 */
+  if(e.target.closest('.cp-order-del,.cp-order__delbtn'))return;
   e.stopPropagation();e.preventDefault();
 },true);
 /* 兼容旧调用点 */

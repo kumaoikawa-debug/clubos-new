@@ -1110,20 +1110,35 @@ function caRenderUnits(){
     + '</div>'
     + '<div class="ca-units__tip">改派须知：目标编号需在区间内空闲；保存后立即生效并同步房态。系统自动分配的预订也可以在这里人工调整。</div>';
 }
-window.caReassign=function(){
+window.caReassign=function(code){
   const cur=CA_UNITS&&CA_UNITS.units?CA_UNITS.units:[];
-  const busyOne=cur.find(u=>u.busyDays&&u.busyDays.length);
-  if(!busyOne){toast('当前区间没有可改派的预订');return;}
+  /* #866：列表每一行都传了自己被点的单元号。旧实现忽略参数、永远改派「第一个忙碌单元」，
+     点第 7 行也会去改第 1 行的预订 —— 老板会以为改派没生效。 */
+  const unit=code?cur.find(u=>u.code===code):null;
+  const busyOne=(unit&&unit.busyDays&&unit.busyDays.length)?unit:cur.find(u=>u.busyDays&&u.busyDays.length);
+  if(!busyOne||!busyOne.busyDays.length){toast('该单元当前没有可改派的预订');return;}
   const bid=busyOne.busyDays[0].bookingId;
-  const existing=cur.filter(u=>u.busyDays&&u.busyDays.length).map(u=>u.code).join(',');
-  uxForm({title:'人工改派',subtitle:'输入当前占用编号对应的新编号（逗号分隔，数量需一致）。目标编号必须在区间内空闲。',
-    fields:[{name:'units',label:'新编号（逗号分隔）',value:existing,required:true}],submitText:'确认改派'})
+  /* 同一张预订可能占多个单元。后端按 qty 校验数量，所以 existing 必须是
+     「这张预订占用的全部编号」，而不是「所有忙碌单元的编号」。 */
+  const owned=cur.filter(u=>(u.busyDays||[]).some(b=>String(b.bookingId)===String(bid))).map(u=>u.code);
+  const existing=owned.join(',');
+  uxForm({title:'人工改派',subtitle:'把预订 '+(bid?('#'+bid):'')+' 占用的单元改为新编号（逗号分隔，数量需与原来一致；留空 = 恢复系统自动分配）。',
+    fields:[{name:'units',label:'新编号（逗号分隔）',value:existing,full:true}],submitText:'确认改派'})
   .then(async d=>{
-    if(!d||!d.units)return;
-    const units=String(d.units).split(/[，,]/).map(s=>s.trim()).filter(Boolean);
+    if(!d)return;
+    const units=String(d.units||'').split(/[，,\s]+/).map(s=>s.trim()).filter(Boolean);
+    if(units.length&&owned.length&&units.length!==owned.length){
+      showAlert({title:'改派失败',message:'这张预订占用 '+owned.length+' 个单元，请填 '+owned.length+' 个新编号（当前 '+units.length+' 个）；留空则恢复自动分配。'});
+      return;
+    }
     try{
-      await api(`/api/club/${CLUB}/camp-bookings/${bid}/assign`,{method:'PATCH',body:JSON.stringify({units})});
-      toast('已改派');
+      /* #866 根因：fetch 的 body 是字符串时默认 Content-Type=text/plain，
+         FastAPI 的 `payload:dict=Body(...)` 收到纯文本 → 422
+         "Input should be a valid dictionary" → shared.js 翻成「格式不正确」。
+         本文件其它写请求都带这个 header，唯独改派漏了。 */
+      await api(`/api/club/${CLUB}/camp-bookings/${bid}/assign`,
+        {method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({units})});
+      toast(units.length?'已改派':'已恢复系统自动分配');
       const d0=(CA_START||''),d1=(CA_END||'');
       CA_UNITS=await api(`/api/club/${CLUB}/pitches/${window._CA_UNITS_PITCH}/units?check_in=${encodeURIComponent(d0)}&check_out=${encodeURIComponent(d1)}`,{cache:'no-store'});
       caRenderUnits();
