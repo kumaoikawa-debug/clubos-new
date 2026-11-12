@@ -2276,3 +2276,13 @@ CREATE TABLE IF NOT EXISTS invite_records (
   FOREIGN KEY(club_id) REFERENCES clubs(id)
 );
 CREATE INDEX IF NOT EXISTS idx_invite_records_club ON invite_records(club_id, created_at DESC);
+
+-- #877 C 端「删除订单」软隐藏：只影响该用户的 C 端列表，后台 / 财务 / 核销数据完全不动。
+-- 与营地订单 status='deleted' 的软删不同，这里按用户维度隔离且可通过 DELETE 恢复。
+CREATE TABLE IF NOT EXISTS user_hidden_orders (
+  user_id INTEGER NOT NULL,
+  order_kind TEXT NOT NULL DEFAULT 'activity',
+  order_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(user_id,order_kind,order_id)
+);

@@ -336,7 +336,50 @@ function mediaHtml(ref,map,cls=''){const x=map[ref];if(!x?.url)return `<div clas
    <image>（preserveAspectRatio="xMidYMid slice" ≈ object-fit:cover），否则退回
    普通 <img>。svg 必须带 w-cropimg 类 —— 各容器的裸 svg 选择器是占位图标的样式
    （44px/26px 描边袋图标），不挂类会被它打回原形（见 web.css）。 */
+/* ── #877 商品图「坏链不空白」兜底（2026-11-13 全面测试 P1）────────────────
+   线上 14 个装备商品的图片字段外链到受 sharecode 保护的上游站点，抽测全部 403；
+   prodImgHtml 又把它渲染成 SVG <image>（没有失败处理），商城 10 张主视觉全空白
+   并产生 10 个未处理 error 事件。修法两层：
+   ① 已确认不可达的外链域名直接降级到本站内置占位图（连请求都不发，error 归零）；
+   ② document 捕获阶段统一兜底任意 <img> / SVG <image> 的加载失败，
+      覆盖 web.js 里那些直接 esc(u) 拼 <img>、不经过 prodImgHtml 的调用点。
+   占位图是极简深绿山脊，无文字堆砌、无装饰边框，与整站视觉一致。 */
+window.WIMG_PLACEHOLDER='/static/web/gear-placeholder.svg?v=20261113a';
+window.WIMG_BAD_HOSTS=/peaktrace-h5\.app\.workbuddy\.host/i;
+window.wImgSrc=function(src){
+  const s=String(src||'').trim();
+  if(!s)return '';
+  if(/^(data:|blob:|\/|\.{1,2}\/)/i.test(s))return s;
+  if(/^https?:/i.test(s)){
+    try{
+      const u=new URL(s,location.href);
+      if(u.host===location.host)return s;
+      if(window.WIMG_BAD_HOSTS.test(u.host))return window.WIMG_PLACEHOLDER;
+    }catch(e){return window.WIMG_PLACEHOLDER}
+  }
+  return s;
+};
+(function(){
+  if(window.__wImgFallbackBound)return;window.__wImgFallbackBound=true;
+  document.addEventListener('error',function(e){
+    const t=e.target;
+    if(!t||!/^(IMG|IMAGE)$/i.test(t.tagName||''))return;
+    if(t.getAttribute&&t.getAttribute('data-wimg-fb'))return;
+    const ph=window.WIMG_PLACEHOLDER;
+    try{t.setAttribute('data-wimg-fb','1')}catch(_){}
+    if(String(t.tagName).toUpperCase()==='IMAGE'){
+      try{
+        t.setAttribute('href',ph);
+        t.setAttributeNS('http://www.w3.org/1999/xlink','xlink:href',ph);
+        if(t.ownerSVGElement)t.ownerSVGElement.setAttribute('preserveAspectRatio','xMidYMid meet');
+      }catch(_){}
+    }else{
+      t.src=ph;if(t.classList)t.classList.add('w-img-fallback');
+    }
+  },true);
+})();
 window.prodImgHtml=function(src,view,cls='',alt=''){
+  src=window.wImgSrc(src);
   if(!src)return '';
   let v=view;
   if(typeof v==='string'){try{v=JSON.parse(v)}catch(e){v=null}}

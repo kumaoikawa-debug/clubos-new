@@ -127,19 +127,24 @@ function couponProductOpts(o){
     ...mk(o.activities,'activity','指定活动'),
     ...mk(o.camps,'camp','指定营地'),
     ...mk(o.pitches,'pitch','指定营位'),
-    ...mk(o.products,'product','指定营地商品'),
-    ...mk(o.categories,'category','指定活动分类')];
+    ...mk(o.products,'camp_product','指定营地商品'),
+    ...mk(o.categories,'activity_category','指定活动分类')];
 }
 function couponScopeValue(b){
   if(!b)return '';
-  if(b.scope_ref_kind&&b.scope_ref_id)return b.scope_ref_kind+':'+b.scope_ref_id;
+  if(b.scope_ref_kind&&b.scope_ref_id){
+    /* #877 存量券的旧 kind 映射到带主体的新 kind，编辑时仍能正确回显 */
+    const k=({product:'camp_product',category:'activity_category'})[b.scope_ref_kind]||b.scope_ref_kind;
+    return k+':'+b.scope_ref_id;
+  }
   return '';
 }
 function couponScopeParse(v){
   const s=String(v||'');
   if(!s||s.indexOf(':')<0)return {scopeRefKind:'',scopeRefId:null};
   const p=s.split(':'),k=p[0],id=Number(p[1])||null;
-  const allowed={activity:'activity',camp:'camp',pitch:'pitch',product:'product',category:'category'};
+  const allowed={activity:'activity',camp:'camp',pitch:'pitch',
+    camp_product:'camp_product',activity_category:'activity_category'};
   if(!id||!allowed[k])return {scopeRefKind:'',scopeRefId:null};
   return {scopeRefKind:allowed[k],scopeRefId:id};
 }
@@ -231,9 +236,9 @@ function couponCommonFields(o,d={},extra=[]){
       validate:(v,data)=>{
         if(!v)return '';
         const k=String(v).split(':')[0], ap=data.appliesTo||'all';
-        if(ap==='activity'&&['camp','pitch','product'].indexOf(k)>=0)
+        if(ap==='activity'&&['camp','pitch','camp_product'].indexOf(k)>=0)
           return '「仅限活动报名」的券不能指定营地 / 营位 / 营地商品，请改选活动或清空具体产品';
-        if(ap==='camp'&&['activity','category'].indexOf(k)>=0)
+        if(ap==='camp'&&['activity','activity_category'].indexOf(k)>=0)
           return '「仅限营地消费」的券不能指定活动 / 活动分类，请改选营地对象或清空具体产品';
         return '';
       }},
@@ -296,7 +301,8 @@ window.couponDetail=async id=>{
   const b=(window._clubBenefits||[]).find(x=>Number(x.id)===Number(id));
   if(!b){showAlert({title:'读取失败',message:'请重新打开「俱乐部营销」再试'});return;}
   const scopeCn=({all:'活动 + 营地通用',activity:'仅限活动报名',camp:'仅限营地消费',product:'指定商品',category:'指定分类'})[b.applies_to]||b.applies_to;
-  const kindCn=({activity:'活动',camp:'营地',pitch:'营位',product:'商品',category:'商品分类'})[b.scope_ref_kind]||'';
+  const kindCn=({activity:'活动',camp:'营地',pitch:'营位',product:'商品',category:'商品分类',
+    camp_product:'营地商品',activity_category:'活动分类'})[b.scope_ref_kind]||'';
   const audienceCn=({all:'所有人（会员 + 非会员）',member:'仅会员',non_member:'仅非会员',new_user:'仅新用户'})[b.claim_audience]||'所有人';
   const validCn=b.validity_type==='relative'?('领券后 '+(b.valid_days||0)+' 天内可用'):couponValidCn(b);
   const rows=[

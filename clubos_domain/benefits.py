@@ -53,6 +53,105 @@ class BenefitEngine:
             return True
         return False
 
+    # ── #877 券「具体产品」的经营主体归属硬校验（2026-11-13 全面测试 P1）──────
+    # 背景：#869 只把建券**下拉**做了主体隔离。测试实测 POST /api/club/1/benefits
+    # 直调传 scopeRefKind=product + 平台装备商品 ID，仍返回 200 并落库
+    # owner_type=CLUB / scope_ref_kind=product —— 俱乐部券由此可引用总平台装备商品。
+    # 用户明确要求「俱乐部/营地后台只涉及活动、营地；总平台只管装备产品」，
+    # 所以隔离必须落到持久化层，而不是只靠前端下拉。
+    # 数据源口径与 app.py::_coupon_scope_options 完全同源：每项都要反查真实表。
+    # #877：俱乐部与总平台的分类/商品 ID 空间完全重叠（实测两边都是 1、2、3…），
+    # 光靠「查哪张表」永远分不清调用者想引用谁。故 kind 本身必须带主体：
+    #   俱乐部 → camp_product / activity_category；总平台 → product / category。
+    # 旧 kind（product/category）只允许存量券在 PATCH 时按新语义兼容解释。
+    _CLUB_SCOPE_TABLES = {
+        'activity': ('activities',),
+        'camp': ('camp_profiles',),
+        'pitch': ('camp_pitches',),
+        # 俱乐部端的「商品」是营地小站 / 租赁 / 门票，绝非总平台 products 表
+        'camp_product': ('camp_store_products', 'camp_rental_items', 'camp_activity_tickets'),
+        # 俱乐部端的「分类」是活动分类，绝非总平台 product_categories 表
+        'activity_category': ('activity_categories',),
+    }
+    _PLATFORM_SCOPE_TABLES = {
+        'product': ('products',),
+        'category': ('product_categories',),
+    }
+
+    @classmethod
+    def validate_scope(cls, c, *, owner_type:str, owner_club_id, data:dict,
+                       allow_legacy_kinds:bool=False):
+        '''校验券的适用范围对象归属；data 兼容「新建 payload 驼峰」与「PATCH 合并行列名」。
+        allow_legacy_kinds 只给 PATCH 用：存量券的旧 kind 按新语义解释，不至于连改标题都失败。
+        不指定具体对象（scope_ref_id 为空）时直接放行 —— 用户明确要求非必选。'''
+        def pick(snake, camel):
+            v = data.get(snake)
+            return v if v not in (None, '', 0, '0') else data.get(camel, v)
+        owner = str(owner_type or '').upper()
+        is_club = owner == 'CLUB'
+        tables = cls._CLUB_SCOPE_TABLES if is_club else cls._PLATFORM_SCOPE_TABLES
+        if is_club and str(pick('benefit_type','benefitType') or '') == 'gear_coupon':
+            raise ValueError('俱乐部不能创建装备商城抵扣券；装备商品由总平台统一经营')
+        if not is_club and str(pick('applies_to','appliesTo') or '').strip().lower() == 'camp':
+            raise ValueError('总平台券不涉及具体营地消费范围')
+        kind = str(pick('scope_ref_kind','scopeRefKind') or '').strip().lower()
+        # #877 新建严格 / PATCH 兼容：俱乐部端旧 kind 与平台装备分类 ID 完全重叠，
+        # 新建一律要求使用明确的活动 / 营地对象类型；存量券编辑时按新 kind 解释。
+        if is_club and kind in ('product','category'):
+            if not allow_legacy_kinds:
+                raise ValueError('俱乐部券请使用活动 / 营地对象类型；装备商品与分类由总平台管理')
+            kind = 'camp_product' if kind == 'product' else 'activity_category'
+        raw_id = pick('scope_ref_id','scopeRefId')
+        try:
+            ref_id = int(raw_id) if raw_id not in (None, '', 0, '0') else None
+        except (TypeError, ValueError):
+            ref_id = None
+        if ref_id and kind:
+            if kind not in tables:
+                hint = ('装备商品由总平台管理，请只选本俱乐部的活动 / 营地对象' if is_club
+                        else '总平台券不涉及具体活动 / 营地对象，请只选装备商品或装备分类')
+                raise ValueError('券的具体产品类型不合法：%s（%s）' % (kind, hint))
+            found = False
+            for t in tables[kind]:
+                try:
+                    sql = 'SELECT 1 FROM %s WHERE id=?' % t
+                    args = [ref_id]
+                    if is_club:
+                        sql += ' AND club_id=?'
+                        args.append(owner_club_id)
+                    if c.execute(sql, args).fetchone():
+                        found = True
+                        break
+                except Exception:
+                    continue
+            if not found:
+                hint = ('装备商品与分类由总平台管理，请只选本俱乐部的活动 / 营地对象' if is_club
+                        else '请只选总平台的装备商品或装备分类')
+                raise ValueError('所选具体产品不存在或不属于当前经营主体（%s）' % hint)
+        # 多营地适用：平台端彻底禁用；俱乐部端每个 id 必须是自己的营地
+        camp_scope = str(pick('camp_scope','campScope') or 'all').strip().lower()
+        ids = pick('camp_scope_ids','campScopeIds')
+        if isinstance(ids, str):
+            try: ids = json.loads(ids)
+            except Exception: ids = []
+        if not isinstance(ids, (list, tuple)): ids = []
+        clean_ids = []
+        for x in ids:
+            try: clean_ids.append(int(x))
+            except (TypeError, ValueError): pass
+        if not is_club:
+            if camp_scope != 'all' or clean_ids:
+                raise ValueError('总平台券不支持多营地适用范围；平台只管装备商品')
+        elif clean_ids:
+            for cid in clean_ids:
+                try:
+                    hit = c.execute('SELECT 1 FROM camp_profiles WHERE id=? AND club_id=?',
+                                    (cid, owner_club_id)).fetchone()
+                except Exception:
+                    hit = None
+                if not hit:
+                    raise ValueError('所选营地不存在或不属于本俱乐部')
+
     def create_club_benefit(self, c, *, club_id:int, payload:dict[str,Any]) -> int:
         if str(payload.get('pointsType') or 'club').lower() != 'club':
             raise ValueError('俱乐部福利只能使用活动积分兑换')
@@ -183,7 +282,8 @@ class BenefitEngine:
         selected_product=str(payload.get('selectedProduct') or '').strip() or None
         # ── #860 真实适用范围：下拉选出来的必须是库里真实存在的对象 ID ──────────────
         scope_ref_kind=str(payload.get('scopeRefKind') or '').strip().lower()
-        if scope_ref_kind not in ('','activity','camp','pitch','product','category'):
+        # #877 保留旧 kind 原值交给 validate_scope 抛明确错误，不再静默归一成「不指定」
+        if scope_ref_kind not in ('','activity','camp','pitch','camp_product','activity_category','product','category'):
             scope_ref_kind=''
         _srid=payload.get('scopeRefId')
         scope_ref_id=None
@@ -225,6 +325,11 @@ class BenefitEngine:
         per_user_daily_limit=max(0,int(payload.get('perUserDailyLimit') or 0))
         _nu=payload.get('newUserOnly')
         new_user_only=1 if (_nu in (True,1,'1','true','是','yes') or claim_audience=='new_user') else 0
+        # #877 所有创建入口（club/platform benefits、platform coupons）的最后一道主体闸门
+        self.validate_scope(c, owner_type=owner_type, owner_club_id=owner_club_id,
+                            data={'scope_ref_kind':scope_ref_kind,'scope_ref_id':scope_ref_id,
+                                  'camp_scope':camp_scope,'camp_scope_ids':camp_scope_ids,
+                                  'benefit_type':benefit_type,'applies_to':applies_to})
         c.execute('''INSERT INTO member_benefits(owner_type,owner_club_id,target_club_id,title,description,
                      benefit_type,applies_to,points_type,points_cost,cash_value,stock,status,rules_json,
                      mode,discount_percent,threshold_amount,image_key,valid_from,valid_to,claim_mode,
@@ -247,12 +352,20 @@ class BenefitEngine:
             claim_audience,per_user_daily_limit,new_user_only))
         return int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
 
-    def list_for_club(self,c,*,club_id:int,include_inactive:bool=False)->list[dict[str,Any]]:
+    def list_for_club(self,c,*,club_id:int,include_inactive:bool=False,include_platform:bool=True)->list[dict[str,Any]]:
+        '''#877 include_platform=False：后台券中心只列本俱乐部自己发的券。
+        平台券虽然可以投放给本俱乐部会员（C 端领券中心仍需看到），但经营者在这里
+        既不能编辑也不能下架它们（PATCH/DELETE 本就按 owner 拦截），混排只会误导。'''
         status_clause='' if include_inactive else "AND status='active'"
-        q=f'''SELECT * FROM member_benefits
-              WHERE ((owner_type='CLUB' AND owner_club_id=?) OR (owner_type='PLATFORM' AND (target_club_id IS NULL OR target_club_id=?)))
+        if include_platform:
+            where="((owner_type='CLUB' AND owner_club_id=?) OR (owner_type='PLATFORM' AND (target_club_id IS NULL OR target_club_id=?)))"
+            args=(club_id,club_id)
+        else:
+            where="owner_type='CLUB' AND owner_club_id=?"
+            args=(club_id,)
+        q=f'''SELECT * FROM member_benefits WHERE {where}
               {status_clause} ORDER BY owner_type,id DESC'''
-        return [dict(r) for r in c.execute(q,(club_id,club_id)).fetchall()]
+        return [dict(r) for r in c.execute(q,args).fetchall()]
 
     def redeem(self,c,*,benefit_id:int,user_id:int,display_club_id:int)->dict[str,Any]:
         benefit=c.execute('SELECT * FROM member_benefits WHERE id=? AND status="active"',(benefit_id,)).fetchone()
@@ -366,8 +479,9 @@ class BenefitEngine:
         if rk=='activity':  return rid in (self._scope_ids(ctx,'activityIds')|self._scope_ids(ctx,'activityId'))
         if rk=='camp':      return rid in (self._scope_ids(ctx,'campIds')|self._scope_ids(ctx,'campId'))
         if rk=='pitch':     return rid in self._scope_ids(ctx,'pitchIds')
-        if rk=='product':   return rid in self._scope_ids(ctx,'productIds')
-        if rk=='category':  return rid in self._scope_ids(ctx,'categoryIds')
+        # #877 俱乐部对象（kind 带主体，与平台装备商品/分类彻底分开）
+        if rk in ('camp_product','product'): return rid in self._scope_ids(ctx,'productIds')
+        if rk in ('activity_category','category'): return rid in self._scope_ids(ctx,'categoryIds')
         return True
 
     def eligible_vouchers(self,c,*,user_id:int,club_id:int,kind:str,context:dict|None=None)->list[dict[str,Any]]:
@@ -388,6 +502,10 @@ class BenefitEngine:
         out=[]
         for rr in rows:
             x=dict(rr)
+            # #877 经营主体硬边界（核销层）：俱乐部/营地后台发的券绝不参与装备订单结算。
+            # 上面已按 benefit_type 过滤，这里再按 owner 兜一层 —— 即便未来新增券种、
+            # 或历史脏数据混进 gear_coupon，也不会让俱乐部券影响到总平台统一经营的装备商品。
+            if kind=='gear' and str(x.get('owner_type') or '').upper()=='CLUB': continue
             # #860 相对效期：优先用「这张券实发时算出来的日期」，没有才回落到模板日期。
             x['valid_from']=x.get('issued_valid_from') or x.get('benefit_valid_from')
             x['valid_to']=x.get('issued_valid_to') or x.get('benefit_valid_to')

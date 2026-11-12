@@ -673,7 +673,10 @@ function meActivityOrdersHtml(){
       act = rq&&rq.eligible?`<button class="me-btn me-btn--danger" onclick="requestActivityRefund(${o.id},${rq.cashRefundAmount||0},${rq.cashRefundPercent||0})">申请退款</button>`:`<span class="me-note">当前不可退款${rq&&rq.reason?' · '+esc(rq.reason):''}</span>`;
     }
     const pax=ps.map(p=>`<div class="me-pax"><b>${esc(p.name)}</b>${p.status==='refunded'?meBadge('已退出','off'):''}<span>${esc(p.phone||'')}</span></div>`).join('');
-    return `<div class="me-card2">
+    /* #877 与营地订单卡同口径：包左滑容器 + 常驻删除按钮（用户反馈「左滑没有删除选项」的残留部分） */
+    return `<div class="me-camp-wrap">
+      <div class="me-camp-del" onclick="event.stopPropagation();meActivityOrderDelete(${Number(o.id)})">删除</div>
+      <div class="me-card2 me-camp">
       <div class="me-card2__hd"><b>${esc(o.activity_title||'活动')}</b>${meBadge(meOrderSt(o.status,'activity'),meOrderTone(o.status,'activity'))}</div>
       <div class="me-card2__meta">${esc(o.occurrence_label||o.start_at||'团期待定')} · ${o.participantCount||ps.length} 人</div>
       <div class="me-card2__amt">实付 <b>${money(o.amount||0)}</b></div>
@@ -682,7 +685,8 @@ function meActivityOrdersHtml(){
       ${pax?`<div class="me-paxs">${pax}</div>`:''}
       <div class="me-card2__ref">退款：${esc((typeof refundStateText==='function')?refundStateText(o):'')}</div>
       ${act?`<div class="me-card2__ops">${act}</div>`:''}
-    </div>`;
+      <div class="me-camp__more"><span></span><button type="button" class="me-camp__delbtn" aria-label="删除订单" onclick="event.stopPropagation();meActivityOrderDelete(${Number(o.id)})">删除</button></div>
+    </div></div>`;
   }).join('');
 }
 /* ── #829 营地订单「已读」与红点 ───────────────────────────────────────────
@@ -772,7 +776,7 @@ function meCampOrdersHtml(list){
 /* #821 左滑删除改为 document 级事件委托：列表多次重渲染也不用手势重绑。
    删除按钮默认由 CSS 藏在右侧外面，只有按住左滑越过 36px 才吸附展开。 */
 let _meSw={x:0,dx:0,wrap:null};
-function _meSwCard(w){return w?w.querySelector('.me-card2.me-camp'):null;}
+function _meSwCard(w){return w?w.querySelector('.me-card2'):null;}
 document.addEventListener('touchstart',function(e){
   const w=e.target.closest&&e.target.closest('.me-camp-wrap');
   if(!w)return;
@@ -821,6 +825,25 @@ async function meCampOrderDelete(oid,st){
   }catch(e){showAlert({title:'删除失败',message:e.message||'请重试'});}
 }
 window.meCampOrderDelete=meCampOrderDelete;
+
+/* #877 活动订单删除＝对本用户「软隐藏」。后端只写 user_hidden_orders，
+   registrations 一行不动（后台报名汇总 / 积分 / 退款 / 核销记录完整保留），
+   刷新后由 order-center 继续过滤；DELETE 同端点可恢复。 */
+async function meActivityOrderDelete(oid){
+  const ok=await uxConfirm({title:'删除订单',message:'删除后这条记录不再显示，报名与支付记录仍完整保留。确定删除？',confirmText:'删除',danger:true});
+  if(!ok)return;
+  try{
+    const uid=(typeof USER!=='undefined'&&USER)||0;
+    await api('/api/public/users/'+uid+'/hidden-orders',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({orderKind:'activity',orderId:Number(oid)}),cache:'no-store'});
+    if(ME.oc&&Array.isArray(ME.oc.activityOrders))
+      ME.oc.activityOrders=ME.oc.activityOrders.filter(x=>Number(x.id)!==Number(oid));
+    toast('订单已删除');
+    try{renderMeSub();}catch(e){}
+  }catch(e){showAlert({title:'删除失败',message:e.message||'请重试'});}
+}
+window.meActivityOrderDelete=meActivityOrderDelete;
 /* ── #829 营地订单详情（订单信息 + 便于核销的二维码）─────────────────────
    原来只有一张列表卡：顾客看到「已支付 · 待出行」却不知道订单号、住了几晚、
    押金多少、码长什么样，到营地只能靠报手机号。这里点开订单 → 独立详情层，

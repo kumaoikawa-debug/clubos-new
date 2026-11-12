@@ -1172,7 +1172,8 @@ window.cpnSwitch=tab=>{
 /* ── 券中心（#860）：券与积分解耦，列表列同步去掉「门店 / 就餐 / 微信投放」等餐饮语义 ── */
 function couponScopeCn(x){
   const base=({all:'活动 + 营地通用',activity:'仅限活动报名',camp:'仅限营地消费',product:'指定商品',category:'指定分类'})[x.applies_to]||'活动 + 营地通用';
-  const k=({activity:'活动',camp:'营地',pitch:'营位',product:'商品',category:'分类'})[x.scope_ref_kind]||'';
+  const k=({activity:'活动',camp:'营地',pitch:'营位',product:'商品',category:'分类',
+    camp_product:'营地商品',activity_category:'活动分类'})[x.scope_ref_kind]||'';
   return k&&x.scope_ref_id?(base+' · #'+x.scope_ref_id):base;
 }
 function couponStoreCn(x){return couponScopeCn(x||{});}   /* 兼容历史调用点，语义已换成适用范围 */

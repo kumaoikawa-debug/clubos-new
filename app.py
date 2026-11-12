@@ -4042,8 +4042,10 @@ def club_gear_discount(club_id:int):
 
 @app.get('/api/club/{club_id}/benefits')
 def club_benefits(club_id:int):
+    '''#877 后台券中心只列本俱乐部自己发的券；平台券可投放给本俱乐部会员，
+    但经营者在这里既不能编辑也不能下架（PATCH/DELETE 按 owner 拦截），混排只会误导。'''
     club_or_404(club_id)
-    with conn() as c:return benefit_engine.list_for_club(c,club_id=club_id,include_inactive=True)
+    with conn() as c:return benefit_engine.list_for_club(c,club_id=club_id,include_inactive=True,include_platform=False)
 
 @app.post('/api/club/{club_id}/benefits')
 def club_add_benefit(club_id:int,payload:dict=Body(...)):
@@ -4086,7 +4088,13 @@ def club_update_benefit(club_id:int,benefit_id:int,payload:dict=Body(...)):
         b=row(c.execute("SELECT * FROM member_benefits WHERE id=? AND owner_type='CLUB' AND owner_club_id=?",(benefit_id,club_id)))
         if not b: raise HTTPException(404,'优惠券不存在或不属于本俱乐部')
         # #860：合并态校验，防止写出「relative 效期却没天数」的永不过期券
-        _validate_coupon_patch(dict(b,**merged_patch))
+        merged=dict(b,**merged_patch)
+        _validate_coupon_patch(merged)
+        # #877 主体归属闸门：PATCH 同样能把券改成「指向平台装备商品」，与 POST 同口径。
+        # 只在本次确实改了适用范围字段时才校验，避免历史脏券连「改个标题」都做不了。
+        if any(k in merged_patch for k in ('scope_ref_kind','scope_ref_id','camp_scope','camp_scope_ids','applies_to','benefit_type')):
+            try: benefit_engine.validate_scope(c,owner_type='CLUB',owner_club_id=club_id,data=merged,allow_legacy_kinds=True)
+            except ValueError as e: raise HTTPException(400,str(e))
         vals.append(benefit_id)
         c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?",vals)
     return {'ok':True}
@@ -6008,7 +6016,11 @@ def _public_price_pending(c, activity_id:int, master:dict|None=None) -> bool:
     没有对外售价时正确做法是**不报价、不可下单**，而不是拿成本价兜底。
     """
     if master is None:
-        master = jload(row(c.execute('SELECT activity_master_json FROM activities WHERE id=?',(activity_id,)))['activity_master_json'],{}) or {}
+        # #877 全面测试 P2：活动不存在时 row() 返回 None，旧代码直接取下标 → 500。
+        # 保守判定为「不可报价」；调用方另抛 404，绝不让公开接口崩成 5xx。
+        _a = row(c.execute('SELECT activity_master_json FROM activities WHERE id=?',(activity_id,)))
+        if _a is None: return True
+        master = jload(_a['activity_master_json'],{}) or {}
     if (master.get('priceFrom') or '') == 'priced':
         return False                      # 俱乐部已明确定价 → 正常卖
     return master_has_cost_evidence(master) or (master.get('priceFrom') == 'pending')
@@ -6018,6 +6030,9 @@ def _public_price_pending(c, activity_id:int, master:dict|None=None) -> bool:
 def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_points:int=0,gear_points:int=0,voucher_codes:str='',participant_count:int=1):
     codes=[x.strip() for x in str(voucher_codes or '').split(',') if x.strip()]
     with conn() as c:
+        # #877：活动不存在直接 404，别把不存在的 ID 交给下游报价引擎。
+        if not row(c.execute('SELECT id FROM activities WHERE id=?',(activity_id,))):
+            raise HTTPException(404,'活动不存在')
         # 成本闸门：没有对外售价就不报价。宁可让顾客看到「价格待定，请联系俱乐部」，
         # 也绝不能把成本底价当成售价报出去（这条链路不经过展示层清洗）。
         if _public_price_pending(c, activity_id):
@@ -7126,6 +7141,39 @@ def _return_window_state(order: dict, ef: dict | None):
         return (limit,None)
 
 
+# ---- #877 C 端「删除活动订单」＝对该用户软隐藏 --------------------------------
+# 全面测试 P3：营地订单卡有常驻删除 + 左滑，活动订单卡两者都没有。
+# 这里刻意**不改 registrations.status**（那会牵动后台报名汇总 / 积分 / 退款 / 核销），
+# 只写一张按用户维度的隐藏表：C 端列表过滤掉，后台与财务数据一行不动，且可恢复。
+@app.get('/api/public/users/{user_id}/hidden-orders')
+def user_hidden_orders(user_id:int):
+    with conn() as c:
+        return {'ok':True,'items':[{'orderKind':r['order_kind'],'orderId':int(r['order_id'])}
+                for r in rows(c.execute('SELECT order_kind,order_id FROM user_hidden_orders WHERE user_id=?',(user_id,))) ]}
+
+@app.post('/api/public/users/{user_id}/hidden-orders')
+def user_hide_order(user_id:int,payload:dict=Body(...)):
+    kind=str(payload.get('orderKind') or 'activity').strip().lower()
+    if kind not in ('activity','gear','camp'): raise HTTPException(400,'订单类型不合法')
+    try: oid=int(payload.get('orderId'))
+    except (TypeError,ValueError): raise HTTPException(400,'缺少 orderId')
+    with conn() as c:
+        # 只能隐藏真实属于该用户的订单，防止拿别人的单号刷接口
+        if kind=='activity':
+            o=row(c.execute('SELECT id FROM registrations WHERE id=? AND user_id=?',(oid,user_id)))
+            if not o: raise HTTPException(404,'订单不存在')
+        c.execute('INSERT OR IGNORE INTO user_hidden_orders(user_id,order_kind,order_id) VALUES(?,?,?)',
+                  (user_id,kind,oid))
+    return {'ok':True,'orderId':oid}
+
+@app.delete('/api/public/users/{user_id}/hidden-orders/{order_id}')
+def user_unhide_order(user_id:int,order_id:int,orderKind:str='activity'):
+    with conn() as c:
+        c.execute('DELETE FROM user_hidden_orders WHERE user_id=? AND order_kind=? AND order_id=?',
+                  (user_id,orderKind,order_id))
+    return {'ok':True,'orderId':order_id}
+
+
 @app.get('/api/public/users/{user_id}/order-center')
 def user_order_center(user_id:int,club_id:int=1):
     with conn() as c:
@@ -7137,6 +7185,10 @@ def user_order_center(user_id:int,club_id:int=1):
             LEFT JOIN activity_occurrences o ON o.id=r.occurrence_id
             LEFT JOIN refund_requests rr ON rr.id=r.refund_request_id
             WHERE r.user_id=? AND r.club_id=? ORDER BY r.created_at DESC,r.id DESC''',(user_id,club_id)))
+        # #877 用户主动「删除」的活动订单只在这一份 C 端聚合里隐藏
+        _hidden={int(r[0]) for r in c.execute(
+            "SELECT order_id FROM user_hidden_orders WHERE user_id=? AND order_kind='activity'",(user_id,))}
+        if _hidden: activity_orders=[x for x in activity_orders if int(x['id']) not in _hidden]
         gear_orders=rows(c.execute('''SELECT g.*,cl.name source_club,rr.status request_status,rr.reason refund_reason,
             rr.decision_note,rr.cash_amount requested_refund_cash,rr.created_at refund_requested_at,rr.updated_at refund_updated_at
             FROM gear_orders g JOIN clubs cl ON cl.id=g.source_club_id
@@ -7676,8 +7728,13 @@ def platform_update_benefit(benefit_id:int,payload:dict=Body(...)):
         if sets:
             # 只在本次确实改了 #860 新字段时才做合并态校验，避免历史脏数据
             # 让「只改个标题」这种无关编辑也失败。
+            merged=dict(b,**merged_patch)
             if any(k in merged_patch for k in _COUPON_NEW_COLS):
-                _validate_coupon_patch(dict(b,**merged_patch))
+                _validate_coupon_patch(merged)
+            # #877 主体归属闸门（老「平台福利」编辑入口与 coupons 同口径）
+            if any(k in merged_patch for k in ('scope_ref_kind','scope_ref_id','camp_scope','camp_scope_ids','applies_to','benefit_type')):
+                try: benefit_engine.validate_scope(c,owner_type='PLATFORM',owner_club_id=None,data=merged)
+                except ValueError as e: raise HTTPException(400,str(e))
             vals.append(benefit_id); c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?",vals)
     return {'ok':True}
 
@@ -7723,7 +7780,7 @@ def _normalize_coupon_col(col, v):
 # 模板日期为空、发券时又不折算的永不过期券。两个 PATCH 端点共用这一份判据。
 _COUPON_ENUM_COLS = {
     'applies_to': ('activity','camp','all','product','category'),
-    'scope_ref_kind': ('','activity','camp','pitch','product','category'),
+    'scope_ref_kind': ('','activity','camp','pitch','camp_product','activity_category','product','category'),
     'camp_scope': ('all','specified'),
     'validity_type': ('fixed','relative'),
     'claim_audience': ('all','member','non_member','new_user'),
@@ -7825,6 +7882,9 @@ def platform_update_coupon(coupon_id: int, payload: dict = Body(...)):
         # #860：与 _create 同口径校验适用范围 / 效期 / 领用限制，防止 PATCH 写出
         # 「relative 效期却没有天数」这类会让券永不过期的脏数据。
         _validate_coupon_patch(merged)
+        if any(k in payload for k in ('scope_ref_kind','scope_ref_id','camp_scope','camp_scope_ids','applies_to','benefit_type')):
+            try: benefit_engine.validate_scope(c,owner_type='PLATFORM',owner_club_id=None,data=merged)
+            except ValueError as e: raise HTTPException(400,str(e))
         if sets:
             vals.append(coupon_id)
             c.execute(f"UPDATE member_benefits SET {', '.join(sets)},updated_at=CURRENT_TIMESTAMP WHERE id=?", vals)
