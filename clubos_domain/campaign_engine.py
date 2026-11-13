@@ -6,8 +6,10 @@ from __future__ import annotations
   - NEWCOMER   首单立减（用户在本俱乐部无已支付订单时生效，直接减 payable）
   - TIME_LIMIT 限时折扣（在 schedule 窗口内、命中 scope 时生效，直接减 payable）
   - BUY_GIFT   满额赠送（满 threshold 元送 points / gift_card / coupon，不改 payable；
-               引擎返回 gifts 列表，实际发放待接入成交回调）
-其余类型（GROUP / CHECKIN / LOTTERY / STAMP / GIFT_CARD / INVITE）由各自独立模块实现，
+               引擎返回 gifts 列表，实际发放由成交回调触发，见 app.py _grant_campaign_gifts）
+  - INVITE     邀请有礼（被邀请且为本俱乐部首单的买家，满 threshold 元送 points / gift_card /
+               coupon；复用 BUY_GIFT 规则与 _is_invited 校验，发放同源）
+其余类型（GROUP / CHECKIN / LOTTERY / STAMP / GIFT_CARD）由各自独立模块实现，
 或以 type 实例接入复用同一 evaluate() 骨架。
 
 设计纪律（对齐既有报价链「宁可不打折不能付不了款」）：
@@ -73,7 +75,7 @@ def validate_campaign_payload(p: dict) -> dict:
         raise ValueError('schedule/scope/rules 必须为对象')
     if t in ('NEWCOMER', 'TIME_LIMIT'):
         _validate_rules_discount(rules)
-    elif t == 'BUY_GIFT':
+    elif t in ('BUY_GIFT', 'INVITE'):
         _validate_rules_buy_gift(rules)
     return {
         'type': t, 'title': title, 'status': status,
@@ -176,7 +178,14 @@ class CampaignEngine:
             return None
         if typ == 'NEWCOMER' and not (user_id and self._is_first_order(c, club_id, user_id)):
             return None
-        if typ == 'BUY_GIFT':
+        if typ in ('BUY_GIFT', 'INVITE'):
+            # INVITE：仅被邀请且为本俱乐部首单的买家可领（邀请有礼，与 JOIN 时的邀请奖励解耦）；
+            # BUY_GIFT：不限身份，满额即送。
+            if typ == 'INVITE' and not (
+                user_id and self._is_invited(c, club_id, user_id)
+                and self._is_first_order(c, club_id, user_id)
+            ):
+                return None
             gift = self._compute_buy_gift(rules, payable)
             if not gift:
                 return None
@@ -302,6 +311,30 @@ class CampaignEngine:
             except Exception:
                 continue
         return True
+
+    @staticmethod
+    def _is_invited(c, club_id, user_id):
+        """该用户是否被邀请加入本俱乐部（邀请有礼资格判定）。
+
+        与 commerce_scope 同源：只看俱乐部活动 / 营地维度的邀请关系，不查装备域。
+        - club_members.referred_by 指向邀请人（入会时写入）；或
+        - invite_records 中存在该用户作为被邀请人的记录。
+        任一命中即视为「被邀请」。
+        """
+        club_id, user_id = int(club_id), int(user_id)
+        try:
+            m = c.execute(
+                "SELECT referred_by FROM club_members WHERE club_id=? AND user_id=?",
+                (club_id, user_id)).fetchone()
+            if m and m['referred_by']:
+                return True
+            if c.execute(
+                "SELECT 1 FROM invite_records WHERE club_id=? AND invitee_user_id=? LIMIT 1",
+                (club_id, user_id)).fetchone():
+                return True
+        except Exception:
+            return False
+        return False
 
     # ---- CRUD（供 app.py 路由调用）----
     def list_campaigns(self, c, *, owner_club_id=None, owner_type='CLUB'):

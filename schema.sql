@@ -2829,3 +2829,22 @@ CREATE INDEX IF NOT EXISTS idx_css_club ON checkout_settlements(club_id, id);
 CREATE INDEX IF NOT EXISTS idx_css_status ON checkout_settlements(status, id);
 CREATE INDEX IF NOT EXISTS idx_cse_checkout ON checkout_settlement_events(checkout_id, id);
 CREATE INDEX IF NOT EXISTS idx_cse_club ON checkout_settlement_events(club_id, id);
+
+-- ===========================================================================
+-- P6 营销赠送发放闭环（2026-11-13）：BUY_GIFT / INVITE 赠品发放幂等日志
+-- 以 (club_id, campaign_id, order_id, gift_type) 唯一约束保证同一活动 + 同一订单 +
+-- 同一赠品类型只发一次；成交回调重复触发不重复发放积分 / 礼品卡额度 / 券。
+-- ===========================================================================
+CREATE TABLE IF NOT EXISTS campaign_grant_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  campaign_id INTEGER NOT NULL,
+  order_id TEXT NOT NULL,
+  gift_type TEXT NOT NULL,
+  copies INTEGER NOT NULL DEFAULT 1,
+  user_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(club_id, campaign_id, order_id, gift_type)
+);
+CREATE INDEX IF NOT EXISTS idx_cgl_club_order ON campaign_grant_log(club_id, order_id, gift_type);
+

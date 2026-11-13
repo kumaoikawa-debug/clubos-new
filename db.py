@@ -2017,6 +2017,26 @@ def _migrate_v045_checkout_settlement(c):
     c.execute("CREATE INDEX IF NOT EXISTS idx_cse_club ON checkout_settlement_events(club_id, id)")
 
 
+def _migrate_v046_campaign_grants(c):
+    """P6 营销赠送发放闭环：BUY_GIFT / INVITE 赠品（积分 / 礼品卡额度 / 券）发放幂等日志。
+
+    成交回调按营销引擎规则发放赠品，本表以 (club_id, campaign_id, order_id, gift_type)
+    唯一约束保证「同一活动 + 同一订单 + 同一赠品类型」只发一次，重复成交回调不重复发。
+    """
+    c.execute("""CREATE TABLE IF NOT EXISTS campaign_grant_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        club_id INTEGER NOT NULL,
+        campaign_id INTEGER NOT NULL,
+        order_id TEXT NOT NULL,
+        gift_type TEXT NOT NULL,
+        copies INTEGER NOT NULL DEFAULT 1,
+        user_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(club_id, campaign_id, order_id, gift_type)
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_cgl_club_order ON campaign_grant_log(club_id, order_id, gift_type)")
+
+
 def init_db():
     with conn() as c:
         c.executescript(SCHEMA.read_text(encoding='utf-8'))
@@ -2048,6 +2068,8 @@ def init_db():
         _migrate_v044_miniprogram_bridge(c)
         # 2026-11-13：P3 结算编排（opt-in 把拼团价 / 礼品卡 / 分销佣金接进成交链路）。
         _migrate_v045_checkout_settlement(c)
+        # 2026-11-13：P6 营销赠送发放闭环（BUY_GIFT / INVITE 赠品发放幂等日志）。
+        _migrate_v046_campaign_grants(c)
         if c.execute('SELECT COUNT(*) FROM clubs').fetchone()[0]:
             _seed_v08_defaults(c)
             if os.getenv('CLUBOS_SECURITY_MODE','demo')!='production': _seed_v15_payment_defaults(c)
