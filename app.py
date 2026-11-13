@@ -8475,8 +8475,9 @@ def _grant_one_campaign_gift(c, *, club_id:int, user_id:int, gift:dict, copies:i
             amount = int(round(float(gift.get('giftValue') or 0)))
             if amount <= 0:
                 return False, {'reason': 'zero-points'}
-            return bool(_grant_club_points(c, club_id=club_id, user_id=user_id, amount=amount,
-                                           source_type='CAMPAIGN_GIFT', source_id=order_id).get('ok')), {'points': amount}
+            pr = _grant_club_points(c, club_id=club_id, user_id=user_id, amount=amount,
+                                    source_type='CAMPAIGN_GIFT', source_id=order_id)
+            return bool(pr.get('ok')), dict(pr, points=amount)
         if gtype == 'gift_card':
             cents = int(round(float(gift.get('giftValue') or 0) * 100))
             if cents <= 0:
@@ -8524,20 +8525,24 @@ def _grant_club_points(c, *, club_id:int, user_id:int, amount:int, source_type:s
 
 def _mint_campaign_coupon(c, *, club_id:int, cash_value:float, title:str) -> dict:
     """铸造一张俱乐部活动券模板（领后 30 天有效），返回完整 benefit 行供 benefit_engine._issue 使用。"""
-    c.execute('''INSERT INTO member_benefits(owner_type,owner_club_id,target_club_id,title,description,
-                 benefit_type,applies_to,points_type,points_cost,cash_value,stock,status,rules_json,
-                 mode,discount_percent,threshold_amount,image_key,valid_from,valid_to,claim_mode,
-                 target_type,target_city,per_user_limit,claimed_count,share_enabled,face_json,
-                 store_scope,dining_modes,wechat_delivery,discount_coupon_type,max_discount_amount,
-                 threshold_scope,deduction_scope,redeemable_product_type,selected_product,
-                 scope_ref_kind,scope_ref_id,camp_scope,camp_scope_ids,validity_type,valid_days,
-                 claim_audience,per_user_daily_limit,new_user_only)
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
-                        ?,?,?,?,?,?,?,?,?)''',
-                ('CLUB', club_id, club_id, title, '营销活动自动赠送券', 'activity_coupon', 'activity',
-                 'club', 0, float(cash_value), None, 'active', '{}', 'fixed', 0, 0, 'sunrise',
-                 None, None, 'grant', 'club', None, 99, 0, 1, None, 'this_club', None, 0, 'single',
-                 None, 'all', 'all', 'all', None, '', None, 'all', None, 'relative', 30, 'all', 0, 0))
+    cols = {
+        'owner_type': 'CLUB', 'owner_club_id': club_id, 'target_club_id': club_id,
+        'title': title, 'description': '营销活动自动赠送券', 'benefit_type': 'activity_coupon',
+        'applies_to': 'activity', 'points_type': 'club', 'points_cost': 0,
+        'cash_value': float(cash_value), 'stock': None, 'status': 'active', 'rules_json': '{}',
+        'mode': 'fixed', 'discount_percent': 0, 'threshold_amount': 0, 'image_key': 'sunrise',
+        'valid_from': None, 'valid_to': None, 'claim_mode': 'grant', 'target_type': 'club',
+        'target_city': None, 'per_user_limit': 99, 'claimed_count': 0, 'share_enabled': 1,
+        'face_json': None, 'store_scope': 'this_club', 'dining_modes': None, 'wechat_delivery': 0,
+        'discount_coupon_type': 'single', 'max_discount_amount': None, 'threshold_scope': 'all',
+        'deduction_scope': 'all', 'redeemable_product_type': 'all', 'selected_product': None,
+        'scope_ref_kind': '', 'scope_ref_id': None, 'camp_scope': 'all', 'camp_scope_ids': None,
+        'validity_type': 'relative', 'valid_days': 30, 'claim_audience': 'all',
+        'per_user_daily_limit': 0, 'new_user_only': 0,
+    }
+    names = ','.join(cols)
+    marks = ','.join('?' * len(cols))
+    c.execute('INSERT INTO member_benefits(%s) VALUES(%s)' % (names, marks), tuple(cols.values()))
     bid = int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
     return dict(c.execute('SELECT * FROM member_benefits WHERE id=?', (bid,)).fetchone())
 
