@@ -29,6 +29,8 @@ CREATE TABLE marketing_campaigns (
   created_by INTEGER, created_at TEXT, updated_at TEXT
 );
 CREATE TABLE registrations (club_id INTEGER, user_id INTEGER, status TEXT);
+CREATE TABLE club_members (club_id INTEGER, user_id INTEGER, referred_by INTEGER);
+CREATE TABLE invite_records (club_id INTEGER, inviter_user_id INTEGER, invitee_user_id INTEGER);
 """
 
 
@@ -193,6 +195,62 @@ class BuyGiftTest(unittest.TestCase):
                          rules_json='{"threshold":100,"giftType":"%s","giftValue":50}' % gt)
             r = CampaignEngine().evaluate(c, club_id=1, user_id=5, payable=200.0)
             self.assertEqual(r['gifts'][0]['gift']['giftType'], gt, gt)
+
+
+class InviteTest(unittest.TestCase):
+    """P6：INVITE 邀请有礼引擎类型（被邀请 + 本俱乐部首单 → 满额赠礼）。"""
+
+    def test_validate_invite_uses_buy_gift_rules(self):
+        p = validate_campaign_payload({'type': 'INVITE', 'title': '邀请满200送100积分',
+                                       'rules': {'threshold': 200, 'giftType': 'points', 'giftValue': 100}})
+        self.assertEqual(p['type'], 'INVITE')
+        with self.assertRaises(ValueError):
+            validate_campaign_payload({'type': 'INVITE', 'title': 'x',
+                                       'rules': {'threshold': 0, 'giftType': 'bad', 'giftValue': 0}})
+
+    def test_invite_not_invited_skips(self):
+        c = new_db()
+        add_campaign(c, owner_club_id=1, type='INVITE', title='邀请礼',
+                     rules_json='{"threshold":100,"giftType":"points","giftValue":50}')
+        r = CampaignEngine().evaluate(c, club_id=1, user_id=5, payable=200.0)
+        self.assertEqual(r['gifts'], [])
+
+    def test_invite_invited_first_order_gift(self):
+        c = new_db()
+        add_campaign(c, owner_club_id=1, type='INVITE', title='邀请礼',
+                     rules_json='{"threshold":100,"giftType":"points","giftValue":50}')
+        c.execute('INSERT INTO club_members(club_id,user_id,referred_by) VALUES(1,5,2)')
+        r = CampaignEngine().evaluate(c, club_id=1, user_id=5, payable=200.0)
+        self.assertEqual(len(r['gifts']), 1)
+        self.assertEqual(r['gifts'][0]['type'], 'INVITE')
+        self.assertEqual(r['gifts'][0]['gift']['giftType'], 'points')
+
+    def test_invite_via_invite_records(self):
+        c = new_db()
+        add_campaign(c, owner_club_id=1, type='INVITE', title='邀请礼',
+                     rules_json='{"threshold":100,"giftType":"gift_card","giftValue":30}')
+        c.execute('INSERT INTO invite_records(club_id,inviter_user_id,invitee_user_id) VALUES(1,2,5)')
+        r = CampaignEngine().evaluate(c, club_id=1, user_id=5, payable=200.0)
+        self.assertEqual(len(r['gifts']), 1)
+        self.assertEqual(r['gifts'][0]['gift']['giftType'], 'gift_card')
+
+    def test_invite_existing_customer_skips(self):
+        # 被邀请但已下过单（非首单）→ 不送
+        c = new_db()
+        add_campaign(c, owner_club_id=1, type='INVITE', title='邀请礼',
+                     rules_json='{"threshold":100,"giftType":"points","giftValue":50}')
+        c.execute('INSERT INTO club_members(club_id,user_id,referred_by) VALUES(1,5,2)')
+        c.execute("INSERT INTO registrations(club_id,user_id,status) VALUES(1,5,'paid')")
+        r = CampaignEngine().evaluate(c, club_id=1, user_id=5, payable=200.0)
+        self.assertEqual(r['gifts'], [])
+
+    def test_invite_below_threshold_skips(self):
+        c = new_db()
+        add_campaign(c, owner_club_id=1, type='INVITE', title='邀请礼',
+                     rules_json='{"threshold":300,"giftType":"points","giftValue":50}')
+        c.execute('INSERT INTO club_members(club_id,user_id,referred_by) VALUES(1,5,2)')
+        r = CampaignEngine().evaluate(c, club_id=1, user_id=5, payable=200.0)
+        self.assertEqual(r['gifts'], [])
 
 
 if __name__ == '__main__':

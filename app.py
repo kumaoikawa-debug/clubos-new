@@ -8233,7 +8233,12 @@ def _cs_apply_to_intent(c, *, intent_id:str, q, req:dict, club_id:int, user_id:i
 
 
 def _cs_settle_after_confirm(c, *, intent_id:str, result:dict) -> dict:
-    """支付成功回调统一编排：佣金入账 + 状态 SETTLED。异常只落 FAILED，绝不抛。"""
+    """支付成功回调统一编排：营销赠品发放 + 佣金入账 + 状态 SETTLED。异常只落 FAILED，绝不抛。"""
+    # P6：营销赠送发放闭环（与结算 opt-in 解耦，普通活动/营地订单也发放；装备订单不触发）。
+    try:
+        _grant_campaign_gifts_for_intent(c, intent_id=intent_id, result=result)
+    except Exception:
+        pass
     rec = cs_mod.get_record(c, intent_id)
     if not rec:
         return {'skipped': True, 'reason': 'no-record'}   # 普通订单：零副作用
@@ -8376,6 +8381,165 @@ def _cs_after_refund(c, refund_id:str) -> dict:
         return dict(out, giftCardRefundCents=refunded, commissionReverse=reversal)
     except Exception as e:
         return {'skipped': True, 'reason': 'exception', 'error': str(e)[:160]}
+
+
+# ── P6 营销赠送发放闭环（BUY_GIFT / INVITE，与结算 opt-in 解耦）────────────────
+# 纪律：活动 / 营地订单成交后按营销引擎规则发放赠品（积分 / 礼品卡额度 / 券）。
+# 与 P3 结算编排完全解耦 —— 无论是否 opt-in 结算都发放；装备销售永远不触发（营销适用范围边界）。
+# 所有异常内部吞掉，绝不阻断成交主流程；幂等由 campaign_grant_log 保证。
+def _grant_campaign_gifts_for_intent(c, *, intent_id:str, result:dict) -> dict:
+    """按结算单还原订单上下文（活动/营地），触发营销赠品发放。"""
+    try:
+        it = row(c.execute('SELECT * FROM checkout_intents WHERE id=?', (str(intent_id),)))
+        if not it:
+            return {'skipped': True, 'reason': 'no-intent'}
+        kind = str(it['kind'] or '')
+        if kind not in ('activity', 'camp_booking'):
+            return {'skipped': True, 'reason': 'not-club-order'}   # 装备/其它订单不触发
+        club_id = int(it['club_id'])
+        user_id = int(it['user_id'])
+        activity_ids, product_ids, order_id, payable = [], [], None, 0.0
+        if kind == 'activity':
+            reg_id = (result or {}).get('registrationId')
+            reg = row(c.execute('SELECT * FROM registrations WHERE id=?', (int(reg_id),))) if reg_id else None
+            if reg:
+                activity_ids = [int(reg['activity_id'])] if reg.get('activity_id') else []
+                payable = float(reg.get('amount') or 0)
+                order_id = str(reg_id)
+                user_id = int(reg['user_id'])
+            else:
+                # 兜底：从结算单 payload 还原（极少路径）
+                meta = jload(it.get('payload_json'), {}) or {}
+                aid = meta.get('activityId') or meta.get('activity_id')
+                if aid:
+                    activity_ids = [int(aid)]
+                payable = float(it.get('cash_amount') or 0)
+                order_id = str(intent_id)
+        else:  # camp_booking
+            co = row(c.execute('SELECT * FROM camp_orders WHERE checkout_id=?', (str(intent_id),)))
+            if co:
+                payable = float(co.get('total') or 0)
+                order_id = str(co['id'])
+                items = rows(c.execute('SELECT ref_id FROM camp_order_items WHERE order_id=?', (int(co['id']),)))
+                product_ids = [int(x['ref_id']) for x in items if x.get('ref_id')]
+        if not order_id or payable <= 0:
+            return {'skipped': True, 'reason': 'no-order-or-zero'}
+        return _grant_campaign_gifts(c, club_id=club_id, user_id=user_id, payable=payable,
+                                     activity_ids=activity_ids, product_ids=product_ids,
+                                     order_id=order_id, order_kind=kind)
+    except Exception as e:
+        return {'skipped': True, 'reason': 'exception', 'error': str(e)[:160]}
+
+
+def _grant_campaign_gifts(c, *, club_id:int, user_id:int, payable:float,
+                          activity_ids:list|None=None, product_ids:list|None=None,
+                          store_ids:list|None=None, order_id:str, order_kind:str) -> dict:
+    """按营销引擎求值，发放本单命中的所有赠品；幂等（campaign_grant_log）。"""
+    out: dict[str, Any] = {'granted': [], 'skipped': []}
+    try:
+        res = CampaignEngine().evaluate(
+            c, club_id=club_id, user_id=user_id, payable=payable,
+            activity_ids=activity_ids, product_ids=product_ids, store_ids=store_ids)
+        for g in (res.get('gifts') or []):
+            gift = g.get('gift') or {}
+            gtype = str(gift.get('giftType') or '')
+            campaign_id = int(g.get('id') or 0)
+            copies = max(1, int(gift.get('copies') or 1))
+            dup = c.execute(
+                'SELECT 1 FROM campaign_grant_log WHERE club_id=? AND campaign_id=? AND order_id=? AND gift_type=? LIMIT 1',
+                (club_id, campaign_id, str(order_id), gtype)).fetchone()
+            if dup:
+                out['skipped'].append({'campaignId': campaign_id, 'giftType': gtype, 'reason': 'already-granted'})
+                continue
+            ok, info = _grant_one_campaign_gift(
+                c, club_id=club_id, user_id=user_id, gift=gift, copies=copies,
+                order_id=str(order_id), order_kind=order_kind)
+            if ok:
+                c.execute('INSERT OR IGNORE INTO campaign_grant_log(club_id,campaign_id,order_id,gift_type,copies,user_id) VALUES(?,?,?,?,?,?)',
+                          (club_id, campaign_id, str(order_id), gtype, copies, user_id))
+                out['granted'].append({'campaignId': campaign_id, 'giftType': gtype, 'info': info})
+            else:
+                out['skipped'].append({'campaignId': campaign_id, 'giftType': gtype,
+                                       'reason': (info or {}).get('reason') if isinstance(info, dict) else str(info)})
+    except Exception as e:
+        out['error'] = str(e)[:160]
+    return out
+
+
+def _grant_one_campaign_gift(c, *, club_id:int, user_id:int, gift:dict, copies:int,
+                             order_id:str, order_kind:str):
+    """发放单条赠品（points / gift_card / coupon）。返回 (ok, info)。"""
+    gtype = str(gift.get('giftType') or '')
+    try:
+        if gtype == 'points':
+            amount = int(round(float(gift.get('giftValue') or 0)))
+            if amount <= 0:
+                return False, {'reason': 'zero-points'}
+            return bool(_grant_club_points(c, club_id=club_id, user_id=user_id, amount=amount,
+                                           source_type='CAMPAIGN_GIFT', source_id=order_id).get('ok')), {'points': amount}
+        if gtype == 'gift_card':
+            cents = int(round(float(gift.get('giftValue') or 0) * 100))
+            if cents <= 0:
+                return False, {'reason': 'zero-giftcard'}
+            r = gc_mod.apply_ledger(
+                c, club_id=club_id, user_id=user_id, delta_cents=cents, ledger_type='REDEEM',
+                source_type='CAMPAIGN_GIFT', source_id=order_id, operator='campaign-gift',
+                note='营销满赠/邀请礼：礼品卡额度发放')
+            return bool(r.get('ok')), {'giftCardCents': cents, 'balanceCents': r.get('balanceCents'), 'reason': r.get('reason')}
+        if gtype == 'coupon':
+            value = float(gift.get('giftValue') or 0)
+            if value <= 0:
+                return False, {'reason': 'zero-coupon'}
+            benefit = _mint_campaign_coupon(c, club_id=club_id, cash_value=value,
+                                            title='%s 赠送券' % (gift.get('title') or '营销赠送'))
+            issued = 0
+            for _ in range(copies):
+                try:
+                    benefit_engine._issue(c, benefit, user_id, club_id, funding='CLUB',
+                                          note='营销满赠/邀请礼自动发放')
+                    issued += 1
+                except Exception:
+                    pass
+            return issued > 0, {'issued': issued, 'benefitId': benefit.get('id')}
+        return False, {'reason': 'unknown-gift-type'}
+    except Exception as e:
+        return False, {'reason': 'exception', 'error': str(e)[:120]}
+
+
+def _grant_club_points(c, *, club_id:int, user_id:int, amount:int, source_type:str, source_id:str) -> dict:
+    """发放俱乐部积分（幂等：同 source_type + source_id 只加一次）。"""
+    try:
+        c.execute('INSERT OR IGNORE INTO club_members(club_id,user_id) VALUES(?,?)', (club_id, user_id))
+        if c.execute('SELECT 1 FROM club_point_ledger WHERE club_id=? AND user_id=? AND source_type=? AND source_id=? LIMIT 1',
+                     (club_id, user_id, source_type, str(source_id))).fetchone():
+            return {'ok': False, 'reason': 'duplicated'}
+        c.execute('UPDATE club_members SET club_points_balance=club_points_balance+? WHERE club_id=? AND user_id=?',
+                  (amount, club_id, user_id))
+        c.execute('INSERT INTO club_point_ledger(club_id,user_id,type,amount,source_type,source_id,note) VALUES(?,?,?,?,?,?,?)',
+                  (club_id, user_id, 'earn', amount, source_type, str(source_id), '营销满赠/邀请礼发放'))
+        return {'ok': True, 'amount': amount}
+    except Exception as e:
+        return {'ok': False, 'reason': 'exception', 'error': str(e)[:120]}
+
+
+def _mint_campaign_coupon(c, *, club_id:int, cash_value:float, title:str) -> dict:
+    """铸造一张俱乐部活动券模板（领后 30 天有效），返回完整 benefit 行供 benefit_engine._issue 使用。"""
+    c.execute('''INSERT INTO member_benefits(owner_type,owner_club_id,target_club_id,title,description,
+                 benefit_type,applies_to,points_type,points_cost,cash_value,stock,status,rules_json,
+                 mode,discount_percent,threshold_amount,image_key,valid_from,valid_to,claim_mode,
+                 target_type,target_city,per_user_limit,claimed_count,share_enabled,face_json,
+                 store_scope,dining_modes,wechat_delivery,discount_coupon_type,max_discount_amount,
+                 threshold_scope,deduction_scope,redeemable_product_type,selected_product,
+                 scope_ref_kind,scope_ref_id,camp_scope,camp_scope_ids,validity_type,valid_days,
+                 claim_audience,per_user_daily_limit,new_user_only)
+                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                        ?,?,?,?,?,?,?,?,?)''',
+                ('CLUB', club_id, club_id, title, '营销活动自动赠送券', 'activity_coupon', 'activity',
+                 'club', 0, float(cash_value), None, 'active', '{}', 'fixed', 0, 0, 'sunrise',
+                 None, None, 'grant', 'club', None, 99, 0, 1, None, 'this_club', None, 0, 'single',
+                 None, 'all', 'all', 'all', None, '', None, 'all', None, 'relative', 30, 'all', 0, 0))
+    bid = int(c.execute('SELECT last_insert_rowid()').fetchone()[0])
+    return dict(c.execute('SELECT * FROM member_benefits WHERE id=?', (bid,)).fetchone())
 
 
 # ── P4 营地产品营销编排（opt-in，装备销售一律不接）────────────────────────────
