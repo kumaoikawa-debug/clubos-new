@@ -151,6 +151,15 @@ window.loadHome=async function(){
        只会新建一个 window 属性、读 `ACT_ALL` 时仍然拿到旧的空数组。 */
     ACT_ALL=acts;
     const list=(acts||[]).slice().sort((a,b)=>Number(b.id||0)-Number(a.id||0));
+    /* P0-2 界面装修器：俱乐部若发布了 club_home 装修布局，渲染到 #homeDecorated（hero 之上）。
+       仅作加法 —— 失败 / 无布局时静默回落，绝不影响下方默认 hero 与活动流。 */
+    try{
+      const deco=document.getElementById('homeDecorated');
+      if(deco&&typeof window.ClubOSRenderPage==='function'){
+        const pg=await api(`/api/public/clubs/${CLUB}/page/club_home`).catch(()=>null);
+        if(pg&&Array.isArray(pg.components)&&pg.components.length) window.ClubOSRenderPage(CLUB,'club_home',deco);
+      }
+    }catch(_){}
     const useBanner=!!(banners&&banners.enabled&&Array.isArray(banners.items)&&banners.items.length);
     if(hero){
       if(useBanner){

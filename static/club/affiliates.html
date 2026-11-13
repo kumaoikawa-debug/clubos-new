@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ClubOS NEW · 分销员</title>
+  <link rel="stylesheet" href="/static/shared.css?v=20261113b">
+  <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261111z">
+  <link rel="stylesheet" href="/static/club/club-glass.css?v=20261112b">
+  <style>
+    body{margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#16362b}
+    .wrap{max-width:960px;margin:0 auto;padding:18px}
+    h1{font-size:18px;margin:0 0 4px}
+    .tip{font-size:12px;color:#8aa39a;margin:0 0 12px;line-height:1.6}
+    .card{background:#fff;border:1px solid #e7edea;border-radius:14px;padding:14px;margin-bottom:12px}
+    .card h3{font-size:14px;margin:0 0 10px}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    .stat{flex:1;min-width:105px;background:#fff;border:1px solid #e7edea;border-radius:12px;padding:12px}
+    .stat .k{font-size:11px;color:#8aa39a}
+    .stat .v{font-size:19px;font-weight:700;margin-top:3px}
+    .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+    .row label{font-size:12px;color:#5d7a6e;min-width:100px}
+    .row input,.row select{padding:6px 8px;border:1px solid #d7e2dd;border-radius:8px;font-size:13px;flex:1;min-width:110px}
+    .row input[type=checkbox]{flex:0;min-width:0;width:16px;height:16px}
+    .row input.sm,.row select.sm{min-width:80px;max-width:130px;flex:0 1 110px}
+    .btn{padding:7px 14px;border-radius:9px;border:1px solid #0a7d52;background:#0a7d52;color:#fff;font-size:13px;cursor:pointer}
+    .btn.ghost{background:#fff;color:#0a7d52}
+    .btn.sm{padding:4px 9px;font-size:12px}
+    .btn.danger{border-color:#c0392b;background:#fff;color:#c0392b}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .empty{color:#8aa39a;text-align:center;padding:16px;font-size:13px}
+    .item{border:1px solid #e7edea;border-radius:11px;padding:10px;margin-bottom:9px}
+    .item__head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+    .item__title{font-weight:600;font-size:13px}
+    .muted{font-size:12px;color:#8aa39a}
+    .code{font-family:ui-monospace,Menlo,monospace;background:#eef3f0;padding:2px 7px;border-radius:6px;font-size:12px}
+    .badge{font-size:11px;padding:2px 8px;border-radius:20px;background:#eef3f0;color:#5d7a6e}
+    .badge.on{background:#e3f6ec;color:#0a7d52}
+    .badge.warn{background:#fdf3e2;color:#a06a10}
+    .badge.off{background:#f6e7e6;color:#b03a2e}
+    .lv{display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+    .lv input{padding:5px 7px;border:1px solid #d7e2dd;border-radius:8px;font-size:12px;width:92px}
+    .lv input.wide{width:130px}
+    table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #f0f4f2}
+    th{color:#8aa39a;font-weight:500}
+    .scroll{max-height:260px;overflow:auto;margin-top:8px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>分销员</h1>
+    <p class="tip">会员持专属推广码拉新，被邀请人下单后按档位返佣，冻结期满生成结算单。金额按「分」记账，费率用 bp（100bp = 1%）。与「平台↔俱乐部佣金」「邀请奖励」是三套独立口径，互不写入。佣金需由订单完成后显式入账，不改动下单与实收。</p>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="card">
+      <h3>分销配置</h3>
+      <div class="row"><label>启用分销</label><input type="checkbox" id="cfgEnabled"></div>
+      <div class="row"><label>申请自动通过</label><input type="checkbox" id="cfgAuto"> <span class="muted">关闭后新申请落「待审核」</span></div>
+      <div class="row"><label>允许自购返佣</label><input type="checkbox" id="cfgSelf"></div>
+      <div class="row"><label>默认费率</label><input type="number" class="sm" id="cfgRate" min="0" max="5000" step="1"> <span class="muted">bp（500 = 5%，上限 5000）</span></div>
+      <div class="row"><label>冻结天数</label><input type="number" class="sm" id="cfgFreeze" min="0" max="365" step="1"> <span class="muted">天，0 = 立即可结</span></div>
+      <div class="row"><label>最低起结额</label><input type="number" class="sm" id="cfgMin" min="0" step="0.01"> <span class="muted">元</span></div>
+      <div class="row" style="margin-top:10px"><label>等级档位</label><span class="muted">按累计成交金额与订单数命中「费率最高」的一档</span></div>
+      <div id="levels"></div>
+      <div class="row" style="justify-content:flex-end;margin-top:8px">
+        <button class="btn sm ghost" id="addLevel">＋ 添加档位</button>
+        <button class="btn sm" id="saveCfg">保存配置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>分销员</h3>
+      <div class="row">
+        <input type="number" class="sm" id="newUid" placeholder="会员 user_id">
+        <input type="number" class="sm" id="newRate" placeholder="单独费率 bp(选填)">
+        <input id="newNote" placeholder="备注(选填)">
+        <button class="btn sm" id="addMember">添加</button>
+      </div>
+      <div id="members"></div>
+    </div>
+
+    <div class="card">
+      <h3>推广关系</h3>
+      <div class="row">
+        <input type="number" class="sm" id="bindAff" placeholder="推广员 user_id">
+        <input type="number" class="sm" id="bindInvitee" placeholder="被邀请人 user_id">
+        <button class="btn sm ghost" id="addBinding">手动绑定</button>
+      </div>
+      <div class="scroll" id="bindings"></div>
+    </div>
+
+    <div class="card">
+      <h3>佣金流水</h3>
+      <div class="row">
+        <input type="number" class="sm" id="qBuyer" placeholder="下单人 user_id">
+        <input type="number" class="sm" id="qAmount" placeholder="订单金额(元)">
+        <button class="btn sm ghost" id="previewBtn">试算（不写库）</button>
+        <span class="muted" id="previewOut"></span>
+      </div>
+      <div class="row">
+        <select class="sm" id="qOrderType">
+          <option value="registration">活动报名</option>
+          <option value="gear_order">装备订单</option>
+          <option value="custom">其它</option>
+        </select>
+        <input class="sm" id="qOrderId" placeholder="订单号">
+        <button class="btn sm" id="accrueBtn">按上方金额入账</button>
+      </div>
+      <div class="scroll" id="commissions"></div>
+    </div>
+
+    <div class="card">
+      <h3>结算单</h3>
+      <div class="row">
+        <input type="number" class="sm" id="settleUid" placeholder="推广员 user_id">
+        <button class="btn sm" id="settleBtn">生成结算单</button>
+        <span class="muted">冻结期未满 / 低于起结额会提示原因</span>
+      </div>
+      <div class="scroll" id="settlements"></div>
+    </div>
+  </div>
+
+  <script src="/static/shared.js?v=20261113b"></script>
+  <script src="/static/club/affiliates.js?v=20261113f"></script>
+</body>
+</html>

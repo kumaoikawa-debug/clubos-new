@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ClubOS NEW · 互动玩法</title>
+  <link rel="stylesheet" href="/static/shared.css?v=20261113b">
+  <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261111z">
+  <link rel="stylesheet" href="/static/club/club-glass.css?v=20261112b">
+  <style>
+    body{margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#16362b}
+    .wrap{max-width:960px;margin:0 auto;padding:18px}
+    h1{font-size:18px;margin:0 0 4px}
+    .tip{font-size:12px;color:#8aa39a;margin:0 0 12px;line-height:1.6}
+    .card{background:#fff;border:1px solid #e7edea;border-radius:14px;padding:14px;margin-bottom:12px}
+    .card h3{font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:8px}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    .stat{flex:1;min-width:100px;background:#fff;border:1px solid #e7edea;border-radius:12px;padding:12px}
+    .stat .k{font-size:11px;color:#8aa39a}
+    .stat .v{font-size:19px;font-weight:700;margin-top:3px}
+    .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+    .row label{font-size:12px;color:#5d7a6e;min-width:96px}
+    .row input,.row select{padding:6px 8px;border:1px solid #d7e2dd;border-radius:8px;font-size:13px;flex:1;min-width:120px}
+    .row input[type=checkbox]{flex:0;min-width:0;width:16px;height:16px}
+    .row input.sm{min-width:70px;max-width:100px;flex:0 1 90px}
+    .btn{padding:7px 14px;border-radius:9px;border:1px solid #0a7d52;background:#0a7d52;color:#fff;font-size:13px;cursor:pointer}
+    .btn.ghost{background:#fff;color:#0a7d52}
+    .btn.sm{padding:4px 9px;font-size:12px}
+    .btn.danger{border-color:#c0392b;background:#fff;color:#c0392b}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .empty{color:#8aa39a;text-align:center;padding:16px;font-size:13px}
+    .item{border:1px solid #e7edea;border-radius:11px;padding:10px;margin-bottom:9px}
+    .item__head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+    .item__title{font-weight:600;font-size:13px}
+    .muted{font-size:12px;color:#8aa39a}
+    .badge{font-size:11px;padding:2px 8px;border-radius:20px;background:#eef3f0;color:#5d7a6e}
+    .badge.on{background:#e3f6ec;color:#0a7d52}
+    .badge.warn{background:#fdf3e2;color:#a06a10}
+    .badge.off{background:#f6e7e6;color:#b03a2e}
+    .line{display:flex;gap:6px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+    .line input{padding:5px 7px;border:1px solid #d7e2dd;border-radius:8px;font-size:12px;width:92px}
+    .line input.wide{width:130px}
+    .line input.tiny{width:56px}
+    .line select{padding:5px 6px;border:1px solid #d7e2dd;border-radius:8px;font-size:12px}
+    table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #f0f4f2}
+    th{color:#8aa39a;font-weight:500}
+    .scroll{max-height:280px;overflow:auto;margin-top:8px}
+    .tabs{display:flex;gap:6px;margin-bottom:10px}
+    .tabs button.on{background:#0a7d52;color:#fff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>互动玩法</h1>
+    <p class="tip">签到 / 抽奖 / 集章三件套。未开启的玩法不影响任何既有下单与报价链路；奖励直接进会员「活动积分」并留流水，实物奖品走待核销清单。业务日固定按北京时间自然日，同一天重复参与不会重复发奖。</p>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="card">
+      <h3>每日签到 <span class="badge" id="badgeCheckin">未开启</span></h3>
+      <div class="row"><label>启用签到</label><input type="checkbox" id="ckEnabled"></div>
+      <div class="row"><label>每日基础积分</label><input type="number" class="sm" id="ckDaily" min="0" step="1">
+        <label style="min-width:auto">连签周期</label><input type="number" class="sm" id="ckCycle" min="1" max="366" step="1"><span class="muted">天（到期回绕）</span></div>
+      <div class="row" style="margin-top:10px"><label>连签加码</label><span class="muted">周期内连签达到指定天数，按「天数最高」的档位额外加分</span></div>
+      <div id="ckRules"></div>
+      <div class="row" style="justify-content:flex-end;margin-top:8px">
+        <button class="btn sm ghost" id="addCkRule">＋ 添加档位</button>
+        <button class="btn sm" data-save="CHECKIN">保存签到配置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>幸运抽奖 <span class="badge" id="badgeLottery">未开启</span></h3>
+      <div class="row"><label>启用抽奖</label><input type="checkbox" id="ltEnabled">
+        <label style="min-width:auto">每人每日次数</label><input type="number" class="sm" id="ltLimit" min="1" max="50" step="1"></div>
+      <div class="row" style="margin-top:10px"><label>奖品池</label><span class="muted">按权重抽取；库存 -1 表示不限量；库存发完自动转为「谢谢参与」</span></div>
+      <div id="ltPrizes"></div>
+      <div class="row" style="justify-content:flex-end;margin-top:8px">
+        <button class="btn sm ghost" id="addLtPrize">＋ 添加奖品</button>
+        <button class="btn sm" data-save="LOTTERY">保存抽奖配置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>集章任务 <span class="badge" id="badgeStamp">未开启</span></h3>
+      <div class="row"><label>启用集章</label><input type="checkbox" id="stEnabled">
+        <label style="min-width:auto">集满</label><input type="number" class="sm" id="stRequired" min="1" step="1"><span class="muted">枚兑换</span>
+        <label style="min-width:auto">奖励积分</label><input type="number" class="sm" id="stPoints" min="0" step="1"></div>
+      <div class="row"><label>奖励名称</label><input id="stRewardName" placeholder="如：户外集章礼包"></div>
+      <div class="row" style="margin-top:10px"><label>可集章动作</label><span class="muted">同一动作、同一天只记一枚，防刷</span></div>
+      <div id="stActions"></div>
+      <div class="row" style="justify-content:flex-end;margin-top:8px">
+        <button class="btn sm ghost" id="addStAction">＋ 添加动作</button>
+        <button class="btn sm" data-save="STAMP">保存集章配置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="tabs">
+        <button class="btn sm on" data-tab="logs">参与记录</button>
+        <button class="btn sm ghost" data-tab="rewards">发奖 / 待核销</button>
+      </div>
+      <div id="records"></div>
+    </div>
+  </div>
+
+  <script src="/static/shared.js?v=20261113b"></script>
+  <script src="/static/club/engagement.js?v=20261113c"></script>
+</body>
+</html>

@@ -65,6 +65,9 @@ def validate_production_config() -> None:
     secret = os.getenv('CLUBOS_COMMERCE_WEBHOOK_SECRET', '')
     if len(secret) < 32 or secret == 'change-me':
         failures.append('commerce webhook secret must be a fresh 32+ character secret')
+    # #892：默认凭据与生产密钥的强制校验放在 scripts/predeploy_security_check.py
+    # （发布前门禁）。不塞进启动校验，避免破坏 5 个 production-mode 安全测试
+    # 既有最小环境变量集；demo/内测模式行为完全不变。
     if failures:
         raise RuntimeError('Unsafe production configuration: ' + '; '.join(failures))
 
@@ -118,7 +121,8 @@ def install_tables() -> None:
             try:
                 c.execute("INSERT INTO auth_accounts(username,password_hash,role,status,platform_department) VALUES(?,?,?,?,'all')",
                           (username,hash_password(pwd),'platform','active'))
-                print(f'[security] 已创建平台管理员账户 {username}（默认密码 {pwd}；请尽快在部署环境变量 CLUBOS_PLATFORM_ADMIN_PASS 中修改并重新部署）',flush=True)
+                # #892：绝不把明文口令写进 stdout / 访问日志，口令一律由部署环境变量注入。
+                print(f'[security] 已创建平台管理员账户 {username}（口令来自 CLUBOS_PLATFORM_ADMIN_PASS，未输出到日志）',flush=True)
             except Exception as e:
                 print(f'[security] 平台管理员账户已存在或创建失败：{e}',flush=True)
 

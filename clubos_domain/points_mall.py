@@ -116,12 +116,13 @@ class PointsMallEngine:
         if it['stock'] is not None and int(it['stock']) <= 0:
             raise OverflowError('该兑换商品已被兑完')
         points = int(it['points_cost'] or 0)
-        wallet = c.execute('SELECT club_points_balance FROM club_members WHERE club_id=? AND user_id=?',
-                           (club_id, user_id)).fetchone()
-        if not wallet or int(wallet[0] or 0) < points:
-            raise ValueError('活动积分不足')
-        c.execute('UPDATE club_members SET club_points_balance=club_points_balance-? WHERE club_id=? AND user_id=?',
-                  (points, club_id, user_id))
+        # #892：余额校验下沉进条件 UPDATE 并检查 rowcount，避免并发「先读后写」
+        # 两个请求同时读到足够余额、各扣一次把余额扣成负数。
+        cur = c.execute('UPDATE club_members SET club_points_balance=club_points_balance-? '
+                        'WHERE club_id=? AND user_id=? AND club_points_balance>=?',
+                        (points, club_id, user_id, points))
+        if cur.rowcount != 1:
+            raise ValueError('活动积分不足或并发冲突，请重试')
         c.execute('''INSERT INTO club_point_ledger(club_id,user_id,type,amount,source_type,source_id,note)
                      VALUES(?,?,?,?,?,?,?)''',
                   (club_id, user_id, 'mall_redeem', -points, 'points_mall_item', str(it['id']),
@@ -137,7 +138,10 @@ class PointsMallEngine:
         else:
             code = 'PM-' + secrets.token_hex(4).upper()
         if it['stock'] is not None:
-            c.execute('UPDATE points_mall_items SET stock=stock-1,updated_at=CURRENT_TIMESTAMP WHERE id=?', (it['id'],))
+            cur = c.execute('UPDATE points_mall_items SET stock=stock-1,updated_at=CURRENT_TIMESTAMP '
+                            'WHERE id=? AND club_id=? AND stock>0', (it['id'], club_id))
+            if cur.rowcount != 1:
+                raise OverflowError('该兑换商品已被兑完')
         c.execute('''INSERT INTO points_mall_redemptions(club_id,item_id,item_title,item_type,user_id,points_spent,code,status)
                      VALUES(?,?,?,?,?,?,?,?)''',
                   (club_id, it['id'], it['title'], it['item_type'], user_id, points, code, 'issued'))
@@ -161,8 +165,10 @@ class PointsMallEngine:
         r = dict(row)
         if r['status'] == 'verified':
             raise ValueError(f'该核销码已于 {str(r["verified_at"] or "")[:16]} 核销')
-        c.execute('''UPDATE points_mall_redemptions SET status='verified',verified_at=CURRENT_TIMESTAMP,verified_by=?
-                     WHERE id=?''', (operator, r['id']))
+        cur = c.execute('''UPDATE points_mall_redemptions SET status='verified',verified_at=CURRENT_TIMESTAMP,verified_by=?
+                     WHERE id=? AND club_id=? AND status!='verified' ''', (operator, r['id'], club_id))
+        if cur.rowcount != 1:
+            raise ValueError('该核销码已被核销，请刷新后重试')
         r['status'] = 'verified'
         return r
 

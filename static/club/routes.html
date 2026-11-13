@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ClubOS NEW · 功能路由表</title>
+  <link rel="stylesheet" href="/static/shared.css?v=20261113b">
+  <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261111z">
+  <link rel="stylesheet" href="/static/club/club-glass.css?v=20261112b">
+  <style>
+    body{margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#16362b}
+    .wrap{max-width:1060px;margin:0 auto;padding:18px}
+    h1{font-size:18px;margin:0 0 4px}
+    .tip{font-size:12px;color:#8aa39a;margin:0 0 12px;line-height:1.7}
+    .card{background:#fff;border:1px solid #e7edea;border-radius:14px;padding:14px;margin-bottom:12px}
+    .card h3{font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+    .toolbar select,.toolbar input{padding:7px 9px;border:1px solid #d7e2dd;border-radius:9px;font-size:13px;background:#fff}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    .stat{flex:1;min-width:100px;background:#fff;border:1px solid #e7edea;border-radius:12px;padding:12px}
+    .stat .k{font-size:11px;color:#8aa39a}
+    .stat .v{font-size:19px;font-weight:700;margin-top:3px}
+    .btn{padding:7px 14px;border-radius:9px;border:1px solid #0a7d52;background:#0a7d52;color:#fff;font-size:13px;cursor:pointer}
+    .btn.ghost{background:#fff;color:#0a7d52}
+    .btn.danger{background:#fff;color:#b03a2e;border-color:#e2b6b0}
+    .btn.sm{padding:4px 9px;font-size:12px}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .empty{color:#8aa39a;text-align:center;padding:16px;font-size:13px}
+    .muted{font-size:12px;color:#8aa39a}
+    .badge{font-size:11px;padding:2px 8px;border-radius:20px;background:#eef3f0;color:#5d7a6e;white-space:nowrap}
+    .badge.on{background:#e3f6ec;color:#0a7d52}
+    .badge.warn{background:#fdf3e2;color:#a06a10}
+    .badge.off{background:#f6e7e6;color:#b03a2e}
+    .grp{margin-top:14px}
+    .grp:first-child{margin-top:0}
+    .grp__t{font-size:12px;font-weight:600;color:#0a7d52;margin-bottom:6px;padding-left:2px}
+    .rt{border:1px solid #e7edea;border-radius:11px;padding:10px;margin-bottom:8px}
+    .rt.is-off{background:#fafbfb}
+    .rt__head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .rt__icon{font-size:17px;width:26px;text-align:center}
+    .rt__t{font-weight:600;font-size:13px}
+    .rt__key{font-size:11px;color:#8aa39a;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .rt__grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-top:9px}
+    .fld{display:flex;flex-direction:column;gap:3px;font-size:11px;color:#5d7a6e}
+    .fld input,.fld select{padding:6px 8px;border:1px solid #d7e2dd;border-radius:8px;font-size:12px;color:#16362b;background:#fff;width:100%;box-sizing:border-box}
+    .rt__url{font-size:11px;color:#8aa39a;margin-top:8px;word-break:break-all;line-height:1.5}
+    .rt__note{font-size:11px;color:#8aa39a;margin-top:5px;line-height:1.5}
+    .dirty{outline:2px solid #f0b429;outline-offset:1px}
+    table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #f0f4f2;vertical-align:top}
+    th{color:#8aa39a;font-weight:500}
+    .auditbox{max-height:220px;overflow:auto;margin-top:8px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>功能路由表</h1>
+    <p class="tip">系统里所有「可去的地方」集中登记。注册表是代码常量，这里只改<strong>本俱乐部的编排</strong>（改名 / 排序 / 显隐 / 自定义跳转）。可用性会联动「设置中枢」的模块开关与「经营业态开关」的 C 端 tab —— 任一处关掉，入口就不会下发。只登记真实存在的页面与端点，<strong>没有独立 C 端页面的能力标为 API，不提供假跳转</strong>。</p>
+
+    <div class="toolbar">
+      <label class="muted">端</label>
+      <select id="scopeSel">
+        <option value="web">C 端（H5 / 小程序）</option>
+        <option value="club">俱乐部后台</option>
+        <option value="platform">平台后台</option>
+        <option value="leader">领队端</option>
+      </select>
+      <button class="btn ghost sm" id="refreshBtn">刷新</button>
+      <button class="btn" id="saveBtn">保存改动</button>
+      <button class="btn danger" id="resetBtn">重置本端</button>
+      <span class="muted" id="hint">读取中…</span>
+    </div>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="card">
+      <h3>入口编排 <span class="muted">显隐三态：跟随默认 / 显示 / 隐藏；改动先标黄，点「保存改动」才提交</span></h3>
+      <div id="routes"><div class="empty">读取中…</div></div>
+    </div>
+
+    <div class="card">
+      <h3>变更审计 <span class="muted">最近 30 条</span></h3>
+      <div class="auditbox" id="audit"></div>
+    </div>
+  </div>
+  <script src="/static/shared.js?v=20261113b"></script>
+  <script src="/static/club/routes.js?v=20261113e"></script>
+</body>
+</html>

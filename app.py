@@ -1,5 +1,5 @@
 from __future__ import annotations
-import uuid, os, io, csv, re, json, zipfile, shutil, asyncio, secrets, hmac, hashlib, base64, subprocess, time, logging
+import uuid, os, io, csv, re, json, zipfile, shutil, asyncio, secrets, hmac, hashlib, base64, subprocess, time, logging, sqlite3
 logger=logging.getLogger('clubos')
 from sqlite3 import IntegrityError
 from datetime import datetime, timedelta, date
@@ -31,6 +31,18 @@ from clubos_domain.club_analytics import ClubBusinessIntelligence
 from clubos_domain import club_biz
 from clubos_domain import club_home
 from clubos_domain import c_profile
+from clubos_domain import page_layout
+from clubos_domain import stores as stores_mod
+from clubos_domain import notifications as notif_mod
+from clubos_domain import stored_value as sv_mod
+from clubos_domain import engagement as eng_mod
+from clubos_domain import group_buy as gb_mod
+from clubos_domain import settings_hub as hub_mod
+from clubos_domain import route_registry as route_mod
+from clubos_domain import affiliate as aff_mod
+from clubos_domain import gift_card as gc_mod
+from clubos_domain import miniprogram_bridge as mb_mod
+from clubos_domain import checkout_settlement as cs_mod
 from clubos_domain.gear_points_policy import GearPointsPolicyService
 from clubos_domain.commission_rate import ClubCommissionRateService
 from clubos_domain.product_catalog import ProductCatalogService
@@ -3995,6 +4007,49 @@ def club_member_orders(club_id:int):
                                  FROM member_orders o JOIN users u ON u.id=o.user_id
                                  WHERE o.club_id=? ORDER BY o.id DESC LIMIT 200''',(club_id,)))
 
+# ── 统一营销活动引擎（P0-1，2026-11-13）──────────────────────────
+# 所有营销玩法（首单立减/限时折扣/拼团/签到…）收敛到 marketing_campaigns 通用表，
+# 新增玩法只填配置、不新建表。CLUB 活动仅对本俱乐部生效，PLATFORM 对所有俱乐部生效。
+from clubos_domain.campaign_engine import CampaignEngine
+
+@app.get('/api/club/{club_id}/campaigns')
+def club_campaigns(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return CampaignEngine().list_campaigns(c, owner_club_id=club_id, owner_type='CLUB')
+
+@app.post('/api/club/{club_id}/campaigns')
+def club_add_campaign(club_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            return CampaignEngine().create_campaign(c, owner_type='CLUB', owner_club_id=club_id, payload=payload)
+    except ValueError as e: raise HTTPException(400,str(e))
+
+@app.patch('/api/club/{club_id}/campaigns/{campaign_id}')
+def club_update_campaign(club_id:int,campaign_id:int,payload:dict=Body(...)):
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            return CampaignEngine().update_campaign(c, campaign_id=campaign_id, payload=payload, owner_club_id=club_id)
+    except LookupError as e: raise HTTPException(404,str(e))
+    except PermissionError as e: raise HTTPException(403,str(e))
+    except ValueError as e: raise HTTPException(400,str(e))
+
+@app.delete('/api/club/{club_id}/campaigns/{campaign_id}')
+def club_delete_campaign(club_id:int,campaign_id:int):
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            return CampaignEngine().delete_campaign(c, campaign_id=campaign_id, owner_club_id=club_id)
+    except LookupError as e: raise HTTPException(404,str(e))
+    except PermissionError as e: raise HTTPException(403,str(e))
+
+@app.get('/api/platform/campaigns')
+def platform_campaigns():
+    with conn() as c:
+        return CampaignEngine().list_campaigns(c, owner_type='PLATFORM')
+
 @app.get('/api/public/clubs/{club_id}/membership/purchasable')
 def public_purchasable_tiers(request:Request,club_id:int,user_id:int|None=None):
     """C 端可购买的会员卡 + 当前用户的有效购买记录（俱乐部未开通时返回空列表）。"""
@@ -5318,6 +5373,2995 @@ def club_home_media(club_id:int,asset_path:str):
     if not file_path or not file_path.is_file():raise HTTPException(404,'not found')
     return FileResponse(file_path)
 
+# ===== P0-2 低代码界面装修器 page_layouts =====
+from datetime import datetime as _dt
+
+def _pl_now():
+    return _dt.now().strftime('%Y-%m-%d %H:%M:%S')
+
+def _dt_now():
+    return _dt.now().strftime('%Y-%m-%d %H:%M:%S')
+
+def _load_published_schema(c, club_id, page_key):
+    row = c.execute('SELECT schema_json, status FROM page_layouts WHERE club_id=? AND page_key=?', (club_id, page_key)).fetchone()
+    if not row:
+        return None
+    return row['schema_json'] if (row['status'] or 'DRAFT') == 'PUBLISHED' else None
+
+@app.get('/api/club/{club_id}/page-layouts')
+def list_page_layouts(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        rs = rows(c.execute('SELECT id,club_id,page_key,title,status,updated_at FROM page_layouts WHERE club_id=? ORDER BY id', (club_id,)))
+    return rs
+
+@app.post('/api/club/{club_id}/page-layouts')
+def create_page_layout(club_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    try:
+        norm = page_layout.normalize_layout(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    now = _pl_now()
+    with conn() as c:
+        try:
+            cur = c.execute('INSERT INTO page_layouts(club_id,page_key,title,status,schema_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)',
+                            (club_id, norm['page_key'], norm['title'], norm['status'], page_layout.dumps(norm['components']), now, now))
+            lid = int(cur.lastrowid)
+        except sqlite3.IntegrityError:
+            raise HTTPException(409, '该页面已存在装修布局，请改用更新接口')
+    return {'id': lid, **norm}
+
+@app.get('/api/club/{club_id}/page-layouts/{layout_id}')
+def get_page_layout(club_id:int, layout_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT * FROM page_layouts WHERE id=? AND club_id=?', (layout_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        d = dict(r); d['components'] = page_layout.loads(d.pop('schema_json', None)); return d
+
+@app.patch('/api/club/{club_id}/page-layouts/{layout_id}')
+def update_page_layout(club_id:int, layout_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT * FROM page_layouts WHERE id=? AND club_id=?', (layout_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        existing = page_layout.loads(r['schema_json'])
+        merged = {
+            'page_key': str(payload.get('page_key', r['page_key']) or '').strip() or r['page_key'],
+            'title': payload.get('title', r['title'] if r['title'] is not None else ''),
+            'status': payload.get('status', r['status']),
+            'components': payload.get('components', existing),
+        }
+        try:
+            norm = page_layout.normalize_layout(merged)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        c.execute('UPDATE page_layouts SET title=?,status=?,schema_json=?,updated_at=? WHERE id=?',
+                  (norm['title'], norm['status'], page_layout.dumps(norm['components']), _pl_now(), layout_id))
+    return {'id': layout_id, **norm}
+
+@app.delete('/api/club/{club_id}/page-layouts/{layout_id}')
+def delete_page_layout(club_id:int, layout_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        c.execute('DELETE FROM page_layouts WHERE id=? AND club_id=?', (layout_id, club_id))
+    return {'ok': True}
+
+@app.get('/api/public/clubs/{club_id}/page/{page_key}')
+def public_page(club_id:int, page_key:str):
+    if page_key not in page_layout.PAGE_KEYS:
+        raise HTTPException(404, 'unknown page_key')
+    if IS_PROD and club_or_404(club_id)['status']!='active': raise HTTPException(404, 'not found')
+    with conn() as c:
+        # P1-4 设置中枢：装修总开关 / 首页呈现方式优先于已发布版面
+        _hp = hub_mod.portal_policy(c, club_id)
+        allow = _hp['decoratorEnabled'] and _hp['homeLayoutMode'] != 'default'
+        schema = _load_published_schema(c, club_id, page_key) if allow else None
+    # P1-5：把路由表生效 URL 注入装修组件（被关闭 / 隐藏的 key 解析不到 → C 端不可点）
+    route_urls = {}
+    if schema:
+        try:
+            with conn() as c:
+                route_urls = _route_eff(c, club_id, 'web', public_only=True)['urlMap']
+        except Exception:
+            route_urls = {}
+    comps = page_layout.render_public(club_id, schema, route_urls=route_urls) if schema else None
+    # 无 PUBLISHED 布局 → components 为 null，前端回落到原 hardcode（home_banners / 默认活动流）
+    return {'page_key': page_key, 'components': comps}
+
+@app.get('/api/public/clubs/{club_id}/page-media/{asset_path:path}')
+def public_page_media(club_id:int, asset_path:str):
+    # 白名单 = 该俱乐部所有 PUBLISHED 布局里真实引用过的 /static/ 图片
+    x = club_or_404(club_id)
+    if IS_PROD and x['status']!='active': raise HTTPException(404, 'not found')
+    with conn() as c:
+        rs = c.execute("SELECT schema_json FROM page_layouts WHERE club_id=? AND status='PUBLISHED'", (club_id,)).fetchall()
+    allowed = set()
+    for r in rs:
+        allowed |= page_layout.media_paths(page_layout.loads(r['schema_json']))
+    original = '/static/' + unquote(asset_path)
+    if original not in allowed: raise HTTPException(404, 'not found')
+    fp = _safe_media_path(original)
+    if not fp or not fp.is_file(): raise HTTPException(404, 'not found')
+    resp = FileResponse(fp)
+    resp.headers['Cache-Control'] = 'public, max-age=300'
+    return resp
+
+
+# ===== P0-3 门店 / 基地 / 分队实体 stores =====
+def _store_row_to_view(r):
+    d = dict(r)
+    d['geo'] = stores_mod.loads(d.pop('geo_json', None))
+    d['hours'] = stores_mod.loads(d.pop('hours_json', None)) or []
+    d['notice'] = stores_mod.loads(d.pop('notice_json', None))
+    d['isDefault'] = bool(d.get('is_default'))
+    return d
+
+@app.get('/api/club/{club_id}/stores')
+def list_stores(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        rs = rows(c.execute('SELECT * FROM stores WHERE club_id=? ORDER BY is_default DESC, id', (club_id,)))
+    return [_store_row_to_view(r) for r in rs]
+
+@app.post('/api/club/{club_id}/stores')
+def create_store(club_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    try:
+        norm = stores_mod.normalize_store(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    now = _dt_now()
+    with conn() as c:
+        n = c.execute('SELECT COUNT(*) n FROM stores WHERE club_id=?', (club_id,)).fetchone()['n']
+        is_default = 1 if (bool(payload.get('isDefault')) or n == 0) else 0
+        if is_default:
+            c.execute('UPDATE stores SET is_default=0 WHERE club_id=?', (club_id,))
+        cur = c.execute(
+            """INSERT INTO stores(club_id,name,address,phone,geo_json,hours_json,notice_json,is_default,status,created_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
+            (club_id, norm['name'], norm['address'] or None, norm['phone'] or None,
+             stores_mod.dumps(norm['geo_json']), stores_mod.dumps(norm['hours_json']), stores_mod.dumps(norm['notice_json']),
+             is_default, norm['status'], now, now))
+        sid = int(cur.lastrowid)
+    return _store_row_to_view({'id': sid, 'club_id': club_id, 'name': norm['name'], 'address': norm['address'],
+                               'phone': norm['phone'], 'geo_json': stores_mod.dumps(norm['geo_json']),
+                               'hours_json': stores_mod.dumps(norm['hours_json']), 'notice_json': stores_mod.dumps(norm['notice_json']),
+                               'is_default': is_default, 'status': norm['status']})
+
+@app.get('/api/club/{club_id}/stores/{store_id}')
+def get_store(club_id:int, store_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT * FROM stores WHERE id=? AND club_id=?', (store_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        return _store_row_to_view(r)
+
+@app.patch('/api/club/{club_id}/stores/{store_id}')
+def update_store(club_id:int, store_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT * FROM stores WHERE id=? AND club_id=?', (store_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        try:
+            norm = stores_mod.normalize_store(payload, dict(r))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        c.execute(
+            """UPDATE stores SET name=?,address=?,phone=?,geo_json=?,hours_json=?,notice_json=?,status=?,updated_at=? WHERE id=?""",
+            (norm['name'], norm['address'] or None, norm['phone'] or None,
+             stores_mod.dumps(norm['geo_json']), stores_mod.dumps(norm['hours_json']), stores_mod.dumps(norm['notice_json']),
+             norm['status'], _dt_now(), store_id))
+    return get_store(club_id, store_id)
+
+@app.post('/api/club/{club_id}/stores/{store_id}/set-default')
+def set_default_store(club_id:int, store_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT id FROM stores WHERE id=? AND club_id=?', (store_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        c.execute('UPDATE stores SET is_default=0 WHERE club_id=?', (club_id,))
+        c.execute('UPDATE stores SET is_default=1 WHERE id=?', (store_id,))
+    return {'ok': True}
+
+@app.delete('/api/club/{club_id}/stores/{store_id}')
+def delete_store(club_id:int, store_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        n = c.execute('SELECT COUNT(*) n FROM stores WHERE club_id=?', (club_id,)).fetchone()['n']
+        if n <= 1:
+            raise HTTPException(409, '至少保留一个门店')
+        r = c.execute('SELECT is_default FROM stores WHERE id=? AND club_id=?', (store_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        if r['is_default']:
+            raise HTTPException(409, '不能删除默认门店，请先指定其他门店为默认')
+        c.execute('DELETE FROM stores WHERE id=? AND club_id=?', (store_id, club_id))
+    return {'ok': True}
+
+
+# ===== P0-4 通知通道抽象 + 模板 notifications =====
+# 把"通知"从单点（仅企微 Webhook）升级为 通道抽象 + 模板 两层：
+#   通道 notification_channels(type∈wechat/email/sms/inapp, 配置存 config_json, enabled 开关)
+#   模板 notification_templates(code 区分业务场景, channel, title, body 可带 {{变量}})
+#   inapp_messages 为站内信收件箱。dispatch() 复用现有企微集成 webhook，绝不因通知失败阻断主流程。
+def _channel_row_to_view(r):
+    d = dict(r)
+    d['config'] = notif_mod.loads(d.pop('config_json', None))
+    return d
+
+@app.get('/api/club/{club_id}/notification-channels')
+def list_notification_channels(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        rs = rows(c.execute('SELECT * FROM notification_channels WHERE club_id=? ORDER BY id', (club_id,)))
+    return [_channel_row_to_view(r) for r in rs]
+
+@app.post('/api/club/{club_id}/notification-channels')
+def create_notification_channel(club_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    try:
+        norm = notif_mod.normalize_channel(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    cfg = notif_mod.dumps(norm['config_json'])
+    try:
+        with conn() as c:
+            cur = c.execute(
+                'INSERT INTO notification_channels(club_id,type,config_json,enabled,created_at,updated_at) VALUES(?,?,?,?,datetime(\'now\'),datetime(\'now\'))',
+                (club_id, norm['type'], cfg, 1 if norm['enabled'] else 0))
+            cid = int(cur.lastrowid)
+    except IntegrityError:
+        raise HTTPException(409, '该通道类型已存在（每个 club 下 type 唯一）')
+    return _channel_row_to_view({'id': cid, 'club_id': club_id, 'type': norm['type'],
+                                 'config_json': cfg, 'enabled': norm['enabled']})
+
+@app.get('/api/club/{club_id}/notification-channels/{channel_id}')
+def get_notification_channel(club_id:int, channel_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT * FROM notification_channels WHERE id=? AND club_id=?', (channel_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        return _channel_row_to_view(r)
+
+@app.patch('/api/club/{club_id}/notification-channels/{channel_id}')
+def update_notification_channel(club_id:int, channel_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT * FROM notification_channels WHERE id=? AND club_id=?', (channel_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        try:
+            norm = notif_mod.normalize_channel(payload, dict(r))
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        cfg = notif_mod.dumps(norm['config_json'])
+        c.execute('UPDATE notification_channels SET type=?,config_json=?,enabled=?,updated_at=datetime(\'now\') WHERE id=?',
+                  (norm['type'], cfg, 1 if norm['enabled'] else 0, channel_id))
+    return get_notification_channel(club_id, channel_id)
+
+@app.delete('/api/club/{club_id}/notification-channels/{channel_id}')
+def delete_notification_channel(club_id:int, channel_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT id FROM notification_channels WHERE id=? AND club_id=?', (channel_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        c.execute('DELETE FROM notification_channels WHERE id=?', (channel_id,))
+    return {'ok': True}
+
+def _template_row_to_view(r):
+    return dict(r)
+
+@app.get('/api/club/{club_id}/notification-templates')
+def list_notification_templates(club_id:int):
+    """返回俱乐部自有模板 + 平台级默认模板（club_id=0），供后台编辑时区分 scope。"""
+    club_or_404(club_id)
+    out = []
+    with conn() as c:
+        rs = rows(c.execute('SELECT * FROM notification_templates WHERE club_id=? OR club_id=0 ORDER BY club_id DESC, id', (club_id,)))
+    for r in rs:
+        d = _template_row_to_view(r)
+        d['scope'] = 'platform' if int(r['club_id']) == 0 else 'club'
+        out.append(d)
+    return out
+
+@app.post('/api/club/{club_id}/notification-templates')
+def create_notification_template(club_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    try:
+        norm = notif_mod.normalize_template(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    with conn() as c:
+        cur = c.execute(
+            'INSERT INTO notification_templates(club_id,code,channel,title,body,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,datetime(\'now\'),datetime(\'now\'))',
+            (club_id, norm['code'], norm['channel'], norm['title'], norm['body'], 1 if norm['enabled'] else 0))
+        tid = int(cur.lastrowid)
+    return _template_row_to_view({'id': tid, 'club_id': club_id, 'code': norm['code'], 'channel': norm['channel'],
+                                  'title': norm['title'], 'body': norm['body'], 'enabled': norm['enabled']})
+
+@app.get('/api/club/{club_id}/notification-templates/{template_id}')
+def get_notification_template(club_id:int, template_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT * FROM notification_templates WHERE id=? AND (club_id=? OR club_id=0)', (template_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        return _template_row_to_view(r)
+
+@app.patch('/api/club/{club_id}/notification-templates/{template_id}')
+def update_notification_template(club_id:int, template_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT * FROM notification_templates WHERE id=? AND club_id=?', (template_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        merged = dict(r); merged.update(payload)
+        try:
+            norm = notif_mod.normalize_template(merged)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        c.execute('UPDATE notification_templates SET code=?,channel=?,title=?,body=?,enabled=?,updated_at=datetime(\'now\') WHERE id=?',
+                  (norm['code'], norm['channel'], norm['title'], norm['body'], 1 if norm['enabled'] else 0, template_id))
+    return get_notification_template(club_id, template_id)
+
+@app.delete('/api/club/{club_id}/notification-templates/{template_id}')
+def delete_notification_template(club_id:int, template_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = c.execute('SELECT id FROM notification_templates WHERE id=? AND club_id=?', (template_id, club_id)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        c.execute('DELETE FROM notification_templates WHERE id=?', (template_id,))
+    return {'ok': True}
+
+@app.post('/api/club/{club_id}/notify')
+def trigger_notification(club_id:int, request:Request, payload:dict=Body(...)):
+    """触发一次通知分发（活动报名/订单/券到期/库存预警等主流程调用此处）。
+
+    body: {code, ctx:{...}, user_id?(inapp 收件人), channel_override?}
+    返回 notif_mod.dispatch 的 {sent, channel, reason}，绝不抛错阻断主流程。
+    """
+    club_or_404(club_id)
+    code = str(payload.get('code') or '')
+    if not code:
+        raise HTTPException(400, 'code 必填')
+    ctx = payload.get('ctx') or {}
+    user_id = payload.get('user_id')
+    channel_override = payload.get('channel_override')
+    if user_id is None:
+        try:
+            ident, _ = get_identity(request)
+            if ident and ident.get('role') in ('member', 'leader') and ident.get('user_id'):
+                user_id = int(ident['user_id'])
+        except Exception:
+            user_id = None
+    with conn() as c:
+        _hub = hub_mod.notify_policy(c, club_id)
+        res = notif_mod.dispatch(c, club_id=club_id, code=code, ctx=ctx,
+                                 user_id=user_id, channel_override=channel_override,
+                                 hub=_hub)
+    return res
+
+@app.get('/api/club/{club_id}/inapp-messages')
+def list_inapp_messages(club_id:int, request:Request):
+    """当前登录用户的站内信收件箱（member/leader 才可读）。"""
+    club_or_404(club_id)
+    ident, _ = get_identity(request)
+    if not ident or ident.get('role') not in ('member', 'leader') or not ident.get('user_id'):
+        raise HTTPException(401, 'authentication required')
+    uid = int(ident['user_id'])
+    with conn() as c:
+        rs = rows(c.execute(
+            'SELECT * FROM inapp_messages WHERE club_id=? AND user_id=? ORDER BY id DESC', (club_id, uid)))
+        unread = c.execute(
+            'SELECT COUNT(*) n FROM inapp_messages WHERE club_id=? AND user_id=? AND is_read=0', (club_id, uid)).fetchone()['n']
+    return {'items': [dict(r) for r in rs], 'unread': int(unread)}
+
+@app.patch('/api/club/{club_id}/inapp-messages/{msg_id}/read')
+def read_inapp_message(club_id:int, msg_id:int, request:Request):
+    club_or_404(club_id)
+    ident, _ = get_identity(request)
+    if not ident or ident.get('role') not in ('member', 'leader') or not ident.get('user_id'):
+        raise HTTPException(401, 'authentication required')
+    uid = int(ident['user_id'])
+    with conn() as c:
+        r = c.execute('SELECT id FROM inapp_messages WHERE id=? AND club_id=? AND user_id=?', (msg_id, club_id, uid)).fetchone()
+        if not r: raise HTTPException(404, 'not found')
+        c.execute('UPDATE inapp_messages SET is_read=1 WHERE id=?', (msg_id,))
+    return {'ok': True}
+
+@app.post('/api/club/{club_id}/inapp-messages/read-all')
+def read_all_inapp_messages(club_id:int, request:Request):
+    club_or_404(club_id)
+    ident, _ = get_identity(request)
+    if not ident or ident.get('role') not in ('member', 'leader') or not ident.get('user_id'):
+        raise HTTPException(401, 'authentication required')
+    uid = int(ident['user_id'])
+    with conn() as c:
+        c.execute('UPDATE inapp_messages SET is_read=1 WHERE club_id=? AND user_id=? AND is_read=0', (club_id, uid))
+    return {'ok': True}
+
+@app.get('/api/platform/notification-templates')
+def list_platform_notification_templates():
+    """平台级默认模板（club_id=0），供平台给所有俱乐部兜底。"""
+    with conn() as c:
+        rs = rows(c.execute('SELECT * FROM notification_templates WHERE club_id=0 ORDER BY id'))
+    return [_template_row_to_view(r) for r in rs]
+
+@app.post('/api/platform/notification-templates')
+def create_platform_notification_template(payload:dict=Body(...)):
+    try:
+        norm = notif_mod.normalize_template(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    with conn() as c:
+        cur = c.execute(
+            'INSERT INTO notification_templates(club_id,code,channel,title,body,enabled,created_at,updated_at) VALUES(0,?,?,?,?,?,datetime(\'now\'),datetime(\'now\'))',
+            (norm['code'], norm['channel'], norm['title'], norm['body'], 1 if norm['enabled'] else 0))
+        tid = int(cur.lastrowid)
+    return _template_row_to_view({'id': tid, 'club_id': 0, 'code': norm['code'], 'channel': norm['channel'],
+                                  'title': norm['title'], 'body': norm['body'], 'enabled': norm['enabled']})
+
+
+# ===== P1-1 会员储值账户 stored_value =====
+# 真金白银预存余额，金额一律「分」INTEGER。独立于积分/AI Credits，不改动 wallet_snapshot。
+# 俱乐部无 stored_value_config 行 = 未开启，所有既有报价/下单链路保持原样。
+def _sv_config(c, club_id:int) -> dict:
+    r = row(c.execute('SELECT * FROM stored_value_config WHERE club_id=?', (club_id,)))
+    if not r:
+        return {'enabled': False, 'allowActivityPay': True, 'maxPayRatio': 100,
+                'minRechargeCents': 0, 'minRechargeAmount': 0.0, 'rules': [], 'updatedAt': None}
+    return sv_mod.config_from_row(r)
+
+
+def _sv_operator(request) -> str:
+    try:
+        ident,_ = get_identity(request)
+        if ident:
+            return str(ident.get('username') or ident.get('role') or 'club-admin')
+    except Exception:
+        pass
+    return 'club-admin'
+
+
+def _sv_public_uid(request, claimed) -> int:
+    """C 端解析会员身份：有合法 member/leader 会话时强制用会话 user_id（防越权读他人余额）；
+    demo/内测无会话时回落显式 user_id（与既有公开端点口径一致）。"""
+    try:
+        ident,_ = get_identity(request)
+    except Exception:
+        ident = None
+    if ident and ident.get('role') in ('member','leader') and ident.get('user_id'):
+        try: return int(ident['user_id'])
+        except (TypeError, ValueError): pass
+    try: return max(0, int(claimed or 0))
+    except (TypeError, ValueError): return 0
+
+
+def _sv_recharge_view(r) -> dict:
+    d = dict(r)
+    return {
+        'id': d.get('id'), 'clubId': d.get('club_id'), 'userId': d.get('user_id'),
+        'amountCents': int(d.get('amount_cents') or 0),
+        'amountAmount': sv_mod.from_cents(d.get('amount_cents')),
+        'bonusCents': int(d.get('bonus_cents') or 0),
+        'bonusAmount': sv_mod.from_cents(d.get('bonus_cents')),
+        'totalCents': int(d.get('total_cents') or 0),
+        'totalAmount': sv_mod.from_cents(d.get('total_cents')),
+        'status': d.get('status'), 'ruleLabel': d.get('rule_label'),
+        'operator': d.get('operator'), 'note': d.get('note'),
+        'createdAt': d.get('created_at'), 'confirmedAt': d.get('confirmed_at'),
+    }
+
+
+@app.get('/api/club/{club_id}/stored-value/config')
+def get_stored_value_config(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return _sv_config(c, club_id)
+
+
+@app.patch('/api/club/{club_id}/stored-value/config')
+def update_stored_value_config(club_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        norm = sv_mod.normalize_config(payload, _sv_config(c, club_id))
+        c.execute("""INSERT INTO stored_value_config
+                     (club_id,enabled,allow_activity_pay,max_pay_ratio,min_recharge_cents,rules_json,updated_at)
+                     VALUES(?,?,?,?,?,?,datetime('now'))
+                     ON CONFLICT(club_id) DO UPDATE SET
+                       enabled=excluded.enabled, allow_activity_pay=excluded.allow_activity_pay,
+                       max_pay_ratio=excluded.max_pay_ratio, min_recharge_cents=excluded.min_recharge_cents,
+                       rules_json=excluded.rules_json, updated_at=excluded.updated_at""",
+                  (club_id, 1 if norm['enabled'] else 0, 1 if norm['allowActivityPay'] else 0,
+                   norm['maxPayRatio'], norm['minRechargeCents'], sv_mod.dumps(norm['rules'])))
+    return get_stored_value_config(club_id)
+
+
+@app.get('/api/club/{club_id}/stored-value/summary')
+def stored_value_summary(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        s = row(c.execute("""SELECT COUNT(*) accounts, COALESCE(SUM(balance_cents),0) balance,
+                             COALESCE(SUM(total_recharged_cents),0) recharged,
+                             COALESCE(SUM(total_bonus_cents),0) bonus,
+                             COALESCE(SUM(total_spent_cents),0) spent
+                             FROM stored_value_accounts WHERE club_id=?""", (club_id,))) or {}
+        pending = c.execute("SELECT COUNT(*) n FROM stored_value_recharges WHERE club_id=? AND status='PENDING'",
+                            (club_id,)).fetchone()['n']
+    return {'accounts': int(s.get('accounts') or 0),
+            'balanceCents': int(s.get('balance') or 0), 'balanceAmount': sv_mod.from_cents(s.get('balance')),
+            'rechargedCents': int(s.get('recharged') or 0), 'rechargedAmount': sv_mod.from_cents(s.get('recharged')),
+            'bonusCents': int(s.get('bonus') or 0), 'bonusAmount': sv_mod.from_cents(s.get('bonus')),
+            'spentCents': int(s.get('spent') or 0), 'spentAmount': sv_mod.from_cents(s.get('spent')),
+            'pendingRecharges': int(pending)}
+
+
+@app.get('/api/club/{club_id}/stored-value/accounts')
+def list_stored_value_accounts(club_id:int, q:str='', limit:int=100, offset:int=0):
+    club_or_404(club_id)
+    sql = """SELECT a.*, u.name AS user_name, u.phone AS user_phone
+             FROM stored_value_accounts a LEFT JOIN users u ON u.id=a.user_id
+             WHERE a.club_id=?"""
+    args = [club_id]
+    if q:
+        sql += " AND (u.name LIKE ? OR u.phone LIKE ? OR CAST(a.user_id AS TEXT) LIKE ?)"
+        like = '%' + q.strip() + '%'
+        args += [like, like, like]
+    sql += ' ORDER BY a.balance_cents DESC, a.id LIMIT ? OFFSET ?'
+    args += [max(1, min(500, int(limit or 100))), max(0, int(offset or 0))]
+    with conn() as c:
+        rs = rows(c.execute(sql, args))
+    return [sv_mod.account_view(r) for r in rs]
+
+
+@app.get('/api/club/{club_id}/stored-value/accounts/{user_id}')
+def get_stored_value_account(club_id:int, user_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = row(c.execute("""SELECT a.*, u.name AS user_name, u.phone AS user_phone
+                             FROM stored_value_accounts a LEFT JOIN users u ON u.id=a.user_id
+                             WHERE a.club_id=? AND a.user_id=?""", (club_id, user_id)))
+        led = rows(c.execute("""SELECT * FROM stored_value_ledger WHERE club_id=? AND user_id=?
+                                ORDER BY id DESC LIMIT 100""", (club_id, user_id)))
+    return {'account': sv_mod.account_view(r) if r else None,
+            'ledger': [sv_mod.ledger_view(x) for x in led]}
+
+
+@app.post('/api/club/{club_id}/stored-value/adjust')
+def adjust_stored_value(club_id:int, request:Request, payload:dict=Body(...)):
+    """后台手工调整余额（赠送/扣减）。amount 为正数元，direction 决定方向。"""
+    club_or_404(club_id)
+    try:
+        uid = int(payload.get('userId') or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    if uid <= 0:
+        raise HTTPException(400, 'userId 必填')
+    direction = str(payload.get('direction') or 'credit').strip().lower()
+    if direction not in ('credit', 'debit'):
+        raise HTTPException(400, 'direction 仅支持 credit/debit')
+    amount_c = sv_mod.to_cents(payload.get('amount'))
+    if amount_c <= 0:
+        raise HTTPException(400, '调整金额无效')
+    if amount_c > sv_mod.MAX_ADJUST_CENTS:
+        raise HTTPException(400, '单次调整超出上限')
+    delta = amount_c if direction == 'credit' else -amount_c
+    with conn() as c:
+        res = sv_mod.apply_ledger(c, club_id=club_id, user_id=uid, delta_cents=delta,
+                                  ledger_type='ADJUST_UP' if direction == 'credit' else 'ADJUST_DOWN',
+                                  source_type='manual_adjust', source_id=payload.get('sourceId') or None,
+                                  operator=_sv_operator(request), note=payload.get('note'))
+        if not res['ok']:
+            raise HTTPException(409, {'reason': res['reason'], 'balanceCents': res['balanceCents']})
+        return {'ok': True, 'balanceCents': res['balanceCents'],
+                'balanceAmount': sv_mod.from_cents(res['balanceCents'])}
+
+
+def _sv_create_recharge(c, club_id:int, user_id:int, payload:dict, operator:str) -> dict:
+    cfg = _sv_config(c, club_id)
+    if not cfg['enabled']:
+        raise HTTPException(409, '该俱乐部尚未开启会员储值')
+    amount_c = sv_mod.to_cents(payload.get('amount'))
+    if amount_c <= 0:
+        raise HTTPException(400, '充值金额无效')
+    if amount_c > sv_mod.MAX_RECHARGE_CENTS:
+        raise HTTPException(400, '超出单笔充值上限')
+    if amount_c < cfg['minRechargeCents']:
+        raise HTTPException(400, '低于最低充值金额')
+    bonus_c = sv_mod.compute_bonus(amount_c, cfg['rules'])
+    label = ''
+    for r in cfg['rules']:
+        if r.get('enabled', True) and amount_c >= r['minCents']:
+            label = r.get('label') or ('充%s送%s' % (r['minAmount'], r['bonusAmount']))
+            break
+    cur = c.execute("""INSERT INTO stored_value_recharges
+                       (club_id,user_id,amount_cents,bonus_cents,total_cents,status,rule_label,operator,note,created_at)
+                       VALUES(?,?,?,?,?,'PENDING',?,?,?,datetime('now'))""",
+                    (club_id, user_id, amount_c, bonus_c, amount_c + bonus_c, label, operator,
+                     str(payload.get('note') or '')[:200] or None))
+    return _sv_recharge_view(row(c.execute('SELECT * FROM stored_value_recharges WHERE id=?',
+                                           (int(cur.lastrowid),))))
+
+
+@app.get('/api/club/{club_id}/stored-value/recharges')
+def list_stored_value_recharges(club_id:int, status:str='', limit:int=100):
+    club_or_404(club_id)
+    sql = 'SELECT * FROM stored_value_recharges WHERE club_id=?'
+    args = [club_id]
+    if status in sv_mod.RECHARGE_STATUSES:
+        sql += ' AND status=?'
+        args.append(status)
+    sql += ' ORDER BY id DESC LIMIT ?'
+    args.append(max(1, min(500, int(limit or 100))))
+    with conn() as c:
+        rs = rows(c.execute(sql, args))
+    return [_sv_recharge_view(r) for r in rs]
+
+
+@app.post('/api/club/{club_id}/stored-value/recharges')
+def create_stored_value_recharge(club_id:int, request:Request, payload:dict=Body(...)):
+    club_or_404(club_id)
+    try:
+        uid = int(payload.get('userId') or 0)
+    except (TypeError, ValueError):
+        uid = 0
+    if uid <= 0:
+        raise HTTPException(400, 'userId 必填')
+    with conn() as c:
+        return _sv_create_recharge(c, club_id, uid, payload, _sv_operator(request))
+
+
+@app.post('/api/club/{club_id}/stored-value/recharges/{rid}/confirm')
+def confirm_stored_value_recharge(club_id:int, rid:int, request:Request):
+    """确认充值到账：本金 + 赠额两条流水，同事务原子写入；重复确认由状态与幂等索引双重拦截。"""
+    club_or_404(club_id)
+    with conn() as c:
+        r = row(c.execute('SELECT * FROM stored_value_recharges WHERE id=? AND club_id=?', (rid, club_id)))
+        if not r:
+            raise HTTPException(404, 'not found')
+        if r['status'] != 'PENDING':
+            raise HTTPException(409, '该充值单已处理（%s）' % r['status'])
+        op = _sv_operator(request)
+        res = sv_mod.apply_ledger(c, club_id=club_id, user_id=int(r['user_id']),
+                                  delta_cents=int(r['amount_cents']), ledger_type='RECHARGE',
+                                  source_type='recharge', source_id=str(rid), operator=op,
+                                  note='充值单 #%d' % rid)
+        if not res['ok']:
+            raise HTTPException(409, {'reason': res['reason']})
+        if int(r['bonus_cents'] or 0) > 0:
+            b = sv_mod.apply_ledger(c, club_id=club_id, user_id=int(r['user_id']),
+                                    delta_cents=int(r['bonus_cents']), ledger_type='BONUS',
+                                    source_type='recharge_bonus', source_id=str(rid), operator=op,
+                                    note='充值赠额 #%d' % rid)
+            if not b['ok']:
+                # 抛错 → conn() 跳过 commit → 本金流水一并回滚，保证原子性
+                raise HTTPException(409, {'reason': b['reason']})
+        c.execute("UPDATE stored_value_recharges SET status='PAID', confirmed_at=datetime('now') WHERE id=?", (rid,))
+        return {'ok': True, 'balanceCents': res['balanceCents'] + int(r['bonus_cents'] or 0),
+                'balanceAmount': sv_mod.from_cents(res['balanceCents'] + int(r['bonus_cents'] or 0))}
+
+
+@app.post('/api/club/{club_id}/stored-value/recharges/{rid}/cancel')
+def cancel_stored_value_recharge(club_id:int, rid:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = row(c.execute('SELECT status FROM stored_value_recharges WHERE id=? AND club_id=?', (rid, club_id)))
+        if not r:
+            raise HTTPException(404, 'not found')
+        if r['status'] != 'PENDING':
+            raise HTTPException(409, '仅待确认充值单可取消')
+        c.execute("UPDATE stored_value_recharges SET status='CANCELLED' WHERE id=?", (rid,))
+    return {'ok': True}
+
+
+@app.get('/api/public/clubs/{club_id}/stored-value/config')
+def public_stored_value_config(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        _sv_hub = hub_mod.is_module_enabled(c, club_id, 'storedValue')
+        cfg = _sv_config(c, club_id)
+    if not _sv_hub or not cfg['enabled']:
+        return {'enabled': False, 'rules': []}
+    return {'enabled': True, 'rules': cfg['rules'], 'minRechargeAmount': cfg['minRechargeAmount'],
+            'maxPayRatio': cfg['maxPayRatio'], 'allowActivityPay': cfg['allowActivityPay']}
+
+
+@app.get('/api/public/clubs/{club_id}/stored-value/my')
+def public_stored_value_my(club_id:int, request:Request, user_id:int=0):
+    club_or_404(club_id)
+    uid = _sv_public_uid(request, user_id)
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    with conn() as c:
+        _sv_hub = hub_mod.is_module_enabled(c, club_id, 'storedValue')
+        cfg = _sv_config(c, club_id)
+        acc = row(c.execute('SELECT * FROM stored_value_accounts WHERE club_id=? AND user_id=?',
+                            (club_id, uid)))
+        led = rows(c.execute("""SELECT * FROM stored_value_ledger WHERE club_id=? AND user_id=?
+                                ORDER BY id DESC LIMIT 50""", (club_id, uid)))
+    if not _sv_hub or not cfg['enabled']:
+        return {'enabled': False, 'balanceCents': 0, 'balanceAmount': 0.0, 'ledger': []}
+    return {
+        'enabled': True, 'userId': uid,
+        'balanceCents': int(acc['balance_cents'] or 0) if acc else 0,
+        'balanceAmount': sv_mod.from_cents(acc['balance_cents']) if acc else 0.0,
+        'status': (acc['status'] if acc else 'ACTIVE'),
+        'maxPayRatio': cfg['maxPayRatio'],
+        'ledger': [sv_mod.ledger_view(x) for x in led],
+    }
+
+
+@app.post('/api/public/clubs/{club_id}/stored-value/recharges')
+def public_create_stored_value_recharge(club_id:int, request:Request, payload:dict=Body(...)):
+    """C 端发起充值单（PENDING），由后台/支付回调确认到账后才入余额。"""
+    club_or_404(club_id)
+    uid = _sv_public_uid(request, payload.get('userId') or 0)
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    with conn() as c:
+        if not hub_mod.is_module_enabled(c, club_id, 'storedValue'):
+            raise HTTPException(403, '会员储值已被设置中枢关闭')
+        return _sv_create_recharge(c, club_id, uid, payload, 'member:%d' % uid)
+
+
+@app.post('/api/public/clubs/{club_id}/stored-value/pay')
+def public_stored_value_pay(club_id:int, request:Request, payload:dict=Body(...)):
+    """用储值余额抵扣一笔订单：按 maxPayRatio 自动用满可用额度，返回还需另付部分。
+
+    body: {payableAmount, orderId, note?}。orderId 作幂等号，重复提交不会重复扣款。
+    """
+    club_or_404(club_id)
+    uid = _sv_public_uid(request, payload.get('userId') or 0)
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    order_id = str(payload.get('orderId') or '').strip()
+    if not order_id:
+        raise HTTPException(400, 'orderId 必填')
+    payable_c = sv_mod.to_cents(payload.get('payableAmount'))
+    if payable_c <= 0:
+        raise HTTPException(400, 'payableAmount 无效')
+    with conn() as c:
+        cfg = _sv_config(c, club_id)
+        if not hub_mod.is_module_enabled(c, club_id, 'storedValue'):
+            raise HTTPException(403, '会员储值已被设置中枢关闭')
+        if not cfg['enabled']:
+            raise HTTPException(409, '该俱乐部尚未开启会员储值')
+        acc = row(c.execute('SELECT balance_cents FROM stored_value_accounts WHERE club_id=? AND user_id=?',
+                            (club_id, uid)))
+        bal = int(acc['balance_cents'] or 0) if acc else 0
+        q = sv_mod.quote_pay(payable_c, bal, cfg['maxPayRatio'])
+        usable = q['usableCents']
+        if usable <= 0:
+            raise HTTPException(409, '储值余额不足或本单不可抵扣')
+        res = sv_mod.apply_ledger(c, club_id=club_id, user_id=uid, delta_cents=-usable,
+                                  ledger_type='PAY', source_type='order', source_id=order_id,
+                                  operator='member:%d' % uid, note=payload.get('note'))
+        if not res['ok']:
+            if res['reason'] == 'duplicated':
+                raise HTTPException(409, '该订单已使用储值支付')
+            raise HTTPException(409, {'reason': res['reason']})
+        return {'ok': True, 'usedCents': usable, 'usedAmount': sv_mod.from_cents(usable),
+                'remainingCents': q['remainingCents'], 'remainingAmount': q['remainingAmount'],
+                'balanceCents': res['balanceCents'], 'balanceAmount': sv_mod.from_cents(res['balanceCents'])}
+
+
+# ───────────────── P1-2 互动玩法：签到 / 抽奖 / 集章 ─────────────────
+# 与 campaign_engine（报价期折扣）完全解耦：这里只处理「用户主动参与 → 发奖」。
+# C 端一律用服务器 UTC+8 业务日，绝不接受客户端传 day/bizKey，防止伪造连签 / 刷章。
+_ENG_KINDS = ('CHECKIN', 'LOTTERY', 'STAMP')
+
+
+def _eng_kind_or_400(kind: str) -> str:
+    k = str(kind or '').strip().upper()
+    if k not in _ENG_KINDS:
+        raise HTTPException(400, '玩法类型只能是 CHECKIN/LOTTERY/STAMP')
+    return k
+
+
+def _eng_uid(request, claimed) -> int:
+    """复用 P1-1 的通用 C 端身份解析（有 member/leader 会话时强制用会话身份防越权）。"""
+    uid = _sv_public_uid(request, claimed)
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    return uid
+
+
+def _eng_raise(res: dict):
+    """domain 写操作失败 → 抛异常，让 `with conn()` 关闭连接并回滚未提交事务，
+    避免「吞异常后 commit 半截数据」留下脏账。"""
+    code = res.get('reason')
+    if code == 'exception':
+        raise HTTPException(500, '互动玩法记账失败，本次操作未生效')
+    if code == 'bad-action':
+        raise HTTPException(400, '无效的集章动作')
+    if code == 'disabled':
+        raise HTTPException(409, '该俱乐部尚未开启此互动玩法')
+    if code == 'already':
+        raise HTTPException(409, '今日已参与，请勿重复提交')
+    if code == 'daily-limit':
+        raise HTTPException(409, '今日参与次数已用完')
+    raise HTTPException(409, {'reason': code or 'failed'})
+
+
+def _eng_notify(c, club_id, uid, label, points):
+    """发奖后联动 P0-4 通知中枢；模板未配置时 dispatch 静默跳过，绝不阻断主流程。"""
+    try:
+        if points > 0:
+            notif_mod.dispatch(c, club_id=club_id, code='engagement_reward',
+                               ctx={'kind': label, 'points': points}, user_id=uid)
+    except Exception:
+        pass
+
+
+@app.get('/api/club/{club_id}/engagement/config')
+def get_engagement_config(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return {k: eng_mod.get_config(c, club_id, k) for k in _ENG_KINDS}
+
+
+@app.patch('/api/club/{club_id}/engagement/config/{kind}')
+def patch_engagement_config(club_id:int, kind:str, payload:dict=Body(...)):
+    club_or_404(club_id)
+    k = _eng_kind_or_400(kind)
+    with conn() as c:
+        cur = eng_mod.get_config(c, club_id, k)
+        cfg = eng_mod.normalize_config(k, payload, cur)
+        eng_mod.save_config(c, club_id, k, cfg)
+    return cfg
+
+
+@app.get('/api/club/{club_id}/engagement/summary')
+def engagement_summary(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return eng_mod.summary(c, club_id)
+
+
+@app.get('/api/club/{club_id}/engagement/logs')
+def engagement_logs(club_id:int, kind:str='', limit:int=100):
+    club_or_404(club_id)
+    sql = """SELECT l.*, u.name AS user_name, u.phone AS user_phone
+             FROM engagement_logs l LEFT JOIN users u ON u.id=l.user_id
+             WHERE l.club_id=?"""
+    args = [club_id]
+    if kind:
+        sql += ' AND l.kind=?'
+        args.append(_eng_kind_or_400(kind))
+    sql += ' ORDER BY l.id DESC LIMIT ?'
+    args.append(max(1, min(500, int(limit or 100))))
+    with conn() as c:
+        rs = rows(c.execute(sql, args))
+    return [eng_mod.log_view(r) for r in rs]
+
+
+@app.get('/api/club/{club_id}/engagement/rewards')
+def engagement_rewards(club_id:int, status:str='', kind:str='', limit:int=100):
+    club_or_404(club_id)
+    sql = """SELECT r.*, u.name AS user_name, u.phone AS user_phone
+             FROM engagement_rewards r LEFT JOIN users u ON u.id=r.user_id
+             WHERE r.club_id=?"""
+    args = [club_id]
+    if kind:
+        sql += ' AND r.kind=?'
+        args.append(_eng_kind_or_400(kind))
+    if status:
+        sql += ' AND r.status=?'
+        args.append(str(status).strip().upper()[:20])
+    sql += ' ORDER BY r.id DESC LIMIT ?'
+    args.append(max(1, min(500, int(limit or 100))))
+    with conn() as c:
+        rs = rows(c.execute(sql, args))
+    return [eng_mod.reward_view(r) for r in rs]
+
+
+@app.post('/api/club/{club_id}/engagement/rewards/{reward_id}/fulfill')
+def fulfill_engagement_reward(club_id:int, reward_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = row(c.execute('SELECT * FROM engagement_rewards WHERE id=? AND club_id=?',
+                          (reward_id, club_id)))
+        if not r:
+            raise HTTPException(404, '发奖记录不存在')
+        if r['status'] != 'PENDING':
+            raise HTTPException(409, '仅待核销奖品可标记发放')
+        c.execute("UPDATE engagement_rewards SET status='FULFILLED', fulfilled_at=datetime('now') WHERE id=?",
+                  (reward_id,))
+    return {'ok': True, 'status': 'FULFILLED'}
+
+
+@app.get('/api/public/clubs/{club_id}/engagement/config')
+def public_engagement_config(club_id:int):
+    """公开规则：不下发抽奖权重 / 库存 / 积分面额等内部配置，防刷。"""
+    club_or_404(club_id)
+    with conn() as c:
+        _eng_hub = hub_mod.portal_policy(c, club_id)['engagementEnabled']
+        cfgs = {k: eng_mod.get_config(c, club_id, k) for k in _ENG_KINDS}
+    out = {}
+    for k, cfg in cfgs.items():
+        if not _eng_hub.get(k.lower(), True) or not cfg['enabled']:
+            out[k] = {'enabled': False}
+        elif k == 'CHECKIN':
+            out[k] = {'enabled': True, 'dailyPoints': cfg['dailyPoints'],
+                      'cycleDays': cfg['cycleDays'], 'streakRules': cfg['streakRules']}
+        elif k == 'LOTTERY':
+            out[k] = {'enabled': True, 'dailyLimit': cfg['dailyLimit'],
+                      'prizes': [{'id': p['id'], 'name': p['name']}
+                                 for p in cfg['prizes'] if p.get('enabled', True)]}
+        else:
+            out[k] = {'enabled': True, 'required': cfg['required'],
+                      'rewardPoints': cfg['rewardPoints'], 'rewardName': cfg['rewardName'],
+                      'actions': [a for a in cfg['actions'] if a.get('enabled', True)]}
+    return out
+
+
+@app.get('/api/public/clubs/{club_id}/engagement/status')
+def public_engagement_status(club_id:int, request:Request, user_id:int=0):
+    club_or_404(club_id)
+    uid = _eng_uid(request, user_id)
+    with conn() as c:
+        return eng_mod.user_status(c, club_id=club_id, user_id=uid)
+
+
+@app.post('/api/public/clubs/{club_id}/engagement/checkin')
+def public_engagement_checkin(club_id:int, request:Request, payload:dict=Body(...)):
+    club_or_404(club_id)
+    uid = _eng_uid(request, payload.get('userId') or 0)
+    with conn() as c:
+        if not hub_mod.is_module_enabled(c, club_id, 'checkin'):
+            raise HTTPException(403, '签到已被设置中枢关闭')
+        res = eng_mod.checkin(c, club_id=club_id, user_id=uid)
+        if not res['ok']:
+            _eng_raise(res)
+        _eng_notify(c, club_id, uid, '签到', res.get('pointsGranted', 0))
+    return res
+
+
+@app.post('/api/public/clubs/{club_id}/engagement/draw')
+def public_engagement_draw(club_id:int, request:Request, payload:dict=Body(...)):
+    club_or_404(club_id)
+    uid = _eng_uid(request, payload.get('userId') or 0)
+    with conn() as c:
+        if not hub_mod.is_module_enabled(c, club_id, 'lottery'):
+            raise HTTPException(403, '抽奖已被设置中枢关闭')
+        res = eng_mod.draw(c, club_id=club_id, user_id=uid)
+        if not res['ok']:
+            _eng_raise(res)
+        _eng_notify(c, club_id, uid, '抽奖', res.get('pointsGranted', 0))
+    return res
+
+
+@app.post('/api/public/clubs/{club_id}/engagement/stamp')
+def public_engagement_stamp(club_id:int, request:Request, payload:dict=Body(...)):
+    club_or_404(club_id)
+    uid = _eng_uid(request, payload.get('userId') or 0)
+    action = str(payload.get('action') or '').strip().lower()
+    if not action:
+        raise HTTPException(400, 'action 必填')
+    with conn() as c:
+        if not hub_mod.is_module_enabled(c, club_id, 'stamp'):
+            raise HTTPException(403, '集章已被设置中枢关闭')
+        res = eng_mod.add_stamp(c, club_id=club_id, user_id=uid, action=action)
+        if not res['ok']:
+            _eng_raise(res)
+        _eng_notify(c, club_id, uid, '集章', res.get('pointsGranted', 0))
+    return res
+
+
+# ───────────────── P1-3 拼团：活动配置 / 开团 / 参团 / 成团 ─────────────────
+# 独立状态机，不改 evaluate()、不改 payable、不碰 checkout 确认流程。
+# 成团后联动 P0-4 通知中枢；团过期惰性判定，无需定时任务。
+def _gb_uid(request, claimed) -> int:
+    """复用通用 C 端身份解析：有 member/leader 会话时强制用会话身份防越权。"""
+    uid = _sv_public_uid(request, claimed)
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    return uid
+
+
+def _gb_raise(res: dict):
+    """写操作失败 → 抛异常让 `with conn()` 关闭连接并回滚未提交事务。"""
+    code = res.get('reason')
+    table = {
+        'exception': (500, '拼团操作失败，本次操作未生效'),
+        'campaign-not-found': (404, '拼团活动不存在'),
+        'team-not-found': (404, '拼团不存在'),
+        'not-leader': (403, '只有团长可以取消该团'),
+        'campaign-not-active': (409, '该拼团活动未开启'),
+        'out-of-window': (409, '不在拼团活动时间内'),
+        'max-teams': (409, '该活动开团数量已达上限'),
+        'already-in-team': (409, '你已在该活动的其他进行中团里'),
+        'already-joined': (409, '你已在这个团里'),
+        'already-success': (409, '该团已成团'),
+        'team-full': (409, '该团已满员'),
+        'team-expired': (409, '该团已过期'),
+        'team-closed': (409, '该团已结束或已取消'),
+        'team-not-open': (409, '仅进行中的团可取消'),
+    }
+    status, msg = table.get(code, (409, '无法完成操作：%s' % (code or 'unknown')))
+    raise HTTPException(status, msg)
+
+
+def _gb_notify_success(c, club_id, team, members):
+    """成团后给全团发站内信；模板未配置时静默跳过，绝不阻断主流程。"""
+    try:
+        ctx = {'teamId': team.get('id'), 'price': team.get('price'),
+               'people': team.get('memberCount')}
+        for m in members or []:
+            notif_mod.dispatch(c, club_id=club_id, code='group_buy_success',
+                               ctx=ctx, user_id=m.get('userId'))
+    except Exception:
+        pass
+
+
+# ---- 后台 ----
+@app.get('/api/club/{club_id}/group-buys/campaigns')
+def gb_list_campaigns(club_id:int, activity_id:int=0, limit:int=200):
+    club_or_404(club_id)
+    with conn() as c:
+        return gb_mod.list_campaigns(c, club_id, activity_id=activity_id or None, limit=limit)
+
+
+@app.post('/api/club/{club_id}/group-buys/campaigns')
+def gb_create_campaign(club_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            return gb_mod.create_campaign(c, club_id, payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch('/api/club/{club_id}/group-buys/campaigns/{campaign_id}')
+def gb_update_campaign(club_id:int, campaign_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            return gb_mod.update_campaign(c, club_id, campaign_id, payload)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete('/api/club/{club_id}/group-buys/campaigns/{campaign_id}')
+def gb_delete_campaign(club_id:int, campaign_id:int):
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            return gb_mod.delete_campaign(c, club_id, campaign_id)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.get('/api/club/{club_id}/group-buys/teams')
+def gb_list_teams(club_id:int, campaign_id:int=0, status:str='', limit:int=100):
+    club_or_404(club_id)
+    with conn() as c:
+        return gb_mod.list_teams(c, club_id, campaign_id=campaign_id or None,
+                                 status=status or None, limit=limit)
+
+
+@app.get('/api/club/{club_id}/group-buys/teams/{team_id}')
+def gb_team_detail(club_id:int, team_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        d = gb_mod.team_detail(c, club_id, team_id)
+    if not d:
+        raise HTTPException(404, '拼团不存在')
+    return d
+
+
+@app.post('/api/club/{club_id}/group-buys/teams/{team_id}/cancel')
+def gb_admin_cancel_team(club_id:int, team_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        res = gb_mod.cancel_team(c, club_id=club_id, team_id=team_id, by_admin=True)
+        if not res['ok']:
+            _gb_raise(res)
+    return {'ok': True, 'status': 'CANCELLED'}
+
+
+@app.get('/api/club/{club_id}/group-buys/summary')
+def gb_summary(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        return gb_mod.summary(c, club_id)
+
+
+# ---- C 端 ----
+@app.get('/api/public/clubs/{club_id}/group-buys/campaigns')
+def public_gb_campaigns(club_id:int, activity_id:int=0):
+    """只暴露 ACTIVE 且在时间窗内的拼团活动。"""
+    club_or_404(club_id)
+    with conn() as c:
+        items = gb_mod.list_campaigns(c, club_id, only_active=True,
+                                      activity_id=activity_id or None)
+    return [x for x in items if gb_mod.window_ok(x)]
+
+
+@app.get('/api/public/clubs/{club_id}/group-buys/teams')
+def public_gb_teams(club_id:int, campaign_id:int=0, status:str='OPEN', limit:int=50):
+    """拼团广场：默认只列可加入的团，不下发任何成员个人信息。"""
+    club_or_404(club_id)
+    with conn() as c:
+        return gb_mod.list_teams(c, club_id, campaign_id=campaign_id or None,
+                                 status=status or None, limit=limit)
+
+
+@app.get('/api/public/clubs/{club_id}/group-buys/teams/{team_id}')
+def public_gb_team_detail(club_id:int, team_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        d = gb_mod.team_detail(c, club_id, team_id)
+    if not d:
+        raise HTTPException(404, '拼团不存在')
+    # C 端不暴露团员手机号 / 真实姓名，只给 userId 与「团员 N」占位。
+    d['members'] = [{'userId': m['userId'], 'role': m['role'], 'status': m['status'],
+                     'displayName': ('团长' if m['role'] == 'LEADER' else '团员'),
+                     'joinedAt': m['joinedAt']} for m in d.get('members', [])]
+    return d
+
+
+@app.get('/api/public/clubs/{club_id}/group-buys/my')
+def public_gb_my(club_id:int, request:Request, user_id:int=0, limit:int=50):
+    club_or_404(club_id)
+    uid = _gb_uid(request, user_id)
+    with conn() as c:
+        return gb_mod.user_teams(c, club_id, uid, limit=limit)
+
+
+@app.post('/api/public/clubs/{club_id}/group-buys/teams')
+def public_gb_open(club_id:int, request:Request, payload:dict=Body(...)):
+    club_or_404(club_id)
+    uid = _gb_uid(request, payload.get('userId') or 0)
+    try:
+        cid = int(payload.get('campaignId') or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'campaignId 无效')
+    if cid <= 0:
+        raise HTTPException(400, 'campaignId 必填')
+    with conn() as c:
+        res = gb_mod.open_team(c, club_id=club_id, campaign_id=cid, user_id=uid)
+        if not res['ok']:
+            _gb_raise(res)
+    return res
+
+
+@app.post('/api/public/clubs/{club_id}/group-buys/teams/{team_id}/join')
+def public_gb_join(club_id:int, team_id:int, request:Request, payload:dict=Body(...)):
+    club_or_404(club_id)
+    uid = _gb_uid(request, payload.get('userId') or 0)
+    with conn() as c:
+        res = gb_mod.join_team(c, club_id=club_id, team_id=team_id, user_id=uid)
+        if not res['ok']:
+            _gb_raise(res)
+        if res['isSuccess']:
+            _gb_notify_success(c, club_id, res['team'], res['members'])
+    return res
+
+
+@app.post('/api/public/clubs/{club_id}/group-buys/teams/{team_id}/cancel')
+def public_gb_cancel(club_id:int, team_id:int, request:Request, payload:dict=Body(...)):
+    club_or_404(club_id)
+    uid = _gb_uid(request, payload.get('userId') or 0)
+    with conn() as c:
+        res = gb_mod.cancel_team(c, club_id=club_id, team_id=team_id, user_id=uid)
+        if not res['ok']:
+            _gb_raise(res)
+    return {'ok': True, 'status': 'CANCELLED'}
+
+
+# ===== P1-4 设置中枢 settings_hub =====
+# 只存「通用偏好 + 已接线模块的总开关覆盖」与变更审计；各模块真实配置仍在原表，
+# 这里只读聚合，绝不复制回写。club_id=0 = 平台级默认。
+def _hub_operator(request) -> str:
+    try:
+        ident, _ = get_identity(request)
+        if ident:
+            return str(ident.get('name') or ident.get('user_id') or ident.get('role') or '')[:60]
+    except Exception:
+        pass
+    return ''
+
+
+@app.get('/api/club/{club_id}/settings-hub/registry')
+def club_settings_hub_registry(club_id:int):
+    """注册表：分组 / 模块（含配置入口）/ 偏好规格 / 可切换白名单。"""
+    club_or_404(club_id)
+    return hub_mod.registry_view()
+
+
+@app.get('/api/club/{club_id}/settings-hub/audit')
+def club_settings_hub_audit(club_id:int, limit:int=50):
+    club_or_404(club_id)
+    with conn() as c:
+        return {'items': hub_mod.audit_list(c, club_id, limit)}
+
+
+@app.get('/api/club/{club_id}/settings-hub')
+def club_settings_hub_get(club_id:int):
+    """一屏全景：所有模块的真实状态 + 偏好生效值 + 汇总（只读聚合）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        return hub_mod.snapshot(c, club_id)
+
+
+@app.patch('/api/club/{club_id}/settings-hub')
+def club_settings_hub_patch(club_id:int, request:Request, payload:dict=Body(...)):
+    """批量覆盖：{changes:{key:value}, note?}。未知 key / 越界值直接 400，不静默夹逼。"""
+    club_or_404(club_id)
+    try:
+        changes = hub_mod.normalize_changes(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    with conn() as c:
+        res = hub_mod.set_many(c, club_id, changes, operator=_hub_operator(request),
+                               note=str(payload.get('note') or ''))
+        snap = hub_mod.snapshot(c, club_id)
+    return {'ok': True, 'updated': res['updated'], 'skipped': res['skipped'], 'snapshot': snap}
+
+
+@app.post('/api/club/{club_id}/settings-hub/reset')
+def club_settings_hub_reset(club_id:int, payload:dict=Body(default={})):
+    """重置覆盖值 → 回落平台默认 / 内置默认。body {keys:[...]}，省略则重置全部。"""
+    club_or_404(club_id)
+    keys = payload.get('keys') if isinstance(payload, dict) else None
+    if keys is not None and not isinstance(keys, list):
+        raise HTTPException(400, 'keys 必须是数组')
+    try:
+        with conn() as c:
+            res = hub_mod.reset(c, club_id, keys)
+            snap = hub_mod.snapshot(c, club_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {'ok': True, 'reset': res['reset'], 'snapshot': snap}
+
+
+@app.get('/api/public/clubs/{club_id}/settings-hub')
+def public_settings_hub(club_id:int):
+    """C 端脱敏视图：只下发模块开关与门户呈现偏好，不含审计 / 管理页 / 探测细节。"""
+    club_or_404(club_id)
+    with conn() as c:
+        pol = hub_mod.portal_policy(c, club_id)
+    return {'homeLayoutMode': pol['homeLayoutMode'],
+            'decoratorEnabled': pol['decoratorEnabled'],
+            'storedValueEnabled': pol['storedValueEnabled'],
+            'engagementEnabled': pol['engagementEnabled']}
+
+
+@app.get('/api/platform/settings-hub')
+def platform_settings_hub_get(request:Request):
+    """平台级默认全景（club_id=0）。"""
+    with conn() as c:
+        return hub_mod.snapshot(c, hub_mod.PLATFORM_CLUB_ID)
+
+
+@app.patch('/api/platform/settings-hub')
+def platform_settings_hub_patch(request:Request, payload:dict=Body(...)):
+    """设置平台级默认（俱乐部有同名覆盖时以俱乐部为准）。"""
+    try:
+        changes = hub_mod.normalize_changes(payload)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    with conn() as c:
+        res = hub_mod.set_many(c, hub_mod.PLATFORM_CLUB_ID, changes,
+                               operator=_hub_operator(request),
+                               note=str(payload.get('note') or ''))
+        snap = hub_mod.snapshot(c, hub_mod.PLATFORM_CLUB_ID)
+    return {'ok': True, 'updated': res['updated'], 'skipped': res['skipped'], 'snapshot': snap}
+
+
+@app.post('/api/platform/settings-hub/reset')
+def platform_settings_hub_reset(payload:dict=Body(default={})):
+    keys = payload.get('keys') if isinstance(payload, dict) else None
+    if keys is not None and not isinstance(keys, list):
+        raise HTTPException(400, 'keys 必须是数组')
+    try:
+        with conn() as c:
+            res = hub_mod.reset(c, hub_mod.PLATFORM_CLUB_ID, keys)
+            snap = hub_mod.snapshot(c, hub_mod.PLATFORM_CLUB_ID)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {'ok': True, 'reset': res['reset'], 'snapshot': snap}
+
+
+@app.get('/api/platform/settings-hub/audit')
+def platform_settings_hub_audit(limit:int=50):
+    with conn() as c:
+        return {'items': hub_mod.audit_list(c, hub_mod.PLATFORM_CLUB_ID, limit)}
+
+
+# ===== P1-5 功能路由表 v0.41 ================================================
+# 注册表是代码常量，俱乐部只存「编排覆盖」；可用性联动复用 settings_hub 模块开关
+# 与 clubs.module_switches_json（C 端 tab 单一数据源），不复制这两处状态。
+def _route_tabs(club_id:int) -> dict:
+    """读 C 端 tab 显隐；任何异常返回空 dict（不误关入口）。"""
+    try:
+        return module_switches_public(club_or_404(club_id))
+    except Exception:
+        return {}
+
+
+def _route_overrides(c, club_id:int, scope:str) -> dict:
+    try:
+        rs = c.execute("SELECT * FROM route_overrides WHERE club_id=? AND scope=?",
+                       (int(club_id), str(scope))).fetchall()
+        return route_mod.overrides_from_rows(rs)
+    except Exception:
+        return {}
+
+
+def _route_eff(c, club_id:int, scope:str, tabs=None, public_only=False) -> dict:
+    """组装「注册表 + 覆盖 + 两处开关」的生效视图。纯读，异常安全。
+
+    tabs 省略时直接用传入的连接读 clubs 表，避免嵌套连接；异常一律空 dict（不误关入口）。
+    """
+    if tabs is None:
+        try:
+            r = c.execute('SELECT module_switches_json FROM clubs WHERE id=?',
+                          (int(club_id),)).fetchone()
+            tabs = module_switches_public(dict(r)) if r else {}
+        except Exception:
+            tabs = {}
+    return route_mod.effective(
+        club_id, scope,
+        overrides=_route_overrides(c, club_id, scope),
+        module_enabled=lambda k: hub_mod.is_module_enabled(c, club_id, k),
+        tab_switches=tabs if isinstance(tabs, dict) else {},
+        public_only=public_only)
+
+
+def _route_audit_write(c, club_id:int, scope:str, key:str, action:str,
+                       detail:dict, operator:str=''):
+    try:
+        c.execute("""INSERT INTO route_audit
+                     (club_id,scope,route_key,action,detail_json,operator,created_at)
+                     VALUES(?,?,?,?,?,?,?)""",
+                  (int(club_id), str(scope), key, action, route_mod.dumps(detail),
+                   str(operator or '')[:60], route_mod.now_str()))
+    except Exception:
+        pass
+
+
+@app.get('/api/club/{club_id}/routes/registry')
+def club_routes_registry(club_id:int, scope:str='', navigable:int=0):
+    """注册表（无俱乐部数据）。装修器编辑器用 navigable=1 拿可跳转页面清单。"""
+    club_or_404(club_id)
+    try:
+        return route_mod.registry_view(scope or None, navigable_only=bool(navigable))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get('/api/club/{club_id}/routes/audit')
+def club_routes_audit(club_id:int, limit:int=50):
+    club_or_404(club_id)
+    with conn() as c:
+        rs = c.execute("""SELECT * FROM route_audit WHERE club_id=?
+                          ORDER BY id DESC LIMIT ?""",
+                       (club_id, max(1, min(200, int(limit))))).fetchall()
+    return {'items': route_mod.audit_view(rs)}
+
+
+@app.get('/api/club/{club_id}/routes')
+def club_routes_get(club_id:int, scope:str='web'):
+    """一屏全景：注册表 + 覆盖后的生效入口（含不可用原因）+ 汇总。"""
+    club_or_404(club_id)
+    if scope not in route_mod.SCOPES:
+        raise HTTPException(400, '未知端：%s' % scope)
+    tabs = _route_tabs(club_id)
+    with conn() as c:
+        eff = _route_eff(c, club_id, scope, tabs=tabs)
+    return {'registry': route_mod.registry_view(scope), 'effective': eff}
+
+
+@app.patch('/api/club/{club_id}/routes')
+def club_routes_patch(club_id:int, request:Request, payload:dict=Body(...)):
+    """批量编排：{scope, changes:[{key,hidden?,sort?,label?,icon?,customUrl?}], note?}。
+
+    hidden 是三态：本次没传就保留库里的 NULL / 0 / 1 —— 只改排序不会放出默认隐藏项。
+    """
+    club_or_404(club_id)
+    scope = str(payload.get('scope') or 'web')
+    if scope not in route_mod.SCOPES:
+        raise HTTPException(400, '未知端：%s' % scope)
+    try:
+        changes = route_mod.normalize_changes(payload, scope)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    operator = ''
+    try:
+        operator = str(_hub_operator(request) or '')
+    except Exception:
+        pass
+    tabs = _route_tabs(club_id)
+    with conn() as c:
+        for ch in changes:
+            old = c.execute("""SELECT hidden,sort_order,label,icon,custom_url
+                               FROM route_overrides
+                               WHERE club_id=? AND scope=? AND route_key=?""",
+                            (club_id, scope, ch['key'])).fetchone()
+            o = dict(old) if old else {}
+            hidden = o.get('hidden')
+            if 'hidden' in ch:
+                hidden = None if ch['hidden'] is None else (1 if ch['hidden'] else 0)
+            sort_order = ch.get('sort', o.get('sort_order'))
+            label = ch.get('label', o.get('label'))
+            icon = ch.get('icon', o.get('icon'))
+            curl = ch.get('customUrl', o.get('custom_url'))
+            c.execute("""INSERT INTO route_overrides
+                         (club_id,scope,route_key,hidden,sort_order,label,icon,custom_url,updated_at)
+                         VALUES(?,?,?,?,?,?,?,?,?)
+                         ON CONFLICT(club_id,scope,route_key) DO UPDATE SET
+                           hidden=excluded.hidden, sort_order=excluded.sort_order,
+                           label=excluded.label, icon=excluded.icon,
+                           custom_url=excluded.custom_url, updated_at=excluded.updated_at""",
+                      (club_id, scope, ch['key'], hidden, sort_order, label, icon, curl,
+                       route_mod.now_str()))
+            _route_audit_write(c, club_id, scope, ch['key'], 'SET',
+                               {'change': ch, 'note': str(payload.get('note') or '')[:200]},
+                               operator)
+        eff = _route_eff(c, club_id, scope, tabs=tabs)
+    return {'ok': True, 'updated': [ch['key'] for ch in changes], 'effective': eff}
+
+
+@app.post('/api/club/{club_id}/routes/reset')
+def club_routes_reset(club_id:int, payload:dict=Body(default={})):
+    """重置编排覆盖 → 回落代码注册表默认。body {scope, keys?}，省略 keys 重置整端。"""
+    club_or_404(club_id)
+    payload = payload if isinstance(payload, dict) else {}
+    scope = str(payload.get('scope') or 'web')
+    if scope not in route_mod.SCOPES:
+        raise HTTPException(400, '未知端：%s' % scope)
+    keys = payload.get('keys')
+    if keys is not None:
+        if not isinstance(keys, list):
+            raise HTTPException(400, 'keys 必须是数组')
+        for k in keys:
+            r = route_mod.resolve(k)
+            if not r or r['scope'] != scope:
+                raise HTTPException(400, '未知或不属于该端的路由：%s' % k)
+    tabs = _route_tabs(club_id)
+    with conn() as c:
+        if keys:
+            qs = ','.join('?' for _ in keys)
+            c.execute("DELETE FROM route_overrides WHERE club_id=? AND scope=? AND route_key IN (%s)" % qs,
+                      [club_id, scope] + [str(k) for k in keys])
+        else:
+            c.execute("DELETE FROM route_overrides WHERE club_id=? AND scope=?", (club_id, scope))
+        _route_audit_write(c, club_id, scope, None, 'RESET',
+                           {'keys': keys or 'all'})
+        eff = _route_eff(c, club_id, scope, tabs=tabs)
+    return {'ok': True, 'effective': eff}
+
+
+@app.get('/api/public/clubs/{club_id}/routes/{scope}')
+def public_routes(club_id:int, scope:str):
+    """C 端一次性拉取可用入口。只允许 web 端、只下发 auth=public 的项，且按开关过滤。"""
+    if scope not in route_mod.PUBLIC_SCOPES:
+        raise HTTPException(404, 'not found')
+    x = club_or_404(club_id)
+    if IS_PROD and x['status'] != 'active':
+        raise HTTPException(404, 'not found')
+    tabs = module_switches_public(x)
+    with conn() as c:
+        eff = _route_eff(c, club_id, scope, tabs=tabs, public_only=True)
+    return route_mod.public_view(eff)
+
+
+# ===== P2-1 分销员 affiliate =====
+# 口径隔离：不写 commission_ledger（平台↔俱乐部）、不写 invite_records（拉新奖励）、
+# 不改 checkout / payable。佣金通过显式端点入账，orderType+orderId 幂等。
+def _aff_config(c, club_id:int) -> dict:
+    r = row(c.execute('SELECT * FROM affiliate_configs WHERE club_id=?', (club_id,)))
+    return aff_mod.config_from_row(r) if r else aff_mod.default_config()
+
+
+def _aff_module_on(c, club_id:int) -> bool:
+    """中枢总开关：异常一律返回 True（绝不因配置读取失败误关业务）。"""
+    try:
+        return bool(hub_mod.is_module_enabled(c, club_id, 'affiliate'))
+    except Exception:
+        return True
+
+
+def _aff_config_view(cfg:dict) -> dict:
+    return {
+        'enabled': bool(cfg.get('enabled')),
+        'autoApprove': bool(cfg.get('autoApprove')),
+        'allowSelfPurchase': bool(cfg.get('allowSelfPurchase')),
+        'defaultRateBp': int(cfg.get('defaultRateBp') or 0),
+        'freezeDays': int(cfg.get('freezeDays') or 0),
+        'minSettleCents': int(cfg.get('minSettleCents') or 0),
+        'minSettleAmount': aff_mod.from_cents(cfg.get('minSettleCents')),
+        'levels': cfg.get('levels') or [],
+    }
+
+
+def _aff_validate_config_payload(p:dict):
+    """越界直接 400 拒绝，不静默夹逼（P1-4 纪律）。"""
+    if 'defaultRateBp' in p:
+        try:
+            v = int(p['defaultRateBp'])
+        except (TypeError, ValueError):
+            raise HTTPException(400, 'defaultRateBp 必须是整数')
+        if not 0 <= v <= aff_mod.MAX_RATE_BP:
+            raise HTTPException(400, 'defaultRateBp 超出范围 0~%d' % aff_mod.MAX_RATE_BP)
+    if 'freezeDays' in p:
+        try:
+            v = int(p['freezeDays'])
+        except (TypeError, ValueError):
+            raise HTTPException(400, 'freezeDays 必须是整数')
+        if not 0 <= v <= aff_mod.MAX_FREEZE_DAYS:
+            raise HTTPException(400, 'freezeDays 超出范围 0~%d' % aff_mod.MAX_FREEZE_DAYS)
+    if 'minSettleAmount' in p:
+        try:
+            v = float(p['minSettleAmount'])
+        except (TypeError, ValueError):
+            raise HTTPException(400, 'minSettleAmount 必须是数字')
+        if v < 0 or aff_mod.to_cents(v) > aff_mod.MAX_AMOUNT_CENTS:
+            raise HTTPException(400, 'minSettleAmount 超出范围')
+        if v > 0 and aff_mod.to_cents(v) == 0:
+            raise HTTPException(400, 'minSettleAmount 低于 0.01 元')
+    if 'levels' in p:
+        lv = aff_mod.normalize_levels(p.get('levels'))
+        if not lv:
+            raise HTTPException(400, 'levels 至少需要一条合法档位（key + 1~%d 的 rateBp）'
+                                % aff_mod.MAX_RATE_BP)
+
+
+def _aff_operator(request) -> str:
+    return _sv_operator(request)
+
+
+def _aff_uid(request, claimed) -> int:
+    return _sv_public_uid(request, claimed)
+
+
+def _aff_bind_reason(res:dict):
+    mapping = {
+        'self-bind': (400, '不能绑定自己'),
+        'already-bound': (409, '该会员已有推广关系'),
+        'invitee-is-affiliate': (409, '分销员不能成为其他人的下线'),
+        'cycle': (409, '检测到循环推广关系'),
+        'affiliate-not-active': (400, '推广员未启用'),
+        'invalid-user': (400, '用户无效'),
+        'exception': (409, '绑定失败，请重试'),
+    }
+    code, msg = mapping.get(res.get('reason'), (400, '绑定失败：%s' % res.get('reason')))
+    raise HTTPException(code, msg)
+
+
+@app.get('/api/club/{club_id}/affiliate/config')
+def get_affiliate_config(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        cfg = _aff_config(c, club_id)
+        module_on = _aff_module_on(c, club_id)
+    return dict(_aff_config_view(cfg), moduleEnabled=module_on)
+
+
+@app.patch('/api/club/{club_id}/affiliate/config')
+def patch_affiliate_config(club_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    _aff_validate_config_payload(payload)
+    with conn() as c:
+        cur = _aff_config(c, club_id)
+        cfg = aff_mod.normalize_config(payload, cur)
+        c.execute("""INSERT INTO affiliate_configs(club_id,enabled,config_json,updated_at)
+                     VALUES(?,?,?,datetime('now'))
+                     ON CONFLICT(club_id) DO UPDATE SET
+                       enabled=excluded.enabled, config_json=excluded.config_json,
+                       updated_at=excluded.updated_at""",
+                  (club_id, 1 if cfg['enabled'] else 0, aff_mod.dumps(cfg)))
+    return _aff_config_view(cfg)
+
+
+@app.get('/api/club/{club_id}/affiliate/members')
+def list_affiliate_members(club_id:int, status:str='', limit:int=200):
+    club_or_404(club_id)
+    sql = 'SELECT * FROM affiliate_members WHERE club_id=?'
+    args = [club_id]
+    if status and status.upper() in aff_mod.MEMBER_STATUSES:
+        sql += ' AND status=?'
+        args.append(status.upper())
+    sql += ' ORDER BY id DESC LIMIT ?'
+    args.append(max(1, min(500, int(limit or 200))))
+    with conn() as c:
+        cfg = _aff_config(c, club_id)
+        rs = rows(c.execute(sql, args))
+    return [aff_mod.member_view(r, cfg) for r in rs]
+
+
+@app.post('/api/club/{club_id}/affiliate/members')
+def create_affiliate_member(club_id:int, request:Request, payload:dict=Body(...)):
+    club_or_404(club_id)
+    norm = aff_mod.normalize_member(payload)
+    if not norm['userId']:
+        raise HTTPException(400, 'userId 必填')
+    with conn() as c:
+        cfg = _aff_config(c, club_id)
+        if c.execute('SELECT id FROM affiliate_members WHERE club_id=? AND user_id=?',
+                     (club_id, norm['userId'])).fetchone():
+            raise HTTPException(409, '该会员已是分销员')
+        status = norm['status']
+        if status == 'PENDING' and cfg.get('autoApprove'):
+            status = 'ACTIVE'
+        last_err = None
+        for _ in range(8):
+            code = aff_mod.gen_code('A', 8)
+            try:
+                cur = c.execute("""INSERT INTO affiliate_members
+                     (club_id,user_id,code,level,rate_bp_override,status,note,created_at)
+                     VALUES(?,?,?,?,?,?,?,datetime('now'))""",
+                                (club_id, norm['userId'], code, norm['level'],
+                                 norm['rateBpOverride'], status, norm['note']))
+                break
+            except sqlite3.IntegrityError as e:
+                last_err = e
+                continue
+        else:
+            raise HTTPException(409, '推广码生成失败，请重试：%s' % last_err)
+        r = row(c.execute('SELECT * FROM affiliate_members WHERE id=?', (cur.lastrowid,)))
+        return aff_mod.member_view(r, cfg)
+
+
+@app.patch('/api/club/{club_id}/affiliate/members/{member_id}')
+def patch_affiliate_member(club_id:int, member_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        r = row(c.execute('SELECT * FROM affiliate_members WHERE id=? AND club_id=?',
+                          (member_id, club_id)))
+        if not r:
+            raise HTTPException(404, 'not found')
+        norm = aff_mod.normalize_member(payload, r)
+        c.execute("""UPDATE affiliate_members
+                        SET level=?, rate_bp_override=?, status=?, note=?
+                      WHERE id=? AND club_id=?""",
+                  (norm['level'], norm['rateBpOverride'], norm['status'], norm['note'],
+                   member_id, club_id))
+        cfg = _aff_config(c, club_id)
+        out = row(c.execute('SELECT * FROM affiliate_members WHERE id=?', (member_id,)))
+        return aff_mod.member_view(out, cfg)
+
+
+@app.delete('/api/club/{club_id}/affiliate/members/{member_id}')
+def delete_affiliate_member(club_id:int, member_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        r = row(c.execute('SELECT * FROM affiliate_members WHERE id=? AND club_id=?',
+                          (member_id, club_id)))
+        if not r:
+            raise HTTPException(404, 'not found')
+        n = c.execute('SELECT COUNT(*) FROM affiliate_commissions WHERE club_id=? AND affiliate_user_id=?',
+                      (club_id, r['user_id'])).fetchone()[0]
+        if n:
+            raise HTTPException(409, '已有 %d 条佣金流水，请改用「冻结」而非删除' % n)
+        c.execute('DELETE FROM affiliate_bindings WHERE club_id=? AND affiliate_user_id=?',
+                  (club_id, r['user_id']))
+        c.execute('DELETE FROM affiliate_members WHERE id=? AND club_id=?', (member_id, club_id))
+    return {'ok': True}
+
+
+@app.get('/api/club/{club_id}/affiliate/bindings')
+def list_affiliate_bindings(club_id:int, affiliate_user_id:int=0, limit:int=200):
+    club_or_404(club_id)
+    sql = 'SELECT * FROM affiliate_bindings WHERE club_id=?'
+    args = [club_id]
+    if affiliate_user_id:
+        sql += ' AND affiliate_user_id=?'
+        args.append(affiliate_user_id)
+    sql += ' ORDER BY id DESC LIMIT ?'
+    args.append(max(1, min(500, int(limit or 200))))
+    with conn() as c:
+        return [dict(r) for r in rows(c.execute(sql, args))]
+
+
+@app.post('/api/club/{club_id}/affiliate/bindings')
+def create_affiliate_binding(club_id:int, payload:dict=Body(...)):
+    """后台人工绑定（补偿线下推广、导入历史关系）。"""
+    club_or_404(club_id)
+    try:
+        aff_uid = int(payload.get('affiliateUserId') or 0)
+        invitee = int(payload.get('inviteeUserId') or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'affiliateUserId / inviteeUserId 必填')
+    with conn() as c:
+        res = aff_mod.bind(c, club_id=club_id, affiliate_user_id=aff_uid,
+                           invitee_user_id=invitee, channel='admin')
+        if not res['ok']:
+            _aff_bind_reason(res)
+        return {'ok': True, 'bindingId': res['bindingId']}
+
+
+@app.post('/api/club/{club_id}/affiliate/preview')
+def preview_affiliate_commission(club_id:int, payload:dict=Body(...)):
+    """只读试算：不写库。供后台核对「某订单会返多少佣」。"""
+    club_or_404(club_id)
+    with conn() as c:
+        return aff_mod.preview(
+            c, club_id=club_id, buyer_user_id=payload.get('buyerUserId'),
+            amount_cents=aff_mod.to_cents(payload.get('orderAmount')),
+            cfg=_aff_config(c, club_id), module_enabled=_aff_module_on(c, club_id))
+
+
+@app.post('/api/club/{club_id}/affiliate/accrue')
+def accrue_affiliate_commission(club_id:int, payload:dict=Body(...)):
+    """订单完成后显式入账。幂等键 (club_id, orderType, orderId, 分销员)。
+
+    佣金失败绝不阻断订单：业务性 reason 正常返回；仅 exception 抛错触发事务回滚，
+    避免「流水写入一半」的脏账。
+    """
+    club_or_404(club_id)
+    ot = str(payload.get('orderType') or '')
+    oid = str(payload.get('orderId') or '')
+    cents = aff_mod.to_cents(payload.get('orderAmount'))
+    if ot not in aff_mod.ORDER_TYPES or not oid or cents <= 0:
+        raise HTTPException(400, 'orderType / orderId / orderAmount 无效')
+    with conn() as c:
+        res = aff_mod.accrue(
+            c, club_id=club_id, order_type=ot, order_id=oid,
+            buyer_user_id=payload.get('buyerUserId'), amount_cents=cents,
+            cfg=_aff_config(c, club_id), module_enabled=_aff_module_on(c, club_id))
+        if res['reason'] == 'exception':
+            raise HTTPException(409, '佣金入账异常，已回滚')
+        return dict(res, commissionAmount=aff_mod.from_cents(res['commissionCents']))
+
+
+@app.post('/api/club/{club_id}/affiliate/reverse')
+def reverse_affiliate_commission(club_id:int, payload:dict=Body(...)):
+    """退款冲回：未结算佣金置 REVERSED；已结算的只计数并提示人工追回（不算错账）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        res = aff_mod.reverse(c, club_id=club_id,
+                              order_type=payload.get('orderType'),
+                              order_id=payload.get('orderId'))
+        if res['reason'] == 'invalid-order':
+            raise HTTPException(400, 'orderType / orderId 无效')
+        if res['reason'] == 'exception':
+            raise HTTPException(409, '冲回失败，已回滚')
+        return dict(res, centsAmount=aff_mod.from_cents(res['cents']))
+
+
+@app.get('/api/club/{club_id}/affiliate/commissions')
+def list_affiliate_commissions(club_id:int, affiliate_user_id:int=0, status:str='', limit:int=200):
+    club_or_404(club_id)
+    sql = 'SELECT * FROM affiliate_commissions WHERE club_id=?'
+    args = [club_id]
+    if affiliate_user_id:
+        sql += ' AND affiliate_user_id=?'
+        args.append(affiliate_user_id)
+    if status and status.upper() in aff_mod.COMMISSION_STATUSES:
+        sql += ' AND status=?'
+        args.append(status.upper())
+    sql += ' ORDER BY id DESC LIMIT ?'
+    args.append(max(1, min(500, int(limit or 200))))
+    with conn() as c:
+        return [aff_mod.commission_view(r) for r in rows(c.execute(sql, args))]
+
+
+@app.post('/api/club/{club_id}/affiliate/settle')
+def settle_affiliate_commission(club_id:int, payload:dict=Body(...)):
+    """生成结算单（GENERATED，待线下打款）。冻结期未满 / 低于起结额会明确返回 reason。"""
+    club_or_404(club_id)
+    try:
+        uid = int(payload.get('affiliateUserId') or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'affiliateUserId 必填')
+    with conn() as c:
+        res = aff_mod.settle(c, club_id=club_id, affiliate_user_id=uid,
+                             cfg=_aff_config(c, club_id))
+        if res['reason'] == 'exception':
+            raise HTTPException(409, '结算失败，已回滚')
+        return dict(res, grossAmount=aff_mod.from_cents(res['grossCents']))
+
+
+@app.get('/api/club/{club_id}/affiliate/settlements')
+def list_affiliate_settlements(club_id:int, limit:int=200):
+    club_or_404(club_id)
+    with conn() as c:
+        rs = rows(c.execute("""SELECT * FROM affiliate_settlements WHERE club_id=?
+                               ORDER BY created_at DESC, id DESC LIMIT ?""",
+                            (club_id, max(1, min(500, int(limit or 200))))))
+    return [aff_mod.settlement_view(r) for r in rs]
+
+
+@app.post('/api/club/{club_id}/affiliate/settlements/{sid}/pay')
+def pay_affiliate_settlement(club_id:int, sid:str, payload:dict=Body(default={})):
+    club_or_404(club_id)
+    with conn() as c:
+        res = aff_mod.mark_settlement_paid(c, club_id=club_id, settlement_id=sid,
+                                           payment_ref=(payload or {}).get('paymentRef', ''))
+        if not res['ok'] and res['reason'] == 'not-found':
+            raise HTTPException(404, 'not found')
+        return res
+
+
+@app.get('/api/club/{club_id}/affiliate/summary')
+def affiliate_summary(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        def _one(sql, args=(club_id,)):
+            try:
+                return c.execute(sql, args).fetchone()[0] or 0
+            except Exception:
+                return 0
+        m = _one('SELECT COUNT(*) FROM affiliate_members WHERE club_id=?')
+        ma = _one("SELECT COUNT(*) FROM affiliate_members WHERE club_id=? AND status='ACTIVE'")
+        b = _one("SELECT COUNT(*) FROM affiliate_bindings WHERE club_id=? AND status='ACTIVE'")
+        pend = _one("SELECT COALESCE(SUM(commission_cents),0) FROM affiliate_commissions WHERE club_id=? AND status='PENDING'")
+        settled = _one("SELECT COALESCE(SUM(commission_cents),0) FROM affiliate_commissions WHERE club_id=? AND status='SETTLED'")
+        rev = _one("SELECT COALESCE(SUM(commission_cents),0) FROM affiliate_commissions WHERE club_id=? AND status='REVERSED'")
+        st = _one('SELECT COUNT(*) FROM affiliate_settlements WHERE club_id=?')
+        paid = _one("SELECT COALESCE(SUM(gross_cents),0) FROM affiliate_settlements WHERE club_id=? AND status='PAID'")
+        cfg = _aff_config(c, club_id)
+        module_on = _aff_module_on(c, club_id)
+    return {
+        'members': m, 'activeMembers': ma, 'bindings': b,
+        'pendingCents': pend, 'pendingAmount': aff_mod.from_cents(pend),
+        'settledCents': settled, 'settledAmount': aff_mod.from_cents(settled),
+        'reversedCents': rev, 'reversedAmount': aff_mod.from_cents(rev),
+        'settlements': st, 'paidCents': paid, 'paidAmount': aff_mod.from_cents(paid),
+        'enabled': bool(cfg.get('enabled')) and module_on,
+    }
+
+
+@app.get('/api/platform/affiliate/summary')
+def platform_affiliate_summary():
+    """平台视角：只看俱乐部级聚合，不暴露单个推广员身份。"""
+    with conn() as c:
+        def _one(sql):
+            try:
+                return c.execute(sql).fetchone()[0] or 0
+            except Exception:
+                return 0
+        return {
+            'clubsEnabled': _one('SELECT COUNT(*) FROM affiliate_configs WHERE enabled=1'),
+            'members': _one('SELECT COUNT(*) FROM affiliate_members'),
+            'activeMembers': _one("SELECT COUNT(*) FROM affiliate_members WHERE status='ACTIVE'"),
+            'bindings': _one("SELECT COUNT(*) FROM affiliate_bindings WHERE status='ACTIVE'"),
+            'pendingCents': _one("SELECT COALESCE(SUM(commission_cents),0) FROM affiliate_commissions WHERE status='PENDING'"),
+            'settledCents': _one("SELECT COALESCE(SUM(commission_cents),0) FROM affiliate_commissions WHERE status='SETTLED'"),
+            'settlements': _one('SELECT COUNT(*) FROM affiliate_settlements'),
+            'paidCents': _one("SELECT COALESCE(SUM(gross_cents),0) FROM affiliate_settlements WHERE status='PAID'"),
+        }
+
+
+# ── C 端推广中心 ────────────────────────────────────────────────────────────
+@app.get('/api/public/clubs/{club_id}/affiliate/config')
+def public_affiliate_config(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        cfg = _aff_config(c, club_id)
+        on = _aff_module_on(c, club_id)
+    return aff_mod.public_config(cfg) if on else {'enabled': False, 'autoApprove': False}
+
+
+@app.get('/api/public/clubs/{club_id}/affiliate/my')
+def public_affiliate_my(club_id:int, request:Request, user_id:int=0):
+    club_or_404(club_id)
+    uid = _aff_uid(request, user_id)
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    with conn() as c:
+        cfg = _aff_config(c, club_id)
+        on = _aff_module_on(c, club_id)
+        m = row(c.execute('SELECT * FROM affiliate_members WHERE club_id=? AND user_id=?',
+                          (club_id, uid)))
+        b = row(c.execute("""SELECT affiliate_user_id,created_at FROM affiliate_bindings
+                             WHERE club_id=? AND invitee_user_id=? AND status='ACTIVE'""",
+                          (club_id, uid)))
+        inv = 0
+        try:
+            inv = c.execute("""SELECT COALESCE(SUM(commission_cents),0) AS p
+                                FROM affiliate_commissions
+                               WHERE club_id=? AND affiliate_user_id=? AND status='PENDING'""",
+                            (club_id, uid)).fetchone()[0] or 0
+        except Exception:
+            inv = 0
+    if not on or not cfg['enabled']:
+        return {'enabled': False, 'isAffiliate': False}
+    return {
+        'enabled': True, 'isAffiliate': bool(m),
+        'member': aff_mod.member_view(m, cfg) if m else None,
+        'uplineUserId': int(b['affiliate_user_id']) if b else None,
+        'pendingCents': int(inv), 'pendingAmount': aff_mod.from_cents(inv),
+    }
+
+
+@app.post('/api/public/clubs/{club_id}/affiliate/apply')
+def public_affiliate_apply(club_id:int, request:Request, payload:dict=Body(default={})):
+    """会员申请成为推广员；autoApprove=False 时落 PENDING 等后台审核。"""
+    club_or_404(club_id)
+    uid = _aff_uid(request, payload.get('userId'))
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    with conn() as c:
+        cfg = _aff_config(c, club_id)
+        if not cfg['enabled'] or not _aff_module_on(c, club_id):
+            raise HTTPException(403, '分销功能未开启')
+        if c.execute('SELECT id FROM affiliate_members WHERE club_id=? AND user_id=?',
+                     (club_id, uid)).fetchone():
+            raise HTTPException(409, '已是分销员')
+        # 已成为别人下线 → 不允许再申请（防层级套利，与 domain.bind 同规则）
+        if c.execute("""SELECT id FROM affiliate_bindings
+                        WHERE club_id=? AND invitee_user_id=? AND status='ACTIVE'""",
+                     (club_id, uid)).fetchone():
+            raise HTTPException(409, '已有推广关系，不能申请成为分销员')
+        status = 'ACTIVE' if cfg['autoApprove'] else 'PENDING'
+        for _ in range(8):
+            code = aff_mod.gen_code('A', 8)
+            try:
+                cur = c.execute("""INSERT INTO affiliate_members
+                     (club_id,user_id,code,level,status,note,created_at)
+                     VALUES(?,?,?,'',?,?,datetime('now'))""",
+                                (club_id, uid, code, status,
+                                 str((payload or {}).get('note') or '')[:200]))
+                break
+            except sqlite3.IntegrityError:
+                continue
+        else:
+            raise HTTPException(409, '推广码生成失败，请重试')
+        m = row(c.execute('SELECT * FROM affiliate_members WHERE id=?', (cur.lastrowid,)))
+        return aff_mod.member_view(m, cfg)
+
+
+@app.post('/api/public/clubs/{club_id}/affiliate/bind')
+def public_affiliate_bind(club_id:int, request:Request, payload:dict=Body(...)):
+    """用推广码绑定推广关系。只按服务端解析的码找推广员，不接受客户端传 userId。"""
+    club_or_404(club_id)
+    code = str(payload.get('code') or '').strip().upper()[:40]
+    uid = _aff_uid(request, payload.get('userId'))
+    if not code or uid <= 0:
+        raise HTTPException(400, 'code 必填且需登录')
+    with conn() as c:
+        cfg = _aff_config(c, club_id)
+        if not cfg['enabled'] or not _aff_module_on(c, club_id):
+            raise HTTPException(403, '分销功能未开启')
+        m = row(c.execute("""SELECT user_id FROM affiliate_members
+                             WHERE club_id=? AND code=? AND status='ACTIVE'""",
+                          (club_id, code)))
+        if not m:
+            raise HTTPException(404, '推广码无效')
+        res = aff_mod.bind(c, club_id=club_id, affiliate_user_id=int(m['user_id']),
+                           invitee_user_id=uid, code=code, channel='code')
+        if not res['ok']:
+            _aff_bind_reason(res)
+        return {'ok': True, 'bindingId': res['bindingId']}
+
+
+@app.get('/api/public/clubs/{club_id}/affiliate/commissions')
+def public_affiliate_commissions(club_id:int, request:Request, user_id:int=0, limit:int=100):
+    club_or_404(club_id)
+    uid = _aff_uid(request, user_id)
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    with conn() as c:
+        rs = rows(c.execute("""SELECT * FROM affiliate_commissions
+                               WHERE club_id=? AND affiliate_user_id=?
+                               ORDER BY id DESC LIMIT ?""",
+                            (club_id, uid, max(1, min(200, int(limit or 100))))))
+    # C 端脱敏：不下发被邀请人 user_id
+    out = []
+    for r in rs:
+        v = aff_mod.commission_view(r)
+        v.pop('inviteeUserId', None)
+        v.pop('bindingId', None)
+        out.append(v)
+    return out
+
+
+# ===== P2-2 礼品卡 gift_card =====
+# 口径隔离：不写 stored_value_*（充值储值）、不写任何积分账户；
+# 兑换只增加 gift_card_accounts 余额，核销由订单完成后的显式端点触发，
+# 绝不改 payable / checkout（与 P1-3 拼团价、P2-1 佣金同一纪律）。
+def _gc_config(c, club_id:int) -> dict:
+    r = row(c.execute('SELECT * FROM gift_card_configs WHERE club_id=?', (club_id,)))
+    return gc_mod.config_from_row(r) if r else gc_mod.default_config()
+
+
+def _gc_module_on(c, club_id:int) -> bool:
+    """设置中枢总开关：异常一律 True（绝不因配置读取失败误关业务）。"""
+    try:
+        return bool(hub_mod.is_module_enabled(c, club_id, 'giftCard'))
+    except Exception:
+        return True
+
+
+def _gc_uid(request, claimed) -> int:
+    return _sv_public_uid(request, claimed)
+
+
+def _gc_operator(request) -> str:
+    return _sv_operator(request)
+
+
+def _gc_validate_config_payload(p:dict):
+    """越界直接 400 拒绝，不静默夹逼（P1-4 纪律）。"""
+    if 'maxRedeemsPerUser' in p:
+        try:
+            v = int(p['maxRedeemsPerUser'])
+        except (TypeError, ValueError):
+            raise HTTPException(400, 'maxRedeemsPerUser 必须是整数')
+        if not 0 <= v <= gc_mod.MAX_REDEEMS_PER_USER:
+            raise HTTPException(400, 'maxRedeemsPerUser 超出范围 0~%d' % gc_mod.MAX_REDEEMS_PER_USER)
+    if 'notice' in p and len(str(p.get('notice') or '')) > 120:
+        raise HTTPException(400, 'notice 最长 120 字')
+
+
+def _gc_redeem_raise(res:dict):
+    mapping = {
+        'disabled': (403, '礼品卡功能未开启'),
+        'bad-code': (400, '卡密格式不正确'),
+        'not-found': (404, '卡密无效或不属于该俱乐部'),
+        'card-redeemed': (409, '该卡已被兑换'),
+        'card-frozen': (409, '该卡已冻结'),
+        'card-void': (409, '该卡已作废'),
+        'card-expired': (409, '该卡已过期'),
+        'card-not-started': (409, '该卡尚未到生效日'),
+        'batch-void': (409, '该卡所在批次已停用'),
+        'redeem-limit': (409, '已达到每人兑换上限'),
+        'invalid-user': (400, '会员身份无效'),
+        'duplicated': (409, '该卡已入账，请勿重复兑换'),
+        'exception': (409, '兑换失败，已回滚'),
+    }
+    code, msg = mapping.get(res.get('reason'), (400, '兑换失败：%s' % res.get('reason')))
+    raise HTTPException(code, msg)
+
+
+def _gc_write_raise(res:dict, what:str):
+    mapping = {
+        'invalid-input': (400, '%s参数无效（金额 / 订单类型 / 订单号）' % what),
+        'bad-type': (400, '%s流水类型非法' % what),
+        'insufficient': (409, '礼品卡余额不足'),
+        'duplicated': (409, '该订单已%s过，不能重复操作' % what),
+        'frozen': (409, '该会员礼品卡账户已冻结'),
+        'not-found': (404, '找不到对应的核销流水'),
+        'exception': (409, '%s失败，已回滚' % what),
+    }
+    code, msg = mapping.get(res.get('reason'), (400, '%s失败：%s' % (what, res.get('reason'))))
+    raise HTTPException(code, msg)
+
+
+def _gc_notify_redeem(c, club_id:int, user_id:int, face_amount, balance_amount):
+    """联动 P0-4 通知通道；模板未配置时 dispatch 静默跳过，绝不阻断兑换。"""
+    try:
+        return notif_mod.dispatch(c, club_id=club_id, code='gift_card_redeemed',
+                                  ctx={'faceAmount': face_amount, 'balanceAmount': balance_amount},
+                                  user_id=user_id, hub=hub_mod.notify_policy(c, club_id))
+    except Exception:
+        return {'sent': False, 'reason': 'exception'}
+
+
+def _gc_batch_counts(c, batch_id:int):
+    try:
+        issued = c.execute('SELECT COUNT(*) FROM gift_card_cards WHERE batch_id=?',
+                           (batch_id,)).fetchone()[0] or 0
+        redeemed = c.execute("SELECT COUNT(*) FROM gift_card_cards WHERE batch_id=? AND status='REDEEMED'",
+                             (batch_id,)).fetchone()[0] or 0
+        return int(issued), int(redeemed)
+    except Exception:
+        return 0, 0
+
+
+@app.get('/api/club/{club_id}/gift-cards/config')
+def get_gift_card_config(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        cfg = _gc_config(c, club_id)
+        module_on = _gc_module_on(c, club_id)
+    return dict(gc_mod.config_view(cfg), moduleEnabled=module_on)
+
+
+@app.patch('/api/club/{club_id}/gift-cards/config')
+def patch_gift_card_config(club_id:int, payload:dict=Body(...)):
+    club_or_404(club_id)
+    _gc_validate_config_payload(payload)
+    with conn() as c:
+        cur = _gc_config(c, club_id)
+        cfg = gc_mod.normalize_config(payload, cur)
+        c.execute("""INSERT INTO gift_card_configs(club_id,enabled,config_json,updated_at)
+                     VALUES(?,?,?,datetime('now'))
+                     ON CONFLICT(club_id) DO UPDATE SET enabled=excluded.enabled,
+                       config_json=excluded.config_json, updated_at=excluded.updated_at""",
+                  (club_id, 1 if cfg['enabled'] else 0, gc_mod.dumps(cfg)))
+    return gc_mod.config_view(cfg)
+
+
+@app.get('/api/club/{club_id}/gift-cards/batches')
+def list_gift_card_batches(club_id:int, limit:int=200):
+    club_or_404(club_id)
+    with conn() as c:
+        rs = rows(c.execute(
+            'SELECT * FROM gift_card_batches WHERE club_id=? ORDER BY id DESC LIMIT ?',
+            (club_id, max(1, min(500, int(limit or 200))))))
+        out = []
+        for r in rs:
+            issued, redeemed = _gc_batch_counts(c, int(r['id']))
+            out.append(gc_mod.batch_view(r, issued, redeemed))
+    return out
+
+
+@app.post('/api/club/{club_id}/gift-cards/batches')
+def create_gift_card_batch(club_id:int, request:Request, payload:dict=Body(...)):
+    """新建批次并立即发卡。发卡失败会抛错触发事务回滚，不留空批次。"""
+    club_or_404(club_id)
+    norm = gc_mod.normalize_batch(payload)
+    if not norm:
+        raise HTTPException(400, 'name / faceAmount / count 无效（面额 0.01~10000 元，数量 1~500，日期需 YYYY-MM-DD 且起<=止）')
+    with conn() as c:
+        cur = c.execute("""INSERT INTO gift_card_batches
+            (club_id,name,face_cents,plan_count,valid_from,valid_until,status,note,created_at,created_by)
+            VALUES(?,?,?,?,?,?,'ACTIVE',?,datetime('now'),?)""",
+            (club_id, norm['name'], norm['faceCents'], norm['count'],
+             norm['validFrom'], norm['validUntil'], norm['note'], _gc_operator(request)))
+        bid = cur.lastrowid
+        res = gc_mod.issue_cards(c, club_id=club_id, batch_id=bid,
+                                 face_cents=norm['faceCents'], count=norm['count'],
+                                 valid_from=norm['validFrom'], valid_until=norm['validUntil'])
+        if not res['ok']:
+            raise HTTPException(409, '发卡失败：%s' % res['reason'])
+        r = row(c.execute('SELECT * FROM gift_card_batches WHERE id=?', (bid,)))
+        return dict(gc_mod.batch_view(r, res['issued'], 0), issued=res['issued'])
+
+
+@app.patch('/api/club/{club_id}/gift-cards/batches/{batch_id}')
+def patch_gift_card_batch(club_id:int, batch_id:int, payload:dict=Body(...)):
+    """批次改名 / 备注 / 停用 / 改有效期。**不允许改面额**（已发出的卡会账实不符）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        r = row(c.execute('SELECT * FROM gift_card_batches WHERE id=? AND club_id=?',
+                          (batch_id, club_id)))
+        if not r:
+            raise HTTPException(404, 'not found')
+        norm = gc_mod.normalize_batch_update(payload, gc_mod.batch_view(r))
+        if norm is None:
+            raise HTTPException(400, '批次更新无效（状态只能是 ACTIVE/VOID，日期需合法且起<=止）')
+        cols = {'name': 'name', 'note': 'note', 'status': 'status',
+                'validFrom': 'valid_from', 'validUntil': 'valid_until'}
+        sets, args = [], []
+        for k, col in cols.items():
+            if k in norm:
+                sets.append(col + '=?')
+                args.append(norm[k])
+        if sets:
+            c.execute('UPDATE gift_card_batches SET ' + ','.join(sets) +
+                      ' WHERE id=? AND club_id=?', args + [batch_id, club_id])
+        out = row(c.execute('SELECT * FROM gift_card_batches WHERE id=?', (batch_id,)))
+        issued, redeemed = _gc_batch_counts(c, batch_id)
+        return gc_mod.batch_view(out, issued, redeemed)
+
+
+@app.post('/api/club/{club_id}/gift-cards/batches/{batch_id}/issue')
+def issue_more_gift_cards(club_id:int, batch_id:int, payload:dict=Body(...)):
+    """追加发卡：沿用批次既有面额与有效期，不允许另传面额。"""
+    club_or_404(club_id)
+    try:
+        count = int(payload.get('count') or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'count 必须是整数')
+    if not 1 <= count <= gc_mod.MAX_ISSUE:
+        raise HTTPException(400, 'count 超出范围 1~%d' % gc_mod.MAX_ISSUE)
+    with conn() as c:
+        b = row(c.execute('SELECT * FROM gift_card_batches WHERE id=? AND club_id=?',
+                          (batch_id, club_id)))
+        if not b:
+            raise HTTPException(404, 'not found')
+        if (b['status'] or 'ACTIVE') != 'ACTIVE':
+            raise HTTPException(409, '批次已停用，不能追加发卡')
+        res = gc_mod.issue_cards(c, club_id=club_id, batch_id=batch_id,
+                                 face_cents=int(b['face_cents'] or 0), count=count,
+                                 valid_from=b['valid_from'], valid_until=b['valid_until'])
+        if not res['ok']:
+            raise HTTPException(409, '发卡失败：%s' % res['reason'])
+        return {'ok': True, 'batchId': batch_id, 'issued': res['issued']}
+
+
+@app.get('/api/club/{club_id}/gift-cards/cards')
+def list_gift_card_cards(club_id:int, batch_id:int=0, status:str='', user_id:int=0,
+                         code:str='', limit:int=200):
+    """后台卡密列表（含导出所需明文卡密）；非后台端点一律不下发卡密。"""
+    club_or_404(club_id)
+    sql = 'SELECT * FROM gift_card_cards WHERE club_id=?'
+    args = [club_id]
+    if batch_id:
+        sql += ' AND batch_id=?'
+        args.append(int(batch_id))
+    if status and status.upper() in gc_mod.CARD_STATUSES:
+        sql += ' AND status=?'
+        args.append(status.upper())
+    if user_id:
+        sql += ' AND user_id=?'
+        args.append(int(user_id))
+    if code:
+        sql += ' AND code=?'
+        args.append(gc_mod.normalize_code(code) or '__INVALID__')
+    sql += ' ORDER BY id DESC LIMIT ?'
+    args.append(max(1, min(500, int(limit or 200))))
+    with conn() as c:
+        rs = rows(c.execute(sql, args))
+    return [gc_mod.card_view(r) for r in rs]
+
+
+@app.patch('/api/club/{club_id}/gift-cards/cards/{card_id}')
+def patch_gift_card_card(club_id:int, card_id:int, payload:dict=Body(...)):
+    """冻结 / 作废 / 恢复单卡；已兑换的卡不允许改状态（防重复兑换）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        r = row(c.execute('SELECT * FROM gift_card_cards WHERE id=? AND club_id=?',
+                          (card_id, club_id)))
+        if not r:
+            raise HTTPException(404, 'not found')
+        norm = gc_mod.normalize_card_update(payload, gc_mod.card_view(r))
+        if norm is None:
+            raise HTTPException(409, '已兑换的卡不能改状态；状态只能是 ACTIVE/FROZEN/VOID')
+        sets, args = [], []
+        if 'status' in norm:
+            sets.append('status=?')
+            args.append(norm['status'])
+        if 'note' in norm:
+            sets.append('note=?')
+            args.append(norm['note'])
+        if sets:
+            c.execute('UPDATE gift_card_cards SET ' + ','.join(sets) +
+                      ' WHERE id=? AND club_id=?', args + [card_id, club_id])
+        out = row(c.execute('SELECT * FROM gift_card_cards WHERE id=?', (card_id,)))
+        return gc_mod.card_view(out)
+
+
+@app.get('/api/club/{club_id}/gift-cards/accounts')
+def list_gift_card_accounts(club_id:int, limit:int=200):
+    club_or_404(club_id)
+    with conn() as c:
+        rs = rows(c.execute(
+            """SELECT * FROM gift_card_accounts WHERE club_id=?
+               ORDER BY balance_cents DESC, id DESC LIMIT ?""",
+            (club_id, max(1, min(500, int(limit or 200))))))
+    return [gc_mod.account_view(r) for r in rs]
+
+
+@app.get('/api/club/{club_id}/gift-cards/ledger')
+def list_gift_card_ledger(club_id:int, user_id:int=0, type:str='', limit:int=200):
+    club_or_404(club_id)
+    sql = 'SELECT * FROM gift_card_ledger WHERE club_id=?'
+    args = [club_id]
+    if user_id:
+        sql += ' AND user_id=?'
+        args.append(int(user_id))
+    if type and type.upper() in gc_mod.LEDGER_TYPES:
+        sql += ' AND type=?'
+        args.append(type.upper())
+    sql += ' ORDER BY id DESC LIMIT ?'
+    args.append(max(1, min(500, int(limit or 200))))
+    with conn() as c:
+        rs = rows(c.execute(sql, args))
+    return [gc_mod.ledger_view(r) for r in rs]
+
+
+@app.post('/api/club/{club_id}/gift-cards/redeem')
+def admin_redeem_gift_card(club_id:int, request:Request, payload:dict=Body(...)):
+    """后台代客兑换（线下发卡 / 客服补偿）。卡密 + userId，身份由后台指定。"""
+    club_or_404(club_id)
+    try:
+        uid = int(payload.get('userId') or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'userId 必填')
+    with conn() as c:
+        cfg = _gc_config(c, club_id)
+        if not cfg['enabled'] or not _gc_module_on(c, club_id):
+            raise HTTPException(403, '礼品卡功能未开启')
+        res = gc_mod.redeem(c, club_id=club_id, code=payload.get('code', ''),
+                            user_id=uid, cfg=cfg, operator=_gc_operator(request))
+        if not res['ok']:
+            _gc_redeem_raise(res)
+        _gc_notify_redeem(c, club_id, uid, res['faceAmount'], res['balanceAmount'])
+        return res
+
+
+@app.post('/api/club/{club_id}/gift-cards/consume')
+def admin_consume_gift_card(club_id:int, request:Request, payload:dict=Body(...)):
+    """订单完成后显式核销礼品卡余额（元 → 分）。orderType+orderId 幂等。"""
+    club_or_404(club_id)
+    try:
+        uid = int(payload.get('userId') or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'userId 必填')
+    cents = gc_mod.to_cents(payload.get('amount'))
+    if cents <= 0:
+        raise HTTPException(400, 'amount 必须为大于 0 的金额（元）')
+    with conn() as c:
+        res = gc_mod.consume(c, club_id=club_id, user_id=uid, cents=cents,
+                             order_type=str(payload.get('orderType') or ''),
+                             order_id=str(payload.get('orderId') or ''),
+                             operator=_gc_operator(request))
+        if not res['ok']:
+            _gc_write_raise(res, '核销')
+        return res
+
+
+@app.post('/api/club/{club_id}/gift-cards/reverse')
+def admin_reverse_gift_card_consume(club_id:int, request:Request, payload:dict=Body(...)):
+    """退款冲回核销：把上次 CONSUME 的金额退回余额，同一订单只冲一次。"""
+    club_or_404(club_id)
+    try:
+        uid = int(payload.get('userId') or 0)
+    except (TypeError, ValueError):
+        raise HTTPException(400, 'userId 必填')
+    with conn() as c:
+        res = gc_mod.reverse_consume(c, club_id=club_id, user_id=uid,
+                                     order_type=str(payload.get('orderType') or ''),
+                                     order_id=str(payload.get('orderId') or ''),
+                                     operator=_gc_operator(request))
+        if not res['ok']:
+            _gc_write_raise(res, '冲回')
+        return res
+
+
+@app.get('/api/club/{club_id}/gift-cards/summary')
+def gift_card_summary(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        def _one(sql, args=(club_id,)):
+            try:
+                return c.execute(sql, args).fetchone()[0] or 0
+            except Exception:
+                return 0
+        batches = _one('SELECT COUNT(*) FROM gift_card_batches WHERE club_id=?')
+        cards = _one('SELECT COUNT(*) FROM gift_card_cards WHERE club_id=?')
+        redeemed = _one("SELECT COUNT(*) FROM gift_card_cards WHERE club_id=? AND status='REDEEMED'")
+        active = _one("SELECT COUNT(*) FROM gift_card_cards WHERE club_id=? AND status='ACTIVE'")
+        bal = _one('SELECT COALESCE(SUM(balance_cents),0) FROM gift_card_accounts WHERE club_id=?')
+        total_redeemed = _one('SELECT COALESCE(SUM(total_redeemed_cents),0) FROM gift_card_accounts WHERE club_id=?')
+        total_consumed = _one('SELECT COALESCE(SUM(total_consumed_cents),0) FROM gift_card_accounts WHERE club_id=?')
+        accounts = _one('SELECT COUNT(*) FROM gift_card_accounts WHERE club_id=?')
+        cfg = _gc_config(c, club_id)
+        module_on = _gc_module_on(c, club_id)
+    return {
+        'batches': batches, 'cards': cards, 'redeemedCards': redeemed, 'activeCards': active,
+        'accounts': accounts,
+        'balanceCents': bal, 'balanceAmount': gc_mod.from_cents(bal),
+        'totalRedeemedCents': total_redeemed, 'totalRedeemedAmount': gc_mod.from_cents(total_redeemed),
+        'totalConsumedCents': total_consumed, 'totalConsumedAmount': gc_mod.from_cents(total_consumed),
+        'enabled': bool(cfg.get('enabled')) and module_on,
+    }
+
+
+@app.get('/api/platform/gift-cards/summary')
+def platform_gift_card_summary():
+    """平台视角：只看俱乐部级聚合，不下发任何卡密 / 会员身份。"""
+    with conn() as c:
+        def _one(sql):
+            try:
+                return c.execute(sql).fetchone()[0] or 0
+            except Exception:
+                return 0
+        return {
+            'clubsEnabled': _one('SELECT COUNT(*) FROM gift_card_configs WHERE enabled=1'),
+            'batches': _one('SELECT COUNT(*) FROM gift_card_batches'),
+            'cards': _one('SELECT COUNT(*) FROM gift_card_cards'),
+            'redeemedCards': _one("SELECT COUNT(*) FROM gift_card_cards WHERE status='REDEEMED'"),
+            'balanceCents': _one('SELECT COALESCE(SUM(balance_cents),0) FROM gift_card_accounts'),
+            'totalConsumedCents': _one('SELECT COALESCE(SUM(total_consumed_cents),0) FROM gift_card_accounts'),
+        }
+
+
+# ── C 端礼品卡中心 ──────────────────────────────────────────────────────────
+@app.get('/api/public/clubs/{club_id}/gift-cards/config')
+def public_gift_card_config(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        cfg = _gc_config(c, club_id)
+        on = _gc_module_on(c, club_id)
+    return gc_mod.public_config(cfg) if on else {'enabled': False, 'notice': '', 'maxRedeemsPerUser': 0}
+
+
+@app.get('/api/public/clubs/{club_id}/gift-cards/my')
+def public_gift_card_my(club_id:int, request:Request, user_id:int=0):
+    """我的礼品卡余额 + 已兑换张数；会话身份优先，防越权读他人余额。"""
+    club_or_404(club_id)
+    uid = _gc_uid(request, user_id)
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    with conn() as c:
+        cfg = _gc_config(c, club_id)
+        on = _gc_module_on(c, club_id)
+        if not on or not cfg['enabled']:
+            return {'enabled': False, 'balanceCents': 0, 'balanceAmount': 0.0, 'redeemedCards': 0}
+        acc = row(c.execute('SELECT * FROM gift_card_accounts WHERE club_id=? AND user_id=?',
+                            (club_id, uid)))
+        n = c.execute("""SELECT COUNT(*) FROM gift_card_cards
+                          WHERE club_id=? AND user_id=? AND status='REDEEMED'""",
+                      (club_id, uid)).fetchone()[0] or 0
+    return dict(gc_mod.account_view(acc) if acc else gc_mod.account_view(None),
+                enabled=True, redeemedCards=int(n), notice=cfg.get('notice') or '')
+
+
+@app.post('/api/public/clubs/{club_id}/gift-cards/redeem')
+def public_gift_card_redeem(club_id:int, request:Request, payload:dict=Body(...)):
+    """会员自助兑换卡密；身份一律由服务端会话解析（demo 回落显式 userId）。"""
+    club_or_404(club_id)
+    uid = _gc_uid(request, payload.get('userId'))
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    with conn() as c:
+        cfg = _gc_config(c, club_id)
+        if not cfg['enabled'] or not _gc_module_on(c, club_id):
+            raise HTTPException(403, '礼品卡功能未开启')
+        res = gc_mod.redeem(c, club_id=club_id, code=payload.get('code', ''),
+                            user_id=uid, cfg=cfg, operator='member')
+        if not res['ok']:
+            _gc_redeem_raise(res)
+        _gc_notify_redeem(c, club_id, uid, res['faceAmount'], res['balanceAmount'])
+        return res
+
+
+@app.get('/api/public/clubs/{club_id}/gift-cards/ledger')
+def public_gift_card_ledger(club_id:int, request:Request, user_id:int=0, limit:int=100):
+    club_or_404(club_id)
+    uid = _gc_uid(request, user_id)
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    with conn() as c:
+        rs = rows(c.execute("""SELECT * FROM gift_card_ledger
+                               WHERE club_id=? AND user_id=? ORDER BY id DESC LIMIT ?""",
+                            (club_id, uid, max(1, min(200, int(limit or 100))))))
+    out = []
+    for r in rs:
+        v = gc_mod.ledger_view(r)
+        v.pop('operator', None)   # C 端脱敏：不暴露后台操作人
+        out.append(v)
+    return out
+
+
+# ===== P2-3 小程序对接桥接层 miniprogram_bridge =====
+# 边界：不重做 club_miniprogram 台账、不搬 club_mp_settings 数据、不编造小程序原生页；
+# 只做「能力清单 → 页面绑定 → 一次启动下发 → 对接就绪度」的编排层，全程只读聚合，
+# 绝不写余额 / 订单 / payable / checkout（与 P1-3 / P2-1 / P2-2 同一纪律）。
+def _mb_module_on(c, club_id:int, key:str) -> bool:
+    """设置中枢总开关：异常 / 未覆盖一律 True（绝不因配置读取失败误关业务）。"""
+    try:
+        return bool(hub_mod.is_module_enabled(c, club_id, key))
+    except Exception:
+        return True
+
+
+def _mb_module_cb(c, club_id:int):
+    return lambda k: _mb_module_on(c, club_id, k)
+
+
+def _mb_bridge_on(c, club_id:int) -> bool:
+    return _mb_module_on(c, club_id, 'miniprogramBridge')
+
+
+def _mb_secret_ready(club_id:int) -> bool:
+    """密钥不入库、不进领域层：只把「是否已配置」的布尔值传下去。"""
+    return bool(os.getenv('WECHAT_MINIPROGRAM_SECRET_%d' % club_id) or
+                os.getenv('WECHAT_MINIPROGRAM_SECRET', ''))
+
+
+def _mb_mp_info(c, club_id:int) -> dict:
+    """复用既有台账真相（_mp_get / _mp_public），只挑小程序端展示字段。"""
+    try:
+        x = _mp_public(_mp_get(c, club_id))
+        return {k: (bool(x.get(k)) if k == 'authorized' else (x.get(k) or ''))
+                for k in ('appid', 'appName', 'avatarUrl', 'qrcodeUrl',
+                          'currentVersion', 'releaseStatus', 'authorized', 'privacyStatus')}
+    except Exception:
+        return {}
+
+
+def _mb_mp_settings(c, club_id:int) -> dict:
+    """复用既有标准设置（base/share/pay 三组），映射成小程序渲染用的少量白名单键。"""
+    try:
+        s = _mp_settings_merge(_mp_settings_load(c, club_id))
+        base = s.get('base') if isinstance(s.get('base'), dict) else {}
+        share = s.get('share') if isinstance(s.get('share'), dict) else {}
+        return {
+            'siteName': str(base.get('siteName') or ''),
+            'primaryColor': str(base.get('primaryColor') or ''),
+            'copyright': str(base.get('copyrightIcon') or ''),
+            'shareTitle': str(share.get('friendTitle') or ''),
+            'shareCover': str(share.get('friendCover') or ''),
+            'customerPhone': '',
+        }
+    except Exception:
+        return {}
+
+
+def _mb_operator(request) -> str:
+    return _sv_operator(request)
+
+
+@app.get('/api/club/{club_id}/miniprogram-bridge/config')
+def get_miniprogram_bridge_config(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        cfg = mb_mod.load_config(c, club_id)
+        on = _mb_bridge_on(c, club_id)
+    return dict(mb_mod.config_view(cfg), moduleEnabled=on)
+
+
+@app.patch('/api/club/{club_id}/miniprogram-bridge/config')
+def patch_miniprogram_bridge_config(club_id:int, request:Request, payload:dict=Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        cur = mb_mod.load_config(c, club_id)
+        cfg = mb_mod.normalize_config(payload, cur)
+        mb_mod.save_config(c, club_id, cfg, _mb_operator(request))
+        mb_mod.audit(c, club_id, 'config.update', {'before': mb_mod.config_view(cur),
+                                                   'after': mb_mod.config_view(cfg)},
+                     _mb_operator(request))
+        return dict(mb_mod.config_view(cfg), moduleEnabled=_mb_bridge_on(c, club_id))
+
+
+@app.get('/api/club/{club_id}/miniprogram-bridge/overview')
+def get_miniprogram_bridge_overview(club_id:int):
+    """后台一屏：能力编排 + 台账摘要 + 就绪度 + 最近检查 / 审计。全只读。"""
+    club_or_404(club_id)
+    with conn() as c:
+        cb = _mb_module_cb(c, club_id)
+        eff = mb_mod.effective(c, club_id, module_enabled=cb, include_club=True)
+        readiness = mb_mod.check_readiness(c, club_id,
+                                           secret_configured=_mb_secret_ready(club_id),
+                                           module_enabled=cb)
+        return {
+            'clubId': club_id, 'config': eff['config'],
+            'moduleEnabled': _mb_bridge_on(c, club_id),
+            'groups': eff['groups'], 'items': eff['items'], 'summary': eff['summary'],
+            'mp': _mb_mp_info(c, club_id), 'settings': _mb_mp_settings(c, club_id),
+            'readiness': readiness,
+            'recentChecks': mb_mod.list_checks(c, club_id, 5),
+            'recentAudit': mb_mod.list_audit(c, club_id, 10),
+            'capabilityTotal': len(mb_mod.CAPABILITIES),
+            'secretHint': 'WECHAT_MINIPROGRAM_SECRET / WECHAT_MINIPROGRAM_SECRET_<clubId>',
+        }
+
+
+@app.get('/api/club/{club_id}/miniprogram-bridge/bindings')
+def get_miniprogram_bridge_bindings(club_id:int):
+    club_or_404(club_id)
+    with conn() as c:
+        eff = mb_mod.effective(c, club_id, module_enabled=_mb_module_cb(c, club_id),
+                               include_club=True)
+        return {'clubId': club_id, 'groups': eff['groups'],
+                'items': eff['items'], 'summary': eff['summary'],
+                'config': eff['config']}
+
+
+@app.patch('/api/club/{club_id}/miniprogram-bridge/bindings/{key}')
+def patch_miniprogram_bridge_binding(club_id:int, key:str, request:Request,
+                                     payload:dict=Body(...)):
+    """绑定 / 改名 / 隐藏 / 排序一条能力。pagePath 非法（外链 / 协议）直接 400。"""
+    club_or_404(club_id)
+    cap = mb_mod.CAP_BY_KEY.get(key)
+    if not cap:
+        raise HTTPException(404, '未知能力 key')
+    with conn() as c:
+        cur = mb_mod.load_bindings(c, club_id).get(key)
+        b = mb_mod.normalize_binding(payload, cur)
+        if b is None:
+            raise HTTPException(400, 'pagePath 非法：仅允许 pages/... 或 subpackages/... 站内路径')
+        if not mb_mod.save_binding(c, club_id, key, b, _mb_operator(request)):
+            raise HTTPException(409, '绑定保存失败')
+        mb_mod.audit(c, club_id, 'binding.update',
+                     {'key': key, 'pagePath': b['page_path'], 'enabled': b['enabled'],
+                      'hidden': b['hidden'], 'sort': b['sort_order']},
+                     _mb_operator(request))
+        return mb_mod.binding_view(cap, mb_mod.load_bindings(c, club_id).get(key))
+
+
+@app.delete('/api/club/{club_id}/miniprogram-bridge/bindings/{key}')
+def delete_miniprogram_bridge_binding(club_id:int, key:str, request:Request):
+    club_or_404(club_id)
+    if key not in mb_mod.CAP_BY_KEY:
+        raise HTTPException(404, '未知能力 key')
+    with conn() as c:
+        reset = mb_mod.reset_binding(c, club_id, key)
+        mb_mod.audit(c, club_id, 'binding.reset', {'key': key, 'existed': reset},
+                     _mb_operator(request))
+        return {'ok': True, 'reset': reset}
+
+
+@app.post('/api/club/{club_id}/miniprogram-bridge/check')
+def post_miniprogram_bridge_check(club_id:int, request:Request):
+    """跑一次对接就绪度并落快照（不触发任何真实微信 API 调用）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        cb = _mb_module_cb(c, club_id)
+        r = mb_mod.check_readiness(c, club_id,
+                                   secret_configured=_mb_secret_ready(club_id),
+                                   module_enabled=cb)
+        mb_mod.record_check(c, club_id, r, _mb_operator(request))
+        mb_mod.audit(c, club_id, 'readiness.check',
+                     {'ready': r['ready'], 'score': r['score'], 'level': r['level']},
+                     _mb_operator(request))
+        return r
+
+
+@app.get('/api/club/{club_id}/miniprogram-bridge/checks')
+def get_miniprogram_bridge_checks(club_id:int, limit:int=30):
+    club_or_404(club_id)
+    with conn() as c:
+        return {'clubId': club_id, 'checks': mb_mod.list_checks(c, club_id, limit)}
+
+
+@app.get('/api/club/{club_id}/miniprogram-bridge/audit')
+def get_miniprogram_bridge_audit(club_id:int, limit:int=50):
+    club_or_404(club_id)
+    with conn() as c:
+        return {'clubId': club_id, 'audit': mb_mod.list_audit(c, club_id, limit)}
+
+
+@app.get('/api/platform/miniprogram-bridge/overview')
+def platform_miniprogram_bridge_overview():
+    """平台视角：每家俱乐部的最新一次就绪度，不下发任何密钥 / 会员数据。"""
+    with conn() as c:
+        try:
+            rs = rows(c.execute("""SELECT cl.id AS club_id, cl.name AS name,
+                                          ck.ready, ck.score, ck.level, ck.created_at
+                                     FROM clubs cl
+                                     LEFT JOIN miniprogram_bridge_checks ck
+                                       ON ck.id=(SELECT id FROM miniprogram_bridge_checks
+                                                 WHERE club_id=cl.id ORDER BY id DESC LIMIT 1)
+                                     ORDER BY cl.id"""))
+        except Exception:
+            rs = []
+        return mb_mod.platform_overview(c, rs)
+
+
+# ── C 端小程序桥接：冷启动 / 能力清单 / 我的聚合 ──────────────────────────────
+@app.get('/api/public/clubs/{club_id}/miniprogram/bootstrap')
+def public_miniprogram_bootstrap(club_id:int, request:Request, user_id:int=0):
+    """小程序冷启动一次拿全：资料 + 设置 + 能力清单 + 导航宫格。
+
+    桥接总开关关闭时返回 enabled=False 的空骨架而不是 4xx —— 小程序不能因
+    后台开关而冷启动失败（三铁律）。"""
+    club_or_404(club_id)
+    uid = _sv_public_uid(request, user_id)
+    with conn() as c:
+        cb = _mb_module_cb(c, club_id)
+        b = mb_mod.bootstrap(c, club_id, module_enabled=cb,
+                             mp_info=_mb_mp_info(c, club_id),
+                             mp_settings=_mb_mp_settings(c, club_id),
+                             user_id=(uid if uid > 0 else None))
+        on = _mb_bridge_on(c, club_id)
+    if not on:
+        b['enabled'] = False
+        b['reason'] = 'module-off'
+        b['capabilities'] = []
+        b['navigation'] = []
+        b['summary']['delivered'] = 0
+        b['summary']['navigation'] = 0
+    return b
+
+
+@app.get('/api/public/clubs/{club_id}/miniprogram/capabilities')
+def public_miniprogram_capabilities(club_id:int, request:Request, user_id:int=0):
+    club_or_404(club_id)
+    uid = _sv_public_uid(request, user_id)
+    with conn() as c:
+        if not _mb_bridge_on(c, club_id):
+            return {'clubId': club_id, 'enabled': False, 'capabilities': [], 'count': 0}
+        eff = mb_mod.effective(c, club_id, module_enabled=_mb_module_cb(c, club_id))
+        caps = mb_mod.capabilities_view(eff, user_id=(uid if uid > 0 else None))
+        return {'clubId': club_id, 'enabled': True, 'capabilities': caps, 'count': len(caps)}
+
+
+@app.get('/api/public/clubs/{club_id}/miniprogram/my')
+def public_miniprogram_my(club_id:int, request:Request, user_id:int=0):
+    """登录会员的桥接「我的」只读聚合；储值与礼品卡余额分列，绝不合并成一个总余额。"""
+    club_or_404(club_id)
+    uid = _sv_public_uid(request, user_id)
+    if uid <= 0:
+        raise HTTPException(401, 'authentication required')
+    with conn() as c:
+        if not _mb_bridge_on(c, club_id):
+            return {'clubId': club_id, 'userId': uid, 'enabled': False,
+                    'balances': {}, 'affiliate': None, 'amountUnit': 'cent'}
+        v = mb_mod.my_view(c, club_id, uid, module_enabled=_mb_module_cb(c, club_id))
+        return dict(v, enabled=True)
+
+
+
+# ===== P3 结算编排 checkout_settlement =====
+# 把 P1-3 拼团价、P2-1 分销佣金、P2-2 礼品卡核销真正接进成交链路。
+#
+# 纪律（与 P0~P2 一脉相承）：
+# - **显式 opt-in**：只有 checkout / price-quote 明确带 settlement 参数才启用。
+#   不带的既有下单链路：不写编排表、不读礼品卡余额、不改 cash_amount、不返佣。
+# - **建单即锁定**：礼品卡在 create intent 时真实扣减余额（CONSUME 流水），
+#   避免「现金少收了、余额却在支付期间被花掉」；取消时写 REFUND 冲回。
+# - **confirm 统一编排**：所有支付成功路径都走 _confirm_checkout，佣金只对该单
+#   有编排记录时入账；accrue 自身按订单幂等，重复 confirm 不会重复返佣。
+# - 异常一律静默回落，绝不阻断支付主流程；编排失败落 FAILED 状态供后台重试。
+def _cs_module_on(c, club_id:int) -> bool:
+    """中枢总开关：异常 / 未覆盖一律 True（绝不因配置读取失败误关业务）。"""
+    try:
+        return bool(hub_mod.is_module_enabled(c, club_id, 'checkoutSettlement'))
+    except Exception:
+        return True
+
+
+def _cs_gift_balance(c, club_id:int, user_id:int) -> int:
+    try:
+        r = row(c.execute('SELECT balance_cents FROM gift_card_accounts WHERE club_id=? AND user_id=?',
+                          (club_id, user_id)))
+        return int(r['balance_cents'] or 0) if r else 0
+    except Exception:
+        return 0
+
+
+def _cs_lock_gift(c, *, club_id:int, user_id:int, cents:int, checkout_id:str) -> dict:
+    """下单锁定：真实扣减礼品卡余额（与 gift_card.consume 同一账本，幂等键 CHECKOUT:<id>）。"""
+    try:
+        return gc_mod.apply_ledger(
+            c, club_id=club_id, user_id=user_id, delta_cents=-int(cents),
+            ledger_type='CONSUME', source_type='CHECKOUT', source_id=str(checkout_id),
+            operator='checkout-settlement', note='下单锁定礼品卡余额')
+    except Exception:
+        return {'ok': False, 'reason': 'exception'}
+
+
+def _cs_refund_gift(c, *, club_id:int, user_id:int, cents:int, checkout_id:str) -> dict:
+    """取消/释放冲回。source_type 与锁定不同，幂等键独立；重复调用只会返回 duplicated。"""
+    try:
+        return gc_mod.apply_ledger(
+            c, club_id=club_id, user_id=user_id, delta_cents=int(cents),
+            ledger_type='REFUND', source_type='CHECKOUT_RELEASE', source_id=str(checkout_id),
+            operator='checkout-settlement', note='结算单取消，礼品卡余额冲回')
+    except Exception:
+        return {'ok': False, 'reason': 'exception'}
+
+
+def _cs_plan(c, *, req:dict, club_id:int, user_id:int, cash_cents:int,
+             activity_id:int, participant_count:int) -> dict:
+    """读拼团成团价与礼品卡余额，算出一份与报价预览严格同源的编排方案。"""
+    gq = None
+    if req.get('teamId'):
+        try:
+            gq = gb_mod.quote_for_team(c, club_id=club_id, activity_id=activity_id,
+                                       team_id=int(req['teamId']), user_id=user_id)
+        except Exception:
+            gq = None
+    bal = 0
+    if req.get('useGiftCard'):
+        try:
+            cfg = _gc_config(c, club_id)
+            if cfg['enabled'] and _gc_module_on(c, club_id):
+                bal = _cs_gift_balance(c, club_id, user_id)
+        except Exception:
+            bal = 0
+    return cs_mod.build_plan(cash_cents=cash_cents, req=req, balance_cents=bal,
+                             max_ratio=100, group_quote=gq,
+                             participant_count=participant_count)
+
+
+def _cs_plan_view(plan:dict) -> dict:
+    """给前端/后台的只读预览视图（不落库）。"""
+    return {
+        'enabled': bool(plan.get('enabled')),
+        'cashBefore': cs_mod.from_cents(plan.get('cashBeforeCents')),
+        'groupBuyCents': int(plan.get('groupBuyCents') or 0),
+        'groupBuyAmount': cs_mod.from_cents(plan.get('groupBuyCents')),
+        'giftCardCents': int(plan.get('giftCardCents') or 0),
+        'giftCardAmount': cs_mod.from_cents(plan.get('giftCardCents')),
+        'orderAmount': cs_mod.from_cents(plan.get('orderAmountCents')),
+        'cashAfter': cs_mod.from_cents(plan.get('cashAfterCents')),
+        'commissionEnabled': bool(plan.get('commissionEnabled')),
+        'groupBuy': plan.get('groupBuy'),
+        'appliedToPayable': True,
+    }
+
+
+def _cs_apply_to_intent(c, *, intent_id:str, q, req:dict, club_id:int, user_id:int,
+                        activity_id:int, participant_count:int) -> dict | None:
+    """建单后：锁定礼品卡 → 改写 cash_amount → 落编排记录。失败整单回落为普通订单。"""
+    cash_before = cs_mod.to_cents(q.payable)
+    plan = _cs_plan(c, req=req, club_id=club_id, user_id=user_id,
+                    cash_cents=cash_before, activity_id=activity_id,
+                    participant_count=participant_count)
+    locked = 0
+    if plan['giftCardCents'] > 0:
+        lr = _cs_lock_gift(c, club_id=club_id, user_id=user_id,
+                           cents=plan['giftCardCents'], checkout_id=intent_id)
+        if lr.get('ok'):
+            locked = int(plan['giftCardCents'])
+        else:
+            plan['giftCardCents'] = 0
+            plan['cashAfterCents'] = plan['orderAmountCents']
+            plan['giftCard'] = None
+
+    def _rollback():
+        if locked:
+            _cs_refund_gift(c, club_id=club_id, user_id=user_id,
+                            cents=locked, checkout_id=intent_id)
+        try:
+            old = cs_mod.from_cents(cash_before)
+            c.execute('UPDATE checkout_intents SET cash_amount=? WHERE id=?', (old, intent_id))
+            q.payable = old
+        except Exception:
+            pass
+
+    try:
+        new_cash = cs_mod.from_cents(plan['cashAfterCents'])
+        c.execute('UPDATE checkout_intents SET cash_amount=?, updated_at=CURRENT_TIMESTAMP WHERE id=?',
+                  (new_cash, intent_id))
+        q.payable = new_cash
+    except Exception:
+        _rollback()
+        return None
+    rec = cs_mod.create_record(c, checkout_id=intent_id, club_id=club_id, user_id=user_id,
+                               plan=plan, request=req, kind='activity',
+                               operator='checkout')
+    if not rec['ok']:
+        _rollback()
+        return None
+    return _cs_plan_view(plan)
+
+
+def _cs_settle_after_confirm(c, *, intent_id:str, result:dict) -> dict:
+    """支付成功回调统一编排：佣金入账 + 状态 SETTLED。异常只落 FAILED，绝不抛。"""
+    rec = cs_mod.get_record(c, intent_id)
+    if not rec:
+        return {'skipped': True, 'reason': 'no-record'}   # 普通订单：零副作用
+    if str(rec['status']) == 'SETTLED':
+        return {'skipped': True, 'reason': 'already-settled'}
+    club_id, user_id = int(rec['club_id']), int(rec['user_id'])
+    cents, reason, detail = 0, 'not-enabled', {}
+    if int(rec['commission_enabled'] or 0):
+        rid = result.get('registrationId') if isinstance(result, dict) else None
+        base = int(rec['order_amount_cents'] or 0)
+        if rid and base > 0 and _aff_module_on(c, club_id):
+            try:
+                ar = aff_mod.accrue(
+                    c, club_id=club_id, order_type='registration', order_id=str(rid),
+                    buyer_user_id=user_id, amount_cents=base,
+                    cfg=_aff_config(c, club_id), module_enabled=True)
+                cents = int(ar.get('commissionCents') or 0)
+                reason = str(ar.get('reason') or '')
+                detail = {'accrued': bool(ar.get('accrued')),
+                          'affiliateUserId': ar.get('affiliateUserId'),
+                          'rateBp': ar.get('rateBp')}
+            except Exception as e:
+                reason = 'exception'
+                detail = {'error': str(e)[:160]}
+        else:
+            reason = 'no-registration-or-zero-base'
+    try:
+        ok = cs_mod.settle_record(c, intent_id, registration_id=(result or {}).get('registrationId'),
+                                  commission_cents=cents, commission_reason=reason,
+                                  detail=detail, operator='checkout-confirm')
+        if not ok['ok']:
+            cs_mod.fail_record(c, intent_id, reason='settle-' + str(ok.get('reason')),
+                               operator='checkout-confirm')
+        return ok
+    except Exception as e:
+        try:
+            cs_mod.fail_record(c, intent_id, reason='exception',
+                               detail={'error': str(e)[:160]}, operator='checkout-confirm')
+        except Exception:
+            pass
+        return {'ok': False, 'reason': 'exception'}
+
+
+def _confirm_checkout(c, *, intent_id:str, commerce_order_id:str|None=None):
+    """替换所有 checkout_engine.confirm 调用点，保证 8 条支付路径编排口径一致。
+
+    注意：本函数体内必须调用原始的 checkout_engine.confirm，不能替换成自己（会无限递归）。
+    """
+    result = checkout_engine.confirm(c, intent_id=intent_id, commerce_order_id=commerce_order_id)
+    try:
+        _cs_settle_after_confirm(c, intent_id=intent_id, result=result)
+    except Exception:
+        pass
+    return result
+
+
+def _cs_release_after_cancel(c, checkout_id:str) -> dict:
+    """取消结算单：释放编排记录并把已锁定的礼品卡余额冲回。"""
+    rec = cs_mod.get_record(c, checkout_id)
+    if not rec:
+        return {'skipped': True, 'reason': 'no-record'}
+    out = cs_mod.release_record(c, checkout_id, reason='checkout-cancelled',
+                                operator='checkout-cancel')
+    if out.get('ok') and out.get('reason') == 'ok' and int(out.get('giftCardCents') or 0) > 0:
+        rr = _cs_refund_gift(c, club_id=int(rec['club_id']), user_id=int(rec['user_id']),
+                             cents=int(out['giftCardCents']), checkout_id=checkout_id)
+        out['refund'] = rr
+    return out
+
+
+# ── 后台：结算编排流水 ────────────────────────────────────────────────────────
+@app.get('/api/club/{club_id}/settlements')
+def list_club_settlements(club_id:int, status:str='', limit:int=50, offset:int=0):
+    club_or_404(club_id)
+    with conn() as c:
+        rs = cs_mod.list_records(c, club_id=club_id, status=status or None,
+                                 limit=limit, offset=offset)
+        return {'items': [cs_mod.view(r) for r in rs],
+                'summary': cs_mod.summary(c, club_id=club_id),
+                'moduleEnabled': _cs_module_on(c, club_id)}
+
+
+@app.get('/api/platform/settlements')
+def platform_settlements_summary():
+    with conn() as c:
+        return {'summary': cs_mod.summary(c),
+                'items': [cs_mod.view(r) for r in cs_mod.list_records(c, limit=100)]}
+
+
+@app.post('/api/club/{club_id}/settlements/preview')
+def preview_club_settlement(club_id:int, payload:dict=Body(...)):
+    """只读试算：不写库、不锁余额。供后台核对「这一单会怎么扣、返多少佣」。"""
+    club_or_404(club_id)
+    req = cs_mod.normalize_request({'settlement': payload.get('settlement')})
+    if not req:
+        return {'enabled': False, 'reason': 'opt-in-required'}
+    with conn() as c:
+        if not _cs_module_on(c, club_id):
+            return {'enabled': False, 'reason': 'module-disabled'}
+        plan = _cs_plan(c, req=req, club_id=club_id,
+                        user_id=int(payload.get('userId') or 0),
+                        cash_cents=cs_mod.to_cents(payload.get('cashAmount')),
+                        activity_id=int(payload.get('activityId') or 0),
+                        participant_count=max(1, int(payload.get('participantCount') or 1)))
+        view = _cs_plan_view(plan)
+        if int(rec_cents := plan['orderAmountCents']) > 0 and req.get('commission'):
+            try:
+                pv = aff_mod.preview(c, club_id=club_id,
+                                     buyer_user_id=int(payload.get('userId') or 0),
+                                     amount_cents=rec_cents, cfg=_aff_config(c, club_id),
+                                     module_enabled=_aff_module_on(c, club_id))
+                view['commissionPreview'] = pv
+            except Exception:
+                view['commissionPreview'] = None
+        return view
+
+
+@app.get('/api/club/{club_id}/settlements/{checkout_id}')
+def get_club_settlement(club_id:int, checkout_id:str):
+    club_or_404(club_id)
+    with conn() as c:
+        r = cs_mod.get_record(c, checkout_id)
+        if not r or int(r['club_id']) != int(club_id):
+            raise HTTPException(404, '结算编排记录不存在')
+        return {'item': cs_mod.view(r), 'events': cs_mod.list_events(c, checkout_id)}
+
+
+@app.post('/api/club/{club_id}/settlements/{checkout_id}/release')
+def release_club_settlement(club_id:int, checkout_id:str, payload:dict=Body(default={})):
+    """手工释放未成交的编排单（RESERVED/FAILED），同时冲回已锁定的礼品卡余额。
+
+    幂等：重复调用返回 already-released；已 SETTLED 的成交单一律 409 拒绝。
+    """
+    club_or_404(club_id)
+    with conn() as c:
+        r = cs_mod.get_record(c, checkout_id)
+        if not r or int(r['club_id']) != int(club_id):
+            raise HTTPException(404, '结算编排记录不存在')
+        if str(r['status']) == 'SETTLED':
+            raise HTTPException(409, '成交订单不能释放，请走退款流程')
+        out = _cs_release_after_cancel(c, checkout_id)
+        return {'ok': True, 'result': out, 'item': cs_mod.view(cs_mod.get_record(c, checkout_id))}
+
+
+@app.post('/api/club/{club_id}/settlements/{checkout_id}/retry')
+def retry_club_settlement(club_id:int, checkout_id:str):
+    """FAILED 编排单手工重试：重跑佣金入账并置 SETTLED（accrue 自身幂等）。"""
+    club_or_404(club_id)
+    with conn() as c:
+        r = cs_mod.get_record(c, checkout_id)
+        if not r or int(r['club_id']) != int(club_id):
+            raise HTTPException(404, '结算编排记录不存在')
+        if str(r['status']) != 'FAILED':
+            raise HTTPException(409, '仅 FAILED 状态可重试')
+        # FAILED 时编排表可能还没写 registration_id，回落到结算单快照里的 result_id
+        ci = row(c.execute('SELECT result_id FROM checkout_intents WHERE id=?', (checkout_id,)))
+        rid = r['registration_id'] or ((ci or {}).get('result_id') or None)
+        out = _cs_settle_after_confirm(c, intent_id=checkout_id,
+                                       result={'registrationId': rid})
+        return {'ok': bool(out.get('ok')), 'result': out,
+                'item': cs_mod.view(cs_mod.get_record(c, checkout_id))}
+
 @app.get('/api/public/clubs/{club_id}/activities')
 def public_activities(club_id:int):
     if IS_PROD and club_or_404(club_id)['status']!='active':raise HTTPException(404,'not found')
@@ -6043,7 +9087,10 @@ def _public_price_pending(c, activity_id:int, master:dict|None=None) -> bool:
 
 
 @app.get('/api/public/activities/{activity_id}/price-quote')
-def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_points:int=0,gear_points:int=0,voucher_codes:str='',participant_count:int=1):
+def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_points:int=0,gear_points:int=0,voucher_codes:str='',participant_count:int=1,team_id:int=0,
+                settle:int=Query(0, alias='settle'),
+                use_gift_card:int=Query(0, alias='useGiftCard'),
+                settle_commission:int=Query(0, alias='settleCommission')):
     codes=[x.strip() for x in str(voucher_codes or '').split(',') if x.strip()]
     with conn() as c:
         # #877：活动不存在直接 404，别把不存在的 ID 交给下游报价引擎。
@@ -6064,6 +9111,17 @@ def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_
             if _md>0:
                 q.points['payable']=round(float(q.points['payable'])-_md,2)
             benefits=benefit_engine.quote_vouchers(c,voucher_codes=codes,user_id=user_id,club_id=int(q.occurrence['club_id']),kind='activity',amount_available=float(q.points['payable']),context={'activityId':int(activity_id)})
+            # P0-1 统一营销活动引擎：在积分/会员/券之后叠加活动折扣（club 隔离、只读、异常安全）。
+            # 折扣直接作用在 q.points['payable']（已是折后金额）上，绝不阻断下单链路。
+            try:
+                _camp=CampaignEngine().evaluate(c, club_id=int(q.occurrence['club_id']), user_id=user_id,
+                                                payable=float(q.points['payable']), activity_ids=[int(activity_id)])
+                if _camp['discount'] > 0:
+                    q.points['campaignDiscount']=round(_camp['discount'], 2)
+                    q.points['campaignsApplied']=_camp['applied']
+                    q.points['payable']=round(float(q.points['payable'])-_camp['discount'], 2)
+            except Exception:
+                pass
         except ValueError as e:
             raise HTTPException(409,str(e))
     out=q.points; out['wallet']=q.wallet; out['occurrence']=q.occurrence; out['pointsPolicy']=q.points_policy
@@ -6079,6 +9137,84 @@ def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_
     out['payable']=round(max(0,float(out['payable'])-float(benefits['totalDiscount'])),2)
     out['funding']['club']=round(float(out['funding']['club'])+float(benefits['clubDiscount']),2)
     out['funding']['platform']=round(float(out['funding']['platform'])+float(benefits['platformSubsidy']),2)
+    # P1-1 会员储值：只下发「本单最多可用储值」供 C 端展示，绝不改 payable、绝不改确认流程。
+    # 俱乐部未开启 / 查询异常 → 一律 None，既有下单链路零影响。
+    try:
+        with conn() as _svc:
+            _scid=int(q.occurrence['club_id'])
+            _scfg=_sv_config(_svc,_scid)
+            if _scfg['enabled'] and _scfg['allowActivityPay']:
+                _sacc=row(_svc.execute('SELECT balance_cents FROM stored_value_accounts WHERE club_id=? AND user_id=?',(_scid,user_id)))
+                _sbal=int(_sacc['balance_cents'] or 0) if _sacc else 0
+                out['storedValue']=sv_mod.quote_pay(sv_mod.to_cents(out['payable']),_sbal,_scfg['maxPayRatio'])
+            else:
+                out['storedValue']=None
+    except Exception:
+        out['storedValue']=None
+    # P1-3 拼团：只读下发「我所在团」的拼团价 / 还差几人，供 C 端展示与对账。
+    # ★ 绝不改 payable、绝不碰 checkout：否则会出现「报价显示拼团价、实收却是原价」
+    #   的口径不一致。groupBuy.appliedToPayable 恒为 False，明示这一约定。
+    # 团不属于本活动 / 用户不在团里 / 查询异常 → 一律 None，既有链路零影响。
+    out['groupBuy']=None
+    if team_id:
+        try:
+            with conn() as _gbc:
+                out['groupBuy']=gb_mod.quote_for_team(
+                    _gbc, club_id=int(q.occurrence['club_id']), activity_id=int(activity_id),
+                    team_id=int(team_id), user_id=int(user_id))
+        except Exception:
+            out['groupBuy']=None
+    # P2-2 礼品卡：只读下发「本单最多可用礼品卡余额」，appliedToPayable 恒为 False。
+    # 与 P1-1 储值 / P1-3 拼团价同纪律：绝不改 payable、绝不碰 checkout，
+    # 否则会出现「报价显示可抵扣、实收却是原价」的口径不一致。
+    # 俱乐部未开启 / 中枢关闭 / 查询异常 → 一律 None，既有下单链路零影响。
+    out['giftCard'] = None
+    try:
+        with conn() as _gcc:
+            _gcid = int(q.occurrence['club_id'])
+            _gcfg = _gc_config(_gcc, _gcid)
+            if _gcfg['enabled'] and _gc_module_on(_gcc, _gcid):
+                _gacc = row(_gcc.execute(
+                    'SELECT balance_cents FROM gift_card_accounts WHERE club_id=? AND user_id=?',
+                    (_gcid, user_id)))
+                _gbal = int(_gacc['balance_cents'] or 0) if _gacc else 0
+                _gq = gc_mod.quote_consume(gc_mod.to_cents(out['payable']), _gbal)
+                _gq['appliedToPayable'] = False
+                out['giftCard'] = _gq
+    except Exception:
+        out['giftCard'] = None
+    # P3 opt-in 预览：只有 settle=1 才调整 payable（默认完全保持既有只读口径）。
+    # 注意：不能用 team_id 作为 opt-in 开关 —— 那是 P1-3 既有的「只读展示」参数。
+    out['settlement'] = None
+    if settle:
+        try:
+            _csreq = cs_mod.normalize_request({'settlement': {
+                'useGiftCard': bool(use_gift_card),
+                'teamId': int(team_id or 0),
+                'commission': bool(settle_commission)}})
+        except Exception:
+            _csreq = None
+        if _csreq:
+            try:
+                with conn() as _csc:
+                    _csclub = int(q.occurrence['club_id'])
+                    if _cs_module_on(_csc, _csclub):
+                        _pl = _cs_plan(
+                            _csc, req=_csreq, club_id=_csclub, user_id=int(user_id),
+                            cash_cents=cs_mod.to_cents(out['payable']),
+                            activity_id=int(activity_id),
+                            participant_count=int(out['participantCount']))
+                        _view = _cs_plan_view(_pl)
+                        _new_payable = _view['cashAfter']
+                        # 先算完再一次赋值，避免异常时留下「payable 改了、预览没下发」的不一致
+                        if out.get('giftCard'):
+                            out['giftCard']['appliedToPayable'] = bool(_pl['giftCardCents'])
+                        if out.get('groupBuy'):
+                            out['groupBuy']['appliedToPayable'] = bool(_pl['groupBuyCents'])
+                        out['payable'] = _new_payable
+                        out['settlement'] = _view
+            except Exception:
+                out['settlement'] = None
     return out
 
 @app.post('/api/public/activities/{activity_id}/checkout')
@@ -6099,13 +9235,31 @@ def create_activity_checkout(request:Request,activity_id:int,payload:dict=Body(.
         uid=_member_uid_from_request(request) or user_or_create(c,name,phone)
         c.execute('INSERT OR IGNORE INTO club_members(club_id,user_id) VALUES(?,?)',(a['club_id'],uid))
         c.execute('INSERT OR IGNORE INTO gear_point_accounts(user_id,balance) VALUES(?,0)',(uid,))
+        # P3：只有 payload 显式带 settlement 块且中枢开启才编排；否则整段跳过，零副作用。
+        _csreq = None
+        try:
+            _csreq = cs_mod.normalize_request(payload)
+            if _csreq and not _cs_module_on(c, int(a['club_id'])):
+                _csreq = None
+        except Exception:
+            _csreq = None
         try:
             participants,participant_policy=participant_service.normalize_for_checkout(activity=a,payer_name=name,payer_phone=phone,participants=participant_input)
             intent_id,q,policy_snapshot,benefits=checkout_engine.create_activity_intent(c,activity=a,occurrence=occ,user_id=uid,requested_club_points=req_cp,requested_gear_points=req_gp,voucher_codes=voucher_codes,participants=participants,participant_policy=participant_policy.as_dict())
         except (OverflowError,ValueError) as e: raise HTTPException(409,str(e))
+        _csview = None
+        if _csreq:
+            try:
+                _csview = _cs_apply_to_intent(
+                    c, intent_id=intent_id, q=q, req=_csreq,
+                    club_id=int(a['club_id']), user_id=int(uid),
+                    activity_id=int(activity_id),
+                    participant_count=max(1, len(participants)))
+            except Exception:
+                _csview = None
         _mi=row(c.execute('SELECT member_discount,member_discount_rate FROM checkout_intents WHERE id=?',(intent_id,)))
     # Activity commerce is intentionally ClubOS Domain only. Medusa is Gear-only.
-    return {'ok':True,'checkoutId':intent_id,'userId':uid,**q.as_dict(),'pointsPolicy':policy_snapshot,'benefits':benefits,
+    return {'ok':True,'checkoutId':intent_id,'userId':uid,**q.as_dict(),'pointsPolicy':policy_snapshot,'benefits':benefits,'settlement':_csview,
             'memberDiscount':float(_mi['member_discount'] or 0),'memberDiscountRate':float(_mi['member_discount_rate'] or 0) if _mi else 0,
             'commerceProvider':'clubos-domain','commerceCartId':None,'commerceNote':None,'nextAction':'PAY',
             'participantCount':len(participants),'participantPolicy':participant_policy.as_dict()}
@@ -6266,7 +9420,7 @@ def start_checkout_payment(checkout_id:str,payload:dict=Body(default={})):
             oid='zero_'+uuid.uuid4().hex[:16]
             commerce_order_id=_commerce_order_after_verified_payment(c,checkout_id=checkout_id,provider_payment_id=oid,provider='clubos-zero')
             payment_lifecycle.succeed(c,checkout_id=checkout_id,provider='clubos-zero',provider_payment_id=oid,payment_attempt_id=attempt.get('paymentAttemptId'),raw={'zeroCash':True})
-            result=checkout_engine.confirm(c,intent_id=checkout_id,commerce_order_id=commerce_order_id)
+            result=_confirm_checkout(c,intent_id=checkout_id,commerce_order_id=commerce_order_id)
             return {**attempt,'status':'succeeded','paymentStatus':'succeeded','result':result,'paymentAction':{'type':'none'}}
         try:
             account=payment_accounts.resolve_for_checkout(c,intent)
@@ -6297,7 +9451,7 @@ def start_checkout_payment(checkout_id:str,payload:dict=Body(default={})):
             pid=created.provider_payment_id or ('local_'+uuid.uuid4().hex[:16])
             commerce_order_id=_commerce_order_after_verified_payment(c,checkout_id=checkout_id,provider_payment_id=pid,provider='local')
             payment_lifecycle.succeed(c,checkout_id=checkout_id,provider='local',provider_payment_id=pid,payment_attempt_id=attempt_id,raw=created.raw or {})
-            result=checkout_engine.confirm(c,intent_id=checkout_id,commerce_order_id=commerce_order_id)
+            result=_confirm_checkout(c,intent_id=checkout_id,commerce_order_id=commerce_order_id)
             return {**attempt,'status':'succeeded','paymentStatus':'succeeded','paymentAction':created.action,'result':result}
     return {**attempt,'paymentStatus':'processing','paymentAction':created.action,'providerPaymentId':created.provider_payment_id,'nextAction':'COMPLETE_PROVIDER_PAYMENT'}
 
@@ -6309,16 +9463,20 @@ def confirm_checkout(checkout_id:str,payload:dict=Body(default={})):
         try:
             commerce_order_id=_commerce_order_after_verified_payment(c,checkout_id=checkout_id,provider_payment_id=order_id,provider='local-manual')
             payment_lifecycle.succeed(c,checkout_id=checkout_id,provider='local-manual',provider_payment_id=order_id,raw=payload)
-            return checkout_engine.confirm(c,intent_id=checkout_id,commerce_order_id=commerce_order_id)
+            return _confirm_checkout(c,intent_id=checkout_id,commerce_order_id=commerce_order_id)
         except LookupError as e: raise HTTPException(404,str(e))
         except (ValueError,OverflowError) as e: raise HTTPException(409,str(e))
 
 @app.post('/api/public/checkouts/{checkout_id}/cancel')
 def cancel_checkout(checkout_id:str):
     with conn() as c:
-        try:return checkout_engine.cancel_intent(c,intent_id=checkout_id)
+        try:out=checkout_engine.cancel_intent(c,intent_id=checkout_id)
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
+        # P3：编排单取消时释放预留、冲回礼品卡余额（异常绝不阻断取消主流程）
+        try:_cs_release_after_cancel(c, checkout_id)
+        except Exception:pass
+        return out
 
 def _payment_account_by_id(c, account_id:int):
     a=row(c.execute('SELECT * FROM payment_accounts WHERE id=? AND enabled=1',(account_id,)))
@@ -6388,7 +9546,7 @@ async def provider_payment_notify(provider_name:str,account_id:int,request:Reque
                 commerce_order_id=_commerce_order_after_verified_payment(c,checkout_id=attempt['checkout_intent_id'],provider_payment_id=transaction_id or merchant_no,provider='wechatpay_v3')
                 payment_lifecycle.succeed(c,checkout_id=attempt['checkout_intent_id'],provider='wechatpay_v3',provider_payment_id=transaction_id or None,
                                           payment_attempt_id=attempt['id'],raw=resource)
-                result=checkout_engine.confirm(c,intent_id=attempt['checkout_intent_id'],commerce_order_id=commerce_order_id)
+                result=_confirm_checkout(c,intent_id=attempt['checkout_intent_id'],commerce_order_id=commerce_order_id)
             elif trade_state in ('CLOSED','PAYERROR','REVOKED'):
                 payment_lifecycle.fail(c,checkout_id=attempt['checkout_intent_id'],provider='wechatpay_v3',reason=trade_state,
                                        provider_payment_id=transaction_id or None,payment_attempt_id=attempt['id'],raw=resource)
@@ -6418,7 +9576,7 @@ async def provider_payment_notify(provider_name:str,account_id:int,request:Reque
                 commerce_order_id=_commerce_order_after_verified_payment(c,checkout_id=attempt['checkout_intent_id'],provider_payment_id=trade_no or merchant_no,provider='alipay')
                 payment_lifecycle.succeed(c,checkout_id=attempt['checkout_intent_id'],provider='alipay',provider_payment_id=trade_no or None,
                                           payment_attempt_id=attempt['id'],raw=verified)
-                result=checkout_engine.confirm(c,intent_id=attempt['checkout_intent_id'],commerce_order_id=commerce_order_id)
+                result=_confirm_checkout(c,intent_id=attempt['checkout_intent_id'],commerce_order_id=commerce_order_id)
             elif trade_status=='TRADE_CLOSED':
                 payment_lifecycle.fail(c,checkout_id=attempt['checkout_intent_id'],provider='alipay',reason=trade_status,provider_payment_id=trade_no or None,payment_attempt_id=attempt['id'],raw=verified)
             _record_payment_event(c,event_key=event_key,provider='alipay',event_type='payment.'+trade_status.lower(),account_id=account_id,
@@ -6443,7 +9601,7 @@ def commerce_order_paid(payload:dict=Body(...), x_clubos_commerce_secret:str|Non
         if existing: return {'ok':True,'idempotent':True,'eventKey':event_key}
         try:
             payment_lifecycle.succeed(c,checkout_id=checkout_id,provider=provider,provider_payment_id=order_id or None,raw=payload)
-            result=checkout_engine.confirm(c,intent_id=checkout_id,commerce_order_id=order_id or None)
+            result=_confirm_checkout(c,intent_id=checkout_id,commerce_order_id=order_id or None)
         except LookupError as e: raise HTTPException(404,str(e))
         except (ValueError,OverflowError) as e: raise HTTPException(409,str(e))
         c.execute('INSERT INTO commerce_events(event_key,provider,event_type,checkout_intent_id,commerce_order_id,payload_json) VALUES(?,?,?,?,?,?)',
@@ -6500,7 +9658,7 @@ def commerce_payment_succeeded(payload:dict=Body(...), x_clubos_commerce_secret:
         try:
             commerce_order_id=_commerce_order_after_verified_payment(c,checkout_id=checkout_id,provider_payment_id=order_id or None,provider=provider)
             payment_lifecycle.succeed(c,checkout_id=checkout_id,provider=provider,provider_payment_id=order_id or None,payment_attempt_id=payload.get('paymentAttemptId'),raw=payload)
-            result=checkout_engine.confirm(c,intent_id=checkout_id,commerce_order_id=commerce_order_id)
+            result=_confirm_checkout(c,intent_id=checkout_id,commerce_order_id=commerce_order_id)
         except LookupError as e: raise HTTPException(404,str(e))
         except (ValueError,OverflowError) as e: raise HTTPException(409,str(e))
         c.execute('INSERT INTO commerce_events(event_key,provider,event_type,checkout_intent_id,commerce_order_id,payload_json) VALUES(?,?,?,?,?,?)',

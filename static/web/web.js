@@ -2964,5 +2964,9 @@ async function startWeb(){
      loadMall 里的深链处理器会接着把商品详情打开。没有这一段，分享出去的链接打开后
      停在首页，要等用户手点「装备」tab 才生效（实测就是这样）。 */
   if(/^#pd=\d+$/.test(location.hash||'')){wviewShow('wmall');await loadMall()}
+  /* P1-5 路由表：#view=<id> 深链（装修器导航宫格 / 路由表下发的 URL）。
+     只接受注册表白名单里的 view id，避免任意 DOM id 被切进来。 */
+  const mv=/^#view=([A-Za-z0-9_]+)$/.exec(location.hash||'');
+  if(mv && ['whome','wactivities','wcamp','wmall','wability','wme','wleaders'].indexOf(mv[1])>=0){wviewShow(mv[1])}
 }
 startWeb();

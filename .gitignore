@@ -14,3 +14,24 @@ static/uploads/*/*/
 versions/
 outputs/
 clubos-*-smoke-*/
+
+# ── #892 上线前安全加固（2026-11-13）─────────────────────────────
+# 环境变量变体：只忽略真实配置，保留所有 *.example / *.template 模板
+.env.local
+.env.production
+.env.development
+.env.test
+.env.*.local
+# 私钥材料，绝不入库
+*.pem
+*.key
+*.p12
+*.pfx
+# SQLite sidecar：含未提交事务数据，误 git add -A 会入库
+*.db-journal
+*.db-wal
+*.db-shm
+# static/ 由 app.mount 直接对外服务，任何 .db/.env 落在这里都可被匿名下载
+# （2026-11-13 线上实证 HTTP 200 / 1875968 bytes / SQLite format 3）
+static/versions/
+static/uploads/**

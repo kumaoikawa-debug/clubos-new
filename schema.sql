@@ -2286,3 +2286,546 @@ CREATE TABLE IF NOT EXISTS user_hidden_orders (
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY(user_id,order_kind,order_id)
 );
+
+-- 2026-11-13 P0-1 统一营销活动引擎：所有营销玩法收敛到一张通用表 + 类型专属 rules_json。
+-- 新增玩法只填配置、不新建表。owner_type=CLUB 仅对本俱乐部生效；PLATFORM 对所有俱乐部生效。
+CREATE TABLE IF NOT EXISTS marketing_campaigns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_type TEXT NOT NULL DEFAULT 'CLUB',
+  owner_club_id INTEGER,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'DRAFT',
+  schedule_json TEXT,
+  scope_json TEXT,
+  rules_json TEXT,
+  stats_json TEXT,
+  created_by INTEGER,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_mc_club_status ON marketing_campaigns(owner_club_id, status);
+CREATE INDEX IF NOT EXISTS idx_mc_platform ON marketing_campaigns(owner_type, status);
+
+-- 2026-11-13 P0-2 低代码界面装修器：通用页面布局表。components 数组（JSON）由
+-- clubos_domain/page_layout.py 负责归一化与公开渲染；page_key 区分 club_home / activity_detail。
+CREATE TABLE IF NOT EXISTS page_layouts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  page_key TEXT NOT NULL,
+  title TEXT,
+  status TEXT NOT NULL DEFAULT 'DRAFT',
+  schema_json TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(club_id, page_key)
+);
+CREATE INDEX IF NOT EXISTS idx_pl_club_page ON page_layouts(club_id, page_key);
+CREATE INDEX IF NOT EXISTS idx_pl_club_status ON page_layouts(club_id, status);
+
+-- 2026-11-13 P0-3 门店/基地/分队实体：把"门店"从权限维度升级为可配置真实实体，
+-- 作为活动/营销活动/商品/权益的门店维度统一挂靠点。is_default=1 的门店即俱乐部主店。
+CREATE TABLE IF NOT EXISTS stores (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  address TEXT,
+  phone TEXT,
+  geo_json TEXT,
+  hours_json TEXT,
+  notice_json TEXT,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_stores_club ON stores(club_id, status);
+
+-- 2026-11-13 P0-4 通知通道抽象 + 模板：渠道可配 wechat/email/sms/inapp，模板按业务 code 带 {{变量}}；
+-- inapp_messages 是站内信收件箱。club_id=0 的模板视为平台级默认。
+CREATE TABLE IF NOT EXISTS notification_channels (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  config_json TEXT,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now')),
+  UNIQUE(club_id, type)
+);
+CREATE TABLE IF NOT EXISTS notification_templates (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL DEFAULT 0,
+  code TEXT NOT NULL,
+  channel TEXT NOT NULL DEFAULT 'inapp',
+  title TEXT,
+  body TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT DEFAULT (datetime('now')),
+  updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS inapp_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER,
+  club_id INTEGER NOT NULL,
+  code TEXT,
+  title TEXT,
+  body TEXT,
+  is_read INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_nc_club ON notification_channels(club_id, type);
+CREATE INDEX IF NOT EXISTS idx_nt_code_club ON notification_templates(code, club_id);
+CREATE INDEX IF NOT EXISTS idx_im_user ON inapp_messages(user_id, is_read);
+
+-- 2026-11-13 P1-1 会员储值账户：真金白银预存余额，金额一律以「分」INTEGER 存储。
+-- 沿用 ai_credit_accounts/ledger 范式；ledger 额外带 balance_after_cents 余额快照便于对账。
+-- 俱乐部未配置 stored_value_config 行 = 未开启储值（不影响任何既有链路）。
+CREATE TABLE IF NOT EXISTS stored_value_config (
+  club_id INTEGER PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  allow_activity_pay INTEGER NOT NULL DEFAULT 1,
+  max_pay_ratio INTEGER NOT NULL DEFAULT 100,
+  min_recharge_cents INTEGER NOT NULL DEFAULT 0,
+  rules_json TEXT NOT NULL DEFAULT '[]',
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS stored_value_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  balance_cents INTEGER NOT NULL DEFAULT 0,
+  total_recharged_cents INTEGER NOT NULL DEFAULT 0,
+  total_bonus_cents INTEGER NOT NULL DEFAULT 0,
+  total_spent_cents INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT,
+  UNIQUE(club_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS stored_value_recharges (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  bonus_cents INTEGER NOT NULL DEFAULT 0,
+  total_cents INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  rule_label TEXT,
+  operator TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  confirmed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS stored_value_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  balance_after_cents INTEGER NOT NULL,
+  source_type TEXT,
+  source_id TEXT,
+  operator TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_sva_club ON stored_value_accounts(club_id, balance_cents);
+CREATE INDEX IF NOT EXISTS idx_svr_club ON stored_value_recharges(club_id, status);
+CREATE INDEX IF NOT EXISTS idx_svl_user ON stored_value_ledger(club_id, user_id, id);
+-- 幂等闸门：同一业务单号在同一会员账户上只能记一次账（重复确认充值不会重复到账）。
+CREATE UNIQUE INDEX IF NOT EXISTS idx_svl_idem
+  ON stored_value_ledger(club_id, user_id, source_type, source_id)
+  WHERE source_id IS NOT NULL;
+
+-- ── P1-2 互动玩法（签到 / 抽奖 / 集章）──────────────────────────────
+-- 无配置行 = 该玩法未开启；config_json 存玩法专属规则（签到档位 / 奖品池 / 集章动作）。
+CREATE TABLE IF NOT EXISTS engagement_configs (
+  club_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT,
+  UNIQUE(club_id, kind)
+);
+-- 参与日志：biz_key 唯一保证「同一天重复点签到 / 重复抽同一序号」不会重复发奖。
+CREATE TABLE IF NOT EXISTS engagement_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  biz_key TEXT NOT NULL,
+  day_key TEXT,
+  action TEXT,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(club_id, kind, user_id, biz_key)
+);
+-- 发奖记录：POINTS 直接进 club_point_ledger（GRANTED），PRIZE 先 PENDING 待后台核销。
+CREATE TABLE IF NOT EXISTS engagement_rewards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  user_id INTEGER NOT NULL,
+  log_id INTEGER,
+  reward_type TEXT NOT NULL DEFAULT 'POINTS',
+  points INTEGER NOT NULL DEFAULT 0,
+  prize_id TEXT,
+  prize_name TEXT,
+  status TEXT NOT NULL DEFAULT 'GRANTED',
+  source_key TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  fulfilled_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_egl_club ON engagement_logs(club_id, kind, id);
+CREATE INDEX IF NOT EXISTS idx_egl_user ON engagement_logs(club_id, user_id, day_key);
+CREATE INDEX IF NOT EXISTS idx_egr_club ON engagement_rewards(club_id, status, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_egr_idem
+  ON engagement_rewards(club_id, kind, user_id, source_key)
+  WHERE source_key IS NOT NULL;
+
+-- ── P1-3 拼团（团购成团）──────────────────────────────────────────
+-- 金额均以「分」INTEGER 存储（_cents 后缀）；起止时间用秒级时间戳，团过期惰性判定。
+CREATE TABLE IF NOT EXISTS group_buy_campaigns (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  activity_id INTEGER,
+  title TEXT NOT NULL,
+  required_people INTEGER NOT NULL DEFAULT 3,
+  group_price_cents INTEGER NOT NULL,
+  original_price_cents INTEGER NOT NULL DEFAULT 0,
+  duration_hours INTEGER NOT NULL DEFAULT 24,
+  max_teams INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'DRAFT',
+  start_at INTEGER,
+  end_at INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS group_buy_teams (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  campaign_id INTEGER NOT NULL,
+  club_id INTEGER NOT NULL,
+  activity_id INTEGER,
+  leader_user_id INTEGER NOT NULL,
+  required_people INTEGER NOT NULL DEFAULT 3,
+  price_cents INTEGER NOT NULL,
+  status TEXT NOT NULL DEFAULT 'OPEN',
+  member_count INTEGER NOT NULL DEFAULT 1,
+  expire_at INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS group_buy_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id INTEGER NOT NULL,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  role TEXT NOT NULL DEFAULT 'MEMBER',
+  price_cents INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'JOINED',
+  joined_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(team_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gbc_club ON group_buy_campaigns(club_id, status);
+CREATE INDEX IF NOT EXISTS idx_gbt_club ON group_buy_teams(club_id, status, id);
+CREATE INDEX IF NOT EXISTS idx_gbt_camp ON group_buy_teams(campaign_id, status);
+CREATE INDEX IF NOT EXISTS idx_gbm_team ON group_buy_members(team_id, user_id);
+
+-- ── P1-4 设置中枢（统一配置入口）────────────────────────────────────
+-- 只存「通用偏好」与「已接线模块的总开关覆盖」；各模块真实配置仍在各自的表里，
+-- 中枢通过只读探测聚合状态，绝不复制或回写。club_id=0 的行是平台级默认值。
+CREATE TABLE IF NOT EXISTS settings_hub_values (
+  club_id INTEGER NOT NULL,
+  key TEXT NOT NULL,
+  value_json TEXT,
+  updated_at TEXT,
+  UNIQUE(club_id, key)
+);
+CREATE TABLE IF NOT EXISTS settings_hub_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  key TEXT NOT NULL,
+  old_value_json TEXT,
+  new_value_json TEXT,
+  action TEXT NOT NULL DEFAULT 'SET',
+  operator TEXT,
+  note TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_shv_key ON settings_hub_values(key, club_id);
+CREATE INDEX IF NOT EXISTS idx_sha_club ON settings_hub_audit(club_id, id);
+
+-- ── P1-5 功能路由表（v0.41）────────────────────────────────────────────────
+-- 注册表是代码常量（clubos_domain/route_registry.py），不落库；这里只存俱乐部级
+-- 「编排覆盖」（隐藏 / 排序 / 改名 / 图标 / 自定义外链）与变更审计。
+-- 可用性联动复用 settings_hub 模块开关 + clubs.module_switches_json，不复制状态。
+CREATE TABLE IF NOT EXISTS route_overrides (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  scope TEXT NOT NULL,
+  route_key TEXT NOT NULL,
+  hidden INTEGER,                 -- NULL=未覆盖 / 0=显式显示 / 1=显式隐藏（三态，避免只改排序就放出默认隐藏项）
+  sort_order INTEGER,
+  label TEXT,
+  icon TEXT,
+  custom_url TEXT,
+  updated_at TEXT,
+  UNIQUE(club_id, scope, route_key)
+);
+CREATE TABLE IF NOT EXISTS route_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  scope TEXT NOT NULL,
+  route_key TEXT,
+  action TEXT NOT NULL DEFAULT 'SET',
+  detail_json TEXT,
+  operator TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ro_club ON route_overrides(club_id, scope);
+CREATE INDEX IF NOT EXISTS idx_ra_club ON route_audit(club_id, id);
+
+-- ── P2-1 分销员（v0.42）──────────────────────────────────────────────────────
+-- 口径隔离：commission_ledger 是「平台↔俱乐部」装备订单佣金（无 user_id），
+-- invite_records 是「一次性拉新奖励」；这里是第三套「俱乐部↔推广员」持续返佣。
+-- 金额一律整数「分」，费率一律 basis points；不写既有佣金表、不改 checkout。
+CREATE TABLE IF NOT EXISTS affiliate_configs (
+  club_id INTEGER PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS affiliate_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  code TEXT NOT NULL,
+  level TEXT,
+  rate_bp_override INTEGER,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  note TEXT,
+  total_orders INTEGER NOT NULL DEFAULT 0,
+  total_amount_cents INTEGER NOT NULL DEFAULT 0,
+  total_commission_cents INTEGER NOT NULL DEFAULT 0,
+  settled_cents INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT,
+  UNIQUE(club_id, user_id),
+  UNIQUE(code)
+);
+CREATE TABLE IF NOT EXISTS affiliate_bindings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  affiliate_user_id INTEGER NOT NULL,
+  invitee_user_id INTEGER NOT NULL,
+  code TEXT,
+  channel TEXT NOT NULL DEFAULT 'code',
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  created_at TEXT,
+  expires_at TEXT,
+  UNIQUE(club_id, invitee_user_id)
+);
+CREATE TABLE IF NOT EXISTS affiliate_commissions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  affiliate_user_id INTEGER NOT NULL,
+  invitee_user_id INTEGER NOT NULL,
+  binding_id INTEGER,
+  order_type TEXT NOT NULL,
+  order_id TEXT NOT NULL,
+  order_amount_cents INTEGER NOT NULL DEFAULT 0,
+  rate_bp INTEGER NOT NULL DEFAULT 0,
+  commission_cents INTEGER NOT NULL DEFAULT 0,
+  level_key TEXT,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  created_at TEXT,
+  available_at TEXT,
+  settled_at TEXT,
+  settlement_id TEXT,
+  reversed_at TEXT,
+  UNIQUE(club_id, order_type, order_id, affiliate_user_id)
+);
+CREATE TABLE IF NOT EXISTS affiliate_settlements (
+  id TEXT PRIMARY KEY,
+  club_id INTEGER NOT NULL,
+  affiliate_user_id INTEGER NOT NULL,
+  gross_cents INTEGER NOT NULL DEFAULT 0,
+  entry_count INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'GENERATED',
+  payment_ref TEXT,
+  created_at TEXT,
+  paid_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_afm_club ON affiliate_members(club_id, status);
+CREATE INDEX IF NOT EXISTS idx_afb_aff ON affiliate_bindings(club_id, affiliate_user_id);
+CREATE INDEX IF NOT EXISTS idx_afc_due ON affiliate_commissions(club_id, affiliate_user_id, status);
+CREATE INDEX IF NOT EXISTS idx_afc_order ON affiliate_commissions(club_id, order_type, order_id);
+CREATE INDEX IF NOT EXISTS idx_afs_club ON affiliate_settlements(club_id, created_at);
+
+-- ── P2-2 礼品卡（v0.43）──────────────────────────────────────────────────────
+-- 口径隔离：stored_value_* 是会员充值储值，club_points_balance / gear_point_accounts
+-- 是积分点数；礼品卡是「预付卡密兑换出来的独立余额」，只写 gift_card_*。
+-- 金额一律整数「分」；流水带 balance_after_cents 快照与幂等唯一索引。
+-- 卡密全局唯一；卡自带 valid_* 供展示/导出，兑换时批次有效期同样是硬闸门
+-- （后台事后收紧批次不能让已发旧卡绕过）。
+-- 不接入 checkout / payable：核销由订单完成后显式端点触发。
+CREATE TABLE IF NOT EXISTS gift_card_configs (
+  club_id INTEGER PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS gift_card_batches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  face_cents INTEGER NOT NULL DEFAULT 0,
+  plan_count INTEGER NOT NULL DEFAULT 0,
+  valid_from TEXT,
+  valid_until TEXT,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  note TEXT,
+  created_at TEXT,
+  created_by TEXT
+);
+CREATE TABLE IF NOT EXISTS gift_card_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  batch_id INTEGER NOT NULL,
+  code TEXT NOT NULL,
+  face_cents INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  user_id INTEGER,
+  redeemed_at TEXT,
+  valid_from TEXT,
+  valid_until TEXT,
+  note TEXT,
+  created_at TEXT,
+  UNIQUE(code)
+);
+CREATE TABLE IF NOT EXISTS gift_card_accounts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  balance_cents INTEGER NOT NULL DEFAULT 0,
+  total_redeemed_cents INTEGER NOT NULL DEFAULT 0,
+  total_consumed_cents INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  created_at TEXT,
+  updated_at TEXT,
+  UNIQUE(club_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS gift_card_ledger (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL DEFAULT 0,
+  balance_after_cents INTEGER NOT NULL DEFAULT 0,
+  source_type TEXT,
+  source_id TEXT,
+  card_id INTEGER,
+  operator TEXT,
+  note TEXT,
+  created_at TEXT,
+  UNIQUE(club_id, user_id, source_type, source_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gcb_club ON gift_card_batches(club_id, status);
+CREATE INDEX IF NOT EXISTS idx_gcc_batch ON gift_card_cards(batch_id);
+CREATE INDEX IF NOT EXISTS idx_gcc_club ON gift_card_cards(club_id, status);
+CREATE INDEX IF NOT EXISTS idx_gcc_user ON gift_card_cards(club_id, user_id);
+CREATE INDEX IF NOT EXISTS idx_gca_club ON gift_card_accounts(club_id, balance_cents);
+CREATE INDEX IF NOT EXISTS idx_gcl_user ON gift_card_ledger(club_id, user_id, id);
+CREATE INDEX IF NOT EXISTS idx_gcl_src ON gift_card_ledger(club_id, source_type, source_id);
+
+
+-- ── P2-3 小程序对接桥接层（2026-11-13）──────────────────────────────────────
+-- 只存「桥接编排」：启动配置、能力→小程序原生页绑定、就绪度检查快照、变更审计。
+-- 小程序认证资料仍以 club_miniprogram 为唯一真相；登录密钥不入库（环境变量）。
+-- hidden 三态：NULL=未覆盖 / 0=显式显示 / 1=显式隐藏（与 P1-5 路由表一致）。
+CREATE TABLE IF NOT EXISTS miniprogram_bridge_config (
+  club_id INTEGER PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  config_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT,
+  updated_by TEXT
+);
+CREATE TABLE IF NOT EXISTS miniprogram_bridge_bindings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  capability_key TEXT NOT NULL,
+  page_path TEXT,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  hidden INTEGER,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  note TEXT,
+  updated_at TEXT,
+  updated_by TEXT,
+  UNIQUE(club_id, capability_key)
+);
+CREATE TABLE IF NOT EXISTS miniprogram_bridge_checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  ready INTEGER NOT NULL DEFAULT 0,
+  score INTEGER NOT NULL DEFAULT 0,
+  level TEXT,
+  missing_json TEXT,
+  detail_json TEXT,
+  operator TEXT,
+  created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS miniprogram_bridge_audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  detail_json TEXT,
+  operator TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_mpbb_club ON miniprogram_bridge_bindings(club_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_mpbc_club ON miniprogram_bridge_checks(club_id, id);
+CREATE INDEX IF NOT EXISTS idx_mpba_club ON miniprogram_bridge_audit(club_id, id);
+
+-- ── P3 结算编排（2026-11-13）────────────────────────────────────────────────
+-- 只有显式带 settlement 参数的下单才写这里；礼品卡余额 / 佣金流水不复制。
+-- DDL 单一真相：clubos_domain/checkout_settlement.py::ensure_tables
+
+CREATE TABLE IF NOT EXISTS checkout_settlements (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  checkout_id TEXT NOT NULL UNIQUE,
+  club_id INTEGER NOT NULL,
+  user_id INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'activity',
+  status TEXT NOT NULL DEFAULT 'RESERVED',
+  order_amount_cents INTEGER NOT NULL DEFAULT 0,
+  cash_before_cents INTEGER NOT NULL DEFAULT 0,
+  group_buy_cents INTEGER NOT NULL DEFAULT 0,
+  gift_card_cents INTEGER NOT NULL DEFAULT 0,
+  cash_after_cents INTEGER NOT NULL DEFAULT 0,
+  group_buy_json TEXT,
+  commission_enabled INTEGER NOT NULL DEFAULT 0,
+  commission_cents INTEGER NOT NULL DEFAULT 0,
+  commission_reason TEXT,
+  registration_id INTEGER,
+  request_json TEXT,
+  detail_json TEXT,
+  operator TEXT,
+  created_at TEXT,
+  updated_at TEXT,
+  settled_at TEXT
+);
+CREATE TABLE IF NOT EXISTS checkout_settlement_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  checkout_id TEXT NOT NULL,
+  club_id INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  from_status TEXT,
+  to_status TEXT,
+  detail_json TEXT,
+  operator TEXT,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_css_club ON checkout_settlements(club_id, id);
+CREATE INDEX IF NOT EXISTS idx_css_status ON checkout_settlements(status, id);
+CREATE INDEX IF NOT EXISTS idx_cse_checkout ON checkout_settlement_events(checkout_id, id);
+CREATE INDEX IF NOT EXISTS idx_cse_club ON checkout_settlement_events(club_id, id);

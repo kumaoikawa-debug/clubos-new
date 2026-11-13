@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ClubOS NEW · 设置中枢</title>
+  <link rel="stylesheet" href="/static/shared.css?v=20261113b">
+  <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261111z">
+  <link rel="stylesheet" href="/static/club/club-glass.css?v=20261112b">
+  <style>
+    body{margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#16362b}
+    .wrap{max-width:1000px;margin:0 auto;padding:18px}
+    h1{font-size:18px;margin:0 0 4px}
+    .tip{font-size:12px;color:#8aa39a;margin:0 0 12px;line-height:1.7}
+    .card{background:#fff;border:1px solid #e7edea;border-radius:14px;padding:14px;margin-bottom:12px}
+    .card h3{font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    .stat{flex:1;min-width:110px;background:#fff;border:1px solid #e7edea;border-radius:12px;padding:12px}
+    .stat .k{font-size:11px;color:#8aa39a}
+    .stat .v{font-size:19px;font-weight:700;margin-top:3px}
+    .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+    .row label{font-size:12px;color:#5d7a6e;min-width:150px}
+    .row input,.row select{padding:6px 8px;border:1px solid #d7e2dd;border-radius:8px;font-size:13px;flex:1;min-width:120px}
+    .row input[type=checkbox]{flex:0;min-width:0;width:16px;height:16px}
+    .row input.sm,.row select.sm{min-width:90px;max-width:130px;flex:0 1 110px}
+    .btn{padding:7px 14px;border-radius:9px;border:1px solid #0a7d52;background:#0a7d52;color:#fff;font-size:13px;cursor:pointer}
+    .btn.ghost{background:#fff;color:#0a7d52}
+    .btn.sm{padding:4px 9px;font-size:12px}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .empty{color:#8aa39a;text-align:center;padding:16px;font-size:13px}
+    .muted{font-size:12px;color:#8aa39a}
+    .badge{font-size:11px;padding:2px 8px;border-radius:20px;background:#eef3f0;color:#5d7a6e;white-space:nowrap}
+    .badge.on{background:#e3f6ec;color:#0a7d52}
+    .badge.warn{background:#fdf3e2;color:#a06a10}
+    .badge.off{background:#f6e7e6;color:#b03a2e}
+    .grp{margin-top:14px}
+    .grp:first-child{margin-top:0}
+    .grp__t{font-size:12px;font-weight:600;color:#0a7d52;margin-bottom:6px;padding-left:2px}
+    .mods{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:9px}
+    .mod{border:1px solid #e7edea;border-radius:11px;padding:10px}
+    .mod__head{display:flex;align-items:center;justify-content:space-between;gap:6px}
+    .mod__t{font-weight:600;font-size:13px}
+    .mod__note{font-size:11px;color:#8aa39a;line-height:1.5;margin:6px 0}
+    .mod__foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
+    .mod__foot label{display:flex;align-items:center;gap:5px;font-size:12px;color:#5d7a6e}
+    .mod__foot input[type=checkbox]{width:15px;height:15px}
+    table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #f0f4f2;vertical-align:top}
+    th{color:#8aa39a;font-weight:500}
+    .auditbox{max-height:260px;overflow:auto;margin-top:8px}
+    .dirty{outline:2px solid #f0b429;outline-offset:1px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>设置中枢</h1>
+    <p class="tip">一屏查看所有能力的真实配置状态，统一跳转去配置。各模块的配置数据仍保存在自己的表里，这里<strong>只读聚合、不复制</strong>；中枢仅保存通用偏好、已接线模块的总开关与变更审计。生效顺序：本俱乐部覆盖 → 平台默认 → 系统内置默认。</p>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="card">
+      <h3>通用偏好 <span class="muted" id="scopeHint"></span></h3>
+      <div class="row">
+        <label>配置层级</label>
+        <select class="sm" id="scope">
+          <option value="club">本俱乐部</option>
+          <option value="platform">平台默认（所有俱乐部兜底）</option>
+        </select>
+        <span class="muted">切换后会重新读取该层级的生效值</span>
+      </div>
+      <div id="prefs"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="savePrefs">保存变更</button>
+        <button class="btn ghost" id="resetAll">重置本层级全部覆盖</button>
+        <span class="muted" id="saveHint">未修改时不会写入，也不会留下审计记录</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>能力总览 <span class="muted">只有标记「可切换」的模块提供总开关，其余请点「前往配置」</span></h3>
+      <div id="modules"></div>
+    </div>
+
+    <div class="card">
+      <h3>变更审计 <span class="muted">当前层级最近 50 条</span></h3>
+      <div class="auditbox" id="audit"></div>
+    </div>
+  </div>
+  <script src="/static/shared.js?v=20261113b"></script>
+  <script src="/static/club/settings-hub.js?v=20261113e"></script>
+</body>
+</html>

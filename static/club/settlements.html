@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ClubOS NEW · 结算编排</title>
+  <link rel="stylesheet" href="/static/shared.css?v=20261113b">
+  <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261111z">
+  <link rel="stylesheet" href="/static/club/club-glass.css?v=20261112b">
+  <style>
+    body{margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#16362b}
+    .wrap{max-width:1020px;margin:0 auto;padding:18px}
+    h1{font-size:18px;margin:0 0 4px}
+    .tip{font-size:12px;color:#8aa39a;margin:0 0 12px;line-height:1.7}
+    .card{background:#fff;border:1px solid #e7edea;border-radius:14px;padding:14px;margin-bottom:12px}
+    .card h3{font-size:14px;margin:0 0 10px}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    .stat{flex:1;min-width:110px;background:#fff;border:1px solid #e7edea;border-radius:12px;padding:12px}
+    .stat .k{font-size:11px;color:#8aa39a}
+    .stat .v{font-size:19px;font-weight:700;margin-top:3px}
+    .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+    .row label{font-size:12px;color:#5d7a6e;min-width:88px}
+    .row input,.row select{padding:6px 8px;border:1px solid #d7e2dd;border-radius:8px;font-size:13px;flex:1;min-width:110px}
+    .row input[type=checkbox]{flex:0;min-width:0;width:16px;height:16px}
+    .row input.sm,.row select.sm{min-width:80px;max-width:150px;flex:0 1 125px}
+    .btn{padding:7px 14px;border-radius:9px;border:1px solid #0a7d52;background:#0a7d52;color:#fff;font-size:13px;cursor:pointer}
+    .btn.ghost{background:#fff;color:#0a7d52}
+    .btn.sm{padding:4px 9px;font-size:12px}
+    .btn.danger{border-color:#c0392b;background:#fff;color:#c0392b}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .empty{color:#8aa39a;text-align:center;padding:16px;font-size:13px}
+    .muted{font-size:12px;color:#8aa39a}
+    .code{font-family:ui-monospace,Menlo,monospace;background:#eef3f0;padding:2px 7px;border-radius:6px;font-size:12px}
+    .badge{font-size:11px;padding:2px 8px;border-radius:20px;background:#eef3f0;color:#5d7a6e}
+    .badge.on{background:#e3f6ec;color:#0a7d52}
+    .badge.warn{background:#fdf3e2;color:#a06a10}
+    .badge.off{background:#f6e7e6;color:#b03a2e}
+    table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #f0f4f2}
+    th{color:#8aa39a;font-weight:500}
+    .scroll{max-height:320px;overflow:auto;margin-top:8px}
+    .out{font-size:12px;color:#0a7d52;line-height:1.6}
+    pre{white-space:pre-wrap;font-size:11px;background:#f7faf9;border-radius:8px;padding:9px;margin:6px 0 0}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>结算编排</h1>
+    <p class="tip">把拼团成团立减、礼品卡抵扣、分销佣金从「只读展示」接进真实成交。只有下单请求<b>显式带 settlement 参数</b>才启用，普通订单完全不写这张表、不改实收。礼品卡在下单瞬间锁定余额（防止现金少收、余额被花掉），取消时自动冲回；佣金在支付成功后按订单幂等入账。</p>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="card">
+      <h3>只读试算（不写库、不锁余额）</h3>
+      <div class="row">
+        <input type="number" class="sm" id="pvCash" placeholder="折后应付(元)" min="0" step="0.01">
+        <input type="number" class="sm" id="pvUid" placeholder="会员 user_id">
+        <input type="number" class="sm" id="pvAct" placeholder="活动 id">
+        <input type="number" class="sm" id="pvTeam" placeholder="团 id（可空）">
+        <input type="number" class="sm" id="pvCount" placeholder="人数" value="1" min="1">
+      </div>
+      <div class="row">
+        <label>启用礼品卡</label><input type="checkbox" id="pvGift" checked>
+        <label>自动返佣</label><input type="checkbox" id="pvComm" checked>
+        <button class="btn sm" id="pvBtn">试算</button>
+      </div>
+      <pre id="pvOut">填写后点「试算」。</pre>
+    </div>
+
+    <div class="card">
+      <h3>编排流水</h3>
+      <div class="row">
+        <select class="sm" id="filterStatus">
+          <option value="">全部状态</option>
+          <option value="RESERVED">已锁定</option>
+          <option value="SETTLED">已成交</option>
+          <option value="RELEASED">已释放</option>
+          <option value="FAILED">失败待重试</option>
+        </select>
+        <button class="btn sm ghost" id="refreshBtn">刷新</button>
+        <span class="muted" id="hubHint"></span>
+      </div>
+      <div class="scroll" id="list"></div>
+    </div>
+
+    <div class="card">
+      <h3>单据详情 / 事件轨迹</h3>
+      <div class="row">
+        <input class="sm" id="detailId" placeholder="结算单 checkoutId">
+        <button class="btn sm ghost" id="detailBtn">查询</button>
+        <button class="btn sm danger" id="releaseBtn">释放并冲回</button>
+        <button class="btn sm" id="retryBtn">重试结算</button>
+        <span class="out" id="actOut"></span>
+      </div>
+      <pre id="detailOut">尚未查询。</pre>
+    </div>
+  </div>
+
+  <script src="/static/shared.js?v=20261113b"></script>
+  <script src="/static/club/settlements.js?v=20261113a"></script>
+</body>
+</html>

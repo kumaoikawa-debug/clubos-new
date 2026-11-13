@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ClubOS NEW · 拼团管理</title>
+  <link rel="stylesheet" href="/static/shared.css?v=20261113b">
+  <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261111z">
+  <link rel="stylesheet" href="/static/club/club-glass.css?v=20261112b">
+  <style>
+    body{margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#16362b}
+    .wrap{max-width:1000px;margin:0 auto;padding:18px}
+    h1{font-size:18px;margin:0 0 4px}
+    .tip{font-size:12px;color:#8aa39a;margin:0 0 12px;line-height:1.6}
+    .card{background:#fff;border:1px solid #e7edea;border-radius:14px;padding:14px;margin-bottom:12px}
+    .card h3{font-size:14px;margin:0 0 10px}
+    .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+    .stat{flex:1;min-width:100px;background:#fff;border:1px solid #e7edea;border-radius:12px;padding:12px}
+    .stat .k{font-size:11px;color:#8aa39a}
+    .stat .v{font-size:19px;font-weight:700;margin-top:3px}
+    .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+    .row label{font-size:12px;color:#5d7a6e;min-width:88px}
+    .row input,.row select{padding:6px 8px;border:1px solid #d7e2dd;border-radius:8px;font-size:13px;flex:1;min-width:110px}
+    .row input.sm{min-width:70px;max-width:110px;flex:0 1 100px}
+    .btn{padding:7px 14px;border-radius:9px;border:1px solid #0a7d52;background:#0a7d52;color:#fff;font-size:13px;cursor:pointer}
+    .btn.ghost{background:#fff;color:#0a7d52}
+    .btn.sm{padding:4px 9px;font-size:12px}
+    .btn.danger{border-color:#c0392b;background:#fff;color:#c0392b}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .empty{color:#8aa39a;text-align:center;padding:16px;font-size:13px}
+    .item{border:1px solid #e7edea;border-radius:11px;padding:10px;margin-bottom:9px}
+    .item__head{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+    .item__title{font-weight:600;font-size:13px}
+    .muted{font-size:12px;color:#8aa39a}
+    .badge{font-size:11px;padding:2px 8px;border-radius:20px;background:#eef3f0;color:#5d7a6e}
+    .badge.on{background:#e3f6ec;color:#0a7d52}
+    .badge.warn{background:#fdf3e2;color:#a06a10}
+    .badge.off{background:#f6e7e6;color:#b03a2e}
+    table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #f0f4f2}
+    th{color:#8aa39a;font-weight:500}
+    .scroll{max-height:300px;overflow:auto;margin-top:8px}
+    .form{border:1px dashed #b9d5c9;border-radius:11px;padding:10px;margin-top:10px;background:#fbfdfc}
+    .form h4{font-size:13px;margin:0 0 8px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>拼团管理</h1>
+    <p class="tip">为活动配置「N 人成团 + 拼团价」。会员开团后邀请好友参团，满员自动成团并给全团发站内信；超时未成团自动失效（无需定时任务）。<b>拼团价仅作展示与对账，不参与应付金额计算</b>，实收仍走原有下单链路。</p>
+
+    <div class="stats" id="stats"></div>
+
+    <div class="card">
+      <h3>拼团活动</h3>
+      <div id="campaigns"></div>
+      <div class="form">
+        <h4 id="formTitle">新建拼团活动</h4>
+        <input type="hidden" id="fId">
+        <div class="row"><label>活动标题</label><input id="fTitle" placeholder="如：雪山徒步 3 人团"></div>
+        <div class="row"><label>关联活动 ID</label><input type="number" class="sm" id="fActivity" min="0" step="1" placeholder="活动 id">
+          <label style="min-width:auto">成团人数</label><input type="number" class="sm" id="fRequired" min="2" max="100" value="3"></div>
+        <div class="row"><label>拼团价(元)</label><input type="number" class="sm" id="fPrice" min="0" step="0.01" placeholder="299">
+          <label style="min-width:auto">原价(元)</label><input type="number" class="sm" id="fOriginal" min="0" step="0.01" placeholder="399"></div>
+        <div class="row"><label>有效时长</label><input type="number" class="sm" id="fDuration" min="1" max="720" value="24"><span class="muted">小时</span>
+          <label style="min-width:auto">最多开团</label><input type="number" class="sm" id="fMaxTeams" min="0" value="0"><span class="muted">0 = 不限</span></div>
+        <div class="row"><label>状态</label>
+          <select id="fStatus">
+            <option value="DRAFT">草稿（不可开团）</option>
+            <option value="ACTIVE">已开启</option>
+            <option value="PAUSED">暂停</option>
+          </select></div>
+        <div class="row" style="justify-content:flex-end;margin-top:8px">
+          <button class="btn sm ghost" id="resetForm">清空</button>
+          <button class="btn sm" id="saveCampaign">保存活动</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>拼团记录</h3>
+      <div class="row">
+        <label>状态筛选</label>
+        <select id="teamStatus">
+          <option value="">全部</option>
+          <option value="OPEN">进行中</option>
+          <option value="SUCCESS">已成团</option>
+          <option value="EXPIRED">已过期</option>
+          <option value="CANCELLED">已取消</option>
+        </select>
+        <button class="btn sm ghost" id="reloadTeams">刷新</button>
+      </div>
+      <div id="teams"></div>
+      <div id="teamDetail"></div>
+    </div>
+  </div>
+
+  <script src="/static/shared.js?v=20261113b"></script>
+  <script src="/static/club/group-buys.js?v=20261113c"></script>
+</body>
+</html>
