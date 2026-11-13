@@ -2,10 +2,13 @@ from __future__ import annotations
 """统一营销活动引擎（P0-1，2026-11-13）。
 
 把分散的营销玩法收敛为一张 marketing_campaigns 通用表 + 类型专属 rules_json，
-新增玩法只填配置、不新建表、不重写报价链。当前 pilot 支持：
-  - NEWCOMER   首单立减（用户在本俱乐部无已支付订单时生效）
-  - TIME_LIMIT 限时折扣（在 schedule 窗口内、命中 scope 时生效）
-后续 GROUP/BUY_GIFT/CHECKIN/LOTTERY/... 均以 type 实例接入，复用同一 evaluate() 骨架。
+新增玩法只填配置、不新建表、不重写报价链。当前已接入引擎规则的类型：
+  - NEWCOMER   首单立减（用户在本俱乐部无已支付订单时生效，直接减 payable）
+  - TIME_LIMIT 限时折扣（在 schedule 窗口内、命中 scope 时生效，直接减 payable）
+  - BUY_GIFT   满额赠送（满 threshold 元送 points / gift_card / coupon，不改 payable；
+               引擎返回 gifts 列表，实际发放待接入成交回调）
+其余类型（GROUP / CHECKIN / LOTTERY / STAMP / GIFT_CARD / INVITE）由各自独立模块实现，
+或以 type 实例接入复用同一 evaluate() 骨架。
 
 设计纪律（对齐既有报价链「宁可不打折不能付不了款」）：
   - 只读、永不对外抛错：任何异常都退回「无折扣」，绝不阻断下单。
@@ -70,6 +73,8 @@ def validate_campaign_payload(p: dict) -> dict:
         raise ValueError('schedule/scope/rules 必须为对象')
     if t in ('NEWCOMER', 'TIME_LIMIT'):
         _validate_rules_discount(rules)
+    elif t == 'BUY_GIFT':
+        _validate_rules_buy_gift(rules)
     return {
         'type': t, 'title': title, 'status': status,
         'schedule': schedule, 'scope': scope, 'rules': rules,
@@ -92,6 +97,24 @@ def _validate_rules_discount(rules: dict):
         raise ValueError('maxDiscount 不能为负')
 
 
+def _validate_rules_buy_gift(rules: dict):
+    """BUY_GIFT 买赠规则：满额(threshold 元)送券/积分/礼品卡额度，不影响 payable。"""
+    th = rules.get('threshold')
+    if th is None or float(th) <= 0:
+        raise ValueError('BUY_GIFT 需要正数 threshold（满额门槛，元）')
+    gtype = str(rules.get('giftType') or 'points').strip().lower()
+    if gtype not in ('points', 'gift_card', 'coupon'):
+        raise ValueError('giftType 必须为 points / gift_card / coupon')
+    gval = rules.get('giftValue')
+    if gval is None or float(gval) <= 0:
+        raise ValueError('BUY_GIFT 需要正数 giftValue（赠送值）')
+    try:
+        if int(rules.get('maxGifts', 1)) < 1:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ValueError('maxGifts 必须为 >=1 的整数')
+
+
 # ──────────────────────────── 引擎 ────────────────────────────
 class CampaignEngine:
     """统一营销活动引擎。所有方法接收 sqlite3 连接 cursor，只读或显式写。"""
@@ -101,8 +124,12 @@ class CampaignEngine:
                  activity_ids: list | None = None, product_ids: list | None = None,
                  store_ids: list | None = None, category_ids: list | None = None,
                  order_time: int | None = None) -> dict:
-        """对一笔应付金额求所有生效活动的总折扣。返回 {discount, applied}。"""
-        out: dict[str, Any] = {'discount': 0.0, 'applied': []}
+        """对一笔应付金额求所有生效活动的总折扣与赠送。返回 {discount, applied, gifts}。
+
+        - discount / applied：只会含「直接减价」类玩法（NEWCOMER / TIME_LIMIT）。
+        - gifts：含「满额赠送」类玩法（BUY_GIFT），不影响 payable，作为赠品发放依据。
+        """
+        out: dict[str, Any] = {'discount': 0.0, 'applied': [], 'gifts': []}
         try:
             if payable is None or float(payable) <= 0:
                 return out
@@ -117,16 +144,22 @@ class CampaignEngine:
                 (club_id,)).fetchall()
             total = 0.0
             applied = []
+            gifts = []
             for r in rows:
                 d = self._eval_one(
                     c, row=dict(r), club_id=club_id, user_id=uid, payable=base, now=now,
                     activity_ids=_to_ints(activity_ids), product_ids=_to_ints(product_ids),
                     store_ids=_to_ints(store_ids), category_ids=_to_ints(category_ids))
-                if d and d['amount'] > 0:
+                if not d:
+                    continue
+                if d['amount'] > 0:
                     applied.append(d)
                     total += d['amount']
+                if d.get('gift'):
+                    gifts.append(d)
             out['discount'] = round(min(total, base), 2)
             out['applied'] = applied
+            out['gifts'] = gifts
         except Exception:
             logger.exception('campaign evaluate failed (club=%s user=%s)', club_id, user_id)
         return out
@@ -143,6 +176,12 @@ class CampaignEngine:
             return None
         if typ == 'NEWCOMER' and not (user_id and self._is_first_order(c, club_id, user_id)):
             return None
+        if typ == 'BUY_GIFT':
+            gift = self._compute_buy_gift(rules, payable)
+            if not gift:
+                return None
+            return {'id': row.get('id'), 'type': typ, 'title': row.get('title'),
+                    'amount': 0.0, 'gift': gift}
         amt = self._compute_discount(rules, payable)
         if amt <= 0:
             return None
@@ -209,6 +248,42 @@ class CampaignEngine:
         if cap > 0:
             amt = min(amt, cap)
         return round(max(0.0, min(amt, payable)), 2)
+
+    @staticmethod
+    def _compute_buy_gift(rules, payable) -> dict | None:
+        """BUY_GIFT 满额赠送：payable >= threshold 时按 floor(payable/threshold) 计算份数，封顶 maxGifts。
+
+        返回赠送明细；不返回任何减价金额（赠送物在成交后发放，不影响 payable）。
+        赠送类型：points（积分）/ gift_card（礼品卡额度，元）/ coupon（券面额，元）。
+        """
+        try:
+            th = float(rules.get('threshold') or 0)
+            if th <= 0 or float(payable) < th:
+                return None
+            gtype = str(rules.get('giftType') or 'points').strip().lower()
+            if gtype not in ('points', 'gift_card', 'coupon'):
+                return None
+            gval = float(rules.get('giftValue') or 0)
+            if gval <= 0:
+                return None
+            try:
+                max_g = int(rules.get('maxGifts', 1))
+            except (TypeError, ValueError):
+                max_g = 1
+            if max_g < 1:
+                max_g = 1
+            copies = min(max_g, int(float(payable) // th))
+            if copies < 1:
+                return None
+            return {
+                'giftType': gtype,
+                'giftValue': round(gval, 2),
+                'copies': copies,
+                'totalValue': round(gval * copies, 2),
+                'threshold': round(th, 2),
+            }
+        except Exception:
+            return None
 
     @staticmethod
     def _is_first_order(c, club_id, user_id):

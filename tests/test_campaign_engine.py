@@ -143,5 +143,57 @@ class CampaignEngineTest(unittest.TestCase):
         self.assertEqual(eng.get_campaign(c, cid)['status'], 'ENDED')
 
 
+class BuyGiftTest(unittest.TestCase):
+    """P5：BUY_GIFT 满额赠送引擎规则（不改 payable，只返回 gifts）。"""
+
+    def test_validate_buy_gift(self):
+        p = validate_campaign_payload({'type': 'BUY_GIFT', 'title': '满200送100积分',
+                                       'rules': {'threshold': 200, 'giftType': 'points', 'giftValue': 100}})
+        self.assertEqual(p['type'], 'BUY_GIFT')
+        with self.assertRaises(ValueError):
+            validate_campaign_payload({'type': 'BUY_GIFT', 'title': 'x',
+                                       'rules': {'threshold': 0, 'giftType': 'bad', 'giftValue': 0}})
+
+    def test_buy_gift_below_threshold(self):
+        c = new_db()
+        add_campaign(c, owner_club_id=1, type='BUY_GIFT', title='满200送',
+                     rules_json='{"threshold":200,"giftType":"points","giftValue":100}')
+        r = CampaignEngine().evaluate(c, club_id=1, user_id=5, payable=150.0)
+        self.assertAlmostEqual(r['discount'], 0.0)
+        self.assertEqual(r['gifts'], [])
+
+    def test_buy_gift_multiples_capped(self):
+        c = new_db()
+        add_campaign(c, owner_club_id=1, type='BUY_GIFT', title='满200送100积分',
+                     rules_json='{"threshold":200,"giftType":"points","giftValue":100,"maxGifts":3}')
+        r = CampaignEngine().evaluate(c, club_id=1, user_id=5, payable=650.0)
+        self.assertAlmostEqual(r['discount'], 0.0)
+        self.assertEqual(len(r['gifts']), 1)
+        g = r['gifts'][0]
+        self.assertEqual(g['type'], 'BUY_GIFT')
+        self.assertEqual(g['gift']['copies'], 3)
+        self.assertEqual(g['gift']['totalValue'], 300.0)
+        self.assertEqual(g['gift']['giftType'], 'points')
+
+    def test_buy_gift_does_not_affect_payable(self):
+        c = new_db()
+        add_campaign(c, owner_club_id=1, type='TIME_LIMIT', title='减10',
+                     rules_json='{"mode":"fixed","amount":10}')
+        add_campaign(c, owner_club_id=1, type='BUY_GIFT', title='满100送',
+                     rules_json='{"threshold":100,"giftType":"gift_card","giftValue":20}')
+        r = CampaignEngine().evaluate(c, club_id=1, user_id=5, payable=200.0)
+        self.assertAlmostEqual(r['discount'], 10.0)
+        self.assertEqual(len(r['gifts']), 1)
+        self.assertEqual(r['gifts'][0]['gift']['giftType'], 'gift_card')
+
+    def test_buy_gift_all_gift_types(self):
+        for gt in ('points', 'gift_card', 'coupon'):
+            c = new_db()
+            add_campaign(c, owner_club_id=1, type='BUY_GIFT', title='g',
+                         rules_json='{"threshold":100,"giftType":"%s","giftValue":50}' % gt)
+            r = CampaignEngine().evaluate(c, club_id=1, user_id=5, payable=200.0)
+            self.assertEqual(r['gifts'][0]['gift']['giftType'], gt, gt)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

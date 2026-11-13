@@ -9319,6 +9319,9 @@ def price_quote(activity_id:int,occurrence_id:int=Query(...),user_id:int=1,club_
                     q.points['campaignDiscount']=round(_camp['discount'], 2)
                     q.points['campaignsApplied']=_camp['applied']
                     q.points['payable']=round(float(q.points['payable'])-_camp['discount'], 2)
+                # P5：BUY_GIFT 满额赠送只透传赠品明细、绝不改 payable；实际发放由成交回调触发。
+                if _camp.get('gifts'):
+                    q.points['campaignGifts']=_camp['gifts']
             except Exception:
                 pass
         except ValueError as e:
