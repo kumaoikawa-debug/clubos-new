@@ -1,6 +1,14 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
 window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='actcats')await loadActCats();if(v==='content'||v==='content-channel'||v==='content-recap'||v==='content-list')await loadContent();if(v==='regs'||v==='regs-list'||v==='regs-refund')await loadRegs();if(v==='execution')await loadExecution();if(v==='members'||v==='members-list'||v==='members-tiers'||v==='members-benefits'||v==='members-mall')await loadMembers();if(v==='mall'||v==='mall-overview'||v==='mall-products'||v==='mall-orders'||v==='mall-aftersales'||v==='mall-settle')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='info')await loadInfoCenter();if(v==='camp')await loadCamp();if(v==='settings')await setTab(SETTINGS_TAB)}
+/* 侧栏「设置中枢」入口：跳到独立的能力总览页 settings-hub.html，
+   自动带上当前 club_id 与 sharecode（沿用当前页 query，避免二次鉴权失败）。
+   注意用绝对路径 /static/club/settings-hub.html，SPA 入口在根路径，相对路径会 404。 */
+window.openSettingsHub=function(){
+  const p=new URLSearchParams(location.search);
+  if(!p.has('club_id'))p.set('club_id',String(CLUB||1));
+  location.href='/static/club/settings-hub.html?'+p.toString();
+};
 async function loadDash(){skel('#recentActivities',4);let d=await api(`/api/club/${CLUB}/dashboard`);$('#creditPill').textContent=`智能 Credits ${d.credits?.balance||0}`;$('#dashMetrics').innerHTML=[['活动',d.activityCount],['报名',d.registrationCount],['客户',d.memberCount],['商城GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div><div class="hint">独立经营数据</div></div>`).join('');$('#analyticsMetrics').innerHTML=[['活动数',d.activityCount],['报名数',d.registrationCount],['商城GMV',money(d.gearGMV)],['商城佣金',money(d.commission)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');let a=await api(`/api/club/${CLUB}/activities`);$('#recentActivities').innerHTML=a.slice(0,5).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)}</div><div class="list-row__sub">${dateText(x.event_date)} · ${esc(x.location||'')}</div></div></div>`).join('')||'<div class="empty">还没有活动</div>';loadClubAttention()}
 /* 工作台「待处理事项」：C 端产生新报名 / 新订单后，俱乐部没有主动提醒，只能自己进
    报名管理 / 商城去翻。这里把各视图里「需要人跟进」的数字汇总到工作台一张卡上，
