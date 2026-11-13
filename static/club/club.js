@@ -1090,7 +1090,7 @@ async function showParticipants(regId){
 
 async function loadMembers(){skel('#tierList',3);
   try{
-  let [a,tiers,benefits,reds,gd,pe,orders,rules,mall,mallReds,tierGifts,inviteReward]=await Promise.all([
+  let [a,tiers,benefits,reds,gd,pe,orders,rules,mall,mallReds,tierGifts,inviteReward,buyGifts,grantLog]=await Promise.all([
     api(`/api/club/${CLUB}/members`),api(`/api/club/${CLUB}/membership/tiers`),
     api(`/api/club/${CLUB}/benefits`),api(`/api/club/${CLUB}/benefits/redemptions`),
     api(`/api/club/${CLUB}/gear-discount`),
@@ -1100,7 +1100,9 @@ async function loadMembers(){skel('#tierList',3);
     api(`/api/club/${CLUB}/points-mall`).catch(()=>[]),
     api(`/api/club/${CLUB}/points-mall/redemptions`).catch(()=>[]),
     api(`/api/club/${CLUB}/tier-reward-rules`).catch(()=>[]),
-    api(`/api/club/${CLUB}/invite-reward`).catch(()=>({settings:{enabled:0},pool:[],records:[],stats:{}}))
+    api(`/api/club/${CLUB}/invite-reward`).catch(()=>({settings:{enabled:0},pool:[],records:[],stats:{}})),
+    api(`/api/club/${CLUB}/campaigns`).catch(()=>[]),
+    api(`/api/club/${CLUB}/campaign-grant-log`).catch(()=>[])
   ]);
   _inviteReward=inviteReward||{settings:{enabled:0},pool:[],records:[],stats:{}};
   $('#memberRows').innerHTML=a.map(x=>`<tr class="member-row" onclick="openMember(${x.user_id})"><td>${esc(x.name)}</td><td><strong>${esc(x.level)}</strong></td><td>${x.activity_count||0}</td><td>${money(x.lifetime_activity_spend||0)}</td><td>${x.club_points_balance}</td><td>${x.gear_points}</td><td>${esc(x.phone||'')}</td><td><span class="sub">查看详情 ›</span></td></tr>`).join('')||'<tr><td colspan="8" class="empty">暂无会员</td></tr>';
@@ -1157,12 +1159,39 @@ async function loadMembers(){skel('#tierList',3);
   /* 升级奖励已并入等级编辑（2026-10-27），上面的 tierRewardList 只是汇总视图。 */
   /* #858 优惠邀请 · 邀请奖励：三 Tab 渲染（基本设置 / 分享设置 / 邀请记录） */
   renderInviteReward();
+  renderBuyGiftCampaigns(buyGifts);
+  renderCampaignGrantLog(grantLog);
   $('#mallItemList').innerHTML=(mall||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.title)} <span class="tag">${esc(x.typeName||x.item_type)}</span>${x.status!=='active'?' <span class="tag orange">已下架</span>':''}</div><div class="list-row__sub">${x.points_cost} 活动积分 · 库存 ${x.stock==null?'不限':x.stock}${x.item_type==='coupon'&&x.refTitle?` · 关联券「${esc(x.refTitle)}」`:''}${x.description?` · ${esc(x.description)}`:''}</div></div><div class="list-row__end"><button class="btn ghost" onclick="editMallItem(${x.id})">编辑</button><button class="btn ghost" onclick="delMallItem(${x.id})">删除</button></div></div>`).join('')||'<div class="empty">还没有兑换商品，点「＋ 兑换商品」上架</div>';
   $('#memberOrderList').innerHTML=(orders||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name||'用户')} · 「${esc(x.tier_name)}」会员卡 <span class="tag">${money(x.amount)}</span></div><div class="list-row__sub">有效期 ${esc((x.valid_from||'').slice(0,10))} 至 ${esc((x.valid_to||'').slice(0,10))} · ${x.months} 个月 · 订单 #${x.id}</div></div></div>`).join('')||'<div class="empty">还没有购买记录（开通「购买会员」并为等级设置购买开通后，顾客即可在 C 端购买）</div>';
   $('#clubBenefitRedemptions').innerHTML=reds.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name)} · ${esc(x.title)}</div><div class="list-row__sub">${x.points_spent?`${x.points_spent} 活动积分 · `:''}${x.funding_owner==='CLUB'?'俱乐部承担':'平台承担'} · ${esc(x.voucher_code||'')}${x.gift_note?` · ${esc(x.gift_note)}`:''}</div></div></div>`).join('')
     +(mallReds||[]).map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name||'顾客')} · 积分商城「${esc(x.item_title)}」<span class="tag">${x.status==='verified'?'已核销':'待核销'}</span></div><div class="list-row__sub">${x.points_spent} 活动积分 · ${esc(String(x.created_at||'').slice(0,10))} · 核销码 <b>${esc(x.code||'')}</b>${x.verified_at?` · 核销于 ${esc(String(x.verified_at).slice(0,16))}`:''}</div></div></div>`).join('')
     ||'<div class="empty">暂无兑换记录</div>';
   }catch(e){loaderError('#tierList',e,'客户与会员加载失败')}
+}
+/* ── 满额买赠 / 邀请有礼（P5/P6 营销引擎：成交回调自动发放，幂等留痕）── */
+function buyGiftRuleText(r){
+  r=r||{};
+  const gt=String(r.giftType||'points');
+  const v=Number(r.giftValue||0);
+  const unit=gt==='points'?`${v} 活动积分`:(gt==='gift_card'?`${money(v)} 礼品卡额度`:`${money(v)} 优惠券（自动生成）`);
+  const mg=Number(r.maxGifts||0)>0?` · 单笔最多 ${r.maxGifts} 份`:'';
+  return `满 ${money(r.threshold)} 送 ${unit}${mg}`;
+}
+function renderBuyGiftCampaigns(list){
+  const box=$('#buyGiftList'); if(!box)return;
+  const rows=(Array.isArray(list)?list:[]).filter(x=>x.type==='BUY_GIFT'||x.type==='INVITE');
+  box.innerHTML=rows.map(x=>{
+    const isInv=x.type==='INVITE';
+    const rule=buyGiftRuleText(x.rules);
+    return `<div class="list-row"><div class="list-row__main"><div class="list-row__title"><span class="tag ${isInv?'info':''}">${isInv?'邀请有礼':'满额买赠'}</span> ${esc(x.title)} <span class="tag">${esc(rule)}</span>${x.status==='ACTIVE'?'':' <span class="tag orange">已停用</span>'}</div><div class="list-row__sub">${isInv?'仅对被邀请好友在本俱乐部的首单生效':'对所有顾客的活动 / 营地订单生效'} · 适用：俱乐部活动 + 营地（装备订单不参与）· 发放幂等，同一订单只发一次</div></div><div class="list-row__end"><button class="btn ghost" onclick="toggleCampaign(${x.id},'${x.status==='ACTIVE'?'PAUSED':'ACTIVE'}')">${x.status==='ACTIVE'?'停用':'启用'}</button><button class="btn ghost" onclick="delCampaign(${x.id})">删除</button></div></div>`;
+  }).join('')||'<div class="empty">还没有买赠 / 邀请有礼规则，点「＋ 新增规则」创建</div>';
+}
+function grantTypeCn(t){return ({points:'活动积分',gift_card:'礼品卡额度',coupon:'优惠券'})[t]||t;}
+function renderCampaignGrantLog(log){
+  const box=$('#campaignGrantLog'); if(!box)return;
+  const rows=Array.isArray(log)?log:[];
+  const cnt=$('#grantLogCount'); if(cnt)cnt.textContent=`${rows.length} 条`;
+  box.innerHTML=rows.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.user_name||('用户 #'+x.user_id))} · ${esc(x.campaign_title||('活动 #'+x.campaign_id))} <span class="tag">${esc(grantTypeCn(x.gift_type))} × ${x.copies||1}</span></div><div class="list-row__sub">${esc(String(x.created_at||'').slice(0,16).replace('T',' '))} · 订单 ${esc(x.order_id)} · 成交时已自动入账</div></div></div>`).join('')||'<div class="empty">暂无发放记录 —— 规则创建后，顾客成交即自动发放并在这里留痕。</div>';
 }
 /* ── 券中心（#856 对齐 Word 三型券：满减 / 折扣 / 商品兑换）── */
 window.cpnSwitch=tab=>{

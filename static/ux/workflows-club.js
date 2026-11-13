@@ -401,6 +401,27 @@ window.addGiftRule=async()=>uxTask(async()=>{
   toast('送券规则已创建');loadMembers()});
 window.toggleGiftRule=async(id,enabled)=>uxTask(async()=>{await api(`/api/club/${CLUB}/coupon-gift-rules/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:!!enabled})});toast(enabled?'规则已启用':'规则已停用');loadMembers()});
 window.delGiftRule=async id=>uxTask(async()=>{if(!await uxConfirm({title:'删除送券规则',message:'删除后，已赠送出去的券不受影响，只是不再自动赠送。'}))return;await api(`/api/club/${CLUB}/coupon-gift-rules/${id}`,{method:'DELETE'});toast('规则已删除');loadMembers()});
+/* 满额买赠 / 邀请有礼（P5/P6 营销引擎）：成交回调自动发放积分 / 礼品卡额度 / 优惠券，幂等留痕。 */
+window.addBuyGift=async()=>uxTask(async()=>{
+  const d=await uxForm({title:'新增买赠 / 邀请有礼规则',
+    subtitle:'顾客单笔活动 / 营地订单实付满门槛后，成交时自动发放赠品（不改订单应付金额，成本由俱乐部承担）。「邀请有礼」只对被邀请好友在本俱乐部的首单生效；装备商城订单不参与。同一订单同一活动只发一次。',
+    fields:[
+      {name:'ctype',label:'规则类型',type:'select',full:true,required:true,value:'BUY_GIFT',
+       options:[{value:'BUY_GIFT',label:'满额买赠（对所有顾客生效）'},{value:'INVITE',label:'邀请有礼（仅被邀请好友的本俱乐部首单）'}]},
+      {name:'title',label:'规则名称（仅后台识别用）',type:'text',required:true,full:true,placeholder:'如：满 500 送 30 元券'},
+      {name:'threshold',label:'单笔实付满（元）',type:'number',min:.01,step:.01,value:500,required:true},
+      {name:'giftType',label:'赠品类型',type:'select',full:true,required:true,value:'coupon',
+       options:[{value:'coupon',label:'优惠券（自动生成活动券，按面额入顾客券包）'},{value:'points',label:'活动积分（入顾客俱乐部积分）'},{value:'gift_card',label:'礼品卡额度（入顾客礼品卡余额）'}]},
+      {name:'giftValue',label:'赠品面额（积分数量 / 元）',type:'number',min:.01,step:.01,value:30,required:true},
+      {name:'maxGifts',label:'单笔订单最多发放份数（留空 = 不限）',type:'number',min:1,step:1}
+    ],submitText:'创建规则'});
+  if(!d)return;
+  const rules={threshold:Number(d.threshold),giftType:String(d.giftType),giftValue:Number(d.giftValue)};
+  if(Number(d.maxGifts||0)>0)rules.maxGifts=Number(d.maxGifts);
+  await post('/api/club/'+CLUB+'/campaigns',{type:String(d.ctype),title:String(d.title||'').trim(),status:'ACTIVE',schedule:{},scope:{},rules});
+  toast('规则已创建，顾客成交后自动发放');loadMembers()});
+window.toggleCampaign=async(id,status)=>uxTask(async()=>{await api(`/api/club/${CLUB}/campaigns/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});toast(status==='ACTIVE'?'规则已启用':'规则已停用');loadMembers()});
+window.delCampaign=async id=>uxTask(async()=>{if(!await uxConfirm({title:'删除买赠规则',message:'删除后，已发放出去的赠品不受影响，只是不再自动发放。'}))return;await api(`/api/club/${CLUB}/campaigns/${id}`,{method:'DELETE'});toast('规则已删除');loadMembers()});
 /* 升级赠券（2026-10-26）：会员达到设定等级时自动送一张券；每个等级绑一张券，可换绑。 */
 window.addTierGift=async()=>{
   let tiers=[],benefits=[];

@@ -4067,6 +4067,22 @@ def club_delete_campaign(club_id:int,campaign_id:int):
     except LookupError as e: raise HTTPException(404,str(e))
     except PermissionError as e: raise HTTPException(403,str(e))
 
+@app.get('/api/club/{club_id}/campaign-grant-log')
+def club_campaign_grant_log(club_id:int,limit:int=100):
+    """P6 营销赠送发放记录：成交回调自动发放的积分 / 礼品卡额度 / 券留痕（新→旧）。"""
+    club_or_404(club_id)
+    limit=max(1,min(int(limit or 100),300))
+    with conn() as c:
+        rows=c.execute('''SELECT g.id, g.campaign_id, g.order_id, g.gift_type, g.copies, g.user_id,
+                                 g.created_at, mc.title AS campaign_title, mc.type AS campaign_type,
+                                 u.name AS user_name
+                          FROM campaign_grant_log g
+                          LEFT JOIN marketing_campaigns mc ON mc.id=g.campaign_id
+                          LEFT JOIN users u ON u.id=g.user_id
+                          WHERE g.club_id=?
+                          ORDER BY g.id DESC LIMIT ?''',(club_id,limit)).fetchall()
+        return [dict(r) for r in rows]
+
 @app.get('/api/platform/campaigns')
 def platform_campaigns():
     with conn() as c:
