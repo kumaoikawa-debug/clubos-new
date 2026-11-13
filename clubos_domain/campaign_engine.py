@@ -213,10 +213,12 @@ class CampaignEngine:
     @staticmethod
     def _is_first_order(c, club_id, user_id):
         club_id, user_id = int(club_id), int(user_id)
+        # 营销适用范围硬边界：首单资格只看俱乐部活动 / 营地成交记录。
+        # 绝不查 gear_orders / member_orders —— 装备销售不能消耗或影响活动营销资格。
+        # 与 commerce_scope.FIRST_ORDER_PROBES 同源（本模块单文件加载，不跨模块 import）。
         probes = [
             "SELECT 1 FROM registrations WHERE club_id=? AND user_id=? AND status IN ('paid','completed','confirmed') LIMIT 1",
-            "SELECT 1 FROM gear_orders WHERE club_id=? AND user_id=? AND status IN ('paid','completed') LIMIT 1",
-            "SELECT 1 FROM member_orders WHERE club_id=? AND user_id=? AND status='paid' LIMIT 1",
+            "SELECT 1 FROM camp_orders WHERE club_id=? AND user_id=? AND status IN ('paid','completed') LIMIT 1",
         ]
         for sql in probes:
             try:

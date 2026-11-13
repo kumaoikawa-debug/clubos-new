@@ -33,7 +33,10 @@ CARD_STATUSES = ('ACTIVE', 'REDEEMED', 'FROZEN', 'VOID', 'EXPIRED')
 CARD_EDITABLE_STATUSES = ('ACTIVE', 'FROZEN', 'VOID')
 ACCOUNT_STATUSES = ('ACTIVE', 'FROZEN')
 LEDGER_TYPES = ('REDEEM', 'CONSUME', 'REFUND', 'ADJUST_UP', 'ADJUST_DOWN')
-ORDER_TYPES = ('registration', 'gear_order', 'custom')
+# 营销适用范围硬边界（2026-11-13）：只允许俱乐部活动 / 营地订单。
+# 总平台装备销售（gear_order / mall / points-mall / Medusa）一律拒绝，
+# 完整口径见 commerce_scope.py；三处白名单由 tests/test_commerce_scope.py 断言一致。
+ORDER_TYPES = ('registration', 'camp_booking', 'camp_order', 'custom')
 
 MAX_FACE_CENTS = 1_000_000       # 单卡面额上限 ¥10,000
 MAX_AMOUNT_CENTS = 100_000_000   # 单笔核销上限 ¥1,000,000

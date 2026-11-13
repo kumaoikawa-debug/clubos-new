@@ -14,11 +14,14 @@
 6. **零依赖**：stdlib-only、cursor-only（调用方管事务），不 import 其它 domain 模块，
    以便 tests 用 importlib 单文件加载。礼品卡 / 分销的真实写入由 app 层注入调用。
 7. 所有异常内部吞掉并返回 reason，绝不外抛阻断支付主流程。
+8. **营销适用范围**：只接俱乐部活动 / 营地订单（见 commerce_scope.py）；
+   总平台装备销售（gear-checkout / gear_orders / mall / points-mall）一律不建编排记录。
 
 口径说明
 --------
-- 拼团价：建单前用成团价替换 occurrence.price（内存副本，不落库），积分/券/会员折扣
-  全部基于新单价重算，是真正的 1:1 口径；本模块只保存对账快照，不二次扣减。
+- 拼团价：作为「订单级立减」(原价−成团价)×人数，在积分/券/会员折扣之后扣减，
+  与 price-quote 的 opt-in 预览严格同源；**不改 occurrence.price**，避免优惠基数与报价不一致。
+- 退款：SETTLED → REFUNDED（幂等），由 app 层冲回礼品卡余额并反转未结算佣金。
 - 佣金基数：`order_amount_cents` = 礼品卡抵扣前的订单应付总额。礼品卡是俱乐部已收的
   预付资金，不是平台补贴，所以不应从佣金基数里扣掉。
 """
@@ -29,9 +32,11 @@ import time
 from datetime import datetime, timedelta, timezone
 
 # ── 常量 ────────────────────────────────────────────────────────────────────
-STATUSES = ('RESERVED', 'SETTLED', 'RELEASED', 'FAILED')
+STATUSES = ('RESERVED', 'SETTLED', 'RELEASED', 'FAILED', 'REFUNDED')
 SETTLEABLE = ('RESERVED', 'FAILED')
-EVENT_TYPES = ('RESERVE', 'SETTLE', 'RELEASE', 'RETRY', 'FAIL')
+REFUNDABLE = ('SETTLED',)
+EVENT_TYPES = ('RESERVE', 'SETTLE', 'RELEASE', 'RETRY', 'FAIL', 'EXPIRE', 'REFUND')
+DEFAULT_TTL_SECONDS = 1800       # 与 checkout_engine / 营地预订的 30 分钟支付窗口一致
 MAX_AMOUNT_CENTS = 100_000_000          # 单笔上限 ¥1,000,000
 MAX_RATIO = 100
 TS_MAX = 10 ** 12
@@ -416,7 +421,7 @@ def fail_record(c, checkout_id: str, *, reason: str = '', detail=None,
 
 
 def release_record(c, checkout_id: str, *, reason: str = '', detail=None,
-                   operator=None, now=None) -> dict:
+                   operator=None, now=None, event_type: str = 'RELEASE') -> dict:
     """支付取消 / 未支付过期：RESERVED/FAILED → RELEASED（由 app 层同时冲回礼品卡余额）。
 
     已 SETTLED 的成交单一律拒绝，避免「订单已成、余额被静默退回」的资损。
@@ -441,7 +446,8 @@ def release_record(c, checkout_id: str, *, reason: str = '', detail=None,
                       updated_at=? WHERE id=?""",
             (_jdump(detail or {'releaseReason': reason}), created, int(r['id'])))
         add_event(c, checkout_id=str(checkout_id), club_id=int(r['club_id']),
-                  event_type='RELEASE', from_status=st, to_status='RELEASED',
+                  event_type=event_type if event_type in EVENT_TYPES else 'RELEASE',
+                  from_status=st, to_status='RELEASED',
                   detail={'reason': reason, 'giftCardCents': int(r['gift_card_cents'] or 0)},
                   operator=operator, now=now)
         res.update(ok=True, reason='ok', status='RELEASED',
@@ -452,6 +458,107 @@ def release_record(c, checkout_id: str, *, reason: str = '', detail=None,
         res['error'] = str(e)[:120]
         return res
 
+
+
+def _expires_at(created, ttl_seconds: int = DEFAULT_TTL_SECONDS) -> str | None:
+    """由 created_at（ISO，UTC+8）推导支付窗口截止时间；坏数据返回 None。"""
+    try:
+        dt = datetime.fromisoformat(str(created))
+        return (dt + timedelta(seconds=_int(ttl_seconds, DEFAULT_TTL_SECONDS, 60, 86400))
+                ).isoformat(timespec='seconds')
+    except Exception:
+        return None
+
+
+def expire_due(c, *, now=None, ttl_seconds: int = DEFAULT_TTL_SECONDS,
+               club_id=None, limit: int = 200) -> dict:
+    """惰性过期：RESERVED 超过支付窗口自动释放，返回需要冲回的礼品卡明细。
+
+    只改编排记录状态；礼品卡余额由 app 层按返回的 giftCardCents 在同一事务里
+    冲回（apply_ledger 的 REFUND 幂等键保证重复执行不会多退）。
+    已 SETTLED / RELEASED / REFUNDED 的单不会被扫到，绝不误退已成交订单。
+    """
+    ttl = _int(ttl_seconds, DEFAULT_TTL_SECONDS, 60, 86400)
+    out = {'ok': True, 'scanned': 0, 'released': [], 'giftCardCents': 0,
+           'ttlSeconds': ttl, 'cutoff': None}
+    try:
+        ts = _ts(now)
+        cutoff = _ts_to_str(max(0, ts - ttl))
+        out['cutoff'] = cutoff
+        sql = ("SELECT checkout_id,club_id,user_id,gift_card_cents "
+               "FROM checkout_settlements WHERE status='RESERVED' AND created_at<?")
+        args = [cutoff]
+        if club_id is not None:
+            sql += ' AND club_id=?'
+            args.append(int(club_id))
+        sql += ' ORDER BY id LIMIT ?'
+        args.append(_int(limit, 200, 1, 1000))
+        rs = c.execute(sql, args).fetchall()
+        out['scanned'] = len(rs)
+        for r in rs:
+            cid = str(r['checkout_id'])
+            res = release_record(c, cid, reason='payment-expired',
+                                 detail={'expiredAt': cutoff, 'ttlSeconds': ttl},
+                                 operator='expire-run', now=ts, event_type='EXPIRE')
+            if res.get('ok') and res.get('reason') == 'ok':
+                cents = int(res.get('giftCardCents') or 0)
+                out['released'].append({
+                    'checkoutId': cid, 'clubId': int(r['club_id']),
+                    'userId': int(r['user_id']), 'giftCardCents': cents})
+                out['giftCardCents'] += cents
+    except Exception as e:
+        out['ok'] = False
+        out['error'] = str(e)[:120]
+    return out
+
+
+def refund_record(c, checkout_id: str, *, refund_request_id=None,
+                  detail=None, operator=None, now=None) -> dict:
+    """退款成功：SETTLED → REFUNDED，返回需冲回的礼品卡 / 佣金金额（由 app 层执行）。
+
+    已 REFUNDED 幂等返回且不再返回金额；未成交 / 已释放的单拒绝，避免重复退钱。
+    礼品卡抵扣按整单一次性退回余额，现金退款仍按既有退款策略走，两者互不干扰。
+    """
+    res = {'ok': False, 'reason': '', 'status': None, 'idempotent': False,
+           'giftCardCents': 0, 'commissionCents': 0, 'registrationId': None}
+    try:
+        r = get_record(c, checkout_id)
+        if not r:
+            res['reason'] = 'no-record'
+            return res
+        st = str(r['status'] or '')
+        if st == 'REFUNDED':
+            res.update(ok=True, reason='already-refunded', status='REFUNDED', idempotent=True)
+            return res
+        if st not in REFUNDABLE:
+            res.update(reason='bad-status', status=st)
+            return res
+        created = _ts_to_str(_ts(now))
+        d = _jload(r.get('detail_json'))
+        if not isinstance(d, dict):
+            d = {}
+        d['refundRequestId'] = str(refund_request_id or '')[:80] or None
+        d['refundedAt'] = created
+        if isinstance(detail, dict):
+            d.update(detail)
+        c.execute("""UPDATE checkout_settlements SET status='REFUNDED',
+                       detail_json=?, updated_at=? WHERE id=?""",
+                  (_jdump(d), created, int(r['id'])))
+        add_event(c, checkout_id=str(checkout_id), club_id=int(r['club_id']),
+                  event_type='REFUND', from_status=st, to_status='REFUNDED',
+                  detail={'refundRequestId': refund_request_id,
+                          'giftCardCents': int(r['gift_card_cents'] or 0),
+                          'commissionCents': int(r['commission_cents'] or 0)},
+                  operator=operator, now=now)
+        res.update(ok=True, reason='ok', status='REFUNDED',
+                   giftCardCents=int(r['gift_card_cents'] or 0),
+                   commissionCents=int(r['commission_cents'] or 0),
+                   registrationId=r.get('registration_id'))
+        return res
+    except Exception as e:
+        res['reason'] = 'exception'
+        res['error'] = str(e)[:120]
+        return res
 
 def view(r) -> dict | None:
     """后台/API 视图：驼峰键 + 元金额，不暴露内部 JSON 原文。"""
@@ -486,6 +593,8 @@ def view(r) -> dict | None:
         'createdAt': d.get('created_at'),
         'updatedAt': d.get('updated_at'),
         'settledAt': d.get('settled_at'),
+        'expiresAt': _expires_at(d.get('created_at')),
+        'refundedAt': (_jload(d.get('detail_json')) or {}).get('refundedAt'),
     }
 
 

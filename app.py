@@ -43,6 +43,7 @@ from clubos_domain import affiliate as aff_mod
 from clubos_domain import gift_card as gc_mod
 from clubos_domain import miniprogram_bridge as mb_mod
 from clubos_domain import checkout_settlement as cs_mod
+from clubos_domain import commerce_scope as scope_mod
 from clubos_domain.gear_points_policy import GearPointsPolicyService
 from clubos_domain.commission_rate import ClubCommissionRateService
 from clubos_domain.product_catalog import ProductCatalogService
@@ -7095,6 +7096,9 @@ def accrue_affiliate_commission(club_id:int, payload:dict=Body(...)):
     ot = str(payload.get('orderType') or '')
     oid = str(payload.get('orderId') or '')
     cents = aff_mod.to_cents(payload.get('orderAmount'))
+    _sc = scope_mod.check_order_type(ot)
+    if not _sc['ok']:
+        raise HTTPException(400, '订单类型不在营销适用范围：' + _sc['reason'] + '；' + scope_mod.SCOPE_NOTE)
     if ot not in aff_mod.ORDER_TYPES or not oid or cents <= 0:
         raise HTTPException(400, 'orderType / orderId / orderAmount 无效')
     with conn() as c:
@@ -7111,6 +7115,9 @@ def accrue_affiliate_commission(club_id:int, payload:dict=Body(...)):
 def reverse_affiliate_commission(club_id:int, payload:dict=Body(...)):
     """退款冲回：未结算佣金置 REVERSED；已结算的只计数并提示人工追回（不算错账）。"""
     club_or_404(club_id)
+    _sc = scope_mod.check_order_type(payload.get('orderType'))
+    if not _sc['ok']:
+        raise HTTPException(400, '订单类型不在营销适用范围：' + _sc['reason'])
     with conn() as c:
         res = aff_mod.reverse(c, club_id=club_id,
                               order_type=payload.get('orderType'),
@@ -7668,6 +7675,9 @@ def admin_consume_gift_card(club_id:int, request:Request, payload:dict=Body(...)
     cents = gc_mod.to_cents(payload.get('amount'))
     if cents <= 0:
         raise HTTPException(400, 'amount 必须为大于 0 的金额（元）')
+    _sc = scope_mod.check_order_type(payload.get('orderType'))
+    if not _sc['ok']:
+        raise HTTPException(400, '订单类型不在营销适用范围：' + _sc['reason'] + '；' + scope_mod.SCOPE_NOTE)
     with conn() as c:
         res = gc_mod.consume(c, club_id=club_id, user_id=uid, cents=cents,
                              order_type=str(payload.get('orderType') or ''),
@@ -7686,6 +7696,9 @@ def admin_reverse_gift_card_consume(club_id:int, request:Request, payload:dict=B
         uid = int(payload.get('userId') or 0)
     except (TypeError, ValueError):
         raise HTTPException(400, 'userId 必填')
+    _sc = scope_mod.check_order_type(payload.get('orderType'))
+    if not _sc['ok']:
+        raise HTTPException(400, '订单类型不在营销适用范围：' + _sc['reason'])
     with conn() as c:
         res = gc_mod.reverse_consume(c, club_id=club_id, user_id=uid,
                                      order_type=str(payload.get('orderType') or ''),
@@ -8206,6 +8219,10 @@ def _cs_settle_after_confirm(c, *, intent_id:str, result:dict) -> dict:
     if str(rec['status']) == 'SETTLED':
         return {'skipped': True, 'reason': 'already-settled'}
     club_id, user_id = int(rec['club_id']), int(rec['user_id'])
+    # 佣金幂等键里的订单类型随业务域走；三者都在 commerce_scope 白名单内。
+    otype = {'activity': 'registration', 'camp_order': 'camp_order',
+             'camp_booking': 'camp_booking'}.get(str(rec['kind'] or 'activity'),
+                                                 'registration')
     cents, reason, detail = 0, 'not-enabled', {}
     if int(rec['commission_enabled'] or 0):
         rid = result.get('registrationId') if isinstance(result, dict) else None
@@ -8213,7 +8230,7 @@ def _cs_settle_after_confirm(c, *, intent_id:str, result:dict) -> dict:
         if rid and base > 0 and _aff_module_on(c, club_id):
             try:
                 ar = aff_mod.accrue(
-                    c, club_id=club_id, order_type='registration', order_id=str(rid),
+                    c, club_id=club_id, order_type=otype, order_id=str(rid),
                     buyer_user_id=user_id, amount_cents=base,
                     cfg=_aff_config(c, club_id), module_enabled=True)
                 cents = int(ar.get('commissionCents') or 0)
@@ -8270,11 +8287,173 @@ def _cs_release_after_cancel(c, checkout_id:str) -> dict:
     return out
 
 
+def _cs_expire_due(c, *, club_id=None, ttl_seconds=None) -> dict:
+    """惰性/定时过期：释放超时 RESERVED 编排单，并在同一事务里冲回礼品卡余额。"""
+    try:
+        kw = {'club_id': club_id}
+        if ttl_seconds:
+            kw['ttl_seconds'] = ttl_seconds
+        out = cs_mod.expire_due(c, **kw)
+        for it in out.get('released', []):
+            cents = int(it.get('giftCardCents') or 0)
+            if cents > 0:
+                _cs_refund_gift(c, club_id=int(it['clubId']), user_id=int(it['userId']),
+                                cents=cents, checkout_id=str(it['checkoutId']))
+        return out
+    except Exception as e:
+        return {'ok': False, 'scanned': 0, 'released': [], 'giftCardCents': 0,
+                'error': str(e)[:120]}
+
+
+def _cs_refund_gift_on_refund(c, *, club_id:int, user_id:int, cents:int,
+                              checkout_id:str) -> dict:
+    """退款冲回礼品卡：独立 source_type，避免与「取消释放」的幂等键串账。"""
+    try:
+        return gc_mod.apply_ledger(
+            c, club_id=club_id, user_id=user_id, delta_cents=int(cents),
+            ledger_type='REFUND', source_type='CHECKOUT_REFUND', source_id=str(checkout_id),
+            operator='checkout-settlement', note='订单退款，礼品卡抵扣额度退回余额')
+    except Exception:
+        return {'ok': False, 'reason': 'exception'}
+
+
+def _cs_after_refund(c, refund_id:str) -> dict:
+    """退款成功联动结算编排：置 REFUNDED、退回礼品卡额度、反转未结算佣金。
+
+    装备订单 / 普通订单没有编排记录 → 直接跳过，零副作用（营销适用范围边界）。
+    refund_record 与 apply_ledger / aff_mod.reverse 都幂等，重复回调不会重复退钱。
+    任何异常都吞掉，绝不阻断退款主流程。
+    """
+    try:
+        rr = row(c.execute('SELECT * FROM refund_requests WHERE id=?', (str(refund_id),)))
+        cid = str((rr or {}).get('checkout_intent_id') or '').strip()
+        if not cid:
+            return {'skipped': True, 'reason': 'no-checkout-intent'}
+        rec = cs_mod.get_record(c, cid)
+        if not rec:
+            return {'skipped': True, 'reason': 'no-record'}
+        out = cs_mod.refund_record(
+            c, cid, refund_request_id=str(refund_id),
+            detail={'refundCashAmount': (rr or {}).get('cash_amount')},
+            operator='refund-finalize')
+        if not out.get('ok') or out.get('idempotent'):
+            return out
+        club_id, user_id = int(rec['club_id']), int(rec['user_id'])
+        refunded = 0
+        if int(out.get('giftCardCents') or 0) > 0:
+            gr = _cs_refund_gift_on_refund(
+                c, club_id=club_id, user_id=user_id,
+                cents=int(out['giftCardCents']), checkout_id=cid)
+            refunded = int(out['giftCardCents']) if gr.get('ok') else 0
+        reversal = {'skipped': True, 'reason': 'no-commission'}
+        if int(out.get('commissionCents') or 0) > 0 and out.get('registrationId'):
+            try:
+                reversal = aff_mod.reverse(c, club_id=club_id, order_type='registration',
+                                           order_id=str(out['registrationId']))
+            except Exception:
+                reversal = {'reason': 'exception'}
+        return dict(out, giftCardRefundCents=refunded, commissionReverse=reversal)
+    except Exception as e:
+        return {'skipped': True, 'reason': 'exception', 'error': str(e)[:160]}
+
+
+# ── P4 营地产品营销编排（opt-in，装备销售一律不接）────────────────────────────
+# 营地属于营销适用范围（clubos_domain/commerce_scope.py）；拼团是活动专属，营地不接。
+# 纪律：不改 quote_snapshot_json（积分/券结算基数保持原样），只改最终应付现金。
+def _cs_camp_request(payload) -> dict | None:
+    """营地 opt-in 归一：清掉活动专属的 teamId，至少保留礼品卡或佣金之一。"""
+    try:
+        req = cs_mod.normalize_request(payload)
+        if not req:
+            return None
+        req['teamId'] = 0
+        req.pop('groupBuy', None)
+        if not (req.get('useGiftCard') or req.get('commission')):
+            return None
+        return req
+    except Exception:
+        return None
+
+
+def _cs_camp_plan(c, *, req:dict, club_id:int, user_id:int, cash_cents:int) -> dict:
+    """营地只读试算：礼品卡额度 + 礼品卡抵扣；无拼团立减。"""
+    bal = 0
+    if req.get('useGiftCard'):
+        try:
+            cfg = _gc_config(c, club_id)
+            if cfg['enabled'] and _gc_module_on(c, club_id):
+                bal = _cs_gift_balance(c, club_id, user_id)
+        except Exception:
+            bal = 0
+    return cs_mod.build_plan(cash_cents=cash_cents, req=req, balance_cents=bal,
+                             max_ratio=100, group_quote=None, participant_count=1)
+
+
+def _cs_apply_camp_intent(c, *, checkout_id:str, req:dict, club_id:int, user_id:int,
+                          kind:str, camp_order_id=None) -> dict | None:
+    """营地建单后编排：锁定礼品卡 → 改写应付现金 → 落记录。失败整单回落普通订单。"""
+    try:
+        ci = row(c.execute('SELECT cash_amount,payload_json FROM checkout_intents WHERE id=?',
+                           (checkout_id,)))
+        if not ci:
+            return None
+        cash_before = cs_mod.to_cents(ci['cash_amount'])
+        plan = _cs_camp_plan(c, req=req, club_id=club_id, user_id=user_id,
+                             cash_cents=cash_before)
+        locked = 0
+        if plan['giftCardCents'] > 0:
+            lr = _cs_lock_gift(c, club_id=club_id, user_id=user_id,
+                               cents=plan['giftCardCents'], checkout_id=checkout_id)
+            if lr.get('ok'):
+                locked = int(plan['giftCardCents'])
+            else:
+                plan['giftCardCents'] = 0
+                plan['cashAfterCents'] = plan['orderAmountCents']
+                plan['giftCard'] = None
+        def _rollback():
+            if locked:
+                _cs_refund_gift(c, club_id=club_id, user_id=user_id,
+                                cents=locked, checkout_id=checkout_id)
+            try:
+                old = cs_mod.from_cents(cash_before)
+                c.execute('UPDATE checkout_intents SET cash_amount=? WHERE id=?',
+                          (old, checkout_id))
+                if camp_order_id:
+                    c.execute('UPDATE camp_orders SET total=? WHERE id=?', (old, camp_order_id))
+            except Exception:
+                pass
+        try:
+            new_cash = cs_mod.from_cents(plan['cashAfterCents'])
+            c.execute('UPDATE checkout_intents SET cash_amount=?,updated_at=CURRENT_TIMESTAMP WHERE id=?',
+                      (new_cash, checkout_id))
+            pd = jload(ci.get('payload_json'), {})
+            if isinstance(pd, dict) and 'total' in pd:
+                pd['total'] = new_cash
+                c.execute('UPDATE checkout_intents SET payload_json=? WHERE id=?',
+                          (jdump(pd), checkout_id))
+            if camp_order_id:
+                c.execute('UPDATE camp_orders SET total=? WHERE id=?', (new_cash, camp_order_id))
+        except Exception:
+            _rollback()
+            return None
+        rec = cs_mod.create_record(c, checkout_id=checkout_id, club_id=club_id,
+                                   user_id=user_id, plan=plan, request=req,
+                                   kind=kind, operator='camp-checkout')
+        if not rec['ok']:
+            _rollback()
+            return None
+        return _cs_plan_view(plan)
+    except Exception:
+        return None
+
+
 # ── 后台：结算编排流水 ────────────────────────────────────────────────────────
 @app.get('/api/club/{club_id}/settlements')
 def list_club_settlements(club_id:int, status:str='', limit:int=50, offset:int=0):
     club_or_404(club_id)
     with conn() as c:
+        try: _cs_expire_due(c, club_id=club_id)
+        except Exception: pass
         rs = cs_mod.list_records(c, club_id=club_id, status=status or None,
                                  limit=limit, offset=offset)
         return {'items': [cs_mod.view(r) for r in rs],
@@ -8285,6 +8464,8 @@ def list_club_settlements(club_id:int, status:str='', limit:int=50, offset:int=0
 @app.get('/api/platform/settlements')
 def platform_settlements_summary():
     with conn() as c:
+        try: _cs_expire_due(c)
+        except Exception: pass
         return {'summary': cs_mod.summary(c),
                 'items': [cs_mod.view(r) for r in cs_mod.list_records(c, limit=100)]}
 
@@ -8317,6 +8498,17 @@ def preview_club_settlement(club_id:int, payload:dict=Body(...)):
         return view
 
 
+@app.post('/api/club/{club_id}/settlements/expire-run')
+def expire_run_club_settlements(club_id:int, payload:dict=Body(default={})):
+    """手工 / 定时触发：批量释放超过支付窗口的 RESERVED 编排单并冲回礼品卡。"""
+    club_or_404(club_id)
+    ttl = payload.get('ttlSeconds') if isinstance(payload, dict) else None
+    with conn() as c:
+        out = _cs_expire_due(c, club_id=club_id, ttl_seconds=ttl)
+        return {'ok': bool(out.get('ok')), 'result': out,
+                'summary': cs_mod.summary(c, club_id=club_id)}
+
+
 @app.get('/api/club/{club_id}/settlements/{checkout_id}')
 def get_club_settlement(club_id:int, checkout_id:str):
     club_or_404(club_id)
@@ -8338,8 +8530,8 @@ def release_club_settlement(club_id:int, checkout_id:str, payload:dict=Body(defa
         r = cs_mod.get_record(c, checkout_id)
         if not r or int(r['club_id']) != int(club_id):
             raise HTTPException(404, '结算编排记录不存在')
-        if str(r['status']) == 'SETTLED':
-            raise HTTPException(409, '成交订单不能释放，请走退款流程')
+        if str(r['status']) in ('SETTLED', 'REFUNDED'):
+            raise HTTPException(409, '成交 / 已退款订单不能释放，请走退款流程')
         out = _cs_release_after_cancel(c, checkout_id)
         return {'ok': True, 'result': out, 'item': cs_mod.view(cs_mod.get_record(c, checkout_id))}
 
@@ -8361,6 +8553,13 @@ def retry_club_settlement(club_id:int, checkout_id:str):
                                        result={'registrationId': rid})
         return {'ok': bool(out.get('ok')), 'result': out,
                 'item': cs_mod.view(cs_mod.get_record(c, checkout_id))}
+
+@app.get('/api/club/{club_id}/commerce-scope')
+def club_commerce_scope(club_id:int):
+    """只读：营销适用范围边界，供后台页 / 小程序对接方自检。"""
+    club_or_404(club_id)
+    return dict(scope_mod.scope_summary(), clubId=club_id)
+
 
 @app.get('/api/public/clubs/{club_id}/activities')
 def public_activities(club_id:int):
@@ -9336,6 +9535,12 @@ def _gear_address_snapshot(c,*,user_id:int,address_id):
 @app.post('/api/public/clubs/{club_id}/gear-checkout')
 def create_gear_checkout(club_id:int,payload:dict=Body(...)):
     club_or_404(club_id); user_id=int(payload.get('userId',1)); items=payload.get('items',[]); req_gp=max(0,int(payload.get('gearPoints',0))); voucher_codes=payload.get('voucherCodes') or []
+    # 营销适用范围硬边界：总平台装备销售绝不接入营销 / 结算编排。
+    # 见 clubos_domain/commerce_scope.py；夹带营销参数一律拒绝而非静默忽略。
+    for _mk in ('settlement','useGiftCard','giftCardCents','commission','settleCommission',
+                'teamId','storedValue','campaignCode','campaignId'):
+        if _mk in payload:
+            raise HTTPException(400, '总平台装备销售不适用俱乐部营销能力：' + _mk)
     if not items: raise HTTPException(400,'items required')
     with conn() as c:
         c.execute('INSERT OR IGNORE INTO gear_point_accounts(user_id,balance) VALUES(?,0)',(user_id,))
@@ -9947,6 +10152,9 @@ def _finalize_provider_refund(refund_id:str, *, provider_refund_id:str|None, pro
         rr=row(c.execute('SELECT after_sales_case_id FROM refund_requests WHERE id=?',(refund_id,))) or {}
         if rr.get('after_sales_case_id'):
             after_sales_engine.mark_refunded(c,case_id=str(rr['after_sales_case_id']))
+        # P4：退款成功联动结算编排（礼品卡额度退回 + 未结算佣金反转），异常绝不阻断退款
+        try: result['settlementReversal']=_cs_after_refund(c,refund_id)
+        except Exception: pass
     mirror=_mirror_refund_to_commerce(refund_id)
     return {**result,'commerceMirror':mirror}
 
@@ -15312,8 +15520,19 @@ def create_camp_checkout(club_id:int,payload:dict=Body(...)):
                           'checkIn':b['check_in'],'checkOut':b['check_out'],
                           'guestName':b['guest_name'],'total':total}),'pending'))
         c.execute('UPDATE camp_pitch_bookings SET order_id=? WHERE id=? AND club_id=?',(iid,bid,club_id))
-        return {'ok':True,'checkoutId':iid,'status':'pending_payment','amount':total,
-                'bookingId':bid,'nextAction':'PAY'}
+        _breq=None
+        try:
+            _breq=_cs_camp_request(payload)
+            if _breq and not _cs_module_on(c,club_id): _breq=None
+        except Exception:
+            _breq=None
+        _bview=None
+        if _breq:
+            _bview=_cs_apply_camp_intent(c,checkout_id=iid,req=_breq,club_id=club_id,
+                                         user_id=int(b['user_id'] or 1),kind='camp_booking')
+        return {'ok':True,'checkoutId':iid,'status':'pending_payment',
+                'amount':(_bview['cashAfter'] if _bview else total),
+                'settlement':_bview,'bookingId':bid,'nextAction':'PAY'}
 
 @app.post('/api/public/camp-checkouts/{checkout_id}/confirm')
 def confirm_camp_checkout(checkout_id:str,payload:dict=Body(default={})):
@@ -15337,6 +15556,9 @@ def confirm_camp_checkout(checkout_id:str,payload:dict=Body(default={})):
                   (str(bid),checkout_id))
         c.execute('''UPDATE camp_pitch_bookings SET status="paid"
                      WHERE id=? AND club_id=? AND status="pending"''',(bid,it['club_id']))
+        # P4：营地预订支付成功 → 编排 SETTLED + 佣金入账（无编排记录则零副作用）
+        try: _cs_settle_after_confirm(c,intent_id=checkout_id,result={'registrationId':bid})
+        except Exception: pass
         return {'ok':True,'checkoutId':checkout_id,'bookingId':bid,'status':'paid','amount':it['cash_amount']}
 
 @app.post('/api/public/camp-checkouts/{checkout_id}/cancel')
@@ -15352,6 +15574,8 @@ def cancel_camp_checkout(checkout_id:str):
                      updated_at=CURRENT_TIMESTAMP WHERE id=?''',(checkout_id,))
         c.execute('''UPDATE camp_pitch_bookings SET status="cancelled"
                      WHERE id=? AND club_id=? AND status="pending"''',(bid,it['club_id']))
+        try: _cs_release_after_cancel(c,checkout_id)
+        except Exception: pass
         return {'ok':True,'checkoutId':checkout_id,'bookingId':bid,'status':'cancelled'}
 
 
@@ -15680,6 +15904,9 @@ def _camp_expire_stale(c,club_id):
                      updated_at=CURRENT_TIMESTAMP WHERE id=? AND status="pending_payment"''',(o['checkout_id'],))
         c.execute('UPDATE camp_order_items SET status="cancelled" WHERE order_id=?',(o['id'],))
         c.execute('''UPDATE camp_orders SET status="expired",cancelled_at=CURRENT_TIMESTAMP WHERE id=?''',(o['id'],))
+        # P4：营地超时 → 释放编排单并冲回礼品卡（与积分/券/房态释放同一事务）
+        try: _cs_release_after_cancel(c,o['checkout_id'] or '')
+        except Exception: pass
     return len(stale)
 
 def _camp_order_out(c,o,with_items=True):
@@ -15746,7 +15973,20 @@ def public_camp_quote(club_id:int,payload:dict=Body(...)):
     with conn() as c:
         _camp_expire_stale(c,club_id)
         q,_,_=_camp_build_quote(c,club_id,payload)
-        return _camp_public_quote(q)
+        out=_camp_public_quote(q)
+        # 营销适用范围只读下发：营地产品可用礼品卡额度，绝不改 payable。
+        out['giftCard']=None
+        try:
+            _uid=int(payload.get('userId') or 0)
+            _cfg=_gc_config(c,club_id)
+            if _uid and _cfg['enabled'] and _gc_module_on(c,club_id):
+                _bal=_cs_gift_balance(c,club_id,_uid)
+                _gq=gc_mod.quote_consume(gc_mod.to_cents(q.get('total') or q.get('payable')),_bal)
+                _gq['appliedToPayable']=False
+                out['giftCard']=_gq
+        except Exception:
+            out['giftCard']=None
+        return out
 
 # ---- 统一订单：创建 / 详情 / 我的订单 / 支付 / 取消 ----
 @app.post('/api/public/clubs/{club_id}/camp-orders')
@@ -15821,8 +16061,21 @@ def public_camp_order_create(club_id:int,payload:dict=Body(...)):
             camp_pricing.hold(c,checkout_id=iid,user_id=uid,club_id=club_id,quote=q,voucher_codes=codes)
         except ValueError as e:
             raise HTTPException(409,str(e))
+        # P4：只有 payload 显式带 settlement 且中枢开启才编排；普通营地下单零副作用。
+        _creq=None
+        try:
+            _creq=_cs_camp_request(payload)
+            if _creq and not _cs_module_on(c,club_id): _creq=None
+        except Exception:
+            _creq=None
+        _cview=None
+        if _creq:
+            _cview=_cs_apply_camp_intent(c,checkout_id=iid,req=_creq,club_id=club_id,
+                                         user_id=uid,kind='camp_order',camp_order_id=oid)
         return {'ok':True,'orderId':oid,'orderNo':order_no,'checkoutId':iid,
-                'redeemCode':rcode,'status':'pending_payment','total':q['total'],'expiresInSeconds':1800,'nextAction':'PAY'}
+                'redeemCode':rcode,'status':'pending_payment',
+                'total':(_cview['cashAfter'] if _cview else q['total']),
+                'settlement':_cview,'expiresInSeconds':1800,'nextAction':'PAY'}
 
 def _dt_date_compact():
     import datetime as _dt
@@ -15911,6 +16164,9 @@ def public_camp_order_pay(order_id:int,payload:dict=Body(default={})):
         c.execute('''UPDATE checkout_intents SET status="paid",payment_status="succeeded",
                      paid_at=CURRENT_TIMESTAMP,result_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?''',
                   (str(order_id),o['checkout_id']))
+        # P4：营地订单支付成功 → 编排 SETTLED + 佣金入账（无编排记录则零副作用）
+        try: _cs_settle_after_confirm(c,intent_id=o['checkout_id'],result={'registrationId':order_id})
+        except Exception: pass
         return {'ok':True,'orderId':order_id,'orderNo':o['order_no'],'status':'paid',
                 'total':o['total'],'pointsEarned':earned,'nextAction':'ORDERS'}
 
@@ -15933,6 +16189,8 @@ def public_camp_order_cancel(order_id:int):
                      updated_at=CURRENT_TIMESTAMP WHERE id=? AND status="pending_payment"''',(o['checkout_id'],))
         c.execute('UPDATE camp_order_items SET status="cancelled" WHERE order_id=?',(order_id,))
         c.execute('''UPDATE camp_orders SET status="cancelled",cancelled_at=CURRENT_TIMESTAMP WHERE id=?''',(order_id,))
+        try: _cs_release_after_cancel(c,o['checkout_id'] or '')
+        except Exception: pass
         return {'ok':True,'orderId':order_id,'status':'cancelled'}
 
 # ---- 履约两步状态机（后台）：确认入住（登记押金） / 办理退房（退押金 + 最终结算）----

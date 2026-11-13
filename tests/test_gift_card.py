@@ -330,8 +330,12 @@ class TestConsume(unittest.TestCase):
         self.assertEqual(dup['reason'], 'duplicated')
         self.assertEqual(self.c.execute("SELECT COUNT(*) FROM gift_card_ledger WHERE type='CONSUME'").fetchone()[0], 1)
         big = gc.consume(self.c, club_id=1, user_id=10, cents=999999,
-                         order_type='gear_order', order_id='G-1', now=NOW)
+                         order_type='camp_order', order_id='G-1', now=NOW)
         self.assertEqual(big['reason'], 'insufficient')
+        # 营销适用范围硬边界：装备订单一律拒绝核销（不让「金额不足」掩盖越界）
+        gear = gc.consume(self.c, club_id=1, user_id=10, cents=100,
+                          order_type='gear_order', order_id='G-2', now=NOW)
+        self.assertEqual(gear['reason'], 'invalid-input')
         self.assertEqual(self.c.execute('SELECT balance_cents FROM gift_card_accounts WHERE user_id=10').fetchone()[0], 7000)
 
     def test_consume_invalid_input(self):

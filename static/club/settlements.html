@@ -46,7 +46,8 @@
 <body>
   <div class="wrap">
     <h1>结算编排</h1>
-    <p class="tip">把拼团成团立减、礼品卡抵扣、分销佣金从「只读展示」接进真实成交。只有下单请求<b>显式带 settlement 参数</b>才启用，普通订单完全不写这张表、不改实收。礼品卡在下单瞬间锁定余额（防止现金少收、余额被花掉），取消时自动冲回；佣金在支付成功后按订单幂等入账。</p>
+    <p class="tip">把拼团成团立减、礼品卡抵扣、分销佣金从「只读展示」接进真实成交。只有下单请求<b>显式带 settlement 参数</b>才启用，普通订单完全不写这张表、不改实收。礼品卡在下单瞬间锁定余额（防止现金少收、余额被花掉），取消 / 超时自动冲回；佣金在支付成功后按订单幂等入账，退款后自动冲回。</p>
+    <p class="tip" id="scopeNote" style="color:#a06a10">营销适用范围加载中…</p>
 
     <div class="stats" id="stats"></div>
 
@@ -76,9 +77,12 @@
           <option value="SETTLED">已成交</option>
           <option value="RELEASED">已释放</option>
           <option value="FAILED">失败待重试</option>
+          <option value="REFUNDED">已退款</option>
         </select>
         <button class="btn sm ghost" id="refreshBtn">刷新</button>
+        <button class="btn sm ghost" id="expireBtn">批量过期释放</button>
         <span class="muted" id="hubHint"></span>
+        <span class="out" id="expireOut"></span>
       </div>
       <div class="scroll" id="list"></div>
     </div>
@@ -97,6 +101,6 @@
   </div>
 
   <script src="/static/shared.js?v=20261113b"></script>
-  <script src="/static/club/settlements.js?v=20261113a"></script>
+  <script src="/static/club/settlements.js?v=20261113b"></script>
 </body>
 </html>

@@ -16,6 +16,9 @@ P0~P2-2 新增的营销与配置能力散落在十几个 `/api/public/*` 端点�
    复用 `club_miniprogram`、设置复用 `club_mp_settings`，本模块只存「桥接编排」。
 3. **零侵入结算**：桥接层全只读聚合，不写任何余额 / 订单 / payable / checkout。
 4. **三铁律**：未配置 / 表缺失 / 回调异常 / 坏输入 → 静默回落默认，绝不阻断主流程。
+5. **营销适用范围**：能力清单只登记俱乐部活动 / 营地产品入口，`storeProducts`
+   指 `camp_store_products`（门店 / 基地在售商品），**不含总平台装备商城**
+   （gear-checkout / mall / points-mall / Medusa）。见 commerce_scope.py。
 
 **安全**：路径只接受站内相对路径与小程序 `pages/...` 形式，拒绝任何协议 / 外链 /
 协议相对 URL；`{club_id}` 在服务端替换，绝不接受客户端传完整 URL（防开放重定向）。
@@ -156,7 +159,8 @@ CAPABILITIES = (
     {'key': 'storeProducts', 'label': '门店商品', 'group': 'commerce', 'audience': 'web',
      'phase': 'P0-3', 'module': 'stores', 'auth': 'public', 'icon': '🏬', 'order': 150,
      'fallback': '/api/public/clubs/{club_id}/store-products',
-     'api': '/api/public/clubs/{club_id}/store-products', 'note': '门店 / 基地在售商品'},
+     'api': '/api/public/clubs/{club_id}/store-products',
+     'note': '营地门店 / 基地在售商品（camp_store_products，非总平台装备商城）'},
 
     {'key': 'checkin', 'label': '每日签到', 'group': 'engagement', 'audience': 'web',
      'phase': 'P1-2', 'module': 'checkin', 'auth': 'login', 'icon': '📅', 'order': 210,

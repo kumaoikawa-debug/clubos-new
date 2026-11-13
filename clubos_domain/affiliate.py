@@ -30,7 +30,10 @@ MEMBER_STATUSES = ('PENDING', 'ACTIVE', 'FROZEN')
 BINDING_STATUSES = ('ACTIVE', 'REVOKED')
 COMMISSION_STATUSES = ('PENDING', 'SETTLED', 'REVERSED')
 SETTLEMENT_STATUSES = ('GENERATED', 'PAID')
-ORDER_TYPES = ('registration', 'gear_order', 'custom')
+# 营销适用范围硬边界（2026-11-13）：只允许俱乐部活动 / 营地订单。
+# 总平台装备销售（gear_order / mall / points-mall / Medusa）一律拒绝，
+# 完整口径见 commerce_scope.py；三处白名单由 tests/test_commerce_scope.py 断言一致。
+ORDER_TYPES = ('registration', 'camp_booking', 'camp_order', 'custom')
 
 MAX_RATE_BP = 5000            # 单笔佣金率上限 50%
 MAX_AMOUNT_CENTS = 100000000  # 单笔订单金额上限 ¥1,000,000

@@ -9,6 +9,7 @@
   }
   const CLUB = getClubId();
   const B = `/api/club/${CLUB}/settlements`;
+  const SCOPE_API = `/api/club/${CLUB}/commerce-scope`;
   const $ = (s, r = document) => r.querySelector(s);
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const yuan = n => '¥' + Number(n || 0).toFixed(2);
@@ -31,11 +32,21 @@
   const stBadge = st => {
     const map = {
       RESERVED: ['warn', '已锁定'], SETTLED: ['on', '已成交'],
-      RELEASED: ['', '已释放'], FAILED: ['off', '失败待重试']
+      RELEASED: ['', '已释放'], FAILED: ['off', '失败待重试'],
+      REFUNDED: ['off', '已退款']
     };
     const [cls, label] = map[st] || ['', st || '-'];
     return `<span class="badge ${cls}">${esc(label)}</span>`;
   };
+
+  async function loadScope() {
+    try {
+      const d = await req('GET', SCOPE_API);
+      $('#scopeNote').textContent = `适用范围：${d.note} 允许订单类型 ${d.allowedOrderTypes.join(' / ')}；装备下单接口不接营销。`;
+    } catch (_) {
+      $('#scopeNote').textContent = '适用范围：仅俱乐部活动 / 营地产品，不含总平台装备销售。';
+    }
+  }
 
   async function loadStats() {
     let d = {};
@@ -64,10 +75,11 @@
     const items = d.items || [];
     if (!items.length) { $('#list').innerHTML = '<div class="empty">暂无编排记录</div>'; return; }
     $('#list').innerHTML = `<table><thead><tr>
-      <th>结算单</th><th>状态</th><th>应付</th><th>拼团立减</th><th>礼品卡</th>
+      <th>结算单</th><th>业务域</th><th>状态</th><th>应付</th><th>拼团立减</th><th>礼品卡</th>
       <th>实收</th><th>佣金</th><th>会员</th><th>时间</th></tr></thead><tbody>` +
       items.map(x => `<tr>
         <td><span class="code">${esc(x.checkoutId)}</span></td>
+        <td class="muted">${esc({ activity: '俱乐部活动', camp_order: '营地订单', camp_booking: '营位预订' }[x.kind] || x.kind || '-')}</td>
         <td>${stBadge(x.status)}</td>
         <td>${yuan(x.cashBefore)}</td>
         <td>${yuan(x.groupBuyAmount)}</td>
@@ -91,7 +103,10 @@
       cashAfter: x.cashAfter,
       commissionAmount: x.commissionAmount,
       commissionReason: x.commissionReason,
+      kind: x.kind,
       registrationId: x.registrationId,
+      expiresAt: x.expiresAt,
+      refundedAt: x.refundedAt,
       request: x.request,
       events: (d.events || []).map(e => `${e.createdAt} ${e.eventType} ${e.fromStatus || '-'} → ${e.toStatus || '-'}`)
     }, null, 2);
@@ -141,6 +156,16 @@
   $('#pvBtn').addEventListener('click', preview);
   $('#releaseBtn').addEventListener('click', () => act('release'));
   $('#retryBtn').addEventListener('click', () => act('retry'));
+  $('#expireBtn').addEventListener('click', async () => {
+    $('#expireOut').textContent = '执行中…';
+    try {
+      const d = await req('POST', `${B}/expire-run`, {});
+      const r = d.result || {};
+      $('#expireOut').textContent = `已释放 ${(r.released || []).length} 单，冲回礼品卡 ¥${(Number(r.giftCardCents || 0) / 100).toFixed(2)}`;
+      ok('过期释放完成');
+      await loadList(); await loadStats();
+    } catch (e) { fail(e, '#expireOut'); }
+  });
   $('#list').addEventListener('click', e => {
     const code = e.target.closest('.code');
     if (code) { $('#detailId').value = code.textContent.trim(); loadDetail(); }
@@ -148,4 +173,5 @@
 
   loadList();
   loadStats();
+  loadScope();
 })();

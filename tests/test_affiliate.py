@@ -245,7 +245,9 @@ class TestPreviewAndAccrue(unittest.TestCase):
     def test_accrue_different_order_type_not_idempotent_collision(self):
         kw = dict(c=self.c, club_id=1, buyer_user_id=20, amount_cents=10000, cfg=_cfg(), now=NOW)
         self.assertTrue(af.accrue(order_type='registration', order_id='1', **kw)['accrued'])
-        self.assertTrue(af.accrue(order_type='gear_order', order_id='1', **kw)['accrued'])
+        self.assertTrue(af.accrue(order_type='camp_order', order_id='1', **kw)['accrued'])
+        # 营销适用范围硬边界：装备订单一律拒绝入账
+        self.assertFalse(af.accrue(order_type='gear_order', order_id='1', **kw)['accrued'])
 
     def test_accrue_invalid_order(self):
         r = af.accrue(self.c, club_id=1, order_type='hack', order_id='X',

@@ -304,5 +304,131 @@ class TestRecords(unittest.TestCase):
                                       event_type='HACK')['ok'])
 
 
+
+class TestExpireDue(unittest.TestCase):
+    """支付窗口过期：惰性自动释放 RESERVED，绝不误动已成交订单。"""
+    def setUp(self):
+        self.c = _db()
+        _record(self.c, 'CK1')
+
+    def tearDown(self):
+        self.c.close()
+
+    def test_not_expired_inside_window(self):
+        r = cs.expire_due(self.c, now=NOW + 1799)
+        self.assertEqual(r['scanned'], 0)
+        self.assertEqual(r['released'], [])
+
+    def test_expired_releases_and_reports_gift_card(self):
+        r = cs.expire_due(self.c, now=NOW + 1801)
+        self.assertTrue(r['ok'])
+        self.assertEqual(r['scanned'], 1)
+        self.assertEqual(r['giftCardCents'], 2000)
+        self.assertEqual(r['released'][0]['checkoutId'], 'CK1')
+        self.assertEqual(cs.get_record(self.c, 'CK1')['status'], 'RELEASED')
+        ev = cs.list_events(self.c, 'CK1')
+        self.assertEqual(ev[0]['eventType'], 'EXPIRE')
+
+    def test_second_run_is_idempotent(self):
+        cs.expire_due(self.c, now=NOW + 1801)
+        r = cs.expire_due(self.c, now=NOW + 3600)
+        self.assertEqual(r['scanned'], 0)
+        self.assertEqual(r['giftCardCents'], 0)
+
+    def test_settled_record_never_expired(self):
+        cs.settle_record(self.c, 'CK1', registration_id=77, now=NOW + 10)
+        r = cs.expire_due(self.c, now=NOW + 9999)
+        self.assertEqual(r['scanned'], 0)
+        self.assertEqual(cs.get_record(self.c, 'CK1')['status'], 'SETTLED')
+
+    def test_released_record_never_expired(self):
+        cs.release_record(self.c, 'CK1', now=NOW + 10)
+        self.assertEqual(cs.expire_due(self.c, now=NOW + 9999)['scanned'], 0)
+
+    def test_club_filter_and_ttl_clamp(self):
+        _record(self.c, 'CK2', club=2)
+        r = cs.expire_due(self.c, now=NOW + 1801, club_id=2)
+        self.assertEqual([x['checkoutId'] for x in r['released']], ['CK2'])
+        self.assertEqual(cs.get_record(self.c, 'CK1')['status'], 'RESERVED')
+        self.assertEqual(cs.expire_due(self.c, now=NOW, ttl_seconds=1)['ttlSeconds'], 60)
+
+    def test_missing_table_never_raises(self):
+        bare = sqlite3.connect(':memory:')
+        bare.row_factory = sqlite3.Row
+        r = cs.expire_due(bare, now=NOW + 1801)
+        self.assertFalse(r['ok'])
+        self.assertEqual(r['released'], [])
+        bare.close()
+
+
+class TestRefundRecord(unittest.TestCase):
+    """退款成功：SETTLED → REFUNDED，返回冲回金额且幂等。"""
+    def setUp(self):
+        self.c = _db()
+        _record(self.c, 'CK1')
+        cs.settle_record(self.c, 'CK1', registration_id=77, commission_cents=300,
+                         now=NOW + 10)
+
+    def tearDown(self):
+        self.c.close()
+
+    def test_refund_marks_and_returns_amounts(self):
+        r = cs.refund_record(self.c, 'CK1', refund_request_id='RF-1', now=NOW + 20)
+        self.assertTrue(r['ok'])
+        self.assertEqual(r['status'], 'REFUNDED')
+        self.assertEqual(r['giftCardCents'], 2000)
+        self.assertEqual(r['commissionCents'], 300)
+        self.assertEqual(r['registrationId'], 77)
+        self.assertEqual(cs.get_record(self.c, 'CK1')['status'], 'REFUNDED')
+        self.assertEqual(cs.list_events(self.c, 'CK1')[0]['eventType'], 'REFUND')
+
+    def test_refund_is_idempotent_and_does_not_repay_twice(self):
+        cs.refund_record(self.c, 'CK1', refund_request_id='RF-1', now=NOW + 20)
+        r = cs.refund_record(self.c, 'CK1', refund_request_id='RF-2', now=NOW + 30)
+        self.assertTrue(r['idempotent'])
+        self.assertEqual(r['reason'], 'already-refunded')
+        self.assertEqual(r['giftCardCents'], 0)
+        self.assertEqual(r['commissionCents'], 0)
+
+    def test_non_settled_status_rejected(self):
+        for cid, st in (('R1', 'RESERVED'), ('R2', 'FAILED'), ('R3', 'RELEASED')):
+            _record(self.c, cid)
+            if st == 'FAILED':
+                cs.fail_record(self.c, cid, reason='x', now=NOW + 1)
+            elif st == 'RELEASED':
+                cs.release_record(self.c, cid, now=NOW + 1)
+            r = cs.refund_record(self.c, cid)
+            self.assertEqual(r['reason'], 'bad-status', (cid, r))
+            self.assertEqual(cs.get_record(self.c, cid)['status'], st)
+
+    def test_no_record_and_missing_table(self):
+        self.assertEqual(cs.refund_record(self.c, 'NOPE')['reason'], 'no-record')
+        bare = sqlite3.connect(':memory:')
+        bare.row_factory = sqlite3.Row
+        self.assertEqual(cs.refund_record(bare, 'X')['reason'], 'no-record')
+        bare.close()
+
+    def test_view_has_expiry_and_refund_time(self):
+        v0 = cs.view(cs.get_record(self.c, 'CK1'))
+        self.assertIsNotNone(v0['expiresAt'])
+        self.assertIsNone(v0['refundedAt'])
+        cs.refund_record(self.c, 'CK1', refund_request_id='RF-9', now=NOW + 20)
+        v1 = cs.view(cs.get_record(self.c, 'CK1'))
+        self.assertIsNotNone(v1['refundedAt'])
+        self.assertEqual(v1['status'], 'REFUNDED')
+
+    def test_summary_counts_refunded(self):
+        cs.refund_record(self.c, 'CK1', refund_request_id='RF-1', now=NOW + 20)
+        self.assertEqual(cs.summary(self.c)['byStatus'].get('REFUNDED'), 1)
+
+
+class TestScopeConstants(unittest.TestCase):
+    def test_statuses_and_ttl(self):
+        self.assertIn('REFUNDED', cs.STATUSES)
+        self.assertEqual(cs.REFUNDABLE, ('SETTLED',))
+        self.assertEqual(cs.DEFAULT_TTL_SECONDS, 1800)
+        self.assertIn('EXPIRE', cs.EVENT_TYPES)
+        self.assertIn('REFUND', cs.EVENT_TYPES)
+
 if __name__ == '__main__':
     unittest.main()
