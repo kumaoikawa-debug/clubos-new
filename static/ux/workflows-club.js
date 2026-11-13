@@ -422,6 +422,34 @@ window.addBuyGift=async()=>uxTask(async()=>{
   toast('规则已创建，顾客成交后自动发放');loadMembers()});
 window.toggleCampaign=async(id,status)=>uxTask(async()=>{await api(`/api/club/${CLUB}/campaigns/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});toast(status==='ACTIVE'?'规则已启用':'规则已停用');loadMembers()});
 window.delCampaign=async id=>uxTask(async()=>{if(!await uxConfirm({title:'删除买赠规则',message:'删除后，已发放出去的赠品不受影响，只是不再自动发放。'}))return;await api(`/api/club/${CLUB}/campaigns/${id}`,{method:'DELETE'});toast('规则已删除');loadMembers()});
+/* 首单立减 / 限时折扣（P0-1 营销引擎定价型）：报价链自动生效，只改实付不改规则。 */
+window.addPriceCampaign=async()=>uxTask(async()=>{
+  const d=await uxForm({title:'新增立减 / 限时活动',
+    subtitle:'「首单立减」只对在本俱乐部没有已支付订单的新顾客生效；「限时折扣」在活动启用期间对全部顾客生效（创建后可随时停用）。优惠叠加在会员折扣 / 券之后，只改实付金额。',
+    fields:[
+      {name:'ctype',label:'活动类型',type:'select',full:true,required:true,value:'NEWCOMER',
+       options:[{value:'NEWCOMER',label:'首单立减（新顾客首单专享）'},{value:'TIME_LIMIT',label:'限时折扣（全部顾客）'}]},
+      {name:'title',label:'活动名称（仅后台识别用）',type:'text',required:true,full:true,placeholder:'如：新客立减 30 元'},
+      {name:'mode',label:'优惠方式',type:'select',full:true,required:true,value:'fixed',
+       options:[{value:'fixed',label:'立减固定金额（元）'},{value:'percent',label:'按百分比折扣'}]},
+      {name:'amount',label:'立减金额（元）—— 优惠方式选「立减」时填写',type:'number',min:0,step:.01,value:30},
+      {name:'percent',label:'折扣率（填 90 = 9 折）—— 选「折扣」时填写',type:'number',min:1,max:100,step:1},
+      {name:'maxDiscount',label:'单笔最多优惠金额（元，可空）',type:'number',min:0,step:.01}
+    ],submitText:'创建活动'});
+  if(!d)return;
+  const rules={mode:String(d.mode||'fixed')};
+  if(rules.mode==='percent'){
+    const p=Number(d.percent);
+    if(!(p>0&&p<=100)){toast('折扣率请填 1–100（90 = 9 折）');return}
+    rules.percent=p;
+  }else{
+    const a=Number(d.amount);
+    if(!(a>=0)||!d.amount){toast('请填写立减金额');return}
+    rules.amount=a;
+  }
+  if(Number(d.maxDiscount||0)>0)rules.maxDiscount=Number(d.maxDiscount);
+  await post('/api/club/'+CLUB+'/campaigns',{type:String(d.ctype),title:String(d.title||'').trim(),status:'ACTIVE',schedule:{},scope:{},rules});
+  toast('营销活动已创建，下单报价自动生效');loadMembers()});
 /* 升级赠券（2026-10-26）：会员达到设定等级时自动送一张券；每个等级绑一张券，可换绑。 */
 window.addTierGift=async()=>{
   let tiers=[],benefits=[];

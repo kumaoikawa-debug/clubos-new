@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ClubOS NEW · 通知中心</title>
+  <link rel="stylesheet" href="/static/shared.css?v=20261113b">
+  <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261111z">
+  <link rel="stylesheet" href="/static/club/club-glass.css?v=20261112b">
+  <style>
+    body{margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#16362b}
+    .wrap{max-width:1020px;margin:0 auto;padding:18px}
+    h1{font-size:18px;margin:0 0 4px}
+    .tip{font-size:12px;color:#8aa39a;margin:0 0 12px;line-height:1.7}
+    .card{background:#fff;border:1px solid #e7edea;border-radius:14px;padding:14px;margin-bottom:12px}
+    .card h3{font-size:14px;margin:0 0 10px}
+    .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
+    .row label{font-size:12px;color:#5d7a6e;min-width:80px}
+    .row input,.row select,.row textarea{padding:6px 8px;border:1px solid #d7e2dd;border-radius:8px;font-size:13px;flex:1;min-width:110px}
+    .row textarea{min-height:64px;font-family:inherit}
+    .row input[type=checkbox]{flex:0;min-width:0;width:16px;height:16px}
+    .row input.sm,.row select.sm{min-width:80px;max-width:180px;flex:0 1 150px}
+    .btn{padding:7px 14px;border-radius:9px;border:1px solid #0a7d52;background:#0a7d52;color:#fff;font-size:13px;cursor:pointer}
+    .btn.ghost{background:#fff;color:#0a7d52}
+    .btn.sm{padding:4px 9px;font-size:12px}
+    .btn.danger{border-color:#c0392b;background:#fff;color:#c0392b}
+    .empty{color:#8aa39a;text-align:center;padding:16px;font-size:13px}
+    .muted{font-size:12px;color:#8aa39a}
+    .badge{font-size:11px;padding:2px 8px;border-radius:20px;background:#eef3f0;color:#5d7a6e;display:inline-block}
+    .badge.on{background:#e3f6ec;color:#0a7d52}
+    .badge.off{background:#f6e7e6;color:#b03a2e}
+    table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    th,td{text-align:left;padding:7px 4px;border-bottom:1px solid #f0f4f2;vertical-align:top}
+    th{color:#8aa39a;font-weight:500}
+    .scroll{max-height:340px;overflow:auto;margin-top:8px}
+    .out{font-size:12px;color:#0a7d52;line-height:1.6}
+    .form{background:#f7faf9;border:1px dashed #d7e2dd;border-radius:10px;padding:10px;margin-top:10px}
+    .form .ft{font-size:12px;color:#0a7d52;font-weight:600;margin-bottom:6px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>通知中心</h1>
+    <p class="tip">P0-4 通知通道抽象 + 模板：先配<b>通道</b>（企业微信 / 邮件 / 短信 / 站内信），再配<b>模板</b>（code 区分业务场景，正文支持 <code>{{变量}}</code> 占位，缺失变量原样保留）。发送失败只记录原因，绝不阻断下单等主流程。企业微信通道不填 webhook 时自动回落俱乐部集成里已配置的企微 webhook。</p>
+
+    <div class="card">
+      <h3>通知通道</h3>
+      <div class="scroll" id="chList"></div>
+      <div class="form" id="chForm">
+        <div class="ft" id="chFormTitle">新增通道</div>
+        <div class="row">
+          <label>类型</label>
+          <select class="sm" id="chType">
+            <option value="wechat">企业微信</option>
+            <option value="email">邮件</option>
+            <option value="sms">短信</option>
+            <option value="inapp">站内信</option>
+          </select>
+          <label>启用</label><input type="checkbox" id="chEnabled" checked>
+          <input type="hidden" id="chEditId">
+        </div>
+        <div class="row">
+          <label>配置</label>
+          <textarea id="chConfig" placeholder='JSON 配置。企业微信：{"webhook":"https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…"}；邮件 / 短信：按服务商填 smtp 或网关密钥等；站内信可留空 {}'></textarea>
+        </div>
+        <div class="row">
+          <button class="btn sm" id="chSave">保存通道</button>
+          <button class="btn sm ghost" id="chReset">清空表单</button>
+          <span class="out" id="chOut"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>消息模板</h3>
+      <div class="scroll" id="tplList"></div>
+      <div class="form" id="tplForm">
+        <div class="ft" id="tplFormTitle">新增模板</div>
+        <div class="row">
+          <label>code</label><input class="sm" id="tplCode" placeholder="如 order.paid（业务场景标识）">
+          <label>通道</label>
+          <select class="sm" id="tplChannel">
+            <option value="inapp">站内信</option>
+            <option value="wechat">企业微信</option>
+            <option value="email">邮件</option>
+            <option value="sms">短信</option>
+          </select>
+          <label>启用</label><input type="checkbox" id="tplEnabled" checked>
+          <input type="hidden" id="tplEditId">
+        </div>
+        <div class="row"><label>标题</label><input id="tplTitle" placeholder="如：报名成功通知（120 字内）"></div>
+        <div class="row"><label>正文</label><textarea id="tplBody" placeholder="支持 {{变量}} 占位，如：{{club_name}}「{{activity_title}}」报名成功，出团日期 {{event_date}}。缺失变量会原样保留。"></textarea></div>
+        <div class="row">
+          <button class="btn sm" id="tplSave">保存模板</button>
+          <button class="btn sm ghost" id="tplReset">清空表单</button>
+          <span class="out" id="tplOut"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/shared.js?v=20261113b"></script>
+  <script src="/static/club/notifications.js?v=20261114a"></script>
+</body>
+</html>

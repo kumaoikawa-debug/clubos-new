@@ -1168,7 +1168,13 @@ async function loadMembers(){skel('#tierList',3);
     ||'<div class="empty">暂无兑换记录</div>';
   }catch(e){loaderError('#tierList',e,'客户与会员加载失败')}
 }
-/* ── 满额买赠 / 邀请有礼（P5/P6 营销引擎：成交回调自动发放，幂等留痕）── */
+/* ── 营销活动（P5/P6 营销引擎：立减 / 限时 / 买赠 / 邀请，成交自动生效与发放，幂等留痕）── */
+function discountRuleText(r){
+  r=r||{};
+  const mode=String(r.mode||'fixed');
+  if(mode==='percent')return `${(Number(r.percent||0)/10).toString().replace(/\.0$/,'')} 折`;
+  return `立减 ${money(r.amount)}`;
+}
 function buyGiftRuleText(r){
   r=r||{};
   const gt=String(r.giftType||'points');
@@ -1177,14 +1183,21 @@ function buyGiftRuleText(r){
   const mg=Number(r.maxGifts||0)>0?` · 单笔最多 ${r.maxGifts} 份`:'';
   return `满 ${money(r.threshold)} 送 ${unit}${mg}`;
 }
+function campaignTypeMeta(t){
+  return ({
+    NEWCOMER:['首单立减','',x=>`首单 ${discountRuleText(x.rules)}（仅本俱乐部无已支付订单的新顾客）`],
+    TIME_LIMIT:['限时折扣','info',x=>`${discountRuleText(x.rules)}（启用期间全部顾客可用）`],
+    BUY_GIFT:['满额买赠','',x=>`${buyGiftRuleText(x.rules)}（成交自动发放）`],
+    INVITE:['邀请有礼','info',x=>`${buyGiftRuleText(x.rules)}（仅被邀请好友的首单）`]
+  })[t];
+}
 function renderBuyGiftCampaigns(list){
   const box=$('#buyGiftList'); if(!box)return;
-  const rows=(Array.isArray(list)?list:[]).filter(x=>x.type==='BUY_GIFT'||x.type==='INVITE');
+  const rows=(Array.isArray(list)?list:[]).filter(x=>campaignTypeMeta(x.type));
   box.innerHTML=rows.map(x=>{
-    const isInv=x.type==='INVITE';
-    const rule=buyGiftRuleText(x.rules);
-    return `<div class="list-row"><div class="list-row__main"><div class="list-row__title"><span class="tag ${isInv?'info':''}">${isInv?'邀请有礼':'满额买赠'}</span> ${esc(x.title)} <span class="tag">${esc(rule)}</span>${x.status==='ACTIVE'?'':' <span class="tag orange">已停用</span>'}</div><div class="list-row__sub">${isInv?'仅对被邀请好友在本俱乐部的首单生效':'对所有顾客的活动 / 营地订单生效'} · 适用：俱乐部活动 + 营地（装备订单不参与）· 发放幂等，同一订单只发一次</div></div><div class="list-row__end"><button class="btn ghost" onclick="toggleCampaign(${x.id},'${x.status==='ACTIVE'?'PAUSED':'ACTIVE'}')">${x.status==='ACTIVE'?'停用':'启用'}</button><button class="btn ghost" onclick="delCampaign(${x.id})">删除</button></div></div>`;
-  }).join('')||'<div class="empty">还没有买赠 / 邀请有礼规则，点「＋ 新增规则」创建</div>';
+    const [tag,cls,ruleFn]=campaignTypeMeta(x.type);
+    return `<div class="list-row"><div class="list-row__main"><div class="list-row__title"><span class="tag ${cls}">${tag}</span> ${esc(x.title)} <span class="tag">${esc(ruleFn(x)||'')}</span>${x.status==='ACTIVE'?'':' <span class="tag orange">已停用</span>'}</div><div class="list-row__sub">适用：俱乐部活动 + 营地（装备订单不参与）· 发放与立减幂等留痕</div></div><div class="list-row__end"><button class="btn ghost" onclick="toggleCampaign(${x.id},'${x.status==='ACTIVE'?'PAUSED':'ACTIVE'}')">${x.status==='ACTIVE'?'停用':'启用'}</button><button class="btn ghost" onclick="delCampaign(${x.id})">删除</button></div></div>`;
+  }).join('')||'<div class="empty">还没有营销活动，点「＋ 立减 / 限时」或「＋ 买赠 / 邀请」创建</div>';
 }
 function grantTypeCn(t){return ({points:'活动积分',gift_card:'礼品卡额度',coupon:'优惠券'})[t]||t;}
 function renderCampaignGrantLog(log){
