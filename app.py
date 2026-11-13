@@ -14387,7 +14387,7 @@ def platform_commissions(club_id:int|None=None,status:str|None=None,date_from:st
         sql+=' ORDER BY l.id DESC'
         return rows(c.execute(sql,args))
 
-@app.get('/api/platform/settlements')
+@app.get('/api/platform/commission-settlements')
 def platform_settlements(club_id:int|None=None):
     with conn() as c:
         out=commission_engine.settlements(c,club_id=club_id)

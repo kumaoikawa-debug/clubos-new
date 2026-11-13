@@ -153,7 +153,7 @@ check('可结算余额已清零',float(after['payableNow'])==0 and float(after['
 with app.conn() as dbc:
     st=dbc.execute("SELECT COUNT(*) n FROM commission_ledger WHERE club_id=1 AND status='settled'").fetchone()['n']
 check('三条流水全部 settled',st==3,st)
-sett=ok('get','/api/platform/settlements?club_id=1').json()
+sett=ok('get','/api/platform/commission-settlements?club_id=1').json()
 rec=[s for s in sett if s['payment_ref']=='CST-TEST-20261022'][0]
 check('结算记录可核对打款账户',rec['payee'] and rec['payee']['cardNoMasked'].endswith('9012'),rec.get('payee'))
 
