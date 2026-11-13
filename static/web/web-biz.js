@@ -248,7 +248,7 @@ window.openMemberCard=window.openMemberCard||function(){wv('wme')};
 
 /* ── ⑤ 品牌外壳（俱乐部设置 DIY · 2026-10-09）────────────────────────────
    HTML 骨架里的「远拓户外」只是占位 —— 真名/logo/口号来自俱乐部设置，
-   启动时拉 /api/public/clubs/{id} 覆盖：顶栏 logo+名字、<title>、首页品牌条。
+   启动时拉 /api/public/clubs/{id} 覆盖：顶栏名字、<title>、首页品牌条（#878 起不下发 logo 图）。
    没配 logo/口号时保持原样（不渲染空壳）。幂等：重复调用只重画同内容。 */
 let _brandApplied=false;
 window.applyClubBrand=async function(){
@@ -267,17 +267,10 @@ window.applyClubBrand=async function(){
     document.querySelectorAll('[data-club-about]').forEach(function(el){el.textContent='关于'+name});
     document.querySelectorAll('[data-club-foot]').forEach(function(el){el.textContent=name+' · MEMBER'});
   }
-  const logo=String(c.logoUrl||'');
-  if(logo){
-    const top=document.querySelector('.web-top');
-    if(top&&!top.querySelector('.web-top__logo')){
-      const img=document.createElement('img');
-      img.className='web-top__logo';img.alt='';img.src=logo;
-      img.style.cssText='width:28px;height:28px;border-radius:8px;object-fit:cover';
-      img.onerror=()=>img.remove();
-      top.insertBefore(img,top.firstChild);
-    }
-  }
+  /* #878（2026-11-13）用户要求去掉 C 端头部的品牌 logo：不再注入 .web-top__logo，
+     首页品牌条里同一张 logo 小图一并去掉，只保留俱乐部名与口号文字。
+     这里还主动清一次已有节点 —— 老版本脚本的缓存若先跑过，DOM 里可能已经留下了图。 */
+  document.querySelectorAll('.web-top__logo').forEach(function(el){el.remove()});
   const slogan=String(c.slogan||'').trim();
   if(slogan){
     const feed=$('#homeFeed');
@@ -285,8 +278,7 @@ window.applyClubBrand=async function(){
       const bar=document.createElement('div');
       bar.id='brandStrip';
       bar.style.cssText='display:flex;align-items:center;gap:10px;margin:2px 0 12px;color:var(--ink-soft,#6b6f66);font-size:13px';
-      bar.innerHTML=(logo?`<img src="${esc(logo)}" alt="" style="width:22px;height:22px;border-radius:6px;object-fit:cover" onerror="this.remove()">`:'')
-        +`<span>${esc(slogan)}</span>`;
+      bar.innerHTML=`<span>${esc(slogan)}</span>`;
       feed.parentNode.insertBefore(bar,feed);
     }
   }

@@ -4272,6 +4272,22 @@ def public_points_mall(request:Request,club_id:int,user_id:int|None=None):
         rate=resolve_club_points_redeem_rate(c,club_id=int(club_id),user_id=int(user_id),setting=setting)
     return {'items':items,'redemptions':redemptions,'wallet':wallet,'pointsRedeemRate':rate}
 
+@app.get('/api/public/clubs/{club_id}/points-ledger')
+def public_points_ledger(request:Request,club_id:int,user_id:int|None=None):
+    """C 端「积分明细」：只返回本人本俱乐部的活动积分流水（只读，最近 30 条）。
+
+    与 /api/club/{club_id}/members/{user_id} 的区别：那条是后台会员档案，会带
+    手机号、内部备注等经营者字段，公开侧绝不复用。这里只下发流水五列，
+    user_id 走 public_user_id（生产环境强制登录身份，不能靠改 query 看别人的账）。
+    """
+    club_or_404(club_id)
+    uid=public_user_id(request,user_id)
+    with conn() as c:
+        items=rows(c.execute('''SELECT type,amount,source_type,note,created_at
+                                FROM club_point_ledger WHERE club_id=? AND user_id=?
+                                ORDER BY id DESC LIMIT 30''',(club_id,uid)))
+    return {'items':items}
+
 @app.post('/api/public/clubs/{club_id}/points-mall/{item_id}/redeem')
 def public_points_mall_redeem(request:Request,club_id:int,item_id:int,payload:dict=Body(...)):
     user_id=public_user_id(request,payload.get('userId'))

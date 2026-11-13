@@ -278,7 +278,7 @@ window.loadOrders=loadOrders;
 /* ── 二级页栈 ─────────────────────────────────────────────────────────── */
 const meStack=[];
 const SUB_ME={};
-const SUB_ME_TITLE={myregs:'我的订单',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息',pointsmall:'积分商城',invite:'邀请好友',inquiries:'我的咨询'};
+const SUB_ME_TITLE={myregs:'我的订单',member:'会员权益',address:'收货地址',coupons:'优惠券',orders:'商城订单',aftersale:'售后 / 退款',service:'联系我们',about:'关于俱乐部',membercard:'会员信息',pointsmall:'积分商城',pointlogs:'积分明细',invite:'邀请好友',inquiries:'我的咨询'};
 const SUB_ME_AFTER={};
 function meStackOpen(){return meStack.length>0;}
 function meEnsureStack(){
@@ -1363,36 +1363,107 @@ SUB_ME_AFTER.pointsmall=async function(){
 function meMallType(t){
   return ({coupon:'优惠券',activity:'活动',service:'服务',goods:'实物'}[t]||t);
 }
+/* ── 积分商城改版（#878 / 2026-11-13）──────────────────────────────────────
+   参考商城式设计：白色「可用积分」大卡（大数字 + 积分明细› + 分隔线 + 兑换记录）+ 
+   2 列图卡（大图 / 标题 / 类型标签 / 蓝色积分价 / 兑换按钮）。数据完全沿用
+   /api/public/clubs/{club}/points-mall 原字段，只重排 DOM、不动任何业务口径。
+   · 商品没有 image_url 时不留白：渲染一张品牌化「积分券面」art（深绿山脊 + 大字），
+     与参考图里 100积分/¥10 的券面卡同一视觉语言；有图时叠在 art 之上，
+     坏图 onerror 直接摘掉 img 自动露出底层 art，不依赖外部占位资源。
+   · 保留 SUB_ME.pointsmall / meMallPaint 函数名、按钮文案「兑换」、
+     「我的兑换」「待核销」等既有文案 —— 发版门禁与 UI 回归按它们断言。 */
+function pmArtHtml(x){
+  const pts=Number(x.points_cost||0);
+  const cash=Number(x.refCashValue||0);
+  const isCp=x.item_type==='coupon';
+  const big=(isCp&&cash>0)?('¥'+cash):String(pts);
+  const unit=(isCp&&cash>0)?'':'积分';
+  const sub=isCp
+    ?((cash>0)?(pts+'积分兑换¥'+cash+'代金券'):String(x.refTitle||'兑换后自动发到券包'))
+    :({coupon:'优惠券',activity:'活动',service:'服务',goods:'实物'}[x.item_type]||'积分兑换');
+  const tip=isCp?'抵扣消费 · 优惠多多':(String(x.description||'积分兑换 · 到店领取'));
+  return `<div class="pm-card__art">
+      <span class="pm-card__art-kicker">远拓户外 · 积分兑换</span>
+      <div class="pm-card__art-main"><b>${esc(big)}</b>${unit?`<em>${unit}</em>`:''}</div>
+      <span class="pm-card__art-pill">${esc(tip)}</span>
+      <span class="pm-card__art-foot">${esc(sub)}</span>
+    </div>`;
+}
 function meMallPaint(d){
   const items=(d.items||[]); const mine=(d.redemptions||[]);
   const w=d.wallet||{};
   const filters=[['all','全部'],['coupon','优惠券'],['activity','活动'],['service','服务'],['goods','实物']];
   const shown=items.filter(x=>window._mallFilter==='all'||x.item_type===window._mallFilter);
-  /* 2026-11-05：换算比例按当前会员等级由后端下发，不再写死 100 积分 = ¥1。
-     老缓存 / 接口异常时退回 100（升级前的历史口径），页面不至于显示 undefined。 */
+  /* 2026-11-05：换算比例按当前会员等级由后端下发，不再写死 100 积分 = ¥1。 */
   const rate=Number(d.pointsRedeemRate||100)||100;
-  const head=`<div class="me-gd"><b>${w.clubPoints??0}</b> 可用积分<span>报名付款可获得积分，报名时也可用积分抵扣；当前 ${rate} 积分 = ¥1（按你的会员等级）</span></div>`;
-  const chips=`<div class="me-mall__tabs">${filters.map(([k,t])=>`<button class="me-mall__tab${window._mallFilter===k?' on':''}" onclick="meMallFilter('${k}')">${t}</button>`).join('')}</div>`;
-  const list=shown.length?shown.map(x=>{
+  const head=`<div class="pm-head">
+      <div class="pm-head__row">
+        <div class="pm-head__left"><span class="pm-head__label">可用积分</span><div class="pm-head__num">${w.clubPoints??0}</div></div>
+        <button class="pm-head__detail" type="button" onclick="pushMe('pointlogs')">积分明细<i>›</i></button>
+      </div>
+      <div class="pm-head__hint">报名付款可赚积分、报名时也可抵扣 · 当前 ${rate} 积分 = ¥1（按你的会员等级）</div>
+      <div class="pm-head__line"></div>
+      <button class="pm-head__rec" type="button" onclick="meMallGoRecords()">兑换记录<i>›</i></button>
+    </div>`;
+  const tabs=`<div class="pm-tabs">${filters.map(([k,t])=>`<button type="button" class="pm-tabs__t${window._mallFilter===k?' on':''}" onclick="meMallFilter('${k}')">${t}</button>`).join('')}</div>`;
+  const grid=shown.length?`<div class="pm-grid">`+shown.map(x=>{
     const off=x.stock!=null&&Number(x.stock)<=0;
     const can=(w.clubPoints??0)>=Number(x.points_cost||0)&&!off;
-    return `<div class="me-bnf">
-      <div class="me-bnf__hd"><b>${esc(x.title)}</b>${meBadge(meMallType(x.item_type),'info')}</div>
-      ${x.description?`<p>${esc(x.description)}</p>`:''}
-      ${x.item_type==='coupon'&&x.refTitle?`<p>兑换后发放券：${esc(x.refTitle)}</p>`:''}
-      <div class="me-bnf__ft">
-        <div class="me-bnf__cost"><b>${x.points_cost}</b> 活动积分${x.stock!=null?` · 剩 ${x.stock}`:''}</div>
-        ${off?meBadge('已兑完','off'):`<button class="me-btn" ${can?'':'disabled'} onclick="meRedeemMall(${x.id},'${esc(x.title)}',${Number(x.points_cost||0)})">兑换</button>`}
+    const iu=String(x.image_url||'').trim();
+    const src=iu?(window.wImgSrc?window.wImgSrc(iu):iu):'';
+    /* #878：坏链被 #877 降级成占位图时别再叠一层空山图 —— 直接露出下面带
+       积分大字的品牌券面 art，避免「有图卡反而没数字、比无图卡信息更少」。 */
+    const ph=String(window.WIMG_PLACEHOLDER||'gear-placeholder.svg');
+    const img=(src&&src.indexOf(ph)<0)?`<img class="pm-card__img" src="${esc(src)}" alt="" loading="lazy" onerror="this.remove()">`:'';
+    return `<article class="pm-card">
+      <div class="pm-card__media">${pmArtHtml(x)}${img}</div>
+      <div class="pm-card__body">
+        <div class="pm-card__title">${esc(x.title)}</div>
+        <div class="pm-card__meta"><span class="pm-card__tag">${meMallType(x.item_type)}</span>${x.stock!=null?`<span class="pm-card__stock">剩 ${Number(x.stock)}</span>`:''}</div>
+        ${x.description?`<div class="pm-card__desc">${esc(x.description)}</div>`:''}
+        <div class="pm-card__foot">
+          <span class="pm-card__pts"><b>${Number(x.points_cost||0)}</b> 积分</span>
+          ${off?'<span class="pm-card__off">已兑完</span>':`<button class="pm-card__btn" type="button" ${can?'':'disabled'} onclick="meRedeemMall(${Number(x.id)},'${esc(x.title)}',${Number(x.points_cost||0)})">兑换</button>`}
+        </div>
       </div>
-    </div>`;
-  }).join(''):empty('该分类暂无可兑换商品','换一个分类看看');
-  const mineHtml=mine.length?`<div class="me-sec-t">我的兑换</div>`+mine.map(r=>`<div class="me-mall__rec">
+    </article>`;
+  }).join('')+`</div>`:empty('该分类暂无可兑换商品','换一个分类看看');
+  const recBody=mine.length?mine.map(r=>`<div class="me-mall__rec">
       <div class="me-mall__rec__hd"><b>${esc(r.item_title)}</b>${meBadge(r.status==='verified'?'已核销':'待核销',r.status==='verified'?'ok':'warn')}</div>
       <div class="me-mall__rec__sub">${meMallType(r.item_type)} · ${r.points_spent} 积分 · ${esc(String(r.created_at||'').slice(0,10))}${r.code?` · 核销码 <b>${esc(r.code)}</b>`:' · 券已发到「优惠券」'}</div>
-    </div>`).join(''):'';
-  return head+chips+`<div class="me-mall__list">${list}</div>`+mineHtml;
+    </div>`).join(''):'<div class="pm-rec__none">还没有兑换记录，挑一件喜欢的换吧</div>';
+  const records=`<div class="pm-rec" id="pmRecords"><div class="me-sec-t">我的兑换</div>${recBody}</div>`;
+  return head+tabs+grid+records;
 }
 function meMallFilter(k){ window._mallFilter=k; const box=document.getElementById('meMallBody'); if(box&&window._mallData)box.innerHTML=meMallPaint(window._mallData); }
+function meMallGoRecords(){ const e=document.getElementById('pmRecords'); if(e&&e.scrollIntoView)e.scrollIntoView({behavior:'smooth',block:'start'}); }
+
+/* ── 积分明细（#878）：只读本人本俱乐部活动积分流水 ─────────────────────────
+   后端 /api/public/clubs/{club}/points-ledger 只下发 type/amount/source_type/
+   note/created_at 五列，手机号、内部备注等后台字段一律不出俱乐部边界。 */
+SUB_ME.pointlogs=function(){ return `<div id="pmLogsBody"><div class="me-empty">正在加载积分明细…</div></div>`; };
+SUB_ME_AFTER.pointlogs=async function(){
+  const box=document.getElementById('pmLogsBody'); if(!box)return;
+  try{
+    const [d,w]=await Promise.all([
+      api(`/api/public/clubs/${CLUB}/points-ledger?user_id=${USER}`),
+      api(`/api/public/users/${USER}/wallet`).catch(()=>null)
+    ]);
+    const its=(d&&d.items)||[];
+    const bal=(w&&w.clubPoints!=null)?w.clubPoints:((window._mallData&&window._mallData.wallet&&window._mallData.wallet.clubPoints)||0);
+    const CN={earn:'报名 / 消费获得',redeem:'积分兑换',spend:'积分抵扣',adjust:'后台调整',
+              refund_redeem_return:'退款返还',refund_earn_reverse:'退款冲回',after_sales_marker:'售后冲正'};
+    const rowsHtml=its.length?`<div class="pm-log">`+its.map(r=>{
+      const amt=Number(r.amount||0); const plus=amt>=0;
+      const label=CN[r.type]||String(r.note||'积分变动');
+      return `<div class="pm-log__row">
+        <div class="pm-log__tx"><b>${esc(label)}</b><span>${esc(String(r.created_at||'').slice(0,16))}</span></div>
+        <b class="pm-log__amt${plus?' is-plus':''}">${plus?'+':''}${amt}</b>
+      </div>`;
+    }).join('')+`</div>`:empty('还没有积分流水','报名付款后就能看到积分入账');
+    box.innerHTML=`<div class="pm-log__sum"><span>当前可用积分</span><b>${bal}</b></div>`+rowsHtml;
+  }catch(e){ box.innerHTML=empty('积分明细加载失败',(e&&e.message)||'请稍后再试'); }
+};
 async function meRedeemMall(id,title,points){
   if(!(await showConfirm({title:'确认兑换',message:`用 ${points} 活动积分兑换「${title}」？积分一旦兑换不可退回。`})))return;
   try{
@@ -1443,7 +1514,7 @@ window.pushMe=pushMe; window.popMe=popMe; window.meSetTab=meSetTab;
 window.meAddAddr=meAddAddr; window.meEditAddr=meEditAddr; window.meDelAddr=meDelAddr; window.meDefaultAddr=meDefaultAddr;
 window.meLogout=meLogout;
 /* 积分商城 / 购买会员 / 拉新邀请（inline onclick 引用，必须挂 window —— me.js 整体是 IIFE，裸 function 不上 window） */
-window.meBuyTier=meBuyTier; window.meRedeemMall=meRedeemMall; window.meMallFilter=meMallFilter;
+window.meBuyTier=meBuyTier; window.meRedeemMall=meRedeemMall; window.meMallFilter=meMallFilter; window.meMallGoRecords=meMallGoRecords;
 window.meClaimByCode=meClaimByCode; window.meFillInviteCode=meFillInviteCode;
 /* BUG-CUX-001（2026-11-08）：下面 4 个函数被模板字符串的 inline onclick 调用，
    me.js 整体是 IIFE，裸 function 不会挂到 window —— 漏导出会让「签到码放大 /
