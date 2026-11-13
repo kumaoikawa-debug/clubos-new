@@ -61,6 +61,26 @@ from clubos_domain import external_fulfillment
 ROOT=Path(__file__).resolve().parent
 STATIC=ROOT/'static'
 UPLOAD=STATIC/'uploads'
+
+def purge_static_secrets():
+    """Defense-in-depth: remove any database/secret files from static/ so they can never be
+    anonymously downloaded (closes server-side db-snapshot leaks). Runs once at startup."""
+    import fnmatch
+    SECRET_PATTERNS=('*.db','*.db-journal','*.db-wal','*.db-shm','*.sqlite','*.sqlite3',
+                     '*.env','*.pem','*.key','*.p12','*.pfx','*.crt')
+    removed=0
+    try:
+        for p in STATIC.rglob('*'):
+            if p.is_file() and any(fnmatch.fnmatch(p.name,pat) for pat in SECRET_PATTERNS):
+                try:
+                    p.unlink(); removed+=1
+                except OSError:
+                    pass
+    except Exception as e:
+        logger.warning('purge_static_secrets: %s',e)
+    if removed:
+        logger.warning('purge_static_secrets removed %d secret file(s) from static/',removed)
+
 from security_v025 import (IS_PROD, sanitize_public_document, validate_production_config, install_tables, authorize_request,
     issue_session, get_identity, revoke_session, record_audit, hash_password)
 validate_production_config()
@@ -69,6 +89,7 @@ app=FastAPI(title='ClubOS NEW',version='0.25.0-production-hardening',
             openapi_url=None if IS_PROD else '/openapi.json')
 init_db()
 install_tables()
+purge_static_secrets()
 if IS_PROD:
     with conn() as _c:
         if _c.execute("SELECT COUNT(*) FROM payment_accounts WHERE enabled=1 AND provider='local'").fetchone()[0]:
