@@ -40,6 +40,18 @@ import httpx
 
 ORIGIN = os.environ.get('PEAKTRACE_ORIGIN',
                         'https://peaktrace-h5.app.workbuddy.host').rstrip('/')
+# 2026-11-13：托管网关对所有 app 启用 sharecode 门禁（不带码一律 403「链接不完整」页）。
+# 服务器到服务器的 B2B 调用必须把上游 app 的 sharecode 拼到 URL 上才能过网关；
+# 业务 token 仍走 JSON body 不受影响。码可由环境变量覆盖（上游换码时无需改代码）。
+UPSTREAM_SHARECODE = os.environ.get('PEAKTRACE_SHARECODE', 'Q7CFCS2XP7').strip()
+
+
+def _upstream_url(base: str, path: str) -> str:
+    """构造过网关的上游 URL：path + ?sharecode=...（已带 query 时用 & 追加）。"""
+    url = base + path
+    if UPSTREAM_SHARECODE:
+        url += ('&' if '?' in url else '?') + 'sharecode=' + UPSTREAM_SHARECODE
+    return url
 PROVIDER = 'PEAKTRACE'
 
 PUSH_PENDING = 'pending'
@@ -247,7 +259,7 @@ def push_orders(records: list[dict], *, origin: str | None = None, timeout: floa
             payload = dict(rec['_payload'])
             payload['token'] = _token()
             try:
-                r = client.post(base + '/api/b2b/orders', json=payload)
+                r = client.post(_upstream_url(base, '/api/b2b/orders'), json=payload)
                 if r.status_code == 200:
                     d = r.json() if isinstance(r.json(), dict) else {}
                     results.append({'id': rec['id'], 'ok': True,
@@ -309,7 +321,7 @@ def pull_orders(records: list[dict], *, origin: str | None = None, timeout: floa
     with httpx.Client(timeout=timeout) as client:
         for rec in records:
             try:
-                r = client.post(base + '/api/b2b/orders/get',
+                r = client.post(_upstream_url(base, '/api/b2b/orders/get'),
                                 json={'token': _token(),
                                       'clubosOrderId': _ref_for_rec(rec),
                                       'clubosOrderNumericId': int(rec['order_id'])})
@@ -563,7 +575,7 @@ def push_return(payload: dict, *, origin: str | None = None, timeout: float = 10
     base = (origin or ORIGIN).rstrip('/')
     try:
         with httpx.Client(timeout=timeout) as client:
-            r = client.post(base + AFTER_SALES_PATH, json=payload)
+            r = client.post(_upstream_url(base, AFTER_SALES_PATH), json=payload)
             if r.status_code == 200:
                 data = r.json()
                 return {'ok': True, 'response': data if isinstance(data, dict) else {}}
