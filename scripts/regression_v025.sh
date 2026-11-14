@@ -212,3 +212,9 @@ python tests/test_marketing_p1_regression.py
 # 三端导航静态护栏：断言已从「写死 10/13 个子页」改为「核心导航必须存在 + 视图容器齐全」，
 # 与当前 24/23 个子页一致；顺带 node --check 全量 static/ux/*.js。
 python tests/ux_smoke_v025.py
+
+# ── 2026-11-14 · 第 3 批 V10/V11/V12 静态护栏 ────────────────────────────────
+# P2-6 club 端 30+ 个 inline handler 的显式导出；P2-5 「改动文件清单 ↔ ?v=」自动比对
+# （以 origin/main 基线为准，改码不 bump 会直接红）；弹层单例、字段联动、积分卡 CTA、
+# 未接入类型灰显、sticky 创建条等形态断言。纯静态，不建库、不碰真库。
+python tests/club_static_guard.py

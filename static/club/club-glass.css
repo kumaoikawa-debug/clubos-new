@@ -189,3 +189,46 @@ body.admin-workspace{background:linear-gradient(125deg,#d4ebdd 0%,#c7e6da 26%,#d
   .admin-workspace .panel-title{flex-wrap:wrap;gap:8px}
   .admin-workspace .ux-dialog{max-height:94dvh}
 }
+
+/* ===== P2-7（2026-11-14）俱乐部营销页：二级 tab / sticky 创建条 / 能力地图 =====
+   目标：390px 视口下不再需要长滚动找「＋创建」，且提交按钮始终在视口内可点。 */
+.mkt-subtabs{display:flex;gap:6px;margin:2px 0 16px;padding:5px;border-radius:12px;
+  background:#eef4ef;border:1px solid #dce9df;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.mkt-subtabs::-webkit-scrollbar{display:none}
+.mkt-subtab{flex:1 0 auto;min-width:82px;min-height:38px;padding:8px 14px;border:0;border-radius:9px;
+  background:transparent;color:#4c6255;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap}
+.mkt-subtab.on{background:#fff;color:#1f6b4f;box-shadow:0 2px 8px rgba(20,54,38,.12)}
+.mkt-subtab:focus-visible{outline:2px solid #2f7a54;outline-offset:-2px}
+.mkt-pane{min-width:0}
+.mkt-pane>*{min-width:0;max-width:100%}
+.mkt-scroll{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.mkt-scroll-hint{display:none;margin:0 0 6px;font-size:11px;color:#8a998f}
+@media(max-width:650px){.mkt-scroll-hint{display:block}}
+.mkt-createbar{position:sticky;bottom:0;z-index:6;display:flex;align-items:center;gap:10px;
+  margin-top:16px;padding:10px 12px;border:1px solid #d8e8dc;border-radius:14px;
+  background:rgba(255,255,255,.96);box-shadow:0 -6px 22px rgba(15,36,26,.09);backdrop-filter:blur(6px)}
+.mkt-createbar__label{font-size:12px;font-weight:800;color:#4c6255;white-space:nowrap}
+.mkt-createbar__acts{display:flex;flex:1;gap:8px;flex-wrap:wrap;justify-content:flex-end;min-width:0}
+.mkt-createbar .btn{min-height:38px;white-space:nowrap}
+.mkt-capmap{margin-top:16px;padding:14px 16px;border:1px solid #dfe9e1;border-radius:14px;background:#fbfdfa}
+.mkt-capmap__t{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px;margin-bottom:10px}
+.mkt-capmap__t b{font-size:14px;color:#234a37}
+.mkt-capmap__t span{font-size:11px;color:#7c8d82;line-height:1.5}
+.mkt-capmap__grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.mkt-cap{padding:9px 11px;border:1px solid #cfe6d7;border-radius:10px;background:#eff8f1;
+  display:grid;gap:2px;min-width:0}
+.mkt-cap b{font-size:12.5px;color:#1f6b4f}
+.mkt-cap small{font-size:10px;letter-spacing:.04em;color:#6e8c79}
+.mkt-cap span{font-size:11px;color:#4c6d59}
+.mkt-cap.is-off{background:#f2f4f2;border-color:#e2e7e2;opacity:.72}
+.mkt-cap.is-off b,.mkt-cap.is-off small,.mkt-cap.is-off span{color:#8d9790}
+.mkt-cap.is-off span{font-weight:700}
+.mkt-capmap__hint{margin-top:10px;font-size:11.5px;color:#7c8d82;line-height:1.6}
+@media(max-width:650px){
+  .mkt-subtabs{margin:0 -2px 12px}
+  .mkt-createbar{flex-direction:column;align-items:stretch;gap:6px;padding:9px 10px}
+  .mkt-createbar__acts{justify-content:stretch}
+  .mkt-createbar .btn{flex:1 1 44%;min-width:0;font-size:12px;padding:8px 6px}
+  .mkt-capmap__grid{grid-template-columns:repeat(auto-fill,minmax(112px,1fr))}
+  .mkt-capmap{padding:11px 12px}
+}

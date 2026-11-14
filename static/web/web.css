@@ -2106,6 +2106,16 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 .web-shell .wme-point__txt{min-width:0}
 .web-shell .wme-point__txt b{display:block;font-size:20px;font-weight:800;line-height:1.1;color:var(--w-ink);font-variant-numeric:tabular-nums}
 .web-shell .wme-point__txt span{display:block;margin-top:2px;font-size:11px;color:var(--w-muted)}
+/* P2-3：积分卡是「积分 → 券」的唯一入口，必须看起来能点。胶囊 CTA + hover/active/focus 反馈，
+   390px 下也不换行（white-space:nowrap + 字号收紧），避免把白卡撑出横向溢出。 */
+.web-shell .wme-point--cta{cursor:pointer;border-radius:14px;transition:background .16s ease,transform .16s ease}
+.web-shell .wme-point--cta:hover{background:var(--w-brand-soft)}
+.web-shell .wme-point--cta:active{transform:scale(.98)}
+.web-shell .wme-point--cta:focus-visible{outline:2px solid var(--w-brand);outline-offset:-2px}
+.web-shell .wme-point__cta{display:inline-flex!important;align-items:center;gap:2px;margin-top:4px!important;
+  padding:3px 8px;border-radius:999px;background:var(--w-brand-soft);color:var(--w-brand)!important;
+  font-size:11px;font-weight:700;white-space:nowrap;line-height:1.3}
+.web-shell .wme-point--cta:hover .wme-point__cta{background:var(--w-brand);color:#fff!important}
 
 /* 四宫格 */
 .web-shell .wme-quad{

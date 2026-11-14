@@ -2,7 +2,7 @@
 <!-- 内联 SVG 图标：省掉 /favicon.ico 的 404（浏览器默认会去请求它）。
      用山形描边，和底部导航的图标同一套笔画。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121714'/%3E%3Cpath d='M3.5 23.5 12 11l4.6 7.6 3-4.8 8.9 9.7z' fill='none' stroke='%237fd0a4' stroke-width='2.1' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/shared.css?v=20261111ab"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261111z"><link rel="stylesheet" href="/static/ux/coupon-faces.css?v=20261024c"><link rel="stylesheet" href="/static/web/web.css?v=20261113c"><link rel="stylesheet" href="/static/web/camp.css?v=20261112f"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
+<link rel="stylesheet" href="/static/shared.css?v=20261111ab"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261111z"><link rel="stylesheet" href="/static/ux/coupon-faces.css?v=20261024c"><link rel="stylesheet" href="/static/web/web.css?v=20261114h"><link rel="stylesheet" href="/static/web/camp.css?v=20261112f"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
 
 <!-- C 端骨架：5 个导航视图（首页 / 活动 / 装备 / 户外能力 / 我的）
      + 1 个不导航的隐藏视图 #wleaders（领队团队专区，2026-10-28 按要求从首页导航移除）。
@@ -169,10 +169,14 @@
       </div>
 
       <div class="wme-points">
-        <!-- 2026-10-26：点「可用积分」直接进入积分商城（二级页），兑换优惠券/活动/服务/实物 -->
-        <div class="wme-point" role="button" tabindex="0" style="cursor:pointer" onclick="pushMe('pointsmall')">
+        <!-- P2-3：#860 把券与积分解耦后，积分商城是唯一「用积分换券」的入口。
+             旧版只有「可用积分 ›」一行小字，看不出能点。改成明确的 CTA + 可点态视觉，
+             并补键盘可达（role=button 的 Enter / Space）。 -->
+        <div class="wme-point wme-point--cta" role="button" tabindex="0" aria-label="去积分商城兑换"
+             onclick="pushMe('pointsmall')"
+             onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();pushMe('pointsmall')}">
           <span class="wme-point__ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.6v4.8l3.2 2"/></svg></span>
-          <div class="wme-point__txt"><b id="meClubPts">0</b><span>可用积分 ›</span></div>
+          <div class="wme-point__txt"><b id="meClubPts">0</b><span class="wme-point__cta">去积分商城兑换 ›</span></div>
         </div>
         <div class="wme-point">
           <span class="wme-point__ic wme-point__ic--gear"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.6 8.4h12.8l-1.1 11H6.7z"/><path d="M8.8 8.4V6.8a3.2 3.2 0 0 1 6.4 0v1.6"/></svg></span>
@@ -234,13 +238,13 @@
   </nav>
 </div>
 
-<script src="/static/shared.js?v=20261113a"></script>
+<script src="/static/shared.js?v=20261114h"></script>
 <script src="/static/ux/clubos-cities.js?v=20261023a"></script>
-<script src="/static/ux/coupon-faces.js?v=20261027c"></script><script src="/static/web/web.js?v=20261112b"></script>
+<script src="/static/ux/coupon-faces.js?v=20261027c"></script><script src="/static/web/web.js?v=20261114h"></script>
 <script src="/static/web/address-sheet.js?v=20261109a"></script>
 <script src="/static/web/web-biz.js?v=20261113b"></script>
-<script src="/static/web/me.js?v=20261113c&rev=20261113c"></script>
-<script src="/static/ux/clubos-ux.js?v=20261111z"></script>
+<script src="/static/web/me.js?v=20261114h&rev=20261114h"></script>
+<script src="/static/ux/clubos-ux.js?v=20261114h"></script>
 <script src="/static/ux/workflows-web.js?v=20261027c"></script>
 <script src="/static/ux/qr-local.js?v=20261014a"></script>
 <script src="/static/ux/experience-core.js?v=20261014a"></script>

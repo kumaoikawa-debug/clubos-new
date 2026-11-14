@@ -4242,3 +4242,99 @@ openActivity=async function(id){
   }catch(e){}
   return r;
 };
+/* ===== P2-6（2026-11-14）club 端 inline handler 显式导出护栏 =====
+   index.html 里有 30+ 处 onclick="xxx(...)"，其中 19 个此前只靠「顶层 function 隐式全局」
+   生效（11 个营销函数是 workflows-club.js 里显式 window.xxx= 的，不受影响）。
+   一旦 club.js 为了模块化被包进 IIFE，这些入口会整片静默失效 —— 点了没反应、控制台
+   才看得到 ReferenceError。这里统一显式挂 window，并由 tests/club_static_guard.py
+   静态巡检：凡被 inline 引用的函数都必须能找到 window.xxx=。 */
+Object.assign(window,{
+  setOrderRange,inviteTab,infoSetKind,infoSetStatus,mpStaffTab,createActivityManual,
+  applyOrderRange,lpToggleForm,addBizItem,addHomeItem,loadCredits,loadPayAccount,
+  loadClubAttention,addActCat,recalcMembership,loadPointsPolicy,bulkEditPoints,
+  loadInfoCenter,infoSearchInput
+});
+
+/* ===== P2-7（2026-11-14）俱乐部营销页信息架构 =====
+   一页塞了「券中心三 tab + 消费送券 + 营销活动 + 发放记录 + 邀请奖励」，
+   390px 要长滚动才找得到创建入口。这里不改任何后端契约与 DOM id，
+   只在运行时把现有 4 个卡收进二级 tab，并给一条 sticky 创建条：
+     · 所有列表容器 id 原样保留，loadMembers() 照旧按 id 写入；
+     · 创建条按钮直接调已有的 window.* 函数，不新增 inline onclick；
+     · 能力地图把 CAMPAIGN_TYPES 里 5 个仅枚举占位的类型灰显标「未接入」。 */
+const MKT_CAP=[
+  ['首单立减','NEWCOMER',true,'新顾客首单专享'],['限时折扣','TIME_LIMIT',true,'北京时间生效时段'],
+  ['满额买赠','BUY_GIFT',true,'成交自动发赠品'],['邀请有礼','INVITE',true,'被邀请好友首单'],
+  ['拼团','GROUP',false,'未接入'],['每日签到','CHECKIN',false,'未接入'],['幸运抽奖','LOTTERY',false,'未接入'],
+  ['集章兑换','STAMP',false,'未接入'],['礼品卡','GIFT_CARD',false,'未接入']
+];
+const MKT_GROUPS=[
+  {key:'coupon',label:'券中心',create:[['addThresholdCoupon','＋ 满减券',[]],['addDiscountCoupon','＋ 折扣券',[]],['addRedeemCoupon','＋ 兑换券',[]]]},
+  {key:'gift',label:'消费送券',create:[['addGiftRule','＋ 送券规则',[]]]},
+  {key:'campaign',label:'营销活动',create:[['addPriceCampaign','＋ 立减 / 限时',[]],['addBuyGift','＋ 买赠 / 邀请',[]],['mktCreateSample','一键示例活动',[]]]},
+  {key:'invite',label:'邀请奖励',create:[['inviteRewardEdit','编辑邀请设置',['basic']]]}
+];
+function initMarketingTabs(){
+  const view=document.getElementById('members-benefits');
+  if(!view||view.dataset.mktReady==='1')return;
+  const head=view.querySelector('.panel-title');
+  const kids=[...view.children].filter(x=>x!==head);
+  if(!head||kids.length<4)return;               /* 结构变了就整体跳过，不误伤页面 */
+  view.dataset.mktReady='1';
+  const tabs=document.createElement('div');
+  tabs.className='mkt-subtabs';tabs.id='mktSubTabs';tabs.setAttribute('role','tablist');
+  tabs.setAttribute('aria-label','俱乐部营销二级导航');
+  tabs.innerHTML=MKT_GROUPS.map((g,i)=>'<button type="button" role="tab" class="mkt-subtab'+(i?'':' on')
+    +'" data-mkt="'+g.key+'" aria-selected="'+(i?'false':'true')+'">'+g.label+'</button>').join('');
+  head.after(tabs);
+  tabs.querySelectorAll('.mkt-subtab').forEach(b=>b.addEventListener('click',()=>window.mktTab(b.dataset.mkt)));
+  MKT_GROUPS.forEach((g,i)=>{
+    const pane=document.createElement('div');
+    pane.className='mkt-pane';pane.id='mktPane-'+g.key;pane.dataset.mkt=g.key;
+    if(i)pane.style.display='none';
+    pane.appendChild(kids[i]);
+    view.appendChild(pane);
+  });
+  /* 发放记录是宽表：让它在自己内部横滑，别把整页撑出 390px 的横向溢出。 */
+  const gl=view.querySelector('#campaignGrantLog');
+  if(gl){gl.classList.add('mkt-scroll');
+    const hint=document.createElement('div');hint.className='mkt-scroll-hint';
+    hint.textContent='发放记录表格较宽，可左右滑动查看 →';gl.before(hint)}
+  const bar=document.createElement('div');
+  bar.className='mkt-createbar';bar.id='mktCreateBar';bar.setAttribute('aria-label','创建营销配置');
+  view.appendChild(bar);
+  const map=document.createElement('div');
+  map.className='mkt-capmap';map.id='mktCapMap';
+  map.innerHTML='<div class="mkt-capmap__t"><b>活动能力地图</b><span>统一营销引擎 CAMPAIGN_TYPES · 灰显项仅枚举占位，尚未接入报价 / 发放链路</span></div>'
+    +'<div class="mkt-capmap__grid">'+MKT_CAP.map(([label,code,on,note])=>
+      '<div class="mkt-cap'+(on?'':' is-off')+'"'+(on?'':' aria-disabled="true"')+'><b>'+label+'</b><small>'+code+'</small><span>'+(on?note:'未接入')+'</span></div>').join('')
+    +'</div><div class="mkt-capmap__hint">还没配置过？用底部「一键示例活动」先建一个「新客首单立减 30 元」，随时可停用或删除。</div>';
+  view.appendChild(map);
+  const paintBar=key=>{
+    const g=MKT_GROUPS.find(x=>x.key===key)||MKT_GROUPS[0];
+    bar.innerHTML='<span class="mkt-createbar__label">'+g.label+'</span><div class="mkt-createbar__acts">'
+      +g.create.map(([fn,label],i)=>'<button type="button" class="btn secondary" data-mkt-create="'+i+'">'+label+'</button>').join('')+'</div>';
+    bar.querySelectorAll('[data-mkt-create]').forEach(b=>b.addEventListener('click',()=>{
+      const item=g.create[Number(b.dataset.mktCreate)];
+      const fn=window[item[0]];if(typeof fn==='function')fn(...(item[2]||[]));
+    }));
+  };
+  window.mktTab=function(key){
+    const g=MKT_GROUPS.find(x=>x.key===key)||MKT_GROUPS[0];
+    view.querySelectorAll('.mkt-pane').forEach(p=>{p.style.display=p.dataset.mkt===g.key?'':'none'});
+    tabs.querySelectorAll('.mkt-subtab').forEach(b=>{
+      const on=b.dataset.mkt===g.key;b.classList.toggle('on',on);b.setAttribute('aria-selected',on?'true':'false');
+    });
+    paintBar(g.key);view.dataset.mktTab=g.key;
+  };
+  window.mktTab(MKT_GROUPS[0].key);
+}
+/* 空态引导（UX 建议）：第一次进营销页不用先研究表单，一键落一个可停用/可删的示例活动。 */
+window.mktCreateSample=async()=>uxTask(async()=>{
+  if(!await uxConfirm({title:'创建示例活动',message:'将创建一个「新客首单立减 30 元」的启用活动，仅对本俱乐部新顾客首单生效，C 端结算明细会显示这笔优惠。创建后可随时停用或删除。',confirmText:'创建示例'}))return;
+  await api('/api/club/'+CLUB+'/campaigns',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({type:'NEWCOMER',title:'示例 · 新客首单立减 30 元',status:'ACTIVE',schedule:{},scope:{},rules:{mode:'fixed',amount:30}})});
+  toast('示例活动已创建');if(typeof loadMembers==='function')loadMembers();
+});
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initMarketingTabs);
+else initMarketingTabs();

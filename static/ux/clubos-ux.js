@@ -51,13 +51,18 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
  function enhanceWeb(){if(page!=='web')return;document.querySelectorAll('.web-nav button').forEach(b=>b.setAttribute('aria-label',b.textContent.trim()));const heading=document.querySelector('#wactivities .web-card h2');if(heading)heading.textContent='下一场冒险，从这里开始。';const webTop=document.querySelector('.web-top');webTop?.setAttribute('role','banner');document.querySelector('.web-nav')?.setAttribute('aria-label','用户主要导航');}
  document.addEventListener('DOMContentLoaded',()=>{enableNavigation();enhanceWeb()});
  // Validated, accessible business form. Data is sent by existing authenticated api() only.
- window.uxForm=function({title,subtitle='',fields=[],hint='',submitText='确认',wide=false,steps='',danger=false}){return new Promise(resolve=>{
-  let settled=false;const teardown=()=>{el.remove();document.body.style.overflow=before;priorFocus?.focus?.()};
+ window.uxForm=function({title,subtitle='',fields=[],hint='',submitText='确认',wide=false,steps='',danger=false,nested=null}={}){return new Promise(resolve=>{
+  let settled=false,closed=false,session=null;
+  /* P2-1：由弹层内部触发的算嵌套（详情里点「编辑」），页面按钮触发的算根弹层。 */
+  const isNested=(nested===null)?uxOverlayNested():!!nested;
+  const teardown=()=>{if(closed)return;closed=true;session&&session.release();el.remove();uxUnregisterOverlay(el)};
   /* hold=true 用于「提交」路径：弹窗不再同帧关闭，而是保留到紧随其后的写请求落定（与 shared.js 的
      showForm/showConfirm 同一套 _holdDialogUntilIdle 语义），用户才看得到"已提交"的反馈。 */
-  const finish=(v,hold)=>{if(settled)return;settled=true;document.removeEventListener('keydown',key);if(hold){_holdDialogUntilIdle(el,el.querySelector('.ux-submit'),teardown)}else{teardown()}resolve(v)};
-  const priorFocus=document.activeElement;const before=document.body.style.overflow;document.body.style.overflow='hidden';const el=document.createElement('div');el.className='ux-overlay';el.innerHTML='<div class="ux-dialog'+(wide?' wide':'')+'" role="dialog" aria-modal="true" aria-labelledby="uxDialogTitle"><div class="ux-dialog-head"><div>'+(steps?'<div class="ux-wizard-steps"><b>'+esc(steps)+'</b></div>':'<div class="eyebrow">CLUBOS / BUSINESS ACTION</div>')+'<h2 id="uxDialogTitle">'+esc(title)+'</h2>'+(subtitle?'<p>'+esc(subtitle)+'</p>':'')+'</div><button class="x" type="button" aria-label="关闭表单">×</button></div><form novalidate><div class="ux-dialog-body">'+(hint?'<div class="ux-help">'+esc(hint)+'</div>':'')+'<div class="ux-fields-2" id="uxFields"></div><div class="ux-inline-error" role="alert" hidden></div></div><div class="ux-dialog-foot"><button type="button" class="btn ghost ux-cancel">取消</button><button type="submit" class="btn ux-submit'+(danger?' danger':'')+'">'+esc(submitText)+'</button></div></form></div>';
-  const grid=el.querySelector('#uxFields');fields.forEach((f,i)=>{const box=document.createElement('div');box.className='ux-field';if(f.full)box.style.gridColumn='1/-1';const id='uxf'+i;const label=document.createElement('label');label.htmlFor=id;label.textContent=f.label||f.name;if(f.required){const em=document.createElement('em');em.textContent=' *';label.appendChild(em)}box.appendChild(label);let inp;
+  const finish=(v,hold)=>{if(settled)return;settled=true;if(hold){_holdDialogUntilIdle(el,el.querySelector('.ux-submit'),teardown)}else{teardown()}resolve(v)};
+  /* P2-1：单例替换 / 嵌套层被顶掉时走这里；已提交（settled）时只拆 DOM，不重复 resolve。 */
+  const forceClose=()=>{if(!settled){settled=true;resolve(null)};teardown()};
+  const el=document.createElement('div');el.className='ux-overlay';el.uxClose=forceClose;el.innerHTML='<div class="ux-dialog'+(wide?' wide':'')+'" role="dialog" aria-modal="true" aria-labelledby="uxDialogTitle"><div class="ux-dialog-head"><div>'+(steps?'<div class="ux-wizard-steps"><b>'+esc(steps)+'</b></div>':'<div class="eyebrow">CLUBOS / BUSINESS ACTION</div>')+'<h2 id="uxDialogTitle">'+esc(title)+'</h2>'+(subtitle?'<p>'+esc(subtitle)+'</p>':'')+'</div><button class="x" type="button" aria-label="关闭表单">×</button></div><form novalidate><div class="ux-dialog-body">'+(hint?'<div class="ux-help">'+esc(hint)+'</div>':'')+'<div class="ux-fields-2" id="uxFields"></div><div class="ux-inline-error" role="alert" hidden></div></div><div class="ux-dialog-foot"><button type="button" class="btn ghost ux-cancel">取消</button><button type="submit" class="btn ux-submit'+(danger?' danger':'')+'">'+esc(submitText)+'</button></div></form></div>';
+  const grid=el.querySelector('#uxFields');fields.forEach((f,i)=>{const box=document.createElement('div');box.className='ux-field';f._box=box;if(f.full)box.style.gridColumn='1/-1';const id='uxf'+i;const label=document.createElement('label');label.htmlFor=id;label.textContent=f.label||f.name;if(f.required){const em=document.createElement('em');em.textContent=' *';label.appendChild(em)}box.appendChild(label);let inp;
   if(f.type==='select'){
     /* #830：下拉改为直接点选。控件内保留同名 hidden input 承接取值，
        form.elements.namedItem(f.name) 的读法一行都不用改。 */
@@ -87,13 +92,51 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
   if(f.type!=='datetime'&&f.type!=='select'){
     inp.id=id;inp.name=f.name;if(f.value!==undefined&&f.value!==null)inp.value=f.value;if(f.placeholder)inp.placeholder=f.placeholder;if(f.required)inp.required=true;if(f.maxLength)inp.maxLength=f.maxLength;if(f.readonly)inp.readOnly=true;box.appendChild(inp);
   }
-  if(f.help){const small=document.createElement('small');small.textContent=f.help;box.appendChild(small)}grid.appendChild(box)});
+  if(f.help||f.helpFn){const small=document.createElement('small');small.textContent=f.help||'';f._helpEl=small;box.appendChild(small)}grid.appendChild(box)});
   const form=el.querySelector('form'),error=el.querySelector('.ux-inline-error');
+  /* ===== P2-2 / P2-4：字段联动（条件显隐、说明随选、二级对象级联）=====
+     f.when      → 函数(all) 或 {field:'mode',in:['fixed']}；不满足时整行隐藏且不参与校验
+     f.helpFn    → 函数(all)，返回当前选项的一句适用说明（写在字段下方 <small>）
+     f.optionsFn → 函数(all)，返回新的 options；选项签名变化时才重绘控件，
+                   避免每敲一个字就把用户正在操作的 select 重建一遍
+     三种能力共用同一份 readAll() 快照；uxChoiceSet 会补发 input/change，联动天然生效。 */
+  function readAll(){const out={};for(const f of fields){
+    if(f.type==='datetime'){out[f.name]=f._el?f._el._collect():'';continue}
+    const n=form.elements.namedItem(f.name);out[f.name]=n?String(n.value):'';
+  }return out}
+  function fieldVisible(f,all){
+    if(!f.when)return true;
+    if(typeof f.when==='function')return !!f.when(all);
+    const v=String(all[f.when.field]??'');
+    return (f.when.in||[]).map(String).indexOf(v)>=0;
+  }
+  function repaintOptions(f,all){
+    if(!f.optionsFn||!f._el)return;
+    const opts=f.optionsFn(all)||[];
+    const sig=JSON.stringify(opts.map(o=>[String(o.value),String(o.label??o.value)]));
+    if(f._optSig===sig)return;
+    f._optSig=sig;
+    const host=f._el,old=host.querySelector('input,select');
+    const keep=old?String(old.value):'',name=old?old.name:f.name,id=old?old.id:('uxfo_'+f.name);
+    host.innerHTML=uxChoiceHtml({id,name,value:keep,options:opts});
+    const node=host.querySelector('input,select');
+    host._collect=()=>node?node.value:'';
+  }
+  function syncFields(){
+    const all=readAll();
+    for(const f of fields){
+      if(f.when&&f._box){const vis=fieldVisible(f,all);f._hidden=!vis;f._box.hidden=!vis;f._box.style.display=vis?'':'none'}
+      if(f._helpEl&&f.helpFn)f._helpEl.textContent=String(f.helpFn(all)||'');
+      if(f.optionsFn)repaintOptions(f,all);
+    }
+  }
+  syncFields();
   const invalid=(node,msg)=>{error.textContent=msg;error.hidden=false;node.setAttribute('aria-invalid','true');
     /* 点选控件的取值节点是 hidden input（不可聚焦），报错时把焦点交给对应圆点行。 */
     if(node&&node.type==='hidden'){const w=node.closest('.ux-choice');const c=w&&w.querySelector('.ux-choice__opt');if(c){c.focus();return}}
     node.focus()};
-  form.addEventListener('input',e=>{if(e.target instanceof HTMLElement)e.target.removeAttribute('aria-invalid');error.hidden=true});
+  form.addEventListener('input',e=>{if(e.target instanceof HTMLElement)e.target.removeAttribute('aria-invalid');error.hidden=true;syncFields()});
+  form.addEventListener('change',syncFields);
   /* 单行输入里的 Enter 不再直接提交表单（2026-10-09 用户反馈「这个界面填写价格时老是跳回到详情」）。
      uxForm 用的是真实 <form>，浏览器默认行为是「任一单行 input 里按 Enter 就 submit」→ 校验通过便保存并关闭弹窗
      （团期弹窗随后还会 openActivity() 跳回活动详情）。用户填完一格敲 Enter 本意只是「接着填下一格」，不该被提交打断。
@@ -107,11 +150,18 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
     const fs=[...el.querySelectorAll('button:not([disabled]),input:not([type=hidden]):not([disabled]),textarea:not([disabled]),select:not([disabled])')].filter(n=>n.offsetParent!==null);
     const i=fs.indexOf(t);if(i>=0&&i<fs.length-1)fs[i+1].focus();
   });
-  form.onsubmit=e=>{e.preventDefault();error.hidden=true;const data={};for(const f of fields){
+  form.onsubmit=e=>{e.preventDefault();error.hidden=true;syncFields();const data={};for(const f of fields){
+   /* P2-2：被联动隐藏的字段不参与必填 / 数值 / 自定义校验，也不把旧值带进提交数据。 */
+   if(f._hidden){data[f.name]='';continue}
    if(f.type==='datetime'){const v=f._el?f._el._collect():'';if(f.required&&!v){invalid((f._el&&f._el._focus)||f._el,'请选择「'+(f.label||f.name)+'」的日期和时间');return}data[f.name]=v;continue}
    const node=form.elements.namedItem(f.name);const raw=node.value.trim();if(f.required&&!raw){invalid(node,'请填写「'+f.label+'」');return}if(f.type==='number'&&raw){const n=Number(raw);if(!Number.isFinite(n)||(f.min!==undefined&&n<Number(f.min))||(f.max!==undefined&&n>Number(f.max))||node.validity.stepMismatch){invalid(node,'「'+f.label+'」不在允许范围内或不符合数量精度');return}data[f.name]=n}else data[f.name]=raw;}
-   for(const f of fields){if(f.validate){const msg=f.validate(data[f.name],data);if(msg){invalid(form.elements.namedItem(f.name)||(f._el&&f._el._focus),msg);return}}}finish(data,true)};
-  el.querySelector('.x').onclick=()=>finish(null);el.querySelector('.ux-cancel').onclick=()=>finish(null);el.onclick=e=>{if(e.target===el)finish(null)};const key=e=>{if(e.key==='Escape'){e.stopPropagation();finish(null)}if(e.key==='Tab'){const focusables=[...el.querySelectorAll('button:not([disabled]),input:not([type=hidden]):not([disabled]),textarea:not([disabled]),select:not([disabled])')];if(!focusables.length)return;const first=focusables[0],last=focusables.at(-1);if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus()}}};document.addEventListener('keydown',key);document.body.appendChild(el);el.querySelector('input:not([type=hidden]):not([type=file]),select,textarea,.x')?.focus();
+   for(const f of fields){if(f._hidden)continue;if(f.validate){const msg=f.validate(data[f.name],data);if(msg){invalid(form.elements.namedItem(f.name)||(f._el&&f._el._focus),msg);return}}}finish(data,true)};
+  el.querySelector('.x').onclick=()=>finish(null);el.querySelector('.ux-cancel').onclick=()=>finish(null);el.onclick=e=>{if(e.target===el)finish(null)};
+  document.body.appendChild(el);
+  uxRegisterOverlay(el,isNested);
+  /* P2-1：Esc / Tab 焦点圈闭 / 背景滚动锁统一交给 uxDialogSession 的引用计数，
+     不再各自 addEventListener + 直接写 body.style.overflow（多弹层时会互相解锁）。 */
+  session=uxDialogSession(el,{onEscape:()=>finish(null),initialFocus:'input:not([type=hidden]):not([type=file]),select,textarea,.x'});
  })};
  window.uxConfirm=async function({title='确认操作',message,confirmText='确认',danger=false}){const result=await uxForm({title,hint:message,fields:[],submitText:confirmText,danger});return result!==null};
  /* e.message 可能是对象（后端 detail 是数组/对象时），原样塞给 toast 会印出

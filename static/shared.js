@@ -295,6 +295,9 @@ function modal(id,on=true){
   if(!el.hasAttribute('tabindex'))el.tabIndex=-1;
   _uxModalSessions.set(id,uxDialogSession(el,{onEscape:()=>modal(id,false),initialFocus:'textarea,input:not([type=file]),select'}));
 }
+/* P2-6：club 端 index.html 有 4 处 inline onclick="modal(...)"，此前只靠「顶层 function
+   隐式全局」生效。一旦 shared.js 被包进 IIFE 就会整片失效，显式导出并纳入静态护栏。 */
+window.modal=modal;
 /* toast 是全站最后一道文案出口（uxTask / 各 catch 都往这里塞 e.message）。
    任何非字符串进来都先归一 —— 用户截图实锤过 `[object Object][object Object]`：
    根因是 api() 把 FastAPI 的数组 detail 直接交给 new Error()。这里再兜一次，
@@ -1611,6 +1614,48 @@ function skel(sel,n=4,h=14){const el=$(sel);if(!el)return;el.innerHTML=skelRows(
 const _uxDlgStack=[];let _uxScrollLocks=0,_uxDlgSeq=0;
 const _UX_FOCUSABLE='a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
 function _uxFocusables(root){return [...root.querySelectorAll(_UX_FOCUSABLE)].filter(el=>el.getClientRects().length>0)}
+/* ===== P2-1（2026-11-14）弹层单例 =====
+   真浏览器实测：桌面连续点 5 个「＋」会叠出 15 个可见 dialog，要按 3 次 Esc 才清空。
+   根因：uxDialog（本文件）与 uxForm（clubos-ux.js）各自 append 一层 .ux-overlay，
+   谁也不知道对方存在；换一种券 / 活动类型时没先取消，就层层堆叠，用户觉得「点不动 / 关不掉」。
+   规则：
+     · 「根弹层」（由页面上的按钮触发）新开前，先关掉所有旧的根弹层；
+     · 「嵌套弹层」（由弹层内部元素触发，例如详情里点「编辑」）允许叠一层；
+     · 硬上限 3 层，杜绝极端情况下继续堆积。
+   每层都必须挂幂等的 .uxClose，关闭时同步注销注册并让自己的 Promise 以「取消」收尾。 */
+const _uxOverlays=[];const UX_OVERLAY_MAX=2;
+/* 「嵌套」只看本次 click 的同步触发源，且用微任务立刻失效：
+   · 点弹层内部的按钮（详情 → 编辑）→ 同一次 click 内开新层，算嵌套；
+   · 点页面上的另一个「＋」（含自动化 element.click()）→ 算根层，旧层被关掉；
+   · 异步链（await 之后才开弹层）→ 标记已失效，算根层，避免「提交中」的旧表单挂在背景。
+   不用 document.activeElement 判定：弹层会把焦点留在自己里面，程序化点页面按钮时会误判成嵌套。 */
+let _uxOpenFromOverlay=false;
+document.addEventListener('click',e=>{
+  const t=e.target;
+  _uxOpenFromOverlay=!!(t&&typeof t.closest==='function'
+    &&_uxOverlays.some(ov=>ov.isConnected&&ov.contains(t)));
+  Promise.resolve().then(()=>{_uxOpenFromOverlay=false});
+},true);
+function uxOverlayNested(){return _uxOpenFromOverlay}
+function uxRegisterOverlay(ov,nested){
+  if(nested)ov.dataset.uxNested='1';
+  else for(const old of [..._uxOverlays]){
+    if(old===ov||!old.isConnected)continue;
+    /* 新根层要连旧根层的嵌套子层一起清掉，否则「详情 + 编辑」的子层会孤零零浮在新层上面。 */
+    try{old.uxClose?old.uxClose():old.remove()}catch(_){try{old.remove()}catch(__){}}
+  }
+  _uxOverlays.push(ov);
+  while(_uxOverlays.length>UX_OVERLAY_MAX){
+    const oldest=_uxOverlays.shift();
+    try{oldest.uxClose?oldest.uxClose():oldest.remove()}catch(_){try{oldest.remove()}catch(__){}}
+  }
+}
+function uxUnregisterOverlay(ov){const i=_uxOverlays.indexOf(ov);if(i>=0)_uxOverlays.splice(i,1)}
+/* 给真浏览器验收用：返回当前仍挂在页面上的弹层数（V10 / V11）。 */
+window.uxOverlayCount=()=>_uxOverlays.filter(o=>o.isConnected).length;
+window.uxRegisterOverlay=uxRegisterOverlay;
+window.uxUnregisterOverlay=uxUnregisterOverlay;
+window.uxOverlayNested=uxOverlayNested;
 function uxDialogSession(root,{onEscape=null,initialFocus=null}={}){
   const prior=document.activeElement;
   const session={root};
@@ -1649,16 +1694,19 @@ function uxDialogSession(root,{onEscape=null,initialFocus=null}={}){
 window.uxDialogSession=uxDialogSession;
 
 /* ===== 原生弹窗替代层：结构化表单 / 确认弹窗 / 信息弹窗（替换 prompt/confirm/alert）===== */
-function uxDialog({title='',desc='',body='',foot='',wide=false,onClose=null,initialFocus=null}={}){
+function uxDialog({title='',desc='',body='',foot='',wide=false,onClose=null,initialFocus=null,nested=null}={}){
+  /* P2-1：默认按「触发源」判定是否嵌套；nested 可显式覆盖。 */
+  const isNested=(nested===null)?uxOverlayNested():!!nested;
   const ov=document.createElement('div');ov.className='ux-overlay';
   const titleId='uxdlg-title-'+(++_uxDlgSeq);
   ov.innerHTML=`<div class="ux-dialog${wide?' wide':''}" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1">
     <div class="ux-dialog-head"><div><h2 id="${titleId}">${esc(title)}</h2>${desc?`<p>${esc(desc)}</p>`:''}</div><button class="ux-x" type="button" aria-label="关闭">×</button></div>
     ${body?`<div class="ux-dialog-body">${body}</div>`:''}${foot?`<div class="ux-dialog-foot">${foot}</div>`:''}</div>`;
   document.body.appendChild(ov);
+  uxRegisterOverlay(ov,isNested);
   let closed=false,session=null;
-  /* uxClose 幂等：取消/×/点遮罩/写请求落定后的持有回调都走它，只会真正释放一次。 */
-  const close=()=>{if(closed)return;closed=true;session&&session.release();ov.remove();if(onClose)onClose()};
+  /* uxClose 幂等：取消/×/点遮罩/写请求落定后的持有回调/单例替换都走它，只会真正释放一次。 */
+  const close=()=>{if(closed)return;closed=true;session&&session.release();ov.remove();uxUnregisterOverlay(ov);if(onClose)onClose()};
   ov.uxClose=close;
   ov.querySelector('.ux-x').onclick=close;
   ov.onclick=e=>{if(e.target===ov)close()};

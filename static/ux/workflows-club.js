@@ -118,17 +118,25 @@ function couponAppliesOpts(){
           {value:'activity',label:'仅限活动报名'},
           {value:'camp',label:'仅限营地消费'}];
 }
-/* 具体产品：第一项恒为「不指定」。用户明确要求「经营者不选某一个产品，
-   这个券就适用于所有产品，不要设定为必选项」—— 所以这里没有 required，
-   也没有任何隐藏的兜底选中。候选全部来自俱乐部自己的真实业务对象。 */
-function couponProductOpts(o){
+/* P2-4：一级「适用范围」+ 二级「指定对象」级联。
+   旧版两组 radio 概念重叠（「仅限活动报名」旁边又出现「指定营地」等 6 项），
+   用户判断不出两者关系，还容易选中冲突组合触发校验错误。
+   现在二级只列一级范围内真实存在的对象；一级切换时选项即时重绘，
+   旧值若已不在范围内自动回落到「不指定」。第一项恒为「不指定」，
+   用户明确要求「不选某一个产品就适用于全部产品」，这里没有 required、没有兜底选中。 */
+const COUPON_APPLIES_HELP={
+  all:'通用：活动报名与营地消费都能用；下面可选任意活动 / 营地对象。',
+  activity:'仅活动报名：营位、营地商品不能用；下面只列活动与活动分类。',
+  camp:'仅营地消费：活动报名不能用；下面只列营地、营位与营地商品。'
+};
+function couponProductOpts(o,applies){
   const mk=(arr,prefix,label)=>(arr||[]).map(x=>({value:prefix+':'+x.id,label:label+' · '+(x.name||('#'+x.id))}));
-  return [{value:'',label:'不指定（适用范围内全部产品）'},
-    ...mk(o.activities,'activity','指定活动'),
-    ...mk(o.camps,'camp','指定营地'),
-    ...mk(o.pitches,'pitch','指定营位'),
-    ...mk(o.products,'camp_product','指定营地商品'),
-    ...mk(o.categories,'activity_category','指定活动分类')];
+  const all=[{value:'',label:'不指定（一级范围内全部产品）'}];
+  const a=String(applies||'all');
+  if(a!=='camp')all.push(...mk(o.activities,'activity','指定活动'),...mk(o.categories,'activity_category','指定活动分类'));
+  if(a!=='activity')all.push(...mk(o.camps,'camp','指定营地'),...mk(o.pitches,'pitch','指定营位'),
+    ...mk(o.products,'camp_product','指定营地商品'));
+  return all;
 }
 function couponScopeValue(b){
   if(!b)return '';
@@ -226,13 +234,16 @@ function couponCommonFields(o,d={},extra=[]){
   return [
     {name:'title',label:'优惠券名称',required:true,full:true,value:d.title||'',maxLength:30},
     /* #869 第一步：定「活动 / 营地」大类。不是必填，默认通用，完全由经营者自定义。 */
-    {name:'appliesTo',label:'适用范围',type:'select',full:true,value:d.applies_to||'all',
+    {name:'appliesTo',label:'① 适用范围（一级）',type:'select',full:true,value:d.applies_to||'all',
       options:couponAppliesOpts(),
-      help:'这张券限活动用、限营地使用，还是活动 / 营地通用，由你自己定；不设置就默认通用，不是必填项。'},
-    /* #869 第二步：选定范围后才选具体产品；不选＝适用于该范围内全部产品。 */
-    {name:'scopeRef',label:'具体产品（可选）',type:'select',full:true,value:couponScopeValue(d),
-      options:couponProductOpts(o),
-      help:'只列本俱乐部的活动与营地业务数据；不指定就适用于上面所选范围内的全部产品，不是必填项。',
+      helpFn:all=>COUPON_APPLIES_HELP[String(all.appliesTo||'all')]||COUPON_APPLIES_HELP.all},
+    /* #869 第二步：选定范围后才选具体产品；不选＝适用于该范围内全部产品。
+       P2-4：二级候选随一级级联，冲突组合从源头消失，下面的 validate 只作兜底。 */
+    {name:'scopeRef',label:'② 指定对象（二级 · 可选）',type:'select',full:true,value:couponScopeValue(d),
+      options:couponProductOpts(o,d.applies_to||'all'),
+      optionsFn:all=>couponProductOpts(o,all.appliesTo||'all'),
+      helpFn:all=>'只列「'+({all:'活动 + 营地',activity:'活动',camp:'营地'}[String(all.appliesTo||'all')]||'活动 + 营地')
+        +'」范围内本俱乐部的真实业务数据；不指定 = 一级范围内全部产品，不是必填项。',
       validate:(v,data)=>{
         if(!v)return '';
         const k=String(v).split(':')[0], ap=data.appliesTo||'all';
@@ -419,7 +430,10 @@ window.addBuyGift=async()=>uxTask(async()=>{
   const rules={threshold:Number(d.threshold),giftType:String(d.giftType),giftValue:Number(d.giftValue)};
   if(Number(d.maxGifts||0)>0)rules.maxGifts=Number(d.maxGifts);
   await post('/api/club/'+CLUB+'/campaigns',{type:String(d.ctype),title:String(d.title||'').trim(),status:'ACTIVE',schedule:{},scope:{},rules});
-  toast('规则已创建，顾客成交后自动发放');loadMembers()});
+  showAlert({title:'规则已创建 · 启用中',message:'「'+String(d.title||'').trim()+'」'
+    +(String(d.ctype)==='INVITE'?'仅对被邀请好友在本俱乐部的首单生效':'对所有顾客的活动 / 营地订单生效')
+    +'。成交后自动发放赠品，发放记录可在「赠品发放记录」核对；C 端订单详情展示实发赠品，装备商城不参与。'});
+  loadMembers()});
 window.toggleCampaign=async(id,status)=>uxTask(async()=>{await api(`/api/club/${CLUB}/campaigns/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});toast(status==='ACTIVE'?'规则已启用':'规则已停用');loadMembers()});
 window.delCampaign=async id=>uxTask(async()=>{if(!await uxConfirm({title:'删除买赠规则',message:'删除后，已发放出去的赠品不受影响，只是不再自动发放。'}))return;await api(`/api/club/${CLUB}/campaigns/${id}`,{method:'DELETE'});toast('规则已删除');loadMembers()});
 /* 首单立减 / 限时折扣（P0-1 营销引擎定价型）：报价链自动生效，只改实付不改规则。 */
@@ -427,25 +441,38 @@ window.addPriceCampaign=async()=>uxTask(async()=>{
   const d=await uxForm({title:'新增立减 / 限时活动',
     subtitle:'「首单立减」只对在本俱乐部没有已支付订单的新顾客生效；「限时折扣」必须设置生效时段（北京时间 UTC+8），窗口外自动不生效。优惠叠加在会员折扣 / 券之后，只改实付金额。',
     fields:[
+      /* P2-2：互斥字段按 mode / ctype 联动显隐，不再靠 label 文字提示「选折扣时填」。
+         隐藏字段由 uxForm 自动跳过必填与校验，也不会把旧值带进提交数据。 */
       {name:'ctype',label:'活动类型',type:'select',full:true,required:true,value:'NEWCOMER',
        options:[{value:'NEWCOMER',label:'首单立减（新顾客首单专享）'},{value:'TIME_LIMIT',label:'限时折扣（全部顾客 · 需设时段）'}],
+       helpFn:all=>all.ctype==='TIME_LIMIT'
+         ?'限时折扣：对所有顾客生效，但只在下面设定的时段内生效；窗口外报价自动不打折。'
+         :'首单立减：仅对在本俱乐部没有已支付订单的新顾客生效，长期有效。',
        validate:(v,all)=>(v==='TIME_LIMIT'&&!(all.startAt||all.endAt||all.timeFrom||all.timeTo||(all.weekdays&&all.weekdays!=='all')))
          ?'限时折扣请至少填一项生效时段；不设时段请选「首单立减」':''},
       {name:'title',label:'活动名称（仅后台识别用）',type:'text',required:true,full:true,placeholder:'如：新客立减 30 元'},
       {name:'mode',label:'优惠方式',type:'select',full:true,required:true,value:'fixed',
-       options:[{value:'fixed',label:'立减固定金额（元）'},{value:'percent',label:'按百分比折扣'}]},
-      {name:'amount',label:'立减金额（元）—— 优惠方式选「立减」时填写',type:'number',min:0,step:.01,value:30},
-      {name:'percent',label:'折扣率（填 90 = 9 折）—— 选「折扣」时填写',type:'number',min:1,max:100,step:1},
-      {name:'maxDiscount',label:'单笔最多优惠金额（元，可空）',type:'number',min:0,step:.01},
+       options:[{value:'fixed',label:'立减固定金额（元）'},{value:'percent',label:'按百分比折扣'}],
+       helpFn:all=>all.mode==='percent'
+         ?'折扣模式：按折后百分比减价，可另设单笔封顶金额。'
+         :'立减模式：每单直接减固定金额，不设封顶。'},
+      {name:'amount',label:'立减金额（元）',type:'number',min:0,step:.01,value:30,required:true,
+       when:{field:'mode',in:['fixed']},help:'每单直接减这么多钱；填 0 表示不打折。'},
+      {name:'percent',label:'折扣率（90 = 9 折）',type:'number',min:1,max:100,step:1,value:90,required:true,
+       when:{field:'mode',in:['percent']},help:'填 90 表示按应付金额的 90% 收取（即 9 折）。'},
+      {name:'maxDiscount',label:'单笔最多优惠金额（元，可空）',type:'number',min:0,step:.01,
+       when:{field:'mode',in:['percent']},help:'仅折扣模式有效；留空或 0 = 不封顶。'},
       {name:'startAt',label:'生效开始（北京时间，可空）',type:'text',full:true,placeholder:'2026-11-20 00:00',
+       when:{field:'ctype',in:['TIME_LIMIT']},
        help:'仅「限时折扣」有效。格式 YYYY-MM-DD HH:mm；留空 = 立即生效。',
        validate:(v,all)=>{if(!v||all.ctype!=='TIME_LIMIT')return '';return /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/.test(String(v).trim())?'':'开始时间请填 YYYY-MM-DD HH:mm 或 YYYY-MM-DD';}},
       {name:'endAt',label:'生效结束（北京时间，可空）',type:'text',full:true,placeholder:'2026-11-30 23:59',
+       when:{field:'ctype',in:['TIME_LIMIT']},
        help:'留空 = 不设结束时间；只填日期时按当天 23:59:59 计。',
        validate:(v,all)=>{if(!v||all.ctype!=='TIME_LIMIT')return '';return /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/.test(String(v).trim())?'':'结束时间请填 YYYY-MM-DD HH:mm 或 YYYY-MM-DD';}},
-      {name:'timeFrom',label:'每日生效时段 · 从',type:'time',help:'如 20:00；留空 = 不限制开始时刻'},
-      {name:'timeTo',label:'每日生效时段 · 到',type:'time',help:'如 22:00；留空 = 不限制结束时刻'},
-      {name:'weekdays',label:'每周生效日',type:'select',value:'all',full:true,
+      {name:'timeFrom',label:'每日生效时段 · 从',type:'time',when:{field:'ctype',in:['TIME_LIMIT']},help:'如 20:00；留空 = 不限制开始时刻'},
+      {name:'timeTo',label:'每日生效时段 · 到',type:'time',when:{field:'ctype',in:['TIME_LIMIT']},help:'如 22:00；留空 = 不限制结束时刻'},
+      {name:'weekdays',label:'每周生效日',type:'select',value:'all',full:true,when:{field:'ctype',in:['TIME_LIMIT']},
        options:[{value:'all',label:'每天'},{value:'0,1,2,3,4',label:'工作日（周一至周五）'},
                 {value:'5,6',label:'周末（周六 / 周日）'},{value:'0',label:'仅周一'},{value:'4',label:'仅周五'}]}
     ],submitText:'创建活动'});
@@ -475,7 +502,12 @@ window.addPriceCampaign=async()=>uxTask(async()=>{
     schedule.timezone='UTC+8';
   }
   await post('/api/club/'+CLUB+'/campaigns',{type:String(d.ctype),title:String(d.title||'').trim(),status:'ACTIVE',schedule,scope:{},rules});
-  toast(schedule.startAt||schedule.timeFrom?'限时活动已创建，按北京时间在设定时段生效':'营销活动已创建，下单报价自动生效');loadMembers()});
+  /* 操作反馈（UX 建议）：创建后不只给一句 toast，把「对谁生效 / 什么时段 / C 端能否看见」说清。 */
+  const who=String(d.ctype)==='NEWCOMER'?'仅本俱乐部新顾客首单':'全部顾客';
+  const when=String(d.ctype)==='TIME_LIMIT'?'按北京时间在设定时段生效，窗口外不打折':'长期生效';
+  showAlert({title:'活动已创建 · 启用中',message:'「'+String(d.title||'').trim()+'」'+who+' · '+when
+    +'。C 端结算明细会显示活动优惠名称与金额，订单详情可见活动优惠；装备商城订单不参与。'});
+  loadMembers()});
 /* 升级赠券（2026-10-26）：会员达到设定等级时自动送一张券；每个等级绑一张券，可换绑。 */
 window.addTierGift=async()=>{
   let tiers=[],benefits=[];
