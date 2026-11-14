@@ -37,7 +37,12 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
   const searchBox=workspace.querySelector('.workspace-search'),tools=workspace.querySelector('.workspace-tools');
   const placeSearch=()=>{if(innerWidth<=900){sidebar.insertBefore(searchBox,nav);sidebar.inert=!sidebar.classList.contains('ux-open')}else{close();sidebar.inert=false;tools.prepend(searchBox)}};
   placeSearch();window.addEventListener('resize',placeSearch);
-  const search=workspace.querySelector('#uxNavSearch');search.addEventListener('input',()=>{let found=0;const needle=search.value.trim().toLowerCase();for(const b of buttons){const match=b.textContent.toLowerCase().includes(needle);b.hidden=!match;found+=match?1:0}for(const g of nav.querySelectorAll('.nav-group')){g.hidden=![...g.querySelectorAll('button')].some(b=>!b.hidden)}nav.querySelector('.ux-nav-empty')?.remove();if(!found){const empty=document.createElement('div');empty.className='ux-nav-empty';empty.textContent='没有匹配的功能入口';nav.appendChild(empty)}});
+  /* 2026-11-14 修复（手机端导航点击无响应的根因）：placeSearch() 在窄屏把搜索框移进
+     sidebar，此时 workspace.querySelector('#uxNavSearch') 返回 null → 下面 addEventListener
+     抛 TypeError → enableNavigation 中断，后续「点导航项关抽屉+切视图」「Esc 关抽屉」
+     「登出绑定」全部失效 —— 手机上点菜单没反应的根源。改为 document 级查找，
+     无论搜索框此刻在 workspace 还是 sidebar 都能命中。 */
+  const search=document.querySelector('#uxNavSearch');if(search)search.addEventListener('input',()=>{let found=0;const needle=search.value.trim().toLowerCase();for(const b of buttons){const match=b.textContent.toLowerCase().includes(needle);b.hidden=!match;found+=match?1:0}for(const g of nav.querySelectorAll('.nav-group')){g.hidden=![...g.querySelectorAll('button')].some(b=>!b.hidden)}nav.querySelector('.ux-nav-empty')?.remove();if(!found){const empty=document.createElement('div');empty.className='ux-nav-empty';empty.textContent='没有匹配的功能入口';nav.appendChild(empty)}});
   /* 有弹窗打开时 Esc 归弹窗层处理（shared.js 的 uxDialogSession 会在自己那一层
      stopPropagation）。这里只负责关闭移动端导航抽屉，别抢 Esc。 */
   const overlayOpen=()=>!!document.querySelector('.ux-overlay,.modal.show');

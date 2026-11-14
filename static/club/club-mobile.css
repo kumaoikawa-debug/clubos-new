@@ -1,0 +1,45 @@
+/* 俱乐部后台 · 响应式加固（2026-11-14）
+   仅作用于 body.admin-workspace；不改动任何 DOM 结构与后端契约。
+   加载顺序在 club-glass.css 之后，故对 admin-workspace.css 的同名媒体查询规则以本文件为准。
+   注意：手机端侧边栏抽屉由 clubos-ux.js 的 .ux-mobile-toggle + .sidebar.ux-open 机制负责，
+   本文件【不得】对 .sidebar 的 transform/position 做任何干预（2026-11-14 实测：
+   在此覆盖 transform 会让抽屉永远滑不出来 —— 点汉堡只见遮罩、菜单不出现）。
+   本文件只做：① 删页头「功能说明」描述文字；② 表格/网格/表单/按钮在窄屏可用。 */
+
+/* ── 删冗余：页头「功能说明」描述文字不再展示（仍保留在 DOM，title 仍可由 admin-compact 提供）─ */
+.admin-workspace .view > .panel-title > div:first-child > .sub,
+.admin-workspace .hero-action > div:first-child > p{
+  display:none;
+}
+
+@media (max-width:900px){
+  /* 装饰光斑(.blob)与装饰 SVG 故意超出视口；窄屏裁掉横向溢出，避免整页左右晃动 */
+  html,body{ overflow-x:hidden; max-width:100vw; }
+  /* 活动中心：左栏与详情上下堆叠 */
+  .admin-workspace .act-shell{ flex-direction:column; }
+  .admin-workspace .act-rail{ width:auto; max-width:none; border-right:0; border-bottom:1px solid var(--line,#e2e8df); }
+  .admin-workspace .act-rail__list{ max-height:240px; }
+  /* 网格：双列版块改为单列 */
+  .admin-workspace .grid.g2{ grid-template-columns:1fr; }
+  /* 表格横向滚动，避免窄屏挤压溢出 */
+  .admin-workspace .card:has(.table){ overflow-x:auto; }
+  .admin-workspace .table{ min-width:560px; }
+  /* 筛选栏 / 按钮组换行不溢出 */
+  .admin-workspace .filter-bar{ flex-wrap:wrap; }
+  .admin-workspace .topbar .pill{ margin-left:auto; }
+}
+
+@media (max-width:650px){
+  .admin-workspace .main{ padding-left:14px; padding-right:14px; }
+  .admin-workspace .grid.g2, .admin-workspace .grid.g4{ grid-template-columns:1fr; }
+  .admin-workspace .set-tabs{ gap:6px; flex-wrap:wrap; }
+  .admin-workspace .set-tab{ font-size:12px; padding:7px 10px; }
+  .admin-workspace .cpn-tabs{ width:100%; }
+  .admin-workspace .cpn-tab{ flex:1; padding:9px 6px; }
+  .admin-workspace .topbar{ flex-wrap:wrap; }
+  .admin-workspace .info-row{ flex-wrap:wrap; }
+  .admin-workspace .card{ padding:16px; }
+  /* 页头按钮组在极窄屏换行且撑满，命中区不小于 42px */
+  .admin-workspace .view > .panel-title > div:has(.btn){ width:100%; }
+  .admin-workspace .view > .panel-title .btn{ min-height:42px; }
+}

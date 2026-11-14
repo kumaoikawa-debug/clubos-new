@@ -2452,7 +2452,7 @@ function bookingHtml(a){
     <div id="paxSummary" class="w-pax-summary"></div>
     <div class="w-block__foot">${paxFootText(pp,maxPax,cur)}</div>
     <input type="hidden" id="participantCount" value="${cur}"></div>`;
-  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="sub">同一活动可有不同日期、不同价格和不同名额。</div><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${earnNote}${pointArea}<button type="button" onclick="routeAsk()" style="width:100%;margin:4px 0 12px;padding:12px;border:1px solid var(--line,#e3e8e6);background:#fff;border-radius:12px;color:#1f2a28;font-weight:600;cursor:pointer">有疑问？先咨询这条线路</button><div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
+  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${earnNote}${pointArea}<button type="button" onclick="routeAsk()" style="width:100%;margin:4px 0 12px;padding:12px;border:1px solid var(--line,#e3e8e6);background:#fff;border-radius:12px;color:#1f2a28;font-weight:600;cursor:pointer">有疑问？先咨询这条线路</button><div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
 }
 /* 团期卡：横向滑动的竖版卡片。竖排长列表在团期一多时把报名页拉得很长，
    而且「哪天 / 多少钱」要上下扫着比；卡片固定宽、一次并排露出两张左右，
@@ -2768,7 +2768,7 @@ async function loadWability(){
     +'<div style="min-width:0"><div style="font-size:13px;font-weight:600">'+esc(a.title)+'</div><div style="font-size:11.5px;color:var(--w-muted);margin-top:3px">'+esc(a.event_date||'')+' · '+esc(a.location||'')+' · '+money(a.amount||0)+'</div></div>'
     +'<span style="margin-left:auto;font-size:11px;color:#5c6b62;white-space:nowrap">'+esc(tier(a))+'</span></div>').join(''):'<div class="w-empty">还没有报名记录。报名参加活动后，这里会变成你的线路履历。</div>';
   $('#wabilitySkills').innerHTML='<h3 style="margin:0 0 6px;font-size:15px">参加过的项目类型</h3>'
-    +'<div class="sub" style="margin-bottom:12px">按你实际报名过的活动标题归纳，不是技能认证。</div>'
+    +''
     +(kinds.length?kinds.map(k=>'<span style="display:inline-block;margin:0 8px 8px 0;padding:6px 12px;border-radius:99px;background:#eaf3ec;color:#2c5c42;font-size:12px">'+esc(k)+'</span>').join('')
       :'<div class="w-empty" style="padding:26px 12px">暂无。参加活动后，这里会按活动类型归纳。</div>');
   /* 同一件商品会在不同订单里重复出现，26 行明细里其实可能只有 6 件不同的东西。
@@ -2783,7 +2783,7 @@ async function loadWability(){
   const gl=Object.values(agg);
   const gearSpend=gl.reduce((s,x)=>s+x.spend,0);
   $('#wabilityGear').innerHTML='<h3 style="margin:0 0 6px;font-size:15px">买过的装备</h3>'
-    +'<div class="sub" style="margin-bottom:12px">来自你的真实商城订单，不是推荐也不是库存。'+gl.length+' 种 / 累计 '+money(gearSpend)+'</div>'
+    + '<div class="sub" style="margin-bottom:12px">'+gl.length+' 种 / 累计 '+money(gearSpend)+'</div>'
     +(gl.length?gl.map(x=>'<div style="display:flex;gap:10px;align-items:center;padding:11px 0;border-top:1px solid var(--w-line)">'
       +'<div style="min-width:0;flex:1"><div style="font-size:12.5px;font-weight:600">'+esc(x.name||'?')+'</div>'
       +'<div style="font-size:11px;color:var(--w-muted);margin-top:3px">'+esc(x.category||'户外装备')+' · 共 '+x.qty+' 件'

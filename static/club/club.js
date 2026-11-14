@@ -177,7 +177,7 @@ async function infoOpen(kind,id){
     +`<div class="info-detail__sec">往来消息</div>${infoThreadHtml(msgs)}`
     +`<div class="info-detail__sec">回复顾客</div>`
     +`<textarea id="infoReplyInput" class="info-reply__ta" maxlength="800" placeholder="直接在这里回复顾客，TA 会在「我的咨询」里看到，也可以继续追问…"></textarea>`
-    +`<div class="sub" style="margin-top:6px">发出即同步到顾客端与领队执行端；急事仍可直接拨打顾客电话。</div>`
+    +``
     +`<div style="display:flex;gap:10px;margin-top:14px;justify-content:flex-end;flex-wrap:wrap">`
     +`<button class="btn ghost" onclick="infoClose()">关闭</button>`
     +`<button class="btn ghost" onclick="infoToggleHandled('${it.kind}',${it.id},${isNew})">${isNew?'标记为已处理':'改回待处理'}</button>`
@@ -218,7 +218,7 @@ async function loadInfoWecom(){
     const on=!!d.wecomEnabled;
     box.innerHTML=`<div class="ux-field"><label>企业微信群机器人 Webhook</label>`
       +`<input id="wecomWebhook" type="url" placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=..." value="${esc(d.wecomWebhook||'')}">`
-      +`<div class="sub">在企微群「群机器人 → 添加机器人」拿到 Webhook 地址。新咨询会作为群消息推送，含顾客姓名 / 电话 / 问题 + 后台深链。</div></div>`
+      +`</div>`
       +`<label class="sub" style="display:flex;align-items:center;gap:8px;margin:10px 0;cursor:pointer"><input type="checkbox" id="wecomEnabled" ${on?'checked':''}> 启用企业微信通知</label>`
       +`<div style="display:flex;gap:10px"><button class="btn" onclick="saveWecom()">保存配置</button><button class="btn ghost" onclick="testWecom()">发送测试</button></div>`;
   }catch(e){box.innerHTML='<div class="empty">读取企微配置失败</div>'}
@@ -333,7 +333,7 @@ function activitySourceLine(a){
   if(extras-linkPhotos>0)bits.push('其中单独上传 '+(extras-linkPhotos)+' 张');
   return '<div class="sub" style="margin-top:6px">'+(lk?'本场按链接生成：':'本场按上传资料生成：')+bits.join(' · ')+'</div>';
 }
-async function openActivity(id){try{LEADER_CTX='activity';if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','智能详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="act-head"><div class="act-head__id"><h2>${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期 · ${a.status==='draft'?'<span class="tag orange">草稿</span>':'<span class="tag">已发布</span>'}</div></div><div class="act-head__ops">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:''}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}&v=${_cverId(a)}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button><button class="btn ghost" onclick="republishActivity(${id})" title="把当前这一版重新发布一次：C 端拿到的永远是最新版，这一步同时刷新 C 端版本戳，已打开的顾客页面会出现「有新版」提示">重新发布 / 同步 C 端</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="act-meta">${activitySourceLine(a)}${_syncNoticeHtml(a)}</div><div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3><div class="sub">用于 C 端活动列表卡片；建议横图 16:9，C 端仅在活动发布后展示。</div></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面<br><span style="font-size:11px;opacity:.75">可点右侧自动选</span>'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button><button class="btn ghost" onclick="autoCover(${a.id})" title="从这份资料抽出的照片里挑一张做封面（优先沿用详情首图）">智能从素材选一张</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
+async function openActivity(id){try{LEADER_CTX='activity';if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','智能详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="act-head"><div class="act-head__id"><h2>${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期 · ${a.status==='draft'?'<span class="tag orange">草稿</span>':'<span class="tag">已发布</span>'}</div></div><div class="act-head__ops">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:''}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}&v=${_cverId(a)}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button><button class="btn ghost" onclick="republishActivity(${id})" title="把当前这一版重新发布一次：C 端拿到的永远是最新版，这一步同时刷新 C 端版本戳，已打开的顾客页面会出现「有新版」提示">重新发布 / 同步 C 端</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="act-meta">${activitySourceLine(a)}${_syncNoticeHtml(a)}</div><div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面<br><span style="font-size:11px;opacity:.75">可点右侧自动选</span>'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button><button class="btn ghost" onclick="autoCover(${a.id})" title="从这份资料抽出的照片里挑一张做封面（优先沿用详情首图）">智能从素材选一张</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
    现在每行都给出「改时间 / 价格」与「删除」；并把两种容易被当成 bug 的状态直接标出来：
    ¥0 不是出错而是「价格待定」（成本表来源的活动在俱乐部定价前会归零），
    已停止报名的团期也要一眼可见，否则老板会以为 C 端还能报。 */
@@ -389,10 +389,10 @@ function pointsPolicyCard(a){
       ${gp.reason?`<div class="sub" style="margin-top:4px">${esc(gp.reason)}</div>`:''}
     </div>`;
   return `<div class="card section" id="pointsPolicyCard">
-    <div class="panel-title"><div><h3>活动积分规则</h3><div class="sub">由俱乐部决定这场活动是否参与积分；团期默认继承整场活动规则。</div></div><span class="tag ${p.enabled?'':'orange'}">${p.enabled?'已开启':'不参与积分'}</span></div>
+    <div class="panel-title"><div><h3>活动积分规则</h3></div><span class="tag ${p.enabled?'':'orange'}">${p.enabled?'已开启':'不参与积分'}</span></div>
     <label style="display:flex;gap:10px;align-items:center;padding:10px 0"><input id="ppEnabled" type="checkbox" ${p.enabled?'checked':''}> <strong>这场活动参与积分体系</strong></label>
     <div class="grid g2" style="margin-top:4px">
-      <div class="notice"><label><input id="ppEarn" type="checkbox" ${p.earnClubPoints?'checked':''}> 报名后产生活动积分</label><div class="sub" style="margin-top:6px">成本由本俱乐部承担；默认按俱乐部积分规则累计。</div></div>
+      <div class="notice"><label><input id="ppEarn" type="checkbox" ${p.earnClubPoints?'checked':''}> 报名后产生活动积分</label></div>
       <div class="notice"><label><input id="ppClub" type="checkbox" ${p.acceptClubPoints?'checked':''}> 允许活动积分抵现金</label><div style="margin-top:8px"><span class="sub">本单最多抵活动金额</span> <input id="ppClubMax" type="number" min="0" max="100" step="1" value="${Number(p.clubPointsMaxDiscountPercent??100)}" style="width:80px"> %</div></div>
     </div>
     ${gpBlock}
@@ -417,7 +417,7 @@ async function savePointsPolicy(id){
 
 function participantPolicyCard(a){
   const p=a.participantPolicy||{};
-  return `<div class="card section"><div class="panel-title"><div><h3>报名人 / 参加人规则</h3><div class="sub">付款人和真正参加活动的人分开管理；多人报名按参加人数占名额和计价。</div></div><span class="tag">最多 ${p.maxParticipantsPerOrder||8} 人/单</span></div><div class="grid g2"><div class="notice"><label><input id="pfIncomplete" type="checkbox" ${p.allowIncompleteAtCheckout!==false?'checked':''}> 允许先付款、后补紧急联系人资料</label><div class="sub" style="margin-top:6px">证件类型与证件号码是平台级必填（投保与实名出行要用），付款前顾客必须填好；勾选后仅紧急联系人可到订单中心补充。</div></div><div class="notice"><label><input id="pfInsurance" type="checkbox" ${p.insuranceRequired?'checked':''}> 本活动需要保险资料</label><div class="sub" style="margin-top:6px">俱乐部可在报名名单中维护投保状态与保单号。</div></div><div class="notice"><label><input id="pfReplace" type="checkbox" ${p.allowParticipantReplacement?'checked':''}> 允许用户自助转名额</label><div style="margin-top:8px"><span class="sub">出发前至少</span> <input id="pfCutoff" type="number" min="0" value="${Number(p.replacementCutoffHours||0)}" style="width:80px"> 小时</div></div><div class="notice"><span class="sub">单笔最多报名</span> <input id="pfMax" type="number" min="1" max="50" value="${Number(p.maxParticipantsPerOrder||8)}" style="width:80px"> 人</div></div><button class="btn secondary" style="margin-top:12px" onclick="saveParticipantPolicy(${a.id})">保存参加人规则</button></div>`
+  return `<div class="card section"><div class="panel-title"><div><h3>报名人 / 参加人规则</h3></div><span class="tag">最多 ${p.maxParticipantsPerOrder||8} 人/单</span></div><div class="grid g2"><div class="notice"><label><input id="pfIncomplete" type="checkbox" ${p.allowIncompleteAtCheckout!==false?'checked':''}> 允许先付款、后补紧急联系人资料</label></div><div class="notice"><label><input id="pfInsurance" type="checkbox" ${p.insuranceRequired?'checked':''}> 本活动需要保险资料</label></div><div class="notice"><label><input id="pfReplace" type="checkbox" ${p.allowParticipantReplacement?'checked':''}> 允许用户自助转名额</label><div style="margin-top:8px"><span class="sub">出发前至少</span> <input id="pfCutoff" type="number" min="0" value="${Number(p.replacementCutoffHours||0)}" style="width:80px"> 小时</div></div><div class="notice"><span class="sub">单笔最多报名</span> <input id="pfMax" type="number" min="1" max="50" value="${Number(p.maxParticipantsPerOrder||8)}" style="width:80px"> 人</div></div><button class="btn secondary" style="margin-top:12px" onclick="saveParticipantPolicy(${a.id})">保存参加人规则</button></div>`
 }
 async function saveParticipantPolicy(id){
   const payload={allowIncompleteAtCheckout:$('#pfIncomplete').checked,insuranceRequired:$('#pfInsurance').checked,allowParticipantReplacement:$('#pfReplace').checked,replacementCutoffHours:Number($('#pfCutoff').value||0),maxParticipantsPerOrder:Number($('#pfMax').value||1)};
@@ -428,9 +428,9 @@ function refundPolicyCard(a){
   const p=a.refundPolicy||{enabled:true,rules:[{minHoursBefore:0,cashRefundPercent:100,label:'活动开始前可退款'}],afterStartCashRefundPercent:0,note:''};
   const rules=(p.rules||[]).slice(0,3); while(rules.length<3) rules.push({minHoursBefore:rules.length===0?72:rules.length===1?24:0,cashRefundPercent:rules.length===0?100:rules.length===1?80:0,label:''});
   return `<div class="card section" id="refundPolicyCard">
-    <div class="panel-title"><div><h3>活动退款规则</h3><div class="sub">退款政策属于俱乐部经营规则；系统按用户申请时距离团期开始时间自动计算现金退款比例。</div></div><span class="tag ${p.enabled?'':'orange'}">${p.enabled?'可申请退款':'不可自主退款'}</span></div>
+    <div class="panel-title"><div><h3>活动退款规则</h3></div><span class="tag ${p.enabled?'':'orange'}">${p.enabled?'可申请退款':'不可自主退款'}</span></div>
     <label style="display:flex;gap:10px;align-items:center;padding:10px 0"><input id="rpEnabled" type="checkbox" ${p.enabled?'checked':''}> <strong>允许用户按本活动规则申请退款</strong></label>
-    <div class="sub" style="margin-bottom:10px">建议按时间从远到近设置。取消费只作用于现金实付；活动积分、装备积分和福利券在退款成功后按 v0.11 规则完整恢复。</div>
+    
     <div class="grid g3">
       ${rules.map((r,i)=>`<div class="notice"><strong>规则 ${i+1}</strong><div style="margin-top:8px"><span class="sub">出发前至少</span> <input id="rpH${i}" type="number" min="0" step="1" value="${Number(r.minHoursBefore||0)}" style="width:76px"> 小时</div><div style="margin-top:8px"><span class="sub">现金退款</span> <input id="rpP${i}" type="number" min="0" max="100" step="1" value="${Number(r.cashRefundPercent||0)}" style="width:76px"> %</div><input id="rpL${i}" value="${esc(r.label||'')}" placeholder="例如：出发前72小时以上" style="width:100%;margin-top:8px;padding:8px;border-radius:8px;border:1px solid var(--line)"></div>`).join('')}
     </div>
@@ -937,16 +937,16 @@ async function openContentAsset(assetId){
 function renderRecapPanel(){
   const host=$('#recapBody');if(!host)return;
   host.innerHTML=`
-    <div class="sub" style="margin-bottom:10px">不挑活动：直接填这场活动的关键信息 + 现场照片，系统自动生成回顾图文。</div>
+    
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;max-width:760px">
       <div><div class="sub" style="margin-bottom:4px">活动名称 *</div><input id="recapTitle" style="width:100%;padding:8px 10px" placeholder="例如：神农架三天两夜徒步"></div>
       <div><div class="sub" style="margin-bottom:4px">活动日期</div><input id="recapDate" style="width:100%;padding:8px 10px" placeholder="例如：2026年10月2日—4日"></div>
       <div><div class="sub" style="margin-bottom:4px">活动地点</div><input id="recapLoc" style="width:100%;padding:8px 10px" placeholder="例如：湖北神农架"></div>
       <div><div class="sub" style="margin-bottom:4px">活动规模</div><input id="recapScale" style="width:100%;padding:8px 10px" placeholder="例如：12 人小队"></div>
     </div>
-    <div style="margin-top:12px"><div class="sub" style="margin-bottom:4px">现场照片（可多选；手机 HEIC 直传支持，自动转 JPEG）</div>
+    <div style="margin-top:12px"><div class="sub" style="margin-bottom:4px">现场照片</div>
     <input type="file" id="recapFiles" multiple accept="image/*,.heic,.heif,.bmp,.gif,.tif,.tiff,.avif"></div>
-    <div style="margin-top:12px"><div class="sub" style="margin-bottom:4px">基础文案 / 领队记录（可不填，但写了回顾才真实）</div>
+    <div style="margin-top:12px"><div class="sub" style="margin-bottom:4px">基础文案 / 领队记录</div>
     <textarea id="recapNote" rows="4" style="width:100%;max-width:680px;padding:8px 10px" placeholder="例如：12 个人全员登顶，山顶风大但出了太阳；下山路上有人扭了脚踝已处理；晚饭火锅全员到齐……"></textarea></div>
     <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
       <button class="btn secondary" id="recapGo">智能生成活动回顾</button>
@@ -1290,7 +1290,7 @@ function renderInviteReward(){
     <div class="list-row"><div class="list-row__main"><div class="list-row__title">分享卡片标题</div></div><div class="list-row__end">${esc(s.share_title||'（使用默认标题）')}</div></div>
     <div class="list-row"><div class="list-row__main"><div class="list-row__title">分享卡片副文案</div></div><div class="list-row__end">${esc(s.share_desc||'（未设置）')}</div></div>
     <div class="list-row"><div class="list-row__main"><div class="list-row__title">分享卡配图</div></div><div class="list-row__end"><b>${(s.share_image_key||'sunrise')}</b></div></div>
-    <div class="sub" style="margin-top:10px">C 端「邀请好友」页按以上配置生成分享卡，会员转发到微信/朋友圈拉新。</div>`;
+    `;
   // 邀请记录
   $('#invitePanel-records').innerHTML=recs.length?`<table class="table"><thead><tr><th>邀请人</th><th>被邀请人</th><th>邀请码</th><th>被邀请人券</th><th>邀请人券</th><th>积分</th><th>时间</th></tr></thead><tbody>${recs.map(r=>`<tr><td>${esc(r.inviter_name||'')}</td><td>${esc(r.invitee_name||'')}</td><td><b>${esc(r.invite_code||'')}</b></td><td>${r.invitee_redemption_id?'已发':'—'}</td><td>${r.inviter_redemption_id?'已发':'—'}</td><td>${Number(r.inviter_points_awarded||0)}</td><td class="sub">${esc(String(r.created_at||'').slice(0,16))}</td></tr>`).join('')}</tbody></table>`
     :'<div class="empty">还没有邀请记录。开启模块并让会员分享邀请码后即可看到。</div>';
@@ -1440,7 +1440,7 @@ async function renderMemberDetail(ov,userId){
     <div class="grid g2 section">
       <div class="card">
         <div class="panel-title"><h3>优惠券</h3><button class="btn secondary" onclick="giftMemberVoucher(${m.user_id})">＋ 赠送优惠券</button></div>
-        <div class="sub" style="margin-bottom:10px">赠送本俱乐部在「俱乐部营销 · 优惠券」里已生成的券；顾客报名付款时可直接抵扣。</div>
+        
         ${vouchers.map(v=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(v.title||'')} <span class="tag">${v.benefit_type==='activity_coupon'?`抵扣 ${money(v.cash_value||0)}`:'非现金福利'}</span>${v.points_spent===0?' <span class="tag orange">获赠</span>':''}</div><div class="list-row__sub">${esc(v.voucher_code||'')}${v.gift_note?` · ${esc(v.gift_note)}`:''} · 领取于 ${esc((v.created_at||'').slice(0,10))}</div></div><div class="list-row__end"><span class="tag ${v.status==='issued'?'':'orange'}">${voucherStatusCn[v.status]||esc(v.status)}</span></div></div>`).join('')||'<div class="empty">暂无优惠券</div>'}
       </div>
       <div class="card">
@@ -1667,7 +1667,7 @@ function paintPointsRate(){
     +`<div style="margin-top:6px">${clubLine}；未设等级专属比例时，本俱乐部默认生效 <b>${d.clubEffectiveRate} 积分 = ¥1</b>。</div>`
     +'<div class="sub" style="margin-top:6px">只影响<b>俱乐部活动积分</b>在活动报名时的抵扣；装备积分由总平台出钱，仍按平台规则，不随这里变化。积分商城的兑换标价是固定积分，不按此比例折现金。</div>'
     +'</div>'
-    +'<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn secondary" onclick="editPointsRedeemRate()">设置俱乐部默认比例</button><span class="sub">各等级专属比例在「客户会员 → 等级会员 / 付费会员卡」里设置</span></div>'
+    +'<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><button class="btn secondary" onclick="editPointsRedeemRate()">设置俱乐部默认比例</button></div>'
     +'<div style="margin-top:12px"><div class="list-row__sub" style="margin-bottom:6px"><b>各会员等级实际生效</b></div>'+tierRows+'</div>';
 }
 async function editPointsRedeemRate(){

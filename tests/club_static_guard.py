@@ -145,10 +145,15 @@ for common in ('static/shared.js', 'static/ux/clubos-ux.js', 'static/shared.css'
     toks = {end: (tokens(htmls[end], common) or [None])[0] for end in ENDS}
     ck('四端 %s 版本一致' % os.path.basename(common),
        len(set(toks.values())) == 1 and None not in toks.values(), toks)
+# 两个共用文件各自独立 bump（端内须同戳，已由上方「四端版本一致」守住），
+# 这里只断言它们都「高于 origin/main 基线」——改了码就要 bump，不钉死具体日期。
 for common in ('static/shared.js', 'static/ux/clubos-ux.js'):
-    toks = [tokens(htmls[e], common) for e in ENDS]
-    ck('%s 已 bump 到 %s' % (os.path.basename(common), BUMP_TOKEN),
-       all(t and BUMP_TOKEN in t for t in toks))
+    toks = {end: (tokens(htmls[end], common) or [None])[0] for end in ENDS}
+    old = {end: (tokens(baseline_html[end], common) or [None])[0] for end in ENDS}
+    stale = [e for e in ENDS if old[e] and toks[e] and toks[e] <= old[e]]
+    ck('%s 版本戳高于基线（改码必 bump）' % os.path.basename(common), not stale,
+       '; '.join('%s: %s<=%s' % (e, toks[e], old[e]) for e in stale)
+       or ','.join('%s=%s' % (e, toks[e]) for e in ENDS))
 
 # ── 3. V10：弹层单例 / 互斥字段联动 / 券范围级联 / 积分卡 CTA / 灰显 ──────────
 ck('V10-a shared.js 有弹层注册表与硬上限',

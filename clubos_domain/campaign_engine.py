@@ -199,10 +199,20 @@ def _validate_rules_discount(rules: dict):
     mode = str(rules.get('mode') or 'fixed').strip().lower()
     if mode not in ('fixed', 'percent', 'threshold'):
         raise ValueError('rules.mode 必须为 fixed/percent/threshold')
-    if mode in ('fixed', 'threshold'):
+    if mode == 'fixed':
         amt = rules.get('amount')
         if amt is None or float(amt) < 0:
-            raise ValueError('fixed/threshold 模式需要非负 amount')
+            raise ValueError('fixed 模式需要非负 amount')
+    if mode == 'threshold':
+        # P2 修复（2026-11-14）：满减门槛必须显式配置正数 threshold。
+        # 缺失或 <=0 时引擎会按默认 0 处理，退化为「无条件立减」，属配置误用风险，
+        # 与 BUY_GIFT 对 threshold 的必填校验保持同一口径。
+        th = rules.get('threshold')
+        if th is None or float(th) <= 0:
+            raise ValueError('threshold 模式需要正数 threshold（满减门槛，元）')
+        amt = rules.get('amount')
+        if amt is None or float(amt) < 0:
+            raise ValueError('threshold 模式需要非负 amount（每档立减额）')
     if mode == 'percent':
         pct = rules.get('percent')
         if pct is None or not (0 < float(pct) <= 100):
