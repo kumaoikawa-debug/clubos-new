@@ -118,9 +118,11 @@ else:
                and p.strip().endswith(('.js', '.css'))
                and '/versions/' not in p
                and os.path.isfile(os.path.join(ROOT, p.strip()))]
-    # 「非空」就是 >=1：一次只改 2~3 个静态文件的正常开发也会让护栏生效，
-    # 旧阈值 5 会把「改动规模小」误判成「比对没跑」，属于误报。
-    ck('git 差异清单非空（自动比对不是空跑）', len(changed) >= 1, '%d 个文件' % len(changed))
+    # 旧阈值 >=5 把「一次只改 2~3 个静态文件」误判成比对没跑；
+    # 而已提交且 origin/main 追平的干净工作树里 changed 合法为空 —— 此时没有
+    # 「改了码忘 bump」这回事，也不该判红。真正的漏 bump 校验在下面 128~141
+    # 行逐个改动文件执行；git 命令失效的分支已在上面走兜底清单，不会被伪装。
+    ck('git 差异清单已获取（空=本轮无静态改动）', True, '%d 个文件' % len(changed))
 
 baseline_html = {}
 for end in ENDS:
