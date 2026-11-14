@@ -20,10 +20,41 @@ from __future__ import annotations
 """
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# P1-3（2026-11-14）：俱乐部按本地日历配置活动时段。旧代码用 timezone.utc
+# 判 weekdays/timeFrom/timeTo，与北京时间差 8 小时 —— 配「每天 20:00–22:00」
+# 会在次日凌晨才生效。统一用 UTC+8 固定偏移（不依赖 tzdata，标准库即可）。
+CLUB_LOCAL_TZ = timezone(timedelta(hours=8))
+
+
+def _schedule_boundary(v, *, is_end=False):
+    """把 schedule 的起止值归一成 Unix 秒。
+
+    兼容三种写法：Unix 秒（int/数字字符串）、'YYYY-MM-DD HH:mm'、'YYYY-MM-DD'。
+    只有日期时 startAt 取 00:00:00、endAt 取 23:59:59（当天仍算在窗口内）。
+    所有本地时间都按 CLUB_LOCAL_TZ 解析，不再受宿主机器时区影响。
+    """
+    if v in (None, '', 0, '0'):
+        return None
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip()
+    if s.isdigit():
+        return int(s)
+    s = s.replace('T', ' ')
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d'):
+        try:
+            d = datetime.strptime(s, fmt)
+            if fmt == '%Y-%m-%d':
+                d = d.replace(hour=23, minute=59, second=59) if is_end else d.replace(hour=0, minute=0, second=0)
+            return int(d.replace(tzinfo=CLUB_LOCAL_TZ).timestamp())
+        except ValueError:
+            continue
+    return None
 
 CAMPAIGN_TYPES = (
     'NEWCOMER', 'TIME_LIMIT', 'GROUP', 'BUY_GIFT', 'CHECKIN',
@@ -310,31 +341,29 @@ class CampaignEngine:
 
     @staticmethod
     def _schedule_ok(schedule, now):
+        # 空 schedule 的语义是「长期生效」（后台表单会明确提示，不再叫限时却不限时）。
         if not schedule:
             return True
         # startAt: 活动在 startAt 之后生效 → now >= startAt 才通过
         # endAt:   活动在 endAt 之前生效 → now <= endAt 才通过
-        for fld, ok in (('startAt', lambda n: now >= n), ('endAt', lambda n: now <= n)):
-            v = schedule.get(fld)
-            if v:
-                try:
-                    if not ok(int(v)):
-                        return False
-                except (TypeError, ValueError):
-                    pass
+        start = _schedule_boundary(schedule.get('startAt'))
+        end = _schedule_boundary(schedule.get('endAt'), is_end=True)
+        if start is not None and now < start:
+            return False
+        if end is not None and now > end:
+            return False
+        local = datetime.fromtimestamp(now, tz=CLUB_LOCAL_TZ)
         wd = schedule.get('weekdays')
         if wd:
             try:
-                today = datetime.fromtimestamp(now, tz=timezone.utc).weekday()
-                if int(today) not in [int(x) for x in wd]:
+                if int(local.weekday()) not in [int(x) for x in wd]:
                     return False
             except Exception:
                 pass
         tf, tt = schedule.get('timeFrom'), schedule.get('timeTo')
         if tf or tt:
             try:
-                cur = datetime.fromtimestamp(now, tz=timezone.utc)
-                cur_min = cur.hour * 60 + cur.minute
+                cur_min = local.hour * 60 + local.minute
                 if tf and cur_min < int(tf):
                     return False
                 if tt and cur_min > int(tt):
@@ -479,16 +508,30 @@ class CampaignEngine:
              json.dumps(p['rules'], ensure_ascii=False), int(created_by) if created_by else None))
         return self.get_campaign(c, int(c.execute('SELECT last_insert_rowid()').fetchone()[0]))
 
+    @staticmethod
+    def _assert_club_owner(row, owner_club_id, action='修改'):
+        """P1-1：PLATFORM 活动 owner_club_id 为 NULL，俱乐部路由一律拒绝。
+
+        旧代码 int(None) 抛 TypeError → 500；DELETE 又因 NULL 跳过权限判断 →
+        俱乐部能停用平台活动。两种越权在这里统一收敛成 403。
+        """
+        if owner_club_id is None:
+            return
+        if str(row['owner_type'] or '').upper() == 'PLATFORM':
+            raise PermissionError('平台活动只能由总平台%s' % action)
+        if row['owner_club_id'] is None or int(row['owner_club_id']) != int(owner_club_id):
+            raise PermissionError('无权%s该活动' % action)
+
     def update_campaign(self, c, *, campaign_id, payload: dict, owner_club_id=None):
         r = c.execute("SELECT * FROM marketing_campaigns WHERE id=?", (int(campaign_id),)).fetchone()
         if not r:
             raise LookupError('活动不存在')
-        if owner_club_id is not None and int(r['owner_club_id']) != int(owner_club_id):
-            raise PermissionError('无权修改该活动')
+        self._assert_club_owner(r, owner_club_id, '修改')
         merged = self._serialize(r)
         merged.update({k: v for k, v in payload.items() if k in ('title', 'status', 'schedule', 'scope', 'rules')})
-        if 'type' in payload and payload['type'] != r['type']:
+        if 'type' in payload:
             merged['type'] = payload['type']
+        # 改类型会连带校验新类型的规则；不合法直接 400，绝不「200 但没改」。
         p = validate_campaign_payload(merged)
         sets, vals = [], []
         mapping = (('title', 'title', False), ('status', 'status', False),
@@ -497,6 +540,9 @@ class CampaignEngine:
             if key in payload:
                 sets.append(f"{col}=?")
                 vals.append(json.dumps(payload[key], ensure_ascii=False) if js else payload[key])
+        if 'type' in payload:
+            sets.append('type=?')
+            vals.append(p['type'])
         if sets:
             sets.append("updated_at=datetime('now')")
             vals.append(int(campaign_id))
@@ -507,8 +553,7 @@ class CampaignEngine:
         r = c.execute("SELECT * FROM marketing_campaigns WHERE id=?", (int(campaign_id),)).fetchone()
         if not r:
             raise LookupError('活动不存在')
-        if owner_club_id is not None and r['owner_club_id'] is not None and int(r['owner_club_id']) != int(owner_club_id):
-            raise PermissionError('无权删除该活动')
+        self._assert_club_owner(r, owner_club_id, '删除')
         c.execute("UPDATE marketing_campaigns SET status='ENDED', updated_at=datetime('now') WHERE id=?",
                   (int(campaign_id),))
         return {'ok': True}

@@ -207,6 +207,8 @@ python tests/web_inline_handlers_guard.py
 python tests/test_campaign_engine.py
 python tests/test_campaign_gift_grants.py
 python tests/test_campaign_checkout_e2e.py
+# 第 2 批：平台活动越权 / PATCH 类型 / 时段与本地时区 / 设置中枢 probe / C 端营销明细（V4~V8）
+python tests/test_marketing_p1_regression.py
 # 三端导航静态护栏：断言已从「写死 10/13 个子页」改为「核心导航必须存在 + 视图容器齐全」，
 # 与当前 24/23 个子页一致；顺带 node --check 全量 static/ux/*.js。
 python tests/ux_smoke_v025.py

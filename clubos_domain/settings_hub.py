@@ -54,7 +54,9 @@ REGISTRY = (
 
     {'key': 'campaigns', 'label': '营销活动引擎', 'group': 'commerce',
      'page': '/static/club/index.html', 'api': '/api/club/{club_id}/campaigns',
-     'probe': {'sql': "SELECT COUNT(*) FROM marketing_campaigns WHERE club_id=? AND status='ACTIVE'", 'mode': 'count'},
+     # P1-4：marketing_campaigns 的俱乐部归属列是 owner_club_id（不是 club_id）。
+     # 旧 SQL 报 no such column 被 _probe 吞掉 → configured=None / unknownModules=1。
+     'probe': {'sql': "SELECT COUNT(*) FROM marketing_campaigns WHERE owner_type='CLUB' AND owner_club_id=? AND status='ACTIVE'", 'mode': 'count'},
      'toggleable': False, 'note': '生效中的活动数；折扣作用在报价链路，不提供总开关'},
     {'key': 'storedValue', 'label': '会员储值', 'group': 'commerce',
      'page': '/static/club/stored-value.html', 'api': '/api/club/{club_id}/stored-value/config',
@@ -294,6 +296,22 @@ def _probe(c, club_id: int, item: dict):
     except Exception:
         # 旧库 / 表还没建 / 字段缺失 → 状态未知，不编造
         return {'count': None, 'configured': None}
+
+
+def probe_selfcheck(c, club_id: int = 1) -> list[dict]:
+    """P1-4：注册表里的每条 probe SQL 都必须能真跑通。
+
+    _probe 出于「绝不误关业务」会吞掉 SQL 异常并把模块标成 unknown；这个自检把
+    异常显式暴露出来，供回归套件在迁移后立刻发现列名/表名写错，不再静默显示未知。
+    """
+    broken = []
+    for m in REGISTRY:
+        p = m.get('probe') or {}
+        try:
+            c.execute(p['sql'], (int(club_id),)).fetchone()
+        except Exception as e:
+            broken.append({'key': m['key'], 'sql': p.get('sql'), 'error': str(e)[:160]})
+    return broken
 
 
 def snapshot(c, club_id: int) -> dict:

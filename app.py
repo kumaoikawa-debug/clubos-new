@@ -10886,6 +10886,34 @@ def user_unhide_order(user_id:int,order_id:int,orderKind:str='activity'):
     return {'ok':True,'orderId':order_id}
 
 
+def _campaign_receipt_for_registration(c, reg:dict) -> dict:
+    """V8：把「本单享受了哪些活动优惠 / 获得了什么赠品」还原给 C 端订单详情。
+
+    活动名与立减来自下单时冻结的 campaignContext 快照（活动后来下架也能解释），
+    赠品以 campaign_grant_log 的**实发记录**为准 —— 绝不下发「承诺了但没发」的假明细。
+    """
+    out = {'campaignDiscount': 0.0, 'campaignsApplied': [],
+           'campaignGifts': [], 'grantedGifts': []}
+    try:
+        iid = reg.get('booking_ref')
+        it = row(c.execute('SELECT payload_json FROM checkout_intents WHERE id=?', (str(iid),))) if iid else None
+        snap = (jload(it.get('payload_json'), {}) or {}).get('campaignContext') if it else None
+        if isinstance(snap, dict):
+            out['campaignDiscount'] = round(float(snap.get('discount') or 0), 2)
+            out['campaignsApplied'] = snap.get('applied') or []
+            out['campaignGifts'] = snap.get('gifts') or []
+        gl = rows(c.execute('''SELECT g.gift_type,g.copies,mc.title,mc.type
+                               FROM campaign_grant_log g
+                               LEFT JOIN marketing_campaigns mc ON mc.id=g.campaign_id
+                               WHERE g.order_id=? ORDER BY g.id''', (str(reg.get('id')),)))
+        out['grantedGifts'] = [{'title': x.get('title') or '营销活动', 'type': x.get('type'),
+                                'giftType': x.get('gift_type'),
+                                'copies': int(x.get('copies') or 0)} for x in gl]
+    except Exception:
+        pass
+    return out
+
+
 @app.get('/api/public/users/{user_id}/order-center')
 def user_order_center(user_id:int,club_id:int=1):
     with conn() as c:
@@ -10941,6 +10969,8 @@ def user_order_center(user_id:int,club_id:int=1):
                 p['refundProgress']=_refund_progress('activity',p.get('refund_status'))
             x['refundProgress']=_refund_progress('activity',x.get('refund_status'))
             x['orderKind']='activity'
+            # V8：活动优惠名称 / 金额 + 实发赠品明细下发到订单详情
+            x.update(_campaign_receipt_for_registration(c,x))
         for x in gear_orders:
             x['items']=rows(c.execute('''SELECT i.*,p.name product_name,p.sku FROM gear_order_items i JOIN products p ON p.id=i.product_id WHERE i.order_id=? ORDER BY i.id''',(x['id'],)))
             x['afterSalesCases']=after_sales_engine.list_for_order(c,int(x['id']))

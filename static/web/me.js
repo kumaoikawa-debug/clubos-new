@@ -662,6 +662,21 @@ function meZoomQr(pid,name){
 /* 「我的订单」= 活动订单（原「我的报名」）+ 营地订单（住宿 / 租赁 / 营地小站）。
    两个 tab 共用同一个 meStack 入口 myregs；param 用 'activity'/'camp' 区分，
    切换走 meSetTab，renderMeSub 会重跑 SUB_ME.myregs 并触发 SUB_ME_AFTER.myregs 拉取营地侧。 */
+/* V8（2026-11-14）：订单详情要能解释「钱为什么少了、本单拿到了什么」。
+   campaignDiscount / campaignsApplied 来自下单时的活动快照，grantedGifts 来自
+   campaign_grant_log 的实发记录 —— 只展示真的发到券包/积分账上的东西。 */
+function meCampaignGiftBlock(o){
+  const d=Number(o&&o.campaignDiscount||0);
+  const applied=Array.isArray(o&&o.campaignsApplied)?o.campaignsApplied:[];
+  const gifts=Array.isArray(o&&o.grantedGifts)?o.grantedGifts:[];
+  if(d<=0&&!gifts.length)return '';
+  const label={points:'积分',gift_card:'礼品卡额度',coupon:'优惠券'};
+  const detail=gifts.map(g=>esc(g.title||'营销活动')+' · '+(label[g.giftType]||'赠品')
+    +(Number(g.copies||0)>1?' ×'+Number(g.copies):'')).join('、');
+  const names=applied.map(a=>a.title).filter(Boolean).join('、');
+  return '<div class="me-campaign-got">'+(d>0?'活动优惠 -'+money(d)+(names?'（'+esc(names)+'）':''):'')
+    +(detail?(d>0?'<br>':'')+'本单获得：'+detail:'')+'</div>';
+}
 function meActivityOrdersHtml(){
   const list=meActivity();
   if(!list.length) return empty('暂无活动订单','报名成功后订单会出现在这里');
@@ -680,6 +695,7 @@ function meActivityOrdersHtml(){
       <div class="me-card2__hd"><b>${esc(o.activity_title||'活动')}</b>${meBadge(meOrderSt(o.status,'activity'),meOrderTone(o.status,'activity'))}</div>
       <div class="me-card2__meta">${esc(o.occurrence_label||o.start_at||'团期待定')} · ${o.participantCount||ps.length} 人</div>
       <div class="me-card2__amt">实付 <b>${money(o.amount||0)}</b></div>
+      ${meCampaignGiftBlock(o)}
       ${meTrip(o)}
       ${meCheckinBlock(o)}
       ${pax?`<div class="me-paxs">${pax}</div>`:''}

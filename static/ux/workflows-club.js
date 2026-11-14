@@ -425,16 +425,29 @@ window.delCampaign=async id=>uxTask(async()=>{if(!await uxConfirm({title:'删除
 /* 首单立减 / 限时折扣（P0-1 营销引擎定价型）：报价链自动生效，只改实付不改规则。 */
 window.addPriceCampaign=async()=>uxTask(async()=>{
   const d=await uxForm({title:'新增立减 / 限时活动',
-    subtitle:'「首单立减」只对在本俱乐部没有已支付订单的新顾客生效；「限时折扣」在活动启用期间对全部顾客生效（创建后可随时停用）。优惠叠加在会员折扣 / 券之后，只改实付金额。',
+    subtitle:'「首单立减」只对在本俱乐部没有已支付订单的新顾客生效；「限时折扣」必须设置生效时段（北京时间 UTC+8），窗口外自动不生效。优惠叠加在会员折扣 / 券之后，只改实付金额。',
     fields:[
       {name:'ctype',label:'活动类型',type:'select',full:true,required:true,value:'NEWCOMER',
-       options:[{value:'NEWCOMER',label:'首单立减（新顾客首单专享）'},{value:'TIME_LIMIT',label:'限时折扣（全部顾客）'}]},
+       options:[{value:'NEWCOMER',label:'首单立减（新顾客首单专享）'},{value:'TIME_LIMIT',label:'限时折扣（全部顾客 · 需设时段）'}],
+       validate:(v,all)=>(v==='TIME_LIMIT'&&!(all.startAt||all.endAt||all.timeFrom||all.timeTo||(all.weekdays&&all.weekdays!=='all')))
+         ?'限时折扣请至少填一项生效时段；不设时段请选「首单立减」':''},
       {name:'title',label:'活动名称（仅后台识别用）',type:'text',required:true,full:true,placeholder:'如：新客立减 30 元'},
       {name:'mode',label:'优惠方式',type:'select',full:true,required:true,value:'fixed',
        options:[{value:'fixed',label:'立减固定金额（元）'},{value:'percent',label:'按百分比折扣'}]},
       {name:'amount',label:'立减金额（元）—— 优惠方式选「立减」时填写',type:'number',min:0,step:.01,value:30},
       {name:'percent',label:'折扣率（填 90 = 9 折）—— 选「折扣」时填写',type:'number',min:1,max:100,step:1},
-      {name:'maxDiscount',label:'单笔最多优惠金额（元，可空）',type:'number',min:0,step:.01}
+      {name:'maxDiscount',label:'单笔最多优惠金额（元，可空）',type:'number',min:0,step:.01},
+      {name:'startAt',label:'生效开始（北京时间，可空）',type:'text',full:true,placeholder:'2026-11-20 00:00',
+       help:'仅「限时折扣」有效。格式 YYYY-MM-DD HH:mm；留空 = 立即生效。',
+       validate:(v,all)=>{if(!v||all.ctype!=='TIME_LIMIT')return '';return /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/.test(String(v).trim())?'':'开始时间请填 YYYY-MM-DD HH:mm 或 YYYY-MM-DD';}},
+      {name:'endAt',label:'生效结束（北京时间，可空）',type:'text',full:true,placeholder:'2026-11-30 23:59',
+       help:'留空 = 不设结束时间；只填日期时按当天 23:59:59 计。',
+       validate:(v,all)=>{if(!v||all.ctype!=='TIME_LIMIT')return '';return /^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?$/.test(String(v).trim())?'':'结束时间请填 YYYY-MM-DD HH:mm 或 YYYY-MM-DD';}},
+      {name:'timeFrom',label:'每日生效时段 · 从',type:'time',help:'如 20:00；留空 = 不限制开始时刻'},
+      {name:'timeTo',label:'每日生效时段 · 到',type:'time',help:'如 22:00；留空 = 不限制结束时刻'},
+      {name:'weekdays',label:'每周生效日',type:'select',value:'all',full:true,
+       options:[{value:'all',label:'每天'},{value:'0,1,2,3,4',label:'工作日（周一至周五）'},
+                {value:'5,6',label:'周末（周六 / 周日）'},{value:'0',label:'仅周一'},{value:'4',label:'仅周五'}]}
     ],submitText:'创建活动'});
   if(!d)return;
   const rules={mode:String(d.mode||'fixed')};
@@ -448,8 +461,21 @@ window.addPriceCampaign=async()=>uxTask(async()=>{
     rules.amount=a;
   }
   if(Number(d.maxDiscount||0)>0)rules.maxDiscount=Number(d.maxDiscount);
-  await post('/api/club/'+CLUB+'/campaigns',{type:String(d.ctype),title:String(d.title||'').trim(),status:'ACTIVE',schedule:{},scope:{},rules});
-  toast('营销活动已创建，下单报价自动生效');loadMembers()});
+  // P1-3：真正把时段写进 schedule，不再写死 {} 让「限时折扣」永久生效。
+  const schedule={};
+  if(String(d.ctype)==='TIME_LIMIT'){
+    if(String(d.startAt||'').trim())schedule.startAt=String(d.startAt).trim();
+    if(String(d.endAt||'').trim())schedule.endAt=String(d.endAt).trim();
+    const toMin=s=>{const m=/^(\d{1,2}):(\d{2})$/.exec(String(s||''));return m?(Number(m[1])*60+Number(m[2])):null};
+    const f=toMin(d.timeFrom),t=toMin(d.timeTo);
+    if(f!==null)schedule.timeFrom=f;
+    if(t!==null)schedule.timeTo=t;
+    if(d.weekdays&&d.weekdays!=='all')schedule.weekdays=String(d.weekdays).split(',').map(Number);
+    if(!Object.keys(schedule).length){toast('限时折扣必须设置至少一项生效时段');return}
+    schedule.timezone='UTC+8';
+  }
+  await post('/api/club/'+CLUB+'/campaigns',{type:String(d.ctype),title:String(d.title||'').trim(),status:'ACTIVE',schedule,scope:{},rules});
+  toast(schedule.startAt||schedule.timeFrom?'限时活动已创建，按北京时间在设定时段生效':'营销活动已创建，下单报价自动生效');loadMembers()});
 /* 升级赠券（2026-10-26）：会员达到设定等级时自动送一张券；每个等级绑一张券，可换绑。 */
 window.addTierGift=async()=>{
   let tiers=[],benefits=[];

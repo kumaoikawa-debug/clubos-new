@@ -1191,6 +1191,18 @@ function buyGiftRuleText(r){
   const mg=Number(r.maxGifts||0)>0?` · 单笔最多 ${r.maxGifts} 份`:'';
   return `满 ${money(r.threshold)} 送 ${unit}${mg}`;
 }
+/* V6：把 schedule 翻译成人话。空 schedule 明确写「长期生效」，不再让
+   「限时折扣」名不副实；所有时段按北京时间 UTC+8 判定，与后端引擎同源。 */
+function campaignScheduleText(s){
+  const o=s||{},bits=[];
+  const fmt=v=>String(v||'').replace('T',' ').slice(0,16);
+  const mm=n=>{const v=Number(n||0);return String(Math.floor(v/60)).padStart(2,'0')+':'+String(v%60).padStart(2,'0')};
+  if(o.startAt)bits.push('从 '+fmt(o.startAt));
+  if(o.endAt)bits.push('至 '+fmt(o.endAt));
+  if(Array.isArray(o.weekdays)&&o.weekdays.length)bits.push('每周 '+o.weekdays.map(d=>'一二三四五六日'[Number(d)]||d).join('/'));
+  if(o.timeFrom||o.timeTo)bits.push('每日 '+(o.timeFrom!==undefined&&o.timeFrom!==null?mm(o.timeFrom):'00:00')+'–'+(o.timeTo!==undefined&&o.timeTo!==null?mm(o.timeTo):'23:59'));
+  return bits.length?bits.join(' · ')+'（北京时间）':'未设时段 · 长期生效';
+}
 function campaignTypeMeta(t){
   return ({
     NEWCOMER:['首单立减','',x=>`首单 ${discountRuleText(x.rules)}（仅本俱乐部无已支付订单的新顾客）`],
@@ -1204,7 +1216,8 @@ function renderBuyGiftCampaigns(list){
   const rows=(Array.isArray(list)?list:[]).filter(x=>campaignTypeMeta(x.type));
   box.innerHTML=rows.map(x=>{
     const [tag,cls,ruleFn]=campaignTypeMeta(x.type);
-    return `<div class="list-row"><div class="list-row__main"><div class="list-row__title"><span class="tag ${cls}">${tag}</span> ${esc(x.title)} <span class="tag">${esc(ruleFn(x)||'')}</span>${x.status==='ACTIVE'?'':' <span class="tag orange">已停用</span>'}</div><div class="list-row__sub">适用：俱乐部活动 + 营地（装备订单不参与）· 发放与立减幂等留痕</div></div><div class="list-row__end"><button class="btn ghost" onclick="toggleCampaign(${x.id},'${x.status==='ACTIVE'?'PAUSED':'ACTIVE'}')">${x.status==='ACTIVE'?'停用':'启用'}</button><button class="btn ghost" onclick="delCampaign(${x.id})">删除</button></div></div>`;
+    const sched=x.type==='TIME_LIMIT'?' · 时段：'+esc(campaignScheduleText(x.schedule)):'';
+    return `<div class="list-row"><div class="list-row__main"><div class="list-row__title"><span class="tag ${cls}">${tag}</span> ${esc(x.title)} <span class="tag">${esc(ruleFn(x)||'')}</span>${x.status==='ACTIVE'?'':' <span class="tag orange">已停用</span>'}</div><div class="list-row__sub">适用：俱乐部活动 + 营地（装备订单不参与）· 发放与立减幂等留痕${sched}</div></div><div class="list-row__end"><button class="btn ghost" onclick="toggleCampaign(${x.id},'${x.status==='ACTIVE'?'PAUSED':'ACTIVE'}')">${x.status==='ACTIVE'?'停用':'启用'}</button><button class="btn ghost" onclick="delCampaign(${x.id})">删除</button></div></div>`;
   }).join('')||'<div class="empty">还没有营销活动，点「＋ 立减 / 限时」或「＋ 买赠 / 邀请」创建</div>';
 }
 function grantTypeCn(t){return ({points:'活动积分',gift_card:'礼品卡额度',coupon:'优惠券'})[t]||t;}
