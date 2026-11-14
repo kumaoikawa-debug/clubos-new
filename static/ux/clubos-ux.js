@@ -30,9 +30,9 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
      面包屑信息重复，撤掉后纵向空间全部还给工作区。仅 club/platform 有 .topbar。 */
   bar.style.display='none';
   const scrim=document.createElement('div');scrim.className='ux-drawer-scrim';scrim.setAttribute('aria-hidden','true');document.body.appendChild(scrim);
-  const toggle=workspace.querySelector('.ux-mobile-toggle');let drawerSession=null;
-  const close=()=>{sidebar.classList.remove('ux-open');scrim.classList.remove('ux-open');toggle.setAttribute('aria-expanded','false');drawerSession?.release();drawerSession=null;sidebar.inert=innerWidth<=900};
-  const open=()=>{if(sidebar.classList.contains('ux-open'))return;sidebar.inert=false;sidebar.classList.add('ux-open');scrim.classList.add('ux-open');toggle.setAttribute('aria-expanded','true');drawerSession=uxDialogSession(sidebar,{onEscape:close,initialFocus:'#uxNavSearch'})};
+  const toggle=workspace.querySelector('.ux-mobile-toggle');let drawerSession=null;let _drawerScrollY=0;
+  const close=()=>{if(!sidebar.classList.contains('ux-open'))return;sidebar.classList.remove('ux-open');scrim.classList.remove('ux-open');toggle.setAttribute('aria-expanded','false');drawerSession?.release();drawerSession=null;sidebar.inert=innerWidth<=900;document.body.classList.remove('ux-drawer-open');window.scrollTo(0,_drawerScrollY)};
+  const open=()=>{if(sidebar.classList.contains('ux-open'))return;_drawerScrollY=window.scrollY||document.documentElement.scrollTop||0;sidebar.inert=false;sidebar.classList.add('ux-open');scrim.classList.add('ux-open');toggle.setAttribute('aria-expanded','true');document.body.classList.add('ux-drawer-open');drawerSession=uxDialogSession(sidebar,{onEscape:close,initialFocus:'#uxNavSearch'})};
   toggle.onclick=()=>sidebar.classList.contains('ux-open')?close():open();scrim.onclick=close;
   const searchBox=workspace.querySelector('.workspace-search'),tools=workspace.querySelector('.workspace-tools');
   const placeSearch=()=>{if(innerWidth<=900){sidebar.insertBefore(searchBox,nav);sidebar.inert=!sidebar.classList.contains('ux-open')}else{close();sidebar.inert=false;tools.prepend(searchBox)}};

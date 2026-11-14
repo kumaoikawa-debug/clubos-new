@@ -276,10 +276,17 @@ window.addRedeemCoupon=()=>uxTask(()=>couponCreateFlow('添加商品兑换券','
   {name:'cashValue',label:'券价值（元，兑换时抵扣的金额）',type:'number',min:0,step:.01,value:68,required:true},
   {name:'thresholdAmount',label:'使用门槛（元，满此金额可用；0 = 无门槛）',type:'number',min:0,step:.01,value:0}
 ])));
+/* #911：详情 / 编辑 / 下架不再依赖 window._clubBenefits（该全局从未被赋值，
+   导致点击必现「读取失败」）。改为直接按 id 拉取本俱乐部券列表后定位，
+   与后台 GET /api/club/{club}/benefits 返回字段一致，且包含下架券（include_inactive）。 */
+async function _getClubBenefit(id){
+  try{const list=await api(`/api/club/${CLUB}/benefits`);return (list||[]).find(x=>Number(x.id)===Number(id))||null;}
+  catch(e){return null;}
+}
 /* 编辑（#860）：三型券共用一套字段，提交走 PATCH（cpnFaceDialog 透传全部新字段）。 */
 window.editCoupon=async id=>uxTask(async()=>{
-  const b=(window._clubBenefits||[]).find(x=>Number(x.id)===Number(id));
-  if(!b){showAlert({title:'读取失败',message:'请重新打开「俱乐部营销」再试'});return;}
+  const b=await _getClubBenefit(id);
+  if(!b){showAlert({title:'读取失败',message:'优惠券信息加载失败，请稍后重试'});return;}
   const mode=String(b.mode||'fixed'),o=await couponScopeOptions();
   let extra;
   if(mode==='threshold')extra=[
@@ -302,15 +309,15 @@ window.editCoupon=async id=>uxTask(async()=>{
   if(ok){toast('优惠券已更新');loadMembers()}
 });
 window.delCoupon=async id=>uxTask(async()=>{
-  const b=(window._clubBenefits||[]).find(x=>Number(x.id)===Number(id));
+  const b=await _getClubBenefit(id);
   const name=b?b.title:'该优惠券';
   if(!await uxConfirm({title:'下架优惠券',message:'确定下架「'+name+'」？下架后顾客无法再领取，但已领取 / 已核销的记录不受影响。',confirmText:'下架'}))return;
   try{await api(`/api/club/${CLUB}/benefits/${id}`,{method:'DELETE'});toast('已下架');loadMembers()}
   catch(e){showAlert({title:'下架失败',message:e.message})}
 });
 window.couponDetail=async id=>{
-  const b=(window._clubBenefits||[]).find(x=>Number(x.id)===Number(id));
-  if(!b){showAlert({title:'读取失败',message:'请重新打开「俱乐部营销」再试'});return;}
+  const b=await _getClubBenefit(id);
+  if(!b){showAlert({title:'读取失败',message:'优惠券信息加载失败，请稍后重试'});return;}
   const scopeCn=({all:'活动 + 营地通用',activity:'仅限活动报名',camp:'仅限营地消费',product:'指定商品',category:'指定分类'})[b.applies_to]||b.applies_to;
   const kindCn=({activity:'活动',camp:'营地',pitch:'营位',product:'商品',category:'商品分类',
     camp_product:'营地商品',activity_category:'活动分类'})[b.scope_ref_kind]||'';

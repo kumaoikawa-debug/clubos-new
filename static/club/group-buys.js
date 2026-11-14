@@ -10,6 +10,7 @@
   const CLUB = getClubId();
   const B = `/api/club/${CLUB}/group-buys`;
   const $ = (s, r = document) => r.querySelector(s);
+  let ACTIVITIES = [];
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const num = (v, d) => { const n = Number(v); return Number.isFinite(n) ? n : (d || 0); };
   const yuan = n => '¥' + Number(n || 0).toFixed(2);
@@ -22,7 +23,7 @@
     $('#fId').value = '';
     $('#formTitle').textContent = '新建拼团活动';
     $('#fTitle').value = '';
-    $('#fActivity').value = '';
+    $('#fActivity').value = '0';
     $('#fRequired').value = 3;
     $('#fPrice').value = '';
     $('#fOriginal').value = '';
@@ -66,7 +67,7 @@
         <div class="item__head">
           <div><span class="item__title">#${c.id} · ${esc(c.title)}</span>
             <span class="badge ${CP_CLS[c.status] || ''}">${CP_CN[c.status] || esc(c.status)}</span></div>
-          <div class="muted">活动 ${c.activityId || '未关联'} · 团数 ${c.teamCount != null ? c.teamCount : '-'}</div>
+          <div class="muted">活动 ${c.activityId ? ('#' + c.activityId + ' · ' + esc(_actTitle(c.activityId))) : '未关联'} · 团数 ${c.teamCount != null ? c.teamCount : '-'}</div>
         </div>
         <div class="muted" style="margin-top:5px">
           ${c.requiredPeople} 人成团 · 拼团价 <b>${yuan(c.groupPrice)}</b>
@@ -115,7 +116,23 @@
       '</tbody></table></div>';
   }
 
-  function loadAll() { loadSummary(); loadCampaigns(); loadTeams(); }
+  async function loadActivities() {
+    const sel = $('#fActivity');
+    if (!sel) return;
+    let list = [];
+    try { list = await api(`/api/club/${CLUB}/activities`); } catch (_) { list = []; }
+    ACTIVITIES = list || [];
+    const cur = sel.value;
+    sel.innerHTML = '<option value="0">不关联（独立拼团）</option>' +
+      ACTIVITIES.map(a => `<option value="${a.id}">#${a.id} · ${esc(a.title || '未命名活动')}</option>`).join('');
+    if (cur) sel.value = cur;
+  }
+  function _actTitle(id) {
+    const a = ACTIVITIES.find(x => String(x.id) === String(id));
+    return a ? (a.title || '未命名活动') : '未知活动';
+  }
+
+  function loadAll() { loadSummary(); loadCampaigns(); loadTeams(); loadActivities(); }
 
   $('#saveCampaign').addEventListener('click', async () => {
     const p = readForm();
@@ -150,7 +167,7 @@
       $('#fId').value = c.id;
       $('#formTitle').textContent = `编辑活动 #${c.id}`;
       $('#fTitle').value = c.title || '';
-      $('#fActivity').value = c.activityId || '';
+      $('#fActivity').value = c.activityId ? String(c.activityId) : '0';
       $('#fRequired').value = c.requiredPeople;
       $('#fPrice').value = c.groupPrice;
       $('#fOriginal').value = c.originalPrice;

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>ClubOS NEW · 拼团管理</title>
   <link rel="stylesheet" href="/static/shared.css?v=20261113b">
-  <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261111z">
+  <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261114a">
   <link rel="stylesheet" href="/static/club/club-glass.css?v=20261112b">
   <style>
     body{margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#16362b}
@@ -58,7 +58,7 @@
         <h4 id="formTitle">新建拼团活动</h4>
         <input type="hidden" id="fId">
         <div class="row"><label>活动标题</label><input id="fTitle" placeholder="如：雪山徒步 3 人团"></div>
-        <div class="row"><label>关联活动 ID</label><input type="number" class="sm" id="fActivity" min="0" step="1" placeholder="活动 id">
+        <div class="row"><label>关联活动</label><select id="fActivity" class="sm"><option value="0">不关联（独立拼团）</option></select>
           <label style="min-width:auto">成团人数</label><input type="number" class="sm" id="fRequired" min="2" max="100" value="3"></div>
         <div class="row"><label>拼团价(元)</label><input type="number" class="sm" id="fPrice" min="0" step="0.01" placeholder="299">
           <label style="min-width:auto">原价(元)</label><input type="number" class="sm" id="fOriginal" min="0" step="0.01" placeholder="399"></div>
@@ -96,6 +96,6 @@
   </div>
 
   <script src="/static/shared.js?v=20261113b"></script>
-  <script src="/static/club/group-buys.js?v=20261113c"></script>
+  <script src="/static/club/group-buys.js?v=20261114a"></script>
 </body>
 </html>
