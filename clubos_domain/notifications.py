@@ -10,8 +10,13 @@
 3. inapp 站内信为默认可用通道（无需外部网关），wechat 复用现有企微集成，email/sms 配置齐备才真发。
 
 v0.40：dispatch 新增**可选** hub 参数（由 settings_hub.notify_policy 提供），用于
-「外发总开关」与「免打扰时段」。不传 hub 时行为与 v0.36 完全一致 —— 既有调用零回归。
-站内信不受这两项限制（用户主动查看，不构成打扰）。
+「外发总开关」与「免打扰时段」。站内信不受这两项限制（用户主动查看，不构成打扰）。
+
+BUG-HUB-002：早期「不传 hub 就不启用策略」让业务链路（签到奖励 / 拼团成功等）
+漏传即可绕过「关闭后企微 / 邮件 / 短信一律不发」的界面承诺。现在 dispatch 在
+未显式传 hub 时自己按 club_id 读 settings_hub.notify_policy，所有外发调用点一律
+受控；显式 hub 仍可用于注入测试时间或强制策略。读取异常一律回落「不限制」，
+延续三铁律：绝不因配置读取失败阻断业务。
 """
 from __future__ import annotations
 
@@ -100,6 +105,24 @@ def _quiet_now(hub) -> bool:
         return False
 
 
+def _policy_from_db(c, club_id):
+    """从设置中枢读外发策略；任何异常回落「不限制」（三铁律：不误伤业务）。
+
+    BUG-HUB-002：由 dispatch 内部统一取策略，避免每个调用点各自记得传 hub。
+    """
+    try:
+        from . import settings_hub as hub_mod
+        # 旧库 / 单测内存库没有中枢表时按「尚未配置策略」处理：不把内置默认的
+        # 22:00-08:00 免打扰强加给从未接入设置中枢的环境（既有调用零回归）。
+        exists = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' "
+                           "AND name='settings_hub_values'").fetchone()
+        if not exists:
+            return {'outboundEnabled': True, 'quietHours': (None, None)}
+        return hub_mod.notify_policy(c, club_id)
+    except Exception:
+        return {'outboundEnabled': True, 'quietHours': (None, None)}
+
+
 def dispatch(c, *, club_id: int, code: str, ctx: dict | None = None,
              user_id: int | None = None, channel_override: str | None = None,
              hub: dict | None = None) -> dict:
@@ -112,7 +135,8 @@ def dispatch(c, *, club_id: int, code: str, ctx: dict | None = None,
         wechat → POST 到 club_integrations 里的企微 webhook；
         email/sms → 配置齐备才发，否则 skipped（避免无网关报错）。
     - hub（可选，设置中枢策略）：{outboundEnabled:bool, quietHours:(start,end), hour:int}。
-      仅约束外发通道（wechat/email/sms），inapp 不受限；不传则不启用该层判断。
+      仅约束外发通道（wechat/email/sms），inapp 不受限。未传时由 dispatch 自己
+      读 settings_hub.notify_policy，保证「不传」不等于「不受控」。
     """
     result = {'sent': False, 'channel': None, 'reason': 'no-template'}
     try:
@@ -136,12 +160,15 @@ def dispatch(c, *, club_id: int, code: str, ctx: dict | None = None,
             result['reason'] = 'channel-disabled'
             return result
 
-        # ── 设置中枢策略（可选）：外发总开关 + 免打扰时段，只作用于外发通道 ──
-        if channel != 'inapp' and isinstance(hub, dict):
-            if not hub.get('outboundEnabled', True):
+        # ── 设置中枢策略：外发总开关 + 免打扰时段，只作用于外发通道 ──
+        # 未显式传 hub 时自动读库，堵住「漏传参数 = 绕过总开关」的口子。
+        policy = (hub if isinstance(hub, dict)
+                  else (_policy_from_db(c, club_id) if hub is None else None))
+        if channel != 'inapp' and isinstance(policy, dict):
+            if not policy.get('outboundEnabled', True):
                 result['reason'] = 'hub-outbound-disabled'
                 return result
-            if _quiet_now(hub):
+            if _quiet_now(policy):
                 result['reason'] = 'hub-quiet-hours'
                 return result
 

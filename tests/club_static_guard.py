@@ -133,12 +133,26 @@ for asset in changed:
     cur = {end: tokens(htmls[end], asset)[0] if tokens(htmls[end], asset) else None
            for end in ENDS}
     referenced = [end for end in ENDS if cur[end] is not None]
-    ck('%s 在 index.html 里有缓存版本戳' % os.path.basename(asset), bool(referenced),
-       ','.join('%s=%s' % (e, cur[e]) for e in ENDS if cur[e]))
+    # 独立页（如 static/club/settings-hub.html）不通过四端 index.html 引用脚本，
+    # 版本戳挂在自己的宿主 HTML 上。补上这类资产的宿主探测，避免每改一次独立页
+    # 脚本都误报「没有缓存版本戳」，同时仍然守住「改码必 bump」。
+    host = None
+    if not referenced:
+        stem = os.path.splitext(os.path.basename(asset))[0]
+        cand = os.path.join(os.path.dirname(asset), stem + '.html')
+        if os.path.isfile(os.path.join(ROOT, cand)) and ('/' + asset + '?v=') in read(cand):
+            host = cand
+            htok = tokens(read(cand), asset)
+            if htok:
+                cur['host'] = htok[0]
+                referenced = ['host']
+    ck('%s 在页面里有缓存版本戳' % os.path.basename(asset), bool(referenced),
+       ','.join('%s=%s' % (e, cur[e]) for e in referenced))
     # 必须比基线新：这是「改了码就要 bump」的自动比对，不钉死具体日期。
     stale = []
     for end in referenced:
-        old = tokens(baseline_html[end], asset)
+        old_html = baseline_html[end] if end in ENDS else (git('show', '%s:%s' % (BASE_REF, host)) or '')
+        old = tokens(old_html, asset)
         if old and cur[end] and cur[end] <= max(old):
             stale.append('%s: %s <= %s' % (end, cur[end], max(old)))
     ck('%s 版本戳高于基线（改码必 bump）' % os.path.basename(asset), not stale,

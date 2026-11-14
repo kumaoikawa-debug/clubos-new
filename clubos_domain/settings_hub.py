@@ -61,7 +61,7 @@ REGISTRY = (
     {'key': 'storedValue', 'label': '会员储值', 'group': 'commerce',
      'page': '/static/club/stored-value.html', 'api': '/api/club/{club_id}/stored-value/config',
      'probe': {'sql': 'SELECT enabled FROM stored_value_config WHERE club_id=?', 'mode': 'scalar'},
-     'toggleable': True, 'note': '关闭后 C 端隐藏储值入口与规则'},
+     'toggleable': True, 'note': '关闭后会员储值充值与抵扣将被拒绝，历史余额保留'},
     {'key': 'groupBuy', 'label': '拼团', 'group': 'commerce',
      'page': '/static/club/group-buys.html', 'api': '/api/club/{club_id}/group-buys/campaigns',
      'probe': {'sql': "SELECT COUNT(*) FROM group_buy_campaigns WHERE club_id=? AND status='ACTIVE'", 'mode': 'count'},
@@ -69,11 +69,11 @@ REGISTRY = (
     {'key': 'affiliate', 'label': '分销员', 'group': 'commerce',
      'page': '/static/club/affiliates.html', 'api': '/api/club/{club_id}/affiliate/config',
      'probe': {'sql': 'SELECT enabled FROM affiliate_configs WHERE club_id=?', 'mode': 'scalar'},
-     'toggleable': True, 'note': '关闭后 C 端隐藏推广中心、佣金不再入账（历史数据保留）'},
+     'toggleable': True, 'note': '关闭后分销相关接口停用、佣金不再新增，历史数据保留'},
     {'key': 'giftCard', 'label': '礼品卡', 'group': 'commerce',
      'page': '/static/club/gift-cards.html', 'api': '/api/club/{club_id}/gift-cards/config',
      'probe': {'sql': 'SELECT enabled FROM gift_card_configs WHERE club_id=?', 'mode': 'scalar'},
-     'toggleable': True, 'note': '关闭后 C 端隐藏兑换入口、兑换不再入账（历史余额保留）'},
+     'toggleable': True, 'note': '关闭后礼品卡兑换将被拒绝，历史余额保留'},
     {'key': 'miniprogramBridge', 'label': '小程序对接', 'group': 'commerce',
      'page': '/static/club/miniprogram-bridge.html', 'api': '/api/club/{club_id}/miniprogram-bridge/config',
      'probe': {'sql': 'SELECT COALESCE((SELECT enabled FROM miniprogram_bridge_config WHERE club_id=?),1)', 'mode': 'scalar'},
@@ -86,15 +86,15 @@ REGISTRY = (
     {'key': 'checkin', 'label': '每日签到', 'group': 'engagement',
      'page': '/static/club/engagement.html', 'api': '/api/club/{club_id}/engagement/config',
      'probe': {'sql': "SELECT enabled FROM engagement_configs WHERE club_id=? AND kind='CHECKIN'", 'mode': 'scalar'},
-     'toggleable': True, 'note': '关闭后 C 端规则下发为未开启'},
+     'toggleable': True, 'note': '关闭后该玩法对会员停止开放，历史记录保留'},
     {'key': 'lottery', 'label': '幸运抽奖', 'group': 'engagement',
      'page': '/static/club/engagement.html', 'api': '/api/club/{club_id}/engagement/config',
      'probe': {'sql': "SELECT enabled FROM engagement_configs WHERE club_id=? AND kind='LOTTERY'", 'mode': 'scalar'},
-     'toggleable': True, 'note': '关闭后 C 端规则下发为未开启'},
+     'toggleable': True, 'note': '关闭后该玩法对会员停止开放，历史记录保留'},
     {'key': 'stamp', 'label': '集章兑换', 'group': 'engagement',
      'page': '/static/club/engagement.html', 'api': '/api/club/{club_id}/engagement/config',
      'probe': {'sql': "SELECT enabled FROM engagement_configs WHERE club_id=? AND kind='STAMP'", 'mode': 'scalar'},
-     'toggleable': True, 'note': '关闭后 C 端规则下发为未开启'},
+     'toggleable': True, 'note': '关闭后该玩法对会员停止开放，历史记录保留'},
 
     {'key': 'notifyChannels', 'label': '通知通道', 'group': 'notification',
      'page': '/static/club/notifications.html', 'api': '/api/club/{club_id}/notification-channels',
@@ -290,12 +290,14 @@ def _probe(c, club_id: int, item: dict):
     try:
         r = c.execute(p['sql'], (int(club_id),)).fetchone()
         if p['mode'] == 'count':
-            return {'count': int(r[0] or 0) if r else 0, 'configured': bool(r and int(r[0] or 0) > 0)}
+            return {'count': int(r[0] or 0) if r else 0,
+                    'configured': bool(r and int(r[0] or 0) > 0), 'error': None}
         v = r[0] if r else None
-        return {'count': None, 'configured': bool(v) if v is not None else False}
-    except Exception:
-        # 旧库 / 表还没建 / 字段缺失 → 状态未知，不编造
-        return {'count': None, 'configured': None}
+        return {'count': None, 'configured': bool(v) if v is not None else False, 'error': None}
+    except Exception as e:
+        # 旧库 / 表还没建 / 字段缺失 → 状态未知，不编造；同时把具体错误带给后台，
+        # 让「状态未知」可诊断（历史上 owner_club_id 列名写错就是这样被静默吞掉的）。
+        return {'count': None, 'configured': None, 'error': str(e)[:160]}
 
 
 def probe_selfcheck(c, club_id: int = 1) -> list[dict]:
@@ -329,6 +331,7 @@ def snapshot(c, club_id: int) -> dict:
             'hubEnabled': hub_on if m['toggleable'] else None,
             'hubOverridden': hub['overridden'] if hub else False,
             'effectiveEnabled': (st['configured'] is not False) and hub_on,
+            'probeError': st.get('error'),
         })
     prefs = []
     for p in PREFERENCES:
@@ -344,8 +347,13 @@ def snapshot(c, club_id: int) -> dict:
     for g in sorted(GROUPS, key=lambda x: x['order']):
         groups.append({'key': g['key'], 'label': g['label'],
                        'modules': [m['key'] for m in REGISTRY if m['group'] == g['key']]})
+    # BUG-HUB-009：统计名叫「覆盖的偏好」，口径必须是「当前层级自己写的覆盖」。
+    # 过去只要 get() 读到值就计入（scope='platform' 也算），导致俱乐部零覆盖时
+    # 平台默认一设就显示 1，和页面里逐项徽章「平台默认」对不上。
+    layer = 'platform' if int(club_id) == PLATFORM_CLUB_ID else 'club'
     return {
         'clubId': int(club_id),
+        'layer': layer,
         'groups': groups,
         'modules': modules,
         'preferences': prefs,
@@ -354,7 +362,7 @@ def snapshot(c, club_id: int) -> dict:
             'configuredModules': sum(1 for m in modules if m['configured'] is True),
             'unknownModules': sum(1 for m in modules if m['configured'] is None),
             'disabledByHub': sum(1 for m in modules if m['toggleable'] and not m['hubEnabled']),
-            'overriddenPreferences': sum(1 for p in prefs if p['overridden']),
+            'overriddenPreferences': sum(1 for p in prefs if p['scope'] == layer),
         },
     }
 
@@ -408,8 +416,11 @@ def set_many(c, club_id: int, changes: dict, operator: str = '', note: str = '')
     return {'updated': updated, 'skipped': skipped}
 
 
-def reset(c, club_id: int, keys) -> dict:
-    """删除俱乐部级覆盖 → 回落平台默认 / 内置默认。keys 为 None 时重置全部允许项。"""
+def reset(c, club_id: int, keys, operator: str = '', note: str = '') -> dict:
+    """删除俱乐部级覆盖 → 回落平台默认 / 内置默认。keys 为 None 时重置全部允许项。
+
+    BUG-HUB-010：RESET 也写入操作人，否则审计表「操作人」恒为「—」，追溯断链。
+    """
     allowed = list(PREF_BY_KEY.keys()) + [MODULE_PREFIX + k for k in TOGGLEABLE]
     targets = [str(k) for k in keys] if keys else allowed
     invalid = [k for k in targets if k not in allowed]
@@ -427,7 +438,8 @@ def reset(c, club_id: int, keys) -> dict:
             c.execute("""INSERT INTO settings_hub_audit
                          (club_id,key,old_value_json,new_value_json,action,operator,note,created_at)
                          VALUES(?,?,?,?,?,?,?,?)""",
-                      (int(club_id), k, old_raw, None, 'RESET', '', '', now_str()))
+                      (int(club_id), k, old_raw, None, 'RESET',
+                       str(operator or '')[:60], str(note or '')[:VALUE_MAX], now_str()))
             done.append(k)
         except Exception:
             continue

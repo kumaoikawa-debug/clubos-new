@@ -27,7 +27,9 @@ def _memory_db(with_module_tables=True):
         c.execute("CREATE TABLE clubs (id INTEGER PRIMARY KEY, name TEXT, c_profile_json TEXT)")
         c.execute("CREATE TABLE club_mp_settings (club_id INTEGER, settings_json TEXT)")
         c.execute("CREATE TABLE page_layouts (club_id INTEGER, status TEXT)")
-        c.execute("CREATE TABLE marketing_campaigns (club_id INTEGER, status TEXT)")
+        # REGISTRY 的 campaigns probe 用 owner_type/owner_club_id（P1-4 修正后的真实表结构）；
+        # 旧内存表只建 club_id，导致这条 SQL 恒抛异常、count 恒为 None。
+        c.execute("CREATE TABLE marketing_campaigns (owner_type TEXT, owner_club_id INTEGER, status TEXT)")
         c.execute("CREATE TABLE stored_value_config (club_id INTEGER, enabled INTEGER)")
         c.execute("CREATE TABLE group_buy_campaigns (club_id INTEGER, status TEXT)")
         c.execute("CREATE TABLE engagement_configs (club_id INTEGER, kind TEXT, enabled INTEGER)")
@@ -187,8 +189,8 @@ class TestSnapshot(unittest.TestCase):
         c.execute("INSERT INTO page_layouts VALUES(1,'PUBLISHED')")
         c.execute("INSERT INTO page_layouts VALUES(1,'DRAFT')")
         c.execute("INSERT INTO stored_value_config VALUES(1,1)")
-        c.execute("INSERT INTO marketing_campaigns VALUES(1,'ACTIVE')")
-        c.execute("INSERT INTO marketing_campaigns VALUES(1,'DRAFT')")
+        c.execute("INSERT INTO marketing_campaigns VALUES('CLUB',1,'ACTIVE')")
+        c.execute("INSERT INTO marketing_campaigns VALUES('CLUB',1,'DRAFT')")
         c.execute("INSERT INTO engagement_configs VALUES(1,'CHECKIN',1)")
         c.execute("INSERT INTO stores VALUES(1,'ACTIVE')")
         c.execute("INSERT INTO notification_channels VALUES(1,1)")
@@ -237,7 +239,11 @@ class TestSnapshot(unittest.TestCase):
         self.assertEqual(by['portal.homeLayoutMode']['scope'], 'platform')
         self.assertTrue(by['portal.homeLayoutMode']['overridden'])
         self.assertEqual(by['notify.quietHoursEnd']['value'], 8)
-        self.assertEqual(s['summary']['overriddenPreferences'], 1)
+        # BUG-HUB-009：平台默认不算「本俱乐部覆盖」，俱乐部自己写一条才算。
+        self.assertEqual(s['summary']['overriddenPreferences'], 0)
+        sh.set_many(c, 1, {'notify.quietHoursStart': 21})
+        self.assertEqual(sh.snapshot(c, 1)['summary']['overriddenPreferences'], 1)
+        self.assertEqual(sh.snapshot(c, 0)['summary']['overriddenPreferences'], 1)
 
 
 class TestSetResetAudit(unittest.TestCase):
@@ -282,8 +288,10 @@ class TestSetResetAudit(unittest.TestCase):
     def test_reset_all(self):
         c = _memory_db()
         sh.set_many(c, 1, {'module.pageLayout': False, 'notify.outboundEnabled': False})
-        r = sh.reset(c, 1, None)
+        r = sh.reset(c, 1, None, operator='admin2')
         self.assertEqual(set(r['reset']), {'module.pageLayout', 'notify.outboundEnabled'})
+        resets = [a for a in sh.audit_list(c, 1) if a['action'] == 'RESET']
+        self.assertTrue(resets and all(a['operator'] == 'admin2' for a in resets))
         self.assertTrue(sh.is_module_enabled(c, 1, 'pageLayout'))
         self.assertIs(sh.get(c, 1, 'notify.outboundEnabled')['value'], True)
 

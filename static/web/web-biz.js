@@ -224,14 +224,14 @@ function bizCard(x){
 window.loadWability=async function(){
   const sec=$('#wability'),box=$('#bizIntro');
   if(!sec||!box)return;
-  const navBtn=document.querySelector('.web-nav button[data-wv="wability"]');
+  /* BUG-HUB-007：nav 显隐统一由 camp.js:applyModuleSwitches 写入，本函数只负责
+     业务介绍内容；两个异步函数各写一次 display 会造成刷新间 tab 数随机变化。 */
   let b=null;
   try{
     const c=await api(`/api/public/clubs/${CLUB}`);
     try{b=c.biz_section?JSON.parse(c.biz_section):null}catch(e){b=null}
   }catch(e){b=null}
   const on=!!(b&&b.enabled&&(b.items||[]).length);
-  if(navBtn)navBtn.style.display=on?'':'none';
   box.innerHTML=on
     ?`<div class="w-biz__head"><h2>${esc(b.title||'业务介绍')}</h2>${b.intro?`<p>${esc(b.intro)}</p>`:''}</div>`
       +`<div class="w-biz__list">${b.items.map(bizCard).join('')}</div>`
@@ -305,9 +305,62 @@ window.wv=function(id,btn){
   }catch(e){}
   return r;
 };
+/* BUG-HUB-008 / BUG-HUB-017：C 端启动时读取设置中枢脱敏视图。
+   过去 H5 从未请求 /api/public/clubs/{id}/settings-hub，后台把 9 个模块开关
+   全关掉后会员端零可见变化，REGISTRY 里「关闭后 C 端隐藏入口」只是设计承诺。
+   这里统一消费：① 暴露 window.ClubOSHubPolicy 给后续组件；② 隐藏带
+   data-hub-module 的入口并拦截点击；③ 在「我的」页说明通知策略（外发关闭 /
+   免打扰时段），让会员知道消息可能延迟。 */
+window.ClubOSHubPolicy=null;
+window.ClubOSHubModuleEnabled=function(){return true};
+window.applyHubPolicy=async function(){
+  let p=null;
+  try{p=await api(`/api/public/clubs/${CLUB}/settings-hub`,{cache:'no-store'})}catch(e){p=null}
+  window.ClubOSHubPolicy=p;
+  if(!p)return;
+  const enabled=k=>{
+    const m=p.modules||{};
+    if(k in m)return m[k]!==false;
+    if(k==='pageLayout')return p.decoratorEnabled!==false;
+    if(k==='storedValue')return p.storedValueEnabled!==false;
+    const eng=p.engagementEnabled||{};
+    if(k in eng)return eng[k]!==false;
+    return true;
+  };
+  window.ClubOSHubModuleEnabled=enabled;
+  document.querySelectorAll('[data-hub-module]').forEach(el=>{
+    const on=enabled(el.dataset.hubModule);
+    el.dataset.hubOff=on?'0':'1';
+    el.style.display=on?'':'none';
+    el.setAttribute('aria-disabled',on?'false':'true');
+    if(!on)el.title='该功能暂未开放';
+  });
+  const note=document.getElementById('hubNotifyNote');
+  if(note){
+    const n=p.notify||{}, q=n.quietHours||[null,null];
+    const quiet=q[0]!=null&&q[1]!=null&&q[0]!==q[1];
+    const off=n.outboundEnabled===false;
+    if(off||quiet){
+      note.hidden=false;
+      const pad=x=>String(x).padStart(2,'0');
+      note.textContent=off?'俱乐部已关闭外发通知，消息可能延迟，请留意站内信。'
+        :`为免打扰，${pad(q[0])}:00–${pad(q[1])}:00 期间的消息可能延迟发送。`;
+    }else{note.hidden=true;note.textContent=''}
+  }
+};
+/* 动态注入的子页入口同样受控：捕获阶段拦住被关闭模块的点击。 */
+document.addEventListener('click',e=>{
+  if(!window.ClubOSHubPolicy||!e.target||!e.target.closest)return;
+  const el=e.target.closest('[data-hub-module]');
+  if(!el)return;
+  if(el.dataset.hubOff==='1'||!window.ClubOSHubModuleEnabled(el.dataset.hubModule)){
+    e.preventDefault();e.stopPropagation();
+    try{window.toast&&window.toast('该功能暂未开放')}catch(_){}
+  }
+},true);
+
 /* 首次进入也挂一次（wv 首调发生在 web.js 的 start 里，本文件后加载已接管）。
-   loadWability 也在这里跑一次：导航入口的显示与否要在**页面加载时**就定下来，
-   否则老板没配业务介绍时，「户外能力」入口会一直挂在那儿，点进去才发现是空的。 */
-if(document.readyState!=='loading'){loadHome();loadWability();applyClubBrand()}
-else document.addEventListener('DOMContentLoaded',()=>{loadHome();loadWability();applyClubBrand()});
+   loadWability 也在这里跑一次：业务介绍内容的显隐要在页面加载时就定下来。 */
+if(document.readyState!=='loading'){loadHome();loadWability();applyClubBrand();applyHubPolicy()}
+else document.addEventListener('DOMContentLoaded',()=>{loadHome();loadWability();applyClubBrand();applyHubPolicy()});
 })();

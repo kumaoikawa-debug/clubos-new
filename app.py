@@ -6138,7 +6138,7 @@ def public_create_stored_value_recharge(club_id:int, request:Request, payload:di
         raise HTTPException(401, 'authentication required')
     with conn() as c:
         if not hub_mod.is_module_enabled(c, club_id, 'storedValue'):
-            raise HTTPException(403, '会员储值已被设置中枢关闭')
+            raise HTTPException(403, '该功能暂未开放，请联系俱乐部')
         return _sv_create_recharge(c, club_id, uid, payload, 'member:%d' % uid)
 
 
@@ -6161,7 +6161,7 @@ def public_stored_value_pay(club_id:int, request:Request, payload:dict=Body(...)
     with conn() as c:
         cfg = _sv_config(c, club_id)
         if not hub_mod.is_module_enabled(c, club_id, 'storedValue'):
-            raise HTTPException(403, '会员储值已被设置中枢关闭')
+            raise HTTPException(403, '该功能暂未开放，请联系俱乐部')
         if not cfg['enabled']:
             raise HTTPException(409, '该俱乐部尚未开启会员储值')
         acc = row(c.execute('SELECT balance_cents FROM stored_value_accounts WHERE club_id=? AND user_id=?',
@@ -6226,7 +6226,8 @@ def _eng_notify(c, club_id, uid, label, points):
     try:
         if points > 0:
             notif_mod.dispatch(c, club_id=club_id, code='engagement_reward',
-                               ctx={'kind': label, 'points': points}, user_id=uid)
+                               ctx={'kind': label, 'points': points}, user_id=uid,
+                               hub=hub_mod.notify_policy(c, club_id))
     except Exception:
         pass
 
@@ -6347,7 +6348,7 @@ def public_engagement_checkin(club_id:int, request:Request, payload:dict=Body(..
     uid = _eng_uid(request, payload.get('userId') or 0)
     with conn() as c:
         if not hub_mod.is_module_enabled(c, club_id, 'checkin'):
-            raise HTTPException(403, '签到已被设置中枢关闭')
+            raise HTTPException(403, '该功能暂未开放，请联系俱乐部')
         res = eng_mod.checkin(c, club_id=club_id, user_id=uid)
         if not res['ok']:
             _eng_raise(res)
@@ -6361,7 +6362,7 @@ def public_engagement_draw(club_id:int, request:Request, payload:dict=Body(...))
     uid = _eng_uid(request, payload.get('userId') or 0)
     with conn() as c:
         if not hub_mod.is_module_enabled(c, club_id, 'lottery'):
-            raise HTTPException(403, '抽奖已被设置中枢关闭')
+            raise HTTPException(403, '该功能暂未开放，请联系俱乐部')
         res = eng_mod.draw(c, club_id=club_id, user_id=uid)
         if not res['ok']:
             _eng_raise(res)
@@ -6378,7 +6379,7 @@ def public_engagement_stamp(club_id:int, request:Request, payload:dict=Body(...)
         raise HTTPException(400, 'action 必填')
     with conn() as c:
         if not hub_mod.is_module_enabled(c, club_id, 'stamp'):
-            raise HTTPException(403, '集章已被设置中枢关闭')
+            raise HTTPException(403, '该功能暂未开放，请联系俱乐部')
         res = eng_mod.add_stamp(c, club_id=club_id, user_id=uid, action=action)
         if not res['ok']:
             _eng_raise(res)
@@ -6425,9 +6426,10 @@ def _gb_notify_success(c, club_id, team, members):
     try:
         ctx = {'teamId': team.get('id'), 'price': team.get('price'),
                'people': team.get('memberCount')}
+        _hub = hub_mod.notify_policy(c, club_id)
         for m in members or []:
             notif_mod.dispatch(c, club_id=club_id, code='group_buy_success',
-                               ctx=ctx, user_id=m.get('userId'))
+                               ctx=ctx, user_id=m.get('userId'), hub=_hub)
     except Exception:
         pass
 
@@ -6641,7 +6643,7 @@ def club_settings_hub_patch(club_id:int, request:Request, payload:dict=Body(...)
 
 
 @app.post('/api/club/{club_id}/settings-hub/reset')
-def club_settings_hub_reset(club_id:int, payload:dict=Body(default={})):
+def club_settings_hub_reset(club_id:int, request:Request, payload:dict=Body(default={})):
     """重置覆盖值 → 回落平台默认 / 内置默认。body {keys:[...]}，省略则重置全部。"""
     club_or_404(club_id)
     keys = payload.get('keys') if isinstance(payload, dict) else None
@@ -6649,7 +6651,8 @@ def club_settings_hub_reset(club_id:int, payload:dict=Body(default={})):
         raise HTTPException(400, 'keys 必须是数组')
     try:
         with conn() as c:
-            res = hub_mod.reset(c, club_id, keys)
+            res = hub_mod.reset(c, club_id, keys, operator=_hub_operator(request),
+                                note='重置本俱乐部全部覆盖')
             snap = hub_mod.snapshot(c, club_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
@@ -6658,14 +6661,24 @@ def club_settings_hub_reset(club_id:int, payload:dict=Body(default={})):
 
 @app.get('/api/public/clubs/{club_id}/settings-hub')
 def public_settings_hub(club_id:int):
-    """C 端脱敏视图：只下发模块开关与门户呈现偏好，不含审计 / 管理页 / 探测细节。"""
+    """C 端脱敏视图：只下发模块开关 / 门户偏好 / 通知策略，不含审计 / 管理页 / 探测细节。
+
+    BUG-HUB-008：原来只下发 4 个字段，且 H5 从未请求过这个接口，后台开关对会员
+    零可见影响。这里补齐 9 个可切换模块与通知策略（都是布尔值/时段，不泄密），
+    由 C 端统一消费。"""
     club_or_404(club_id)
     with conn() as c:
         pol = hub_mod.portal_policy(c, club_id)
+        nfy = hub_mod.notify_policy(c, club_id)
+        modules = {k: hub_mod.is_module_enabled(c, club_id, k) for k in hub_mod.TOGGLEABLE}
+    qh = nfy.get('quietHours') or (None, None)
     return {'homeLayoutMode': pol['homeLayoutMode'],
             'decoratorEnabled': pol['decoratorEnabled'],
             'storedValueEnabled': pol['storedValueEnabled'],
-            'engagementEnabled': pol['engagementEnabled']}
+            'engagementEnabled': pol['engagementEnabled'],
+            'modules': modules,
+            'notify': {'outboundEnabled': bool(nfy.get('outboundEnabled', True)),
+                       'quietHours': [qh[0], qh[1]]}}
 
 
 @app.get('/api/platform/settings-hub')
@@ -6691,13 +6704,14 @@ def platform_settings_hub_patch(request:Request, payload:dict=Body(...)):
 
 
 @app.post('/api/platform/settings-hub/reset')
-def platform_settings_hub_reset(payload:dict=Body(default={})):
+def platform_settings_hub_reset(request:Request, payload:dict=Body(default={})):
     keys = payload.get('keys') if isinstance(payload, dict) else None
     if keys is not None and not isinstance(keys, list):
         raise HTTPException(400, 'keys 必须是数组')
     try:
         with conn() as c:
-            res = hub_mod.reset(c, hub_mod.PLATFORM_CLUB_ID, keys)
+            res = hub_mod.reset(c, hub_mod.PLATFORM_CLUB_ID, keys,
+                                operator=_hub_operator(request), note='重置平台级默认')
             snap = hub_mod.snapshot(c, hub_mod.PLATFORM_CLUB_ID)
     except ValueError as e:
         raise HTTPException(400, str(e))

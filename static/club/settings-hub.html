@@ -8,85 +8,217 @@
   <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261114a">
   <link rel="stylesheet" href="/static/club/club-glass.css?v=20261112b">
   <style>
-    body{margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#16362b}
-    .wrap{max-width:1000px;margin:0 auto;padding:18px}
-    h1{font-size:18px;margin:0 0 4px}
-    .tip{font-size:12px;color:#8aa39a;margin:0 0 12px;line-height:1.7}
-    .card{background:#fff;border:1px solid #e7edea;border-radius:14px;padding:14px;margin-bottom:12px}
+    :root{--brand:#0a7d52;--ink:#16362b;--muted:#8aa39a;--line:#e7edea;--bg:#f5f7f6;--soft:#f8fbf9}
+    body{margin:0;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:var(--ink)}
+    .wrap{max-width:1040px;margin:0 auto;padding:18px 18px 44px}
+    h1{font-size:18px;margin:0 0 4px;line-height:1.3}
+    .tip{font-size:12px;color:var(--muted);margin:0 0 14px;line-height:1.75}
+    .card{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;scroll-margin-top:116px}
     .card h3{font-size:14px;margin:0 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+    /* 吸顶操作条：19 张卡 + 审计长滚动时保存按钮始终可见 */
+    .hubbar{position:sticky;top:0;z-index:30;background:rgba(255,255,255,.95);backdrop-filter:blur(12px);
+      border:1px solid var(--line);border-radius:14px;padding:10px 14px 8px;margin:0 0 14px;
+      box-shadow:0 8px 22px rgba(16,45,33,.06)}
+    .hubbar__row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+    .hubbar__row--top{margin-bottom:6px}
+    .hubbar__title{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;min-width:0}
+    .hubbar__acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .hubbar__hint{font-size:11px;color:var(--muted);margin-top:7px;line-height:1.45;
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    body.has-dirty .hubbar__hint{color:#a06a10;font-weight:600}
+    body.is-platform .hubbar{border-color:#f0b429;box-shadow:inset 0 3px 0 #f0b429,0 8px 22px rgba(16,45,33,.06)}
+    .crumbs{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--muted);min-width:0}
+    .crumbs a{color:var(--brand);text-decoration:none;white-space:nowrap}
+    .crumbs a:hover{text-decoration:underline}
+    .crumbs__sep{color:#c7d6cf}
+    .scope-chip{font-size:11px;padding:3px 9px;border-radius:20px;background:#e3f6ec;color:var(--brand);white-space:nowrap}
+    body.is-platform .scope-chip{background:#fdf3e2;color:#a06a10}
+    .dirty-chip{font-size:11px;padding:4px 9px;border-radius:20px;background:#fdf3e2;color:#a06a10;white-space:nowrap}
+    .dirty-chip[hidden]{display:none}
+
     .stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
-    .stat{flex:1;min-width:110px;background:#fff;border:1px solid #e7edea;border-radius:12px;padding:12px}
-    .stat .k{font-size:11px;color:#8aa39a}
-    .stat .v{font-size:19px;font-weight:700;margin-top:3px}
+    .stat{flex:1;min-width:110px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:11px 12px;
+      cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .15s;text-align:left}
+    .stat:hover{border-color:#b9d8c8;box-shadow:0 6px 16px rgba(16,45,33,.07);transform:translateY(-1px)}
+    .stat:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+    .stat.active{border-color:var(--brand);background:#f2fbf6}
+    .stat .k{font-size:11px;color:var(--muted)}
+    .stat .v{font-size:19px;font-weight:700;margin-top:3px;line-height:1.2}
+    .stat .stat__hint{font-size:10px;color:#a6bab1;margin-top:3px}
+
+    .scope-impact[hidden]{display:none}
+    .scope-impact{background:#fff9e9;border:1px solid #f2dda6;border-radius:10px;padding:9px 11px;
+      font-size:12px;color:#8a6210;line-height:1.6;margin:0 0 10px}
     .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
     .row label{font-size:12px;color:#5d7a6e;min-width:150px}
     .row input,.row select{padding:6px 8px;border:1px solid #d7e2dd;border-radius:8px;font-size:13px;flex:1;min-width:120px}
-    .row input[type=checkbox]{flex:0;min-width:0;width:16px;height:16px}
+    .row input[type=checkbox]{flex:0 0 16px;min-width:16px;width:16px;height:16px}
     .row input.sm,.row select.sm{min-width:90px;max-width:130px;flex:0 1 110px}
-    .btn{padding:7px 14px;border-radius:9px;border:1px solid #0a7d52;background:#0a7d52;color:#fff;font-size:13px;cursor:pointer}
-    .btn.ghost{background:#fff;color:#0a7d52}
+    /* 偏好行：标签 / 控件 / 来源徽章三段对齐，说明单独一行，不再挤成一团 */
+    .prow{display:grid;grid-template-columns:minmax(150px,1fr) auto auto;align-items:center;gap:6px 10px;
+      padding:9px 11px;border:1px solid #edf2ef;border-radius:10px;background:var(--soft);margin:6px 0}
+    .prow>label{min-width:0;font-weight:600;color:#2c4a3e}
+    .prow>.muted{grid-column:1/-1;font-size:11px;line-height:1.55}
+    .prow>.hub-ctl,.prow>.badge{justify-self:end}
+    .prow input.sm,.prow select.sm{width:130px;max-width:100%;min-width:90px}
+    .prow.flash{border-color:#f0b429;background:#fff9e9}
+
+    .btn{padding:7px 14px;border-radius:9px;border:1px solid var(--brand);background:var(--brand);color:#fff;font-size:13px;cursor:pointer;white-space:nowrap}
+    .btn.ghost{background:#fff;color:var(--brand)}
     .btn.sm{padding:4px 9px;font-size:12px}
     .btn:disabled{opacity:.45;cursor:not-allowed}
-    .empty{color:#8aa39a;text-align:center;padding:16px;font-size:13px}
-    .muted{font-size:12px;color:#8aa39a}
+    .empty{color:var(--muted);text-align:center;padding:18px 14px;font-size:13px;line-height:1.7}
+    .muted{font-size:12px;color:var(--muted)}
     .badge{font-size:11px;padding:2px 8px;border-radius:20px;background:#eef3f0;color:#5d7a6e;white-space:nowrap}
-    .badge.on{background:#e3f6ec;color:#0a7d52}
+    .badge.on{background:#e3f6ec;color:var(--brand)}
     .badge.warn{background:#fdf3e2;color:#a06a10}
     .badge.off{background:#f6e7e6;color:#b03a2e}
-    .grp{margin-top:14px}
+    /* 未配置=待办，不是故障；状态未知=探测异常，用琥珀色区分 */
+    .badge.todo{background:#eef3f0;color:#5d7a6e}
+    .badge.unknown{background:#fdf3e2;color:#a06a10}
+
+    .grp{margin-top:14px;scroll-margin-top:116px}
     .grp:first-child{margin-top:0}
-    .grp__t{font-size:12px;font-weight:600;color:#0a7d52;margin-bottom:6px;padding-left:2px}
+    .grp__t{display:flex;align-items:center;gap:6px;width:100%;font-size:12px;font-weight:600;color:var(--brand);
+      margin:0 0 6px;padding:5px 2px;background:none;border:0;cursor:pointer;text-align:left}
+    .grp__t .caret{width:0;height:0;border-left:5px solid var(--brand);border-top:4px solid transparent;
+      border-bottom:4px solid transparent;transform:rotate(90deg);transition:transform .15s;flex:0 0 6px}
+    .grp.collapsed .grp__t .caret{transform:rotate(0)}
+    .grp__n{font-weight:400;color:#a6bab1;font-size:11px;margin-left:2px}
+    .grp.collapsed .mods{display:none}
     .mods{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:9px}
-    .mod{border:1px solid #e7edea;border-radius:11px;padding:10px}
+    .mod{border:1px solid var(--line);border-radius:11px;padding:10px;background:#fff}
     .mod__head{display:flex;align-items:center;justify-content:space-between;gap:6px}
     .mod__t{font-weight:600;font-size:13px}
-    .mod__note{font-size:11px;color:#8aa39a;line-height:1.5;margin:6px 0}
+    .mod__note{font-size:11px;color:var(--muted);line-height:1.55;margin:6px 0}
     .mod__foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px}
-    .mod__foot label{display:flex;align-items:center;gap:5px;font-size:12px;color:#5d7a6e}
+    .mod__foot label{display:flex;align-items:center;gap:6px;font-size:12px;color:#5d7a6e}
     .mod__foot input[type=checkbox]{width:15px;height:15px}
+    .mod__sw{cursor:pointer}
+    .mod__err{margin-top:7px;font-size:11px;color:#a06a10}
+    .mod__err summary{cursor:pointer;outline:none}
+    .mod__err code{display:block;margin-top:5px;padding:6px 8px;background:#fff9e9;border-radius:6px;
+      font-size:10px;white-space:pre-wrap;word-break:break-all;color:#8a6210}
+
+    /* 统一开关：布尔偏好与模块总开关同一视觉、同一点击面积 */
+    .hub-switch,.mod__foot input.hub-switch,.row input.hub-switch{
+      -webkit-appearance:none;appearance:none;position:relative;display:inline-block;
+      flex:0 0 38px;width:38px;min-width:38px;max-width:38px;height:22px;margin:0;
+      border:1px solid #cbdad2;border-radius:999px;background:#d6e2dc;cursor:pointer;
+      transition:background .16s,border-color .16s;vertical-align:middle}
+    .hub-switch::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+      background:#fff;box-shadow:0 1px 3px rgba(16,45,33,.28);transition:transform .16s}
+    .hub-switch:checked{background:var(--brand);border-color:var(--brand)}
+    .hub-switch:checked::after{transform:translateX(16px)}
+    .hub-switch:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+    .dirty{outline:2px solid #f0b429;outline-offset:2px}
+
+    .toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:6px}
+    .toolbar[hidden]{display:none}
+    .search{flex:1 1 220px;min-width:0;display:flex}
+    .search input{width:100%;padding:7px 11px;border:1px solid #d7e2dd;border-radius:9px;font-size:13px;background:#fff}
+    .search input:focus{outline:2px solid #b9d8c8;outline-offset:1px}
+    .chips{display:flex;gap:6px;flex-wrap:wrap}
+    .chip{padding:5px 11px;border-radius:20px;border:1px solid #d7e2dd;background:#fff;color:#5d7a6e;
+      font-size:12px;cursor:pointer;white-space:nowrap}
+    .chip:hover{border-color:#b9d8c8}
+    .chip.active{background:var(--brand);border-color:var(--brand);color:#fff}
+    .filter-note{font-size:11px;min-height:16px;margin:2px 0 8px}
+    .linkbtn{border:0;background:none;padding:0 2px;color:var(--brand);font-size:11px;cursor:pointer;text-decoration:underline}
+    .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
+    /* shared.js 给所有后台页注入的退出登录浮标（z-index 9000）会盖住独立页内容；
+       本页已有「返回俱乐部后台」面包屑，直接隐藏。 */
+    body>.logout-fab{display:none}
+
     table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
     th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #f0f4f2;vertical-align:top}
-    th{color:#8aa39a;font-weight:500}
-    .auditbox{max-height:260px;overflow:auto;margin-top:8px}
-    .dirty{outline:2px solid #f0b429;outline-offset:1px}
+    th{color:var(--muted);font-weight:500}
+    .auditbox{max-height:300px;overflow:auto;margin-top:8px;border:1px solid var(--line);border-radius:10px}
+    .auditbox table{margin:0}
+    .auditbox thead th{position:sticky;top:0;z-index:1;background:var(--soft);padding:8px;border-bottom:1px solid var(--line)}
+    .auditbox tbody tr:nth-child(even){background:#fbfdfc}
+    .auditbox td{padding:8px;white-space:nowrap}
+    .auditbox td:last-child{white-space:normal;min-width:110px}
+
+    @media(max-width:640px){
+      .wrap{padding:12px 12px 34px}
+      .hubbar{padding:8px 10px 7px}
+      .hubbar__row--main{flex-wrap:wrap}
+      .hubbar__acts{width:100%;justify-content:flex-end}
+      .hubbar__acts .btn{flex:1 1 auto}
+      .card{padding:12px}
+      h1{font-size:16px}
+      .stat{flex:1 1 calc(50% - 10px);min-width:0}
+      .stat .v{font-size:17px}
+      .prow{grid-template-columns:minmax(0,1fr) auto;gap:5px 8px}
+      .prow>.badge{grid-column:1;grid-row:2;justify-self:start}
+      .prow>.muted{grid-column:1/-1}
+      .mods{grid-template-columns:1fr}
+      .crumbs{font-size:11px}
+      .scope-chip{font-size:10px}
+      .auditbox{overflow-x:auto}
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>设置中枢</h1>
-    <p class="tip">一屏查看所有能力的真实配置状态，统一跳转去配置。各模块的配置数据仍保存在自己的表里，这里<strong>只读聚合、不复制</strong>；中枢仅保存通用偏好、已接线模块的总开关与变更审计。生效顺序：本俱乐部覆盖 → 平台默认 → 系统内置默认。</p>
+    <div class="hubbar" id="hubbar">
+      <div class="hubbar__row hubbar__row--top">
+        <div class="crumbs"><a id="backToAdmin" href="/club">← 返回俱乐部后台</a><span class="crumbs__sep">/</span><span>设置中枢</span></div>
+        <span class="scope-chip" id="hubbarScope">本俱乐部</span>
+      </div>
+      <div class="hubbar__row hubbar__row--main">
+        <div class="hubbar__title"><h1>设置中枢</h1><span class="muted" id="scopeHint"></span></div>
+        <div class="hubbar__acts">
+          <span class="dirty-chip" id="dirtyChip" hidden></span>
+          <button class="btn ghost" id="resetAll" type="button">重置覆盖</button>
+          <button class="btn" id="savePrefs" type="button">保存变更</button>
+        </div>
+      </div>
+      <div class="hubbar__hint" id="saveHint">未修改时不会写入，也不会留下审计记录</div>
+    </div>
+
+    <p class="tip">一屏查看所有能力的真实配置状态，统一跳转去配置。各模块的配置数据仍保存在自己的表里，这里<strong>只读聚合、不复制</strong>；中枢仅保存通用偏好、已接线模块的总开关与变更审计。生效顺序：本俱乐部覆盖 → 平台默认 → 系统内置默认。点统计数字可快速筛选能力卡片。</p>
 
     <div class="stats" id="stats"></div>
 
-    <div class="card">
-      <h3>通用偏好 <span class="muted" id="scopeHint"></span></h3>
+    <div class="card" id="prefsCard">
+      <h3>通用偏好 <span class="muted" id="scopeHint2"></span></h3>
+      <div class="scope-impact" id="scopeImpact" hidden>当前正在编辑<strong>平台级默认</strong>：一次保存会影响所有未单独覆盖的俱乐部，包含首页呈现、外发通知策略与各模块总开关。请确认已评估影响范围。</div>
       <div class="row">
         <label>配置层级</label>
         <select class="sm" id="scope">
           <option value="club">本俱乐部</option>
           <option value="platform">平台默认（所有俱乐部兜底）</option>
         </select>
-        <span class="muted">切换后会重新读取该层级的生效值</span>
+        <span class="muted" id="scopeNote">切换后会重新读取该层级的生效值</span>
       </div>
       <div id="prefs"></div>
-      <div class="row" style="margin-top:12px">
-        <button class="btn" id="savePrefs">保存变更</button>
-        <button class="btn ghost" id="resetAll">重置本层级全部覆盖</button>
-        <span class="muted" id="saveHint">未修改时不会写入，也不会留下审计记录</span>
-      </div>
     </div>
 
-    <div class="card">
+    <div class="card" id="modulesCard">
       <h3>能力总览 <span class="muted">只有标记「可切换」的模块提供总开关，其余请点「前往配置」</span></h3>
+      <div class="toolbar" id="modTools">
+        <label class="search"><span class="sr">搜索能力</span><input id="modSearch" type="search" placeholder="搜索能力名称或说明" autocomplete="off"></label>
+        <div class="chips" id="modFilters">
+          <button type="button" class="chip active" data-filter="all">全部</button>
+          <button type="button" class="chip" data-filter="ok">生效中</button>
+          <button type="button" class="chip" data-filter="todo">需处理</button>
+          <button type="button" class="chip" data-filter="unknown">状态未知</button>
+        </div>
+        <button type="button" class="btn sm ghost" id="toggleGroups">折叠全部分组</button>
+      </div>
+      <div class="filter-note muted" id="filterNote"></div>
       <div id="modules"></div>
     </div>
 
-    <div class="card">
+    <div class="card" id="auditCard">
       <h3>变更审计 <span class="muted">当前层级最近 50 条</span></h3>
       <div class="auditbox" id="audit"></div>
     </div>
   </div>
   <script src="/static/shared.js?v=20261113b"></script>
-  <script src="/static/club/settings-hub.js?v=20261113e"></script>
+  <script src="/static/club/settings-hub.js?v=20261115d"></script>
 </body>
 </html>

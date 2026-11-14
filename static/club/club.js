@@ -4338,3 +4338,21 @@ window.mktCreateSample=async()=>uxTask(async()=>{
 });
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',initMarketingTabs);
 else initMarketingTabs();
+
+/* BUG-HUB-011：设置中枢「前往配置」深链 ?view=xxx&tab=yyy。
+   SPA 首屏固定落在工作台，过去 6 个跳 index.html 的入口进来后还要管理员自己在
+   侧栏找目标模块。DOM 就绪后按 URL 直接激活对应视图；settings 的 tab 交给
+   SETTINGS_TAB，避免与 window.onView 里的默认 tab 发生异步竞态。 */
+(function(){
+  const p=new URLSearchParams(location.search);
+  const v=p.get('view'); if(!v)return;
+  const apply=()=>{
+    const btn=[...document.querySelectorAll('.nav button[data-view]')].find(b=>b.dataset.view===v);
+    if(!btn)return;
+    const t=p.get('tab');
+    if(t&&v==='settings'){try{SETTINGS_TAB=t}catch(e){}}
+    btn.click();
+  };
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',apply);
+  else apply();
+})();

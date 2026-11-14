@@ -91,16 +91,24 @@ const CP_ICON={
 
 /* ── 经营业态开关：活动 / 营地互斥同槽（唯一数据源） ────────────────────── */
 async function applyModuleSwitches(){
+  /* BUG-HUB-007：过去 camp.js 依据 module_switches.bizIntro、web-biz.js 依据
+     clubs.biz_section 各写一次同一个 nav 按钮的 display，两个 await 谁后完成谁生效，
+     同一配置连续刷新会出现 4tab / 5tab 两种状态。现在把显隐收成唯一写入点：
+     同一份公开俱乐部响应里同时取「开关」与「内容」，按「开关开 且 有内容」决定，
+     内容渲染仍归 loadWability，它不再碰 nav。 */
+  let biz=null;
   try{
     const club=await api('/api/public/clubs/'+CLUB,{cache:'no-store'});
     if(club&&club.module_switches)CAMP_SW=Object.assign({home:true,activity:true,camp:false,bizIntro:true},club.module_switches);
+    try{biz=club&&club.biz_section?(typeof club.biz_section==='string'?JSON.parse(club.biz_section):club.biz_section):null}catch(e){biz=null}
   }catch(e){/* 默认兜底：活动开、营地关 */}
   const actBtn=document.querySelector('.web-nav button[data-wv="wactivities"]');
   const campBtn=document.querySelector('.web-nav button[data-wv="wcamp"]');
   const abBtn=document.querySelector('.web-nav button[data-wv="wability"]');
   if(actBtn)actBtn.style.display=(CAMP_SW.activity&&!CAMP_SW.camp)?'':'none';
   if(campBtn)campBtn.style.display=CAMP_SW.camp?'':'none';
-  if(abBtn)abBtn.style.display=CAMP_SW.bizIntro?'':'none';
+  const bizOn=!!(biz&&biz.enabled&&(biz.items||[]).length);
+  if(abBtn)abBtn.style.display=(CAMP_SW.bizIntro&&bizOn)?'':'none';
 }
 window.applyModuleSwitches=applyModuleSwitches;
 

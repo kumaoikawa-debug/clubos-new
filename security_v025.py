@@ -378,6 +378,11 @@ async def authorize_request(request: Request) -> dict | None:
     """
     if TEST_OPEN:
         # 内测开放：不做身份/角色/归属校验，也不拦截任何管理接口。
+        # 例外（BUG-HUB-003）：平台级设置中枢是「一次写入波及所有未覆盖俱乐部」
+        # 的全局配置，即便内测免登录也必须保留平台角色校验 —— 否则俱乐部后台
+        # 的下拉框可直接改全平台默认值。平台账号需正常登录后才可读写。
+        if request.url.path.startswith('/api/platform/settings-hub'):
+            return await _authorize_shared(request, strict=IS_PROD)
         return None
     return await _authorize_shared(request, strict=IS_PROD)
 
