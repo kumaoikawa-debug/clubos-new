@@ -55,8 +55,31 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
  }
  function enhanceWeb(){if(page!=='web')return;document.querySelectorAll('.web-nav button').forEach(b=>b.setAttribute('aria-label',b.textContent.trim()));const heading=document.querySelector('#wactivities .web-card h2');if(heading)heading.textContent='下一场冒险，从这里开始。';const webTop=document.querySelector('.web-top');webTop?.setAttribute('role','banner');document.querySelector('.web-nav')?.setAttribute('aria-label','用户主要导航');}
  document.addEventListener('DOMContentLoaded',()=>{enableNavigation();enhanceWeb()});
- // Validated, accessible business form. Data is sent by existing authenticated api() only.
- window.uxForm=function({title,subtitle='',fields=[],hint='',submitText='确认',wide=false,steps='',danger=false,nested=null}={}){return new Promise(resolve=>{
+// Validated, accessible business form. Data is sent by existing authenticated api() only.
+/* 原生 <select> 下拉填充（支持 optgroup 分组）：给 uxForm 的 type:'dropdown' 用。
+   options 可以是扁平 [{value,label}]，也可以是分组 [{group,options:[...]}] 混排；
+   第一项「不指定」这类扁平项直接渲染为 <option>，带 group 的项渲染为 <optgroup>。
+   selected 命中不到时浏览器自动选中第一项（对 scopeRef 来说就是回落到「不指定」），
+   所以用旧值重绘时若一级范围切换导致旧值已不在新选项里，会自然回落、不卡死。 */
+function uxFillSelect(sel,options,selected){
+  sel.innerHTML='';
+  const addOpt=(o)=>{const opt=document.createElement('option');const v=(o.value===undefined||o.value===null)?'':String(o.value);opt.value=v;opt.textContent=(o.label===undefined||o.label===null)?String(o.value):String(o.label);if(v===String(selected))opt.selected=true;sel.appendChild(opt)};
+  for(const o of (options||[])){
+    if(o&&o.group&&Array.isArray(o.options)&&o.options.length){
+      const og=document.createElement('optgroup');og.label=o.group;
+      for(const c of o.options){const opt=document.createElement('option');const v=(c.value===undefined||c.value===null)?'':String(c.value);opt.value=v;opt.textContent=(c.label===undefined||c.label===null)?String(c.value):String(c.label);if(v===String(selected))opt.selected=true;og.appendChild(opt)}
+      sel.appendChild(og);
+    }else if(o&&!o.group){addOpt(o)}
+  }
+}
+/* 选项签名：扁平与分组统一算；repaintOptions 用它判断要不要重绘。 */
+function uxOptionSig(opts){
+  return JSON.stringify((opts||[]).map(o=>{
+    if(o&&o.group)return ['__g',o.group,(o.options||[]).map(c=>[String(c.value),String(c.label==null?c.value:c.label)])];
+    return [String(o.value),String(o.label==null?o.value:o.label)];
+  }));
+}
+window.uxForm=function({title,subtitle='',fields=[],hint='',submitText='确认',wide=false,steps='',danger=false,nested=null}={}){return new Promise(resolve=>{
   let settled=false,closed=false,session=null;
   /* P2-1：由弹层内部触发的算嵌套（详情里点「编辑」），页面按钮触发的算根弹层。 */
   const isNested=(nested===null)?uxOverlayNested():!!nested;
@@ -77,6 +100,17 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
     inp._collect=()=>node?node.value:'';
     f._el=inp;box.appendChild(inp);
   }
+  else if(f.type==='dropdown'){
+    /* 原生 <select> 下拉：用于选项数量大（几十上百条活动 / 营地）或需要分组（optgroup）的场景，
+       不再退化为「圆点 radio」（uxChoiceHtml 在 ≤8 项时铺成 radio，多到 100 条活动时根本放不下）。
+       取值节点即 select 自身，form.elements.namedItem(f.name) 直接读到，提交 / 联动无需改动。 */
+    const sel=document.createElement('select');
+    sel.id=id;sel.name=f.name;sel.className='ux-select-native';
+    if(f.required)sel.required=true;
+    uxFillSelect(sel,f.options||[],f.value);
+    sel._collect=()=>sel.value;
+    inp=sel;f._el=inp;box.appendChild(inp);
+  }
   else if(f.type==='textarea'){inp=document.createElement('textarea')}
   else if(f.type==='datetime'){
     /* 日期/时间点选（原生 date+time，可点击选择）＋ 常用时间胶囊 ＋ 实时自然语言预览。
@@ -94,7 +128,7 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
     fmt();inp._collect=()=>{const d=dEl.value,t=tEl.value;return (d&&t)?(d+' '+t):''};inp._focus=dEl;f._el=inp;box.appendChild(inp);
   }
   else{inp=document.createElement('input');inp.type=f.type||'text';if(f.min!==undefined)inp.min=f.min;if(f.max!==undefined)inp.max=f.max;if(f.step!==undefined)inp.step=f.step}
-  if(f.type!=='datetime'&&f.type!=='select'){
+  if(f.type!=='datetime'&&f.type!=='select'&&f.type!=='dropdown'){
     inp.id=id;inp.name=f.name;if(f.value!==undefined&&f.value!==null)inp.value=f.value;if(f.placeholder)inp.placeholder=f.placeholder;if(f.required)inp.required=true;if(f.maxLength)inp.maxLength=f.maxLength;if(f.readonly)inp.readOnly=true;box.appendChild(inp);
   }
   if(f.help||f.helpFn){const small=document.createElement('small');small.textContent=f.help||'';f._helpEl=small;box.appendChild(small)}grid.appendChild(box)});
@@ -118,9 +152,10 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
   function repaintOptions(f,all){
     if(!f.optionsFn||!f._el)return;
     const opts=f.optionsFn(all)||[];
-    const sig=JSON.stringify(opts.map(o=>[String(o.value),String(o.label??o.value)]));
+    const sig=uxOptionSig(opts);
     if(f._optSig===sig)return;
     f._optSig=sig;
+    if(f.type==='dropdown'){uxFillSelect(f._el,opts,f._el.value);return;}
     const host=f._el,old=host.querySelector('input,select');
     const keep=old?String(old.value):'',name=old?old.name:f.name,id=old?old.id:('uxfo_'+f.name);
     host.innerHTML=uxChoiceHtml({id,name,value:keep,options:opts});

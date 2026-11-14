@@ -130,13 +130,26 @@ const COUPON_APPLIES_HELP={
   camp:'仅营地消费：活动报名不能用；下面只列营地、营位与营地商品。'
 };
 function couponProductOpts(o,applies){
-  const mk=(arr,prefix,label)=>(arr||[]).map(x=>({value:prefix+':'+x.id,label:label+' · '+(x.name||('#'+x.id))}));
-  const all=[{value:'',label:'不指定（一级范围内全部产品）'}];
+  /* 二级指定对象按一级范围级联，且改为「分组下拉」（optgroup）而非平铺 radio：
+     活动 / 活动分类 / 营地 / 营位 / 营地商品 各成一组，首项恒为「不指定」。
+     后端已返回全部活动（≤200），后续有 100 条活动就进「活动」组全显示，不再写死。 */
   const a=String(applies||'all');
-  if(a!=='camp')all.push(...mk(o.activities,'activity','指定活动'),...mk(o.categories,'activity_category','指定活动分类'));
-  if(a!=='activity')all.push(...mk(o.camps,'camp','指定营地'),...mk(o.pitches,'pitch','指定营位'),
-    ...mk(o.products,'camp_product','指定营地商品'));
-  return all;
+  const groups=[];
+  const push=(group,arr,prefix)=>{
+    const items=(arr||[]).map(x=>({value:prefix+':'+x.id,label:(x.name||('#'+x.id))}));
+    if(items.length)groups.push({group,options:items});
+  };
+  const all=[{value:'',label:'不指定（一级范围内全部产品）'}];
+  if(a!=='camp'){
+    push('活动',o.activities,'activity');
+    push('活动分类',o.categories,'activity_category');
+  }
+  if(a!=='activity'){
+    push('营地',o.camps,'camp');
+    push('营位',o.pitches,'pitch');
+    push('营地商品',o.products,'camp_product');
+  }
+  return [...all,...groups];
 }
 function couponScopeValue(b){
   if(!b)return '';
@@ -163,7 +176,7 @@ function couponCampFields(o,d={}){
   const out=[{name:'campScope',label:'多营地适用',type:'select',full:true,value:d.camp_scope||'all',
     options:[{value:'all',label:'全部营地适用'},...(multi?[{value:'specified',label:'仅指定营地适用'}]:[])],
     help:multi?'你名下有多家营地，可以限定这张券只能在其中一家使用。':'当前只有一家营地，默认全部营地适用。'}];
-  if(multi)out.push({name:'campScopeId',label:'选择适用营地',type:'select',full:true,
+  if(multi)out.push({name:'campScopeId',label:'选择适用营地',type:'dropdown',full:true,
     value:String(cur[0]||camps[0].id||''),options:camps.map(x=>({value:String(x.id),label:x.name||('#'+x.id)}))});
   return out;
 }
@@ -239,7 +252,7 @@ function couponCommonFields(o,d={},extra=[]){
       helpFn:all=>COUPON_APPLIES_HELP[String(all.appliesTo||'all')]||COUPON_APPLIES_HELP.all},
     /* #869 第二步：选定范围后才选具体产品；不选＝适用于该范围内全部产品。
        P2-4：二级候选随一级级联，冲突组合从源头消失，下面的 validate 只作兜底。 */
-    {name:'scopeRef',label:'② 指定对象（二级 · 可选）',type:'select',full:true,value:couponScopeValue(d),
+    {name:'scopeRef',label:'② 指定对象（二级 · 可选）',type:'dropdown',full:true,value:couponScopeValue(d),
       options:couponProductOpts(o,d.applies_to||'all'),
       optionsFn:all=>couponProductOpts(o,all.appliesTo||'all'),
       helpFn:all=>'只列「'+({all:'活动 + 营地',activity:'活动',camp:'营地'}[String(all.appliesTo||'all')]||'活动 + 营地')

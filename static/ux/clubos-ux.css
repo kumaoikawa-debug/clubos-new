@@ -83,6 +83,11 @@ body{background:var(--bg);font-size:14px}a{color:var(--brand)}:focus-visible{out
 .ux-choice__opt.on{color:#0f9d58;font-weight:650}
 .ux-choice__txt{word-break:break-word}
 .ux-choice-native{width:auto;max-width:100%;padding:9px 11px;min-height:40px;background:#fff;border:1px solid #d7e0d9;border-radius:10px;color:var(--text);outline:0}
+/* 原生下拉（uxForm type:'dropdown'）：用于选项数量大或需分组的场景（活动 / 营地全量列表）。
+   与原生 select 一致的可访问性，外观对齐其它字段：圆角描边 + 自定义箭头（去掉浏览器默认箭头）。
+   特异性高于 .ux-field select，确保 padding-right 与 appearance 生效。 */
+.ux-field .ux-select-native{appearance:none;-webkit-appearance:none;background-color:#fff;background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1l5 5 5-5' fill='none' stroke='%2366776e' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>");background-repeat:no-repeat;background-position:right 12px center;padding-right:34px;cursor:pointer}
+.ux-field .ux-select-native:focus{border-color:#70a279;box-shadow:0 0 0 3px #dfeddf}
 .ux-field__t{font-size:12px;font-weight:780;color:#455b4c}
 .ux-field__t em{color:#a84735;font-style:normal}
 .ux-dt-preview{font-size:13px;color:#3c674c;background:#f1f6ee;border:1px dashed #cfe0cf;border-radius:9px;padding:9px 12px;min-height:20px}

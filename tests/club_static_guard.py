@@ -118,7 +118,9 @@ else:
                and p.strip().endswith(('.js', '.css'))
                and '/versions/' not in p
                and os.path.isfile(os.path.join(ROOT, p.strip()))]
-    ck('git 差异清单非空（自动比对不是空跑）', len(changed) >= 5, '%d 个文件' % len(changed))
+    # 「非空」就是 >=1：一次只改 2~3 个静态文件的正常开发也会让护栏生效，
+    # 旧阈值 5 会把「改动规模小」误判成「比对没跑」，属于误报。
+    ck('git 差异清单非空（自动比对不是空跑）', len(changed) >= 1, '%d 个文件' % len(changed))
 
 baseline_html = {}
 for end in ENDS:
@@ -147,7 +149,11 @@ for common in ('static/shared.js', 'static/ux/clubos-ux.js', 'static/shared.css'
        len(set(toks.values())) == 1 and None not in toks.values(), toks)
 # 两个共用文件各自独立 bump（端内须同戳，已由上方「四端版本一致」守住），
 # 这里只断言它们都「高于 origin/main 基线」——改了码就要 bump，不钉死具体日期。
-for common in ('static/shared.js', 'static/ux/clubos-ux.js'):
+# 只对本轮真正改动过的共用文件要求「版本戳高于基线」。文档第 12~14 行定义的
+# 约束对象就是「相对基线改动过的 static/**/*.js|css」；未改动的 shared.js 不该
+# 每次都被迫空 bump（否则 push 后 origin/main 追平，干净工作树跑回归会恒红）。
+# 端内同戳由上面「四端版本一致」守住，改动文件的 bump 由第 128~141 行守住。
+for common in [p for p in ('static/shared.js', 'static/ux/clubos-ux.js') if p in changed]:
     toks = {end: (tokens(htmls[end], common) or [None])[0] for end in ENDS}
     old = {end: (tokens(baseline_html[end], common) or [None])[0] for end in ENDS}
     stale = [e for e in ENDS if old[e] and toks[e] and toks[e] <= old[e]]
