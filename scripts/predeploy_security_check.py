@@ -207,10 +207,45 @@ def check_runtime() -> None:
         rec('PASS', f'static/ 体积 {mb:.1f} MB')
 
 
+# 10) 发布前设置中枢回归门禁不能被摘除 / 改弱（#927~#930，2026-11-14）
+def check_hub_gate() -> None:
+    """4 份验收脚本 + 4 条硬锁是发布前的必跑项，这里做只读的「存在性」自检。
+
+    动态断言由 scripts/predeploy_hub_gate.py 在真实例 / 真 Chrome 上执行；本函数只保证
+    这条链没被删、没被改成恒绿 —— 与 check_guards() 锁并发守卫是同一套思路。
+    """
+    gate = read('scripts/predeploy_hub_gate.py')
+    entry = read('scripts/predeploy_gate.sh')
+    locks = ('G1_PREF_WIDTH', 'G2_OUTBOUND_POLICY', 'G3_NAV_STABLE', 'G4_SCOPE_DIRTY')
+    scripts = ('p1_verify.py', 'p2_verify.py', 'uiux_verify.py', 'four_end_verify.py')
+    problems = []
+    if not gate:
+        problems.append('predeploy_hub_gate.py 缺失')
+    else:
+        miss = [x for x in locks if x not in gate]
+        if miss:
+            problems.append('硬锁标记缺失：' + ', '.join(miss))
+        if 'sys.exit(1 if n_fail else 0)' not in gate:
+            problems.append('runner 缺少 FAIL 退出码')
+        if 'os.remove(jpath)' not in gate:
+            problems.append('runner 不再清理旧结果 JSON（残留会造成假绿）')
+    if not entry:
+        problems.append('predeploy_gate.sh 统一入口缺失')
+    elif 'predeploy_hub_gate.py' not in entry or 'regression_v025.sh' not in entry:
+        problems.append('统一入口未串联 hub gate / 全量回归')
+    for s in scripts:
+        if "sys.exit(0 if s['fail'] == 0 else 1)" not in read('scripts/hub_gate/' + s):
+            problems.append(s + ' 缺少 FAIL 退出码')
+    if problems:
+        rec('FAIL', '发布前设置中枢回归门禁被摘除或改弱', '；'.join(problems[:4]))
+    else:
+        rec('PASS', '发布前设置中枢门禁齐全（统一入口 + 4 脚本 + 4 硬锁 + 失败退出码）')
+
+
 def main() -> int:
     for fn in (check_webroot, check_gitignore, check_shared_version,
                check_duplicate_routes, check_guards, check_default_creds,
-               check_url_token, check_git_history, check_runtime):
+               check_url_token, check_git_history, check_runtime, check_hub_gate):
         fn()
     icons = {'PASS': 'PASS', 'FAIL': 'FAIL', 'WARN': 'WARN'}
     for level, name, detail in RESULTS:
