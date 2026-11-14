@@ -38,7 +38,15 @@
     const sel = $('#scope');
     sel.dataset.current = sel.value;
     let role = '';
-    try { const me = await api('/api/auth/me'); role = (me && me.role) || ''; } catch (_) {}
+    /* 内测开放（CLUBOS_TEST_OPEN=1）下 /api/auth/me 对匿名会话返回 401。
+       shared.js 的全局 api() 遇到 401 会 location.href='/login'，而 /login 又 307 回 /club，
+       于是「俱乐部后台 → 设置中枢」会被立刻踢回后台首页，整页永远打不开（线上实测）。
+       这里只是读取角色决定是否展示平台层级，用原生 fetch 静默处理 401，不触发全局跳转。 */
+    try {
+      const r = await fetch('/api/auth/me' + (location.search || ''),
+                            { credentials: 'same-origin', cache: 'no-store' });
+      if (r.ok) { const me = await r.json(); role = (me && me.role) || ''; }
+    } catch (_) {}
     const note = $('#scopeNote');
     if (role !== 'platform') {
       $$('#scope option[value="platform"]').forEach(o => o.remove());
