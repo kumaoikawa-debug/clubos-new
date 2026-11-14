@@ -54,6 +54,87 @@ def _to_ints(vals):
     return out
 
 
+def _clean_ids(vals):
+    """快照里只存可序列化的整数列表（去掉空值 / 0 / 非数字）。"""
+    out = []
+    for x in (vals or []):
+        try:
+            i = int(x)
+            if i > 0:
+                out.append(i)
+        except (TypeError, ValueError):
+            pass
+    return sorted(set(out))
+
+
+# ── 报价 / 成交发放共用的营销上下文快照（2026-11-14 · V3 / P0-3）────────────
+def build_campaign_context(*, club_id, user_id, payable, kind='activity',
+                           activity_ids=None, product_ids=None, store_ids=None,
+                           category_ids=None, camp_ids=None, pitch_ids=None,
+                           discount=0.0, applied=None, gifts=None,
+                           evaluated_at=None) -> dict:
+    """把「本单适用哪些活动、按哪个金额算份数」冻结成一份可 JSON 化的快照。
+
+    落点：checkout_intents.payload_json.campaignContext。报价期（price-quote）与
+    成交发放期（_grant_campaign_gifts_for_intent）都读同一份 context / payable，
+    杜绝「报价显示赠品、成交不发放」以及 payable 口径漂移导致的份数不一致。
+    """
+    return {
+        'version': 2,
+        'clubId': int(club_id),
+        'userId': int(user_id) if user_id else None,
+        'kind': str(kind or 'activity'),
+        'payable': round(float(payable or 0), 2),
+        'activityIds': _clean_ids(activity_ids),
+        'productIds': _clean_ids(product_ids),
+        'storeIds': _clean_ids(store_ids),
+        'categoryIds': _clean_ids(category_ids),
+        'campIds': _clean_ids(camp_ids),
+        'pitchIds': _clean_ids(pitch_ids),
+        'discount': round(float(discount or 0), 2),
+        'applied': list(applied or []),
+        'gifts': list(gifts or []),
+        # 显式传 0 表示「这不是一份下单快照，成交侧必须重新求值」（单测/老单兜底）。
+        'evaluatedAt': int(evaluated_at) if evaluated_at is not None else _now_ts(),
+    }
+
+
+def context_from_intent(intent: dict | None) -> dict | None:
+    """从 checkout_intents 行还原快照；老单（无快照）按订单字段兜底重建。
+
+    兜底路径只是为了让本次上线前已存在的 pending 结算单仍能成交，绝不重新
+    猜测活动资格：gifts 为空时成交侧会重新 evaluate（并排除本笔订单）。
+    """
+    if not intent:
+        return None
+    meta = _jload(intent.get('payload_json'), {}) or {}
+    snap = meta.get('campaignContext')
+    if isinstance(snap, dict) and snap.get('version') == 2:
+        ctx = dict(snap)
+    else:
+        ctx = {
+            'version': 2,
+            'clubId': intent.get('club_id'),
+            'userId': intent.get('user_id'),
+            'kind': intent.get('kind') or 'activity',
+            'payable': round(float(intent.get('cash_amount') or 0), 2),
+            'activityIds': [], 'productIds': [], 'storeIds': [],
+            'categoryIds': [], 'campIds': [], 'pitchIds': [],
+            'discount': 0.0, 'applied': [], 'gifts': [], 'evaluatedAt': 0,
+            'legacy': True,
+        }
+        aid = meta.get('activityId') or meta.get('activity_id')
+        if aid:
+            ctx['activityIds'] = _clean_ids([aid])
+        if meta.get('campId'):
+            ctx['campIds'] = _clean_ids([meta.get('campId')])
+        if meta.get('pitchId'):
+            ctx['pitchIds'] = _clean_ids([meta.get('pitchId')])
+    ctx['clubId'] = int(ctx.get('clubId') or intent.get('club_id') or 0)
+    ctx['userId'] = int(ctx.get('userId') or intent.get('user_id') or 0)
+    return ctx
+
+
 # ──────────────────────────── 校验 ────────────────────────────
 def validate_campaign_payload(p: dict) -> dict:
     """校验并归一化创建/更新载荷；非法抛 ValueError。"""
@@ -125,11 +206,14 @@ class CampaignEngine:
     def evaluate(self, c, *, club_id: int, user_id: int | None, payable: float,
                  activity_ids: list | None = None, product_ids: list | None = None,
                  store_ids: list | None = None, category_ids: list | None = None,
-                 order_time: int | None = None) -> dict:
+                 camp_ids: list | None = None, pitch_ids: list | None = None,
+                 order_time: int | None = None, exclude_order: dict | None = None) -> dict:
         """对一笔应付金额求所有生效活动的总折扣与赠送。返回 {discount, applied, gifts}。
 
         - discount / applied：只会含「直接减价」类玩法（NEWCOMER / TIME_LIMIT）。
-        - gifts：含「满额赠送」类玩法（BUY_GIFT），不影响 payable，作为赠品发放依据。
+        - gifts：含「满额赠送」类玩法（BUY_GIFT / INVITE），不影响 payable，作为赠品发放依据。
+        - exclude_order：成交回调专用，形如 {'kind':'activity','id': 123}；首单资格
+          判定时排除「本笔订单自己」（支付成功先落 paid 订单、后发赠品）。
         """
         out: dict[str, Any] = {'discount': 0.0, 'applied': [], 'gifts': []}
         try:
@@ -151,7 +235,9 @@ class CampaignEngine:
                 d = self._eval_one(
                     c, row=dict(r), club_id=club_id, user_id=uid, payable=base, now=now,
                     activity_ids=_to_ints(activity_ids), product_ids=_to_ints(product_ids),
-                    store_ids=_to_ints(store_ids), category_ids=_to_ints(category_ids))
+                    store_ids=_to_ints(store_ids), category_ids=_to_ints(category_ids),
+                    camp_ids=_to_ints(camp_ids), pitch_ids=_to_ints(pitch_ids),
+                    exclude_order=exclude_order)
                 if not d:
                     continue
                 if d['amount'] > 0:
@@ -166,24 +252,36 @@ class CampaignEngine:
             logger.exception('campaign evaluate failed (club=%s user=%s)', club_id, user_id)
         return out
 
+    def evaluate_context(self, c, ctx: dict, *, exclude_order: dict | None = None) -> dict:
+        """按 build_campaign_context 快照求值（报价 / 成交发放共用同一入口）。"""
+        return self.evaluate(
+            c, club_id=ctx.get('clubId'), user_id=ctx.get('userId'),
+            payable=ctx.get('payable'),
+            activity_ids=ctx.get('activityIds'), product_ids=ctx.get('productIds'),
+            store_ids=ctx.get('storeIds'), category_ids=ctx.get('categoryIds'),
+            camp_ids=ctx.get('campIds'), pitch_ids=ctx.get('pitchIds'),
+            exclude_order=exclude_order)
+
     def _eval_one(self, c, *, row, club_id, user_id, payable, now,
-                  activity_ids, product_ids, store_ids, category_ids):
+                  activity_ids, product_ids, store_ids, category_ids,
+                  camp_ids=None, pitch_ids=None, exclude_order=None):
         typ = row.get('type')
         scope = _jload(row.get('scope_json'), {}) or {}
         schedule = _jload(row.get('schedule_json'), {}) or {}
         rules = _jload(row.get('rules_json'), {}) or {}
-        if not self._scope_match(scope, activity_ids, product_ids, store_ids, category_ids):
+        if not self._scope_match(scope, activity_ids, product_ids, store_ids,
+                                 category_ids, camp_ids, pitch_ids):
             return None
         if not self._schedule_ok(schedule, now):
             return None
-        if typ == 'NEWCOMER' and not (user_id and self._is_first_order(c, club_id, user_id)):
+        if typ == 'NEWCOMER' and not (user_id and self._is_first_order(c, club_id, user_id, exclude_order)):
             return None
         if typ in ('BUY_GIFT', 'INVITE'):
             # INVITE：仅被邀请且为本俱乐部首单的买家可领（邀请有礼，与 JOIN 时的邀请奖励解耦）；
             # BUY_GIFT：不限身份，满额即送。
             if typ == 'INVITE' and not (
                 user_id and self._is_invited(c, club_id, user_id)
-                and self._is_first_order(c, club_id, user_id)
+                and self._is_first_order(c, club_id, user_id, exclude_order)
             ):
                 return None
             gift = self._compute_buy_gift(rules, payable)
@@ -197,12 +295,16 @@ class CampaignEngine:
         return {'id': row.get('id'), 'type': typ, 'title': row.get('title'), 'amount': round(amt, 2)}
 
     @staticmethod
-    def _scope_match(scope, activity_ids, product_ids, store_ids, category_ids):
+    def _scope_match(scope, activity_ids, product_ids, store_ids, category_ids,
+                     camp_ids=None, pitch_ids=None):
+        # 与 camp_pricing._scope_context 产出的 ID 集合一一对应：报价与成交发放
+        # 必须能用同一组对象 ID 判定命中，不能「报价命中、发放落空」。
         for key, vals in (('activityIds', activity_ids), ('productIds', product_ids),
-                          ('storeIds', store_ids), ('categoryIds', category_ids)):
+                          ('storeIds', store_ids), ('categoryIds', category_ids),
+                          ('campIds', camp_ids), ('pitchIds', pitch_ids)):
             want = scope.get(key)
             if want:
-                if not (_to_ints(want) & set(vals)):
+                if not (_to_ints(want) & set(vals or ())):
                     return False
         return True
 
@@ -295,18 +397,37 @@ class CampaignEngine:
             return None
 
     @staticmethod
-    def _is_first_order(c, club_id, user_id):
+    def _is_first_order(c, club_id, user_id, exclude_order=None):
+        """本俱乐部是否尚无历史成交订单。
+
+        P0-1（2026-11-14）：支付成功是「先写 paid 订单、后发赠品」，若不排除本笔订单，
+        INVITE / NEWCOMER 的资格永远被本单自己否决。exclude_order 由成交回调传入，
+        形如 {'kind':'activity'|'camp_booking'|'camp_order','id': 本笔订单主键}。
+        """
         club_id, user_id = int(club_id), int(user_id)
         # 营销适用范围硬边界：首单资格只看俱乐部活动 / 营地成交记录。
         # 绝不查 gear_orders / member_orders —— 装备销售不能消耗或影响活动营销资格。
         # 与 commerce_scope.FIRST_ORDER_PROBES 同源（本模块单文件加载，不跨模块 import）。
         probes = [
-            "SELECT 1 FROM registrations WHERE club_id=? AND user_id=? AND status IN ('paid','completed','confirmed') LIMIT 1",
-            "SELECT 1 FROM camp_orders WHERE club_id=? AND user_id=? AND status IN ('paid','completed') LIMIT 1",
+            ('activity', "SELECT 1 FROM registrations WHERE club_id=? AND user_id=? AND status IN ('paid','completed','confirmed')"),
+            ('camp_order', "SELECT 1 FROM camp_orders WHERE club_id=? AND user_id=? AND status IN ('paid','completed')"),
         ]
-        for sql in probes:
+        ex = exclude_order if isinstance(exclude_order, dict) else {}
+        ex_kind = str(ex.get('kind') or '')
+        if ex_kind == 'camp_booking':
+            ex_kind = 'camp_order'
+        try:
+            ex_id = int(ex.get('id') or 0)
+        except (TypeError, ValueError):
+            ex_id = 0
+        for kind, sql in probes:
+            args = [club_id, user_id]
+            if ex_id and ex_kind == kind:
+                sql += ' AND id<>?'
+                args.append(ex_id)
+            sql += ' LIMIT 1'
             try:
-                if c.execute(sql, (club_id, user_id)).fetchone():
+                if c.execute(sql, args).fetchone():
                     return False
             except Exception:
                 continue

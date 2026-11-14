@@ -170,6 +170,28 @@ class CheckoutEngine:
             c, activity=activity, user_id=user_id, amount=quote.payable)
         if member_discount > 0:
             quote.payable = round(float(quote.payable) - member_discount, 2)
+        # 2026-11-14 · P0-3/V3：报价与成交发放共用同一份营销上下文快照。
+        # 在「会员折后、券折前」这个和 price-quote 完全相同的基数上求值，把 payable、
+        # 适用范围 ID、活动折扣与赠品明细一起冻结进结算单 payload。成交回调按快照兑现，
+        # 不再用 registrations.amount 另算一遍；活动在下单后下架/改动也不会少发。
+        campaign_context = None
+        campaign_discount = 0.0
+        try:
+            from .campaign_engine import CampaignEngine, build_campaign_context
+            _camp = CampaignEngine().evaluate(
+                c, club_id=int(activity['club_id']), user_id=int(user_id),
+                payable=float(quote.payable), activity_ids=[int(activity['id'])])
+            campaign_discount = round(min(float(_camp.get('discount') or 0), float(quote.payable)), 2)
+            campaign_context = build_campaign_context(
+                club_id=int(activity['club_id']), user_id=int(user_id),
+                payable=float(quote.payable), kind='activity',
+                activity_ids=[int(activity['id'])],
+                discount=campaign_discount,
+                applied=_camp.get('applied') or [], gifts=_camp.get('gifts') or [])
+        except Exception as e:
+            logger.warning('campaign context snapshot failed (activity=%s): %s', activity.get('id'), e)
+            campaign_context = None
+            campaign_discount = 0.0
         intent_id=self._new_id()
         benefit_quote={'clubDiscount':0.0,'platformSubsidy':0.0,'totalDiscount':0.0,'applied':[]}
         if self.benefits and voucher_codes:
@@ -178,11 +200,14 @@ class CheckoutEngine:
                 club_id=int(activity['club_id']),kind='activity',amount_available=quote.payable,
                 # #860 指定活动的券必须真的命中这场活动（与 price-quote 同一判据）
                 context={'activityId':int(activity['id'])})
-        cash_amount=max(0.0,float(quote.payable)-float(benefit_quote['totalDiscount']))
+        # 口径与 price-quote 的 out['payable'] 完全一致：会员折后 → 券折 → 活动折扣。
+        cash_amount=max(0.0,round(float(quote.payable)-float(benefit_quote['totalDiscount'])-campaign_discount,2))
         # 成交时生效的换算比例进快照：以后运营改比例，历史订单仍能解释「当时几分抵一块」。
         policy_snapshot={**policy.as_dict(),'pointsRedeemRate':redeem_rate}
         participant_policy = participant_policy or (self.participants.from_activity(activity).as_dict() if self.participants else {})
         payload={'activityId':int(activity['id']),'occurrenceId':int(occurrence['id']),'participants':participants}
+        if campaign_context:
+            payload['campaignContext']=campaign_context
         redemption_ids=[x['redemptionId'] for x in benefit_quote['applied']]
         c.execute("""INSERT INTO checkout_intents(
           id,kind,user_id,club_id,status,original_amount,cash_amount,club_points_reserved,

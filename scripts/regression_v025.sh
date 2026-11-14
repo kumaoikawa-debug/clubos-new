@@ -200,3 +200,13 @@ python tests/ecommerce_gear_points_regression.py
 # 同时锁住活动订单出行语义 / 活动搜索 / 字段级校验 / 无封面占位 / 地址清空 / 版本 bump。
 # 纯静态扫描，不 import app、不建库、不碰真库。
 python tests/web_inline_handlers_guard.py
+
+# ── 2026-11-14 · V9 营销回归覆盖盲区修复 ──────────────────────────────────────
+# 营销引擎 22 例、发放闭环 15 例、真实成交链路 4 组 / 28 条断言此前都不在套件里，
+# 于是「全量 PASS」并不能代表营销被回归过。三份均自带临时库隔离，不碰项目真库。
+python tests/test_campaign_engine.py
+python tests/test_campaign_gift_grants.py
+python tests/test_campaign_checkout_e2e.py
+# 三端导航静态护栏：断言已从「写死 10/13 个子页」改为「核心导航必须存在 + 视图容器齐全」，
+# 与当前 24/23 个子页一致；顺带 node --check 全量 static/ux/*.js。
+python tests/ux_smoke_v025.py
