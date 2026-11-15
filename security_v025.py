@@ -435,6 +435,10 @@ async def _authorize_shared(request: Request, strict: bool) -> dict | None:
         return None
     if strict and any(rx.fullmatch(path) for rx in _DEMO_ONLY): _forbidden('demo-only endpoint disabled')
     if method == 'GET' and any(rx.fullmatch(path) for rx in _PUBLIC_READ): return None
+    # F-08：产品官网营销落地页在 demo / strict 下都必须匿名可读，否则访客打不开
+    # 「申请体验」落地页（表单端点 /api/public/club-applications 已在上方单独放行并限流）。
+    # 不能并入后台页面元组：那组在 strict 下会走角色校验，官网没有对应角色。
+    if method in ('GET','HEAD') and path=='/home': return None
     if not strict:
         # demo 语义保留：C 端匿名（public/* 全方法）+ 页面壳 + 俱乐部公开读探针。
         if path.startswith('/api/public/'): return None

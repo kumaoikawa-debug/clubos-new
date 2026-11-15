@@ -99,8 +99,7 @@ async function quickCreateProduct(unitCost,supplierId){
         sumEl.innerHTML='<span style="color:#8a958c">未填规格：将只创建 1 个默认规格。给「颜色 → 尺码」行填上数量后，这里会自动汇总并带入采购数量。</span>';
         return;
       }
-      sumEl.innerHTML=`<div>颜色 <b>${colors}</b> · 规格 <b>${specs}</b> 个 · 合计 <b style="font-size:16px;color:#1a7f37">${total}</b> 件</div>`
-        +`<div class="sub" style="font-size:12px;color:#6b7a70;margin-top:2px">已按颜色自动汇总，采购数量无需手填（「＋ 加一个颜色」「＋ 加尺码」可继续）。</div>`;
+      sumEl.innerHTML=`<div>颜色 <b>${colors}</b> · 规格 <b>${specs}</b> 个 · 合计 <b style="font-size:16px;color:#1a7f37">${total}</b> 件</div>`;
     };
     const addSizeRow=(g,init)=>{const row=document.createElement('div');row.className='qc-row';row.style.cssText='display:grid;grid-template-columns:1fr 88px 1fr auto;gap:6px;align-items:center';
       row.innerHTML=`<input class="qcSize" placeholder="尺码 如 S" value="${esc(init&&init.size||'')}" style="padding:7px;border:1px solid #cdd5cf;border-radius:7px">`

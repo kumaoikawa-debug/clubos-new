@@ -524,6 +524,24 @@
 .plat-ofilter__chip{border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 9px;font-size:11.5px;color:var(--muted);cursor:pointer}
 .plat-ofilter__chip.is-on{border-color:var(--brand);color:var(--brand);font-weight:750;background:#eef6f2}
 .plat-ofilter__hit{margin-left:auto;font-size:12px;color:var(--muted);white-space:nowrap}
+/* DEF-03：390px 视口下日期组（两个 date + 快捷 chips）实测 401px 且不换行，
+   把整页撑到 428px 产生横向晃动。窄屏改成整行自适应 + 内部允许换行；
+   宽表（9 列 1040px）继续只在卡片内部横向滚动，不外溢到页面。 */
+@media (max-width:760px){
+  .plat-ofilter__dates{flex:1 1 100%;min-width:0;flex-wrap:wrap;gap:6px}
+  .plat-ofilter__dates input[type=date]{flex:1 1 116px;min-width:0;max-width:none}
+  .plat-ofilter__chips{flex:1 1 100%;min-width:0;flex-wrap:wrap;margin-left:0;gap:6px}
+  .plat-ofilter select,.plat-ofilter input[type=text]{flex:1 1 128px;min-width:0;max-width:none}
+  .plat-ofilter .btn{flex:1 1 auto;min-width:0}
+  .plat-ofilter__hit{width:100%;margin-left:0;white-space:normal}
+  .main .view .card:has(> .table){max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+}
+/* DEF-05：宽表（≥820px）在 516px 容器里右侧列被裁切且没有任何可滚动线索。
+   显式给表格容器横向滚动 + 可见滚动条，并在表上方保留一行极简滑动提示。 */
+.plat-scroll-hint{font-size:12px;color:var(--muted);margin:0 0 8px;user-select:none}
+#productProfitList{overflow-x:auto;-webkit-overflow-scrolling:touch}
+#productProfitList::-webkit-scrollbar,.main .view .card:has(> .table)::-webkit-scrollbar,.main .view div:has(> .table)::-webkit-scrollbar{height:8px}
+#productProfitList::-webkit-scrollbar-thumb,.main .view .card:has(> .table)::-webkit-scrollbar-thumb,.main .view div:has(> .table)::-webkit-scrollbar-thumb{background:#b9c8bf;border-radius:8px}
 .plat-ordlog{display:flex;flex-direction:column;gap:2px;font-size:12px;line-height:1.5}
 .plat-ordlog b{font-weight:750}
 .plat-ordlog .sub{margin-top:0;font-variant-numeric:tabular-nums}
@@ -995,3 +1013,6 @@
   .plat-api__status{padding:14px}
   .plat-api__foot{flex-direction:column;align-items:stretch}
 }
+
+/* OBS-02：空态首次引导按钮容器（状态型空态共用，无 CTA 时仍是普通空态） */
+.plat-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:11px}

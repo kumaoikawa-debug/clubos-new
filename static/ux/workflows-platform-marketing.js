@@ -331,7 +331,7 @@
         '<button class="btn secondary" type="button" onclick="platEditInvite()">编辑基本设置</button>' +
       '</div>' +
       '<div class="card"><div class="panel-title"><h3>邀请记录</h3><span class="tag">共 ' + Number(stat.total || 0) + ' 条</span></div>' +
-        '<div class="sub">累计发放邀请人积分 ' + Number(stat.points_awarded || 0) + '。记录来自各俱乐部的邀请关系，平台只读汇总。</div>' +
+        '<div class="sub">累计发放邀请人积分 ' + Number(stat.points_awarded || 0) + '。</div>' +
         (rowsHtml ? '<div class="plat-tablewrap"><table class="table"><thead><tr><th>邀请人</th><th>被邀请人</th><th>归属</th><th>时间</th></tr></thead><tbody>' + rowsHtml + '</tbody></table></div>'
                   : empty('还没有邀请记录')) +
       '</div></div>';

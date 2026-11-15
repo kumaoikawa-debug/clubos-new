@@ -461,7 +461,6 @@
         '</div>' +
 
         '<footer class="plat-cpe__foot">' +
-          '<span class="sub">成本由总平台承担，核销后进平台补贴账</span>' +
           '<div class="plat-cpe__footacts">' +
             '<button class="btn ghost" type="button" data-act="close">取消</button>' +
             '<button class="btn" type="button" data-act="save">' + (isEdit ? '保存修改' : '创建优惠券') + '</button>' +

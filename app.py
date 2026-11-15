@@ -127,6 +127,19 @@ async def security_boundary(request:Request,call_next):
     #   浏览器与前置网关就可能按启发式策略留一份旧 JSON，后台换版后顾客刷新拿到的还是上一版。
     #   这条必须放在 IS_PROD 之外、且放在可能重建 response 的审计分支之后。
     response.headers['Cache-Control']='no-store' if request.url.path.startswith('/api/') else 'private, no-store'
+    # OBS-03：demo/内测模式匿名也会返回后台静态壳（登录门由前端 /api/auth/me 承担）。
+    # 把「别被网关/爬虫缓存成公开可索引页」从上线人工确认项改为代码强制：兼容 HTTP/1.0
+    # 网关、禁止共享缓存按 URL 复用不同会话的壳、显式 noindex。官网 /home 不在其中，保留 SEO。
+    if request.url.path=='/home':
+        # F-08：官网是唯一需要公开缓存与收录的页面。保留协商缓存（FileResponse 自带
+        # ETag/Last-Modified），不套后台页的 no-store / noindex，避免误伤 SEO。
+        response.headers['Cache-Control']='public, no-cache'
+    elif request.url.path in ('/','/club','/platform','/web','/leader','/login'):
+        response.headers['Cache-Control']='no-store, no-cache, must-revalidate, private'
+        response.headers['Pragma']='no-cache'
+        response.headers['Expires']='0'
+        response.headers['X-Robots-Tag']='noindex, nofollow, noarchive'
+        response.headers['Vary']='Cookie, Authorization'
     response.headers['X-Request-ID']=request_id
     return response
 
@@ -11127,8 +11140,9 @@ def user_orders(user_id:int):
 def _complete_receipt(c, order_id: int) -> dict:
     """订单「确认收货」统一收口：shipped → delivered + 冻结佣金 + 对齐外部履约表。
 
-    被三处复用：C 端 confirm-receipt 端点、平台 PATCH delivered、10 天自动确认循环
-    (_auto_confirm_loop)。幂等：已是 delivered 原样返回，不重复冻结。
+    被四处复用：C 端 confirm-receipt、平台 PATCH delivered（OBS-01 起）、10 天自动确认
+    循环 (_auto_confirm_loop)、Medusa delivered 端点在 local/演示模式的等价签收(DEF-02)。
+    幂等：已是 delivered 原样返回，不重复冻结。
     """
     o = row(c.execute('SELECT * FROM gear_orders WHERE id=?', (int(order_id),)))
     if not o:
@@ -11471,8 +11485,16 @@ def platform_credits():
 
 @app.post('/api/platform/credits/adjust')
 def platform_credit_adjust(payload:dict=Body(...)):
-    cid=int(payload['clubId']);amount=int(payload['amount']);note=payload.get('note','平台调整')
-    with conn() as c:return ai_credit_engine.adjust(c,club_id=cid,amount=amount,note=note)
+    # F-01：空 body / 非法参数原先抛 KeyError → 生产 500；统一收敛为 400 / 404。
+    if not isinstance(payload,dict) or payload.get('clubId') in (None,'') or payload.get('amount') in (None,''):
+        raise HTTPException(400,'请提供 clubId 和 amount')
+    try: cid=int(payload['clubId']);amount=int(payload['amount'])
+    except (TypeError,ValueError): raise HTTPException(400,'clubId / amount 必须为整数')
+    note=payload.get('note','平台调整')
+    with conn() as c:
+        try:return ai_credit_engine.adjust(c,club_id=cid,amount=amount,note=note)
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(400,str(e))
 
 @app.get('/api/platform/ai-credit/plans')
 def platform_ai_credit_plans():
@@ -12176,6 +12198,9 @@ async def upload_platform_image(file:UploadFile=File(...)):
     # 商品「介绍/详情」里的插图：只落盘并返回 URL，不挂进商品图集。
     # 与 /images/batch 的区别：那个会追加进 product_images，C 端顶部轮播会再出现一次；
     # 介绍里的插图不该占用主图轮播，所以单独走这个接口。
+    # F-07：本端点也是平台端通用图片上传入口（品牌 Logo 等先传图拿 URL、再随表单落库；
+    # 新建品牌还没有 id，不能走「建完再传」）。原先下方重复声明过一份完全相同的
+    # /uploads/image（FastAPI 只注册先者），现已合并为唯一实现。
     url=await _save_platform_upload(file)
     if not url: raise HTTPException(400,'只支持图片文件（png/jpg/jpeg/webp/gif），单张上限 10MB')
     return {'url':url}
@@ -12648,14 +12673,6 @@ def platform_brand_settlement_patch(settlement_id:int, payload:dict=Body(...)):
         if not sets: return {'ok':True}
         c.execute('UPDATE brand_settlements SET %s WHERE id=?' % ','.join(sets), vals+[settlement_id])
     return {'ok':True}
-
-@app.post('/api/platform/uploads/image')
-async def platform_upload_image(file:UploadFile=File(...)):
-    """平台端通用图片上传（2026-10-26）：品牌 Logo 等先传图拿到 URL，
-    再随表单一起落库 —— 新建品牌还没有 id，不能走「建完再传」的路线。"""
-    url=await _save_platform_upload(file)
-    if not url: raise HTTPException(400,'只支持图片文件（png/jpg/jpeg/webp/gif），单张上限 10MB')
-    return {'url':url}
 
 
 @app.get('/api/platform/product-categories')
@@ -13216,8 +13233,11 @@ def platform_product_visibility_requests(status:str|None=None):
         return rows(c.execute(q+' ORDER BY r.id DESC',args))
 
 def _owned_product(c,pid):
+    # F-05：商品不存在时 stock_control.owned 抛 LookupError，统一转 404；
+    # 放在这里可覆盖所有调用点（含 warehouse/reconcile），原先漏出为 500。
     try:return stock_control.owned(c,pid)
     except ValueError as e:raise HTTPException(409,str(e))
+    except LookupError as e:raise HTTPException(404,str(e))
 
 def _validate_product_publish(c,pid,changes=None):
     p=row(c.execute('SELECT * FROM products WHERE id=?',(pid,)))
@@ -13421,29 +13441,29 @@ def platform_order_filters():
 @app.patch('/api/platform/orders/{order_id}')
 def platform_update_order(order_id:int,payload:dict=Body(...)):
     if payload.get('status')=='shipped':return platform_create_shipment(order_id,{'trackingNo':payload.get('tracking_no'),'carrier':payload.get('carrier')})
-    if payload.get('status')=='delivered':
+    delivering=payload.get('status')=='delivered'
+    if delivering:
         with conn() as c:
             o=row(c.execute('SELECT * FROM gear_orders WHERE id=?',(order_id,)))
             if not o or o['status'] not in ('shipped','delivered'):raise HTTPException(409,'只能确认已发货订单签收')
     elif payload.get('status') is not None:raise HTTPException(409,'订单状态必须通过对应业务动作推进')
-    allowed=['status','tracking_no','carrier','after_sales_status'];sets=[];vals=[]
+    # OBS-01：签收统一走 _complete_receipt（写 status/delivered_at、冻结佣金、对齐外部
+    # 履约表、幂等）。这里只更新随单附带的其他字段，不再重复实现一份签收逻辑。
+    allowed=['tracking_no','carrier','after_sales_status'];sets=[];vals=[]
     for k in allowed:
         if k in payload:sets.append(f'{k}=?');vals.append(payload[k])
-    commission=None
-    if sets:
+    receipt=None
+    if sets or delivering:
         vals.append(order_id)
         with conn() as c:
             existing=row(c.execute('SELECT id FROM gear_orders WHERE id=?',(order_id,)))
             if not existing: raise HTTPException(404,'装备订单不存在')
-            c.execute(f'UPDATE gear_orders SET {", ".join(sets)} WHERE id=?',vals)
-            if payload.get('status')=='delivered':
-                c.execute('UPDATE gear_orders SET delivered_at=COALESCE(delivered_at,CURRENT_TIMESTAMP) WHERE id=?',(order_id,))
-                commission=commission_engine.freeze_order(c,order_id=order_id)
-                # 外部履约表对齐：平台确认签收后，供应商侧物流统一标记已妥投。
-                try: c.execute("UPDATE external_fulfillment_orders SET fulfill_status=? WHERE order_id=? AND fulfill_status!='delivered'",
-                               (external_fulfillment.FUL_DELIVERED, order_id))
-                except Exception: pass
-    return {'ok':True,'commission':commission}
+            if sets: c.execute(f'UPDATE gear_orders SET {", ".join(sets)} WHERE id=?',vals)
+            if delivering:
+                try: receipt=_complete_receipt(c,order_id)
+                except LookupError as e: raise HTTPException(404,str(e))
+                except ValueError as e: raise HTTPException(409,str(e))
+    return {'ok':True,'commission':(receipt or {}).get('commission'),'idempotent':bool((receipt or {}).get('idempotent'))}
 
 
 # ==========================================================================
@@ -13760,12 +13780,14 @@ def platform_warehouse_move(payload:dict=Body(...)):
     with conn() as c:
         try:return warehouse_engine.move_stock(c,product_id=int(payload.get('productId') or 0),from_location_id=int(payload.get('fromLocationId') or 0),to_location_id=int(payload.get('toLocationId') or 0),quantity=int(payload.get('quantity') or 0),note=str(payload.get('note') or '仓内移库'),variant_id=payload.get('variantId'))
         except ValueError as e:raise HTTPException(409,str(e))
+        except LookupError as e:raise HTTPException(404,str(e))
 
 @app.post('/api/platform/warehouse/count')
 def platform_warehouse_count(payload:dict=Body(...)):
     with conn() as c:
         try:out=warehouse_engine.count_location(c,product_id=int(payload.get('productId') or 0),location_id=int(payload.get('locationId') or 0),counted_on_hand=int(payload.get('countedOnHand') or 0),note=str(payload.get('note') or '库位盘点'),variant_id=payload.get('variantId'))
         except ValueError as e:raise HTTPException(409,str(e))
+        except LookupError as e:raise HTTPException(404,str(e))
     out['commerceSync']=_safe_sync_inventory_products([int(payload.get('productId') or 0)])
     return out
 
@@ -14579,16 +14601,34 @@ def platform_retry_shipment_commerce(order_id:int):
 
 @app.post('/api/platform/orders/{order_id}/delivered')
 def platform_mark_delivered(order_id:int):
-    if commerce_provider()!='medusa': raise HTTPException(409,'当前未启用 Medusa')
-    with conn() as c:o=row(c.execute('SELECT * FROM gear_orders WHERE id=?',(order_id,)))
-    if not o: raise HTTPException(404,'装备订单不存在')
-    if not o.get('commerce_order_id') or not o.get('commerce_fulfillment_id'): raise HTTPException(409,'缺少 Medusa fulfillment')
-    try: MedusaClient().mark_delivered(str(o['commerce_order_id']),str(o['commerce_fulfillment_id']))
-    except Exception as e: raise HTTPException(502,f'Medusa签收同步失败: {e}')
+    """平台标记签收。
+
+    DEF-02：Medusa 环境先同步上游 fulfillment 再签收；local/演示环境原先恒 409，
+    导致「发货 → 签收 → 佣金冻结 → 结算」在演示与培训环境无法自证闭环。
+    非生产 + local 时改走 _complete_receipt 统一收口（写 delivered_at、冻结佣金、
+    对齐外部履约表，且幂等），与 C 端确认收货 / PATCH delivered 行为一致。
+    生产模式仍拒绝无外部履约的手工签收，避免越过上游物流真实妥投。
+    """
+    if commerce_provider()=='medusa':
+        with conn() as c:o=row(c.execute('SELECT * FROM gear_orders WHERE id=?',(order_id,)))
+        if not o: raise HTTPException(404,'装备订单不存在')
+        if not o.get('commerce_order_id') or not o.get('commerce_fulfillment_id'): raise HTTPException(409,'缺少 Medusa fulfillment')
+        try: MedusaClient().mark_delivered(str(o['commerce_order_id']),str(o['commerce_fulfillment_id']))
+        except Exception as e: raise HTTPException(502,f'Medusa签收同步失败: {e}')
+        with conn() as c:
+            c.execute("UPDATE gear_orders SET status='delivered',commerce_sync_status='delivered',delivered_at=CURRENT_TIMESTAMP WHERE id=?",(order_id,))
+            commission=commission_engine.freeze_order(c,order_id=order_id)
+        return {'ok':True,'orderId':order_id,'status':'delivered','commission':commission}
+    if IS_PROD: raise HTTPException(409,'当前未启用 Medusa，生产环境禁止手工签收')
     with conn() as c:
-        c.execute("UPDATE gear_orders SET status='delivered',commerce_sync_status='delivered',delivered_at=CURRENT_TIMESTAMP WHERE id=?",(order_id,))
-        commission=commission_engine.freeze_order(c,order_id=order_id)
-    return {'ok':True,'orderId':order_id,'status':'delivered','commission':commission}
+        try:
+            res=_complete_receipt(c,order_id)
+        except LookupError as e:
+            raise HTTPException(404,str(e))
+        except ValueError as e:
+            raise HTTPException(409,str(e))
+        res['mode']='local-simulated'
+        return res
 
 def _start_after_sales_refund(case_id:str):
     with conn() as c:
@@ -15328,7 +15368,9 @@ def platform_reconcile_stock(product_id:int,payload:dict=Body(...)):
 @app.post('/api/platform/procurement/purchase-orders/{po_id}/supplier-shipment')
 def platform_supplier_shipment(po_id:str,payload:dict=Body(...)):
     with conn() as c:
-        po=inventory_engine.get_purchase_order(c,po_id)
+        # F-02：采购单不存在时引擎抛 LookupError，统一转 404（原先生产表现为 500）。
+        try: po=inventory_engine.get_purchase_order(c,po_id)
+        except LookupError as e: raise HTTPException(404,str(e))
         if po['status'] not in ('ordered','partially_received'):raise HTTPException(409,'只有已下单采购可登记供应商发货')
         key=str(payload.get('requestKey') or '').strip();tracking=str(payload.get('trackingNo') or '').strip()
         if not key or not tracking:raise HTTPException(400,'请提供本次发货凭证和请求键')
