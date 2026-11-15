@@ -776,3 +776,24 @@ body.has-webbar .logout-fab{bottom:calc(71px + 12px)}
 .workspace-credit{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border:1px solid #dfe8da;border-radius:999px;background:#f0f5ef;color:#3d6b50;font-size:12px;font-weight:700;white-space:nowrap;cursor:default}
 .workspace-credit:before{content:'✦';font-size:11px;color:#427d62}
 @media(max-width:650px){.workspace-credit{padding:5px 9px;font-size:10.5px}}
+
+
+/* ===== 2026-11-15 手机端抽屉：遮罩层级修复 + 触屏可用性 ===== */
+/* 遮罩必须和侧栏同处 .app 层叠上下文（见 clubos-ux.js）；显式锁住 31 < 32，
+   防止端专属 glass 样式里的 .app{position:relative;z-index:1} 再把整层压下去。 */
+.app>.ux-drawer-scrim.ux-open{z-index:31}
+@media(max-width:900px){
+  .sidebar.ux-open{z-index:32;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;
+    padding-top:max(12px,env(safe-area-inset-top));
+    padding-bottom:max(16px,env(safe-area-inset-bottom))}
+  /* 抽屉内独立关闭按钮：吸在右上角，44px 触屏命中区，桌面端完全隐藏 */
+  .ux-drawer-close{display:flex;position:absolute;top:calc(10px + env(safe-area-inset-top));right:10px;
+    z-index:3;width:40px;height:40px;align-items:center;justify-content:center;
+    border:1px solid rgba(36,87,67,.18);border-radius:12px;background:rgba(255,255,255,.94);
+    color:#245743;box-shadow:0 2px 10px #10251724;-webkit-tap-highlight-color:transparent}
+  .ux-drawer-close svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round}
+  .ux-drawer-close:active{transform:scale(.94);background:#eaf3ec}
+  /* 品牌行给关闭按钮让出右侧空间，避免文字被压住 */
+  .sidebar.ux-open>.brand{padding-right:44px}
+}
+@media(min-width:901px){.ux-drawer-close{display:none}}

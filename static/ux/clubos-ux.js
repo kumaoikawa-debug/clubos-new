@@ -29,11 +29,45 @@ const clubGroups=[['工作空间',['dash','analytics']],['活动经营',['activi
   /* 顶栏整体撤掉（俱乐部端 2026-11-01、平台端 2026-11-02 用户要求）：标题/副标题与
      面包屑信息重复，撤掉后纵向空间全部还给工作区。仅 club/platform 有 .topbar。 */
   bar.style.display='none';
-  const scrim=document.createElement('div');scrim.className='ux-drawer-scrim';scrim.setAttribute('aria-hidden','true');document.body.appendChild(scrim);
+  /* 2026-11-15 P0：手机端抽屉所有菜单「点不动」的根因。
+     club-glass.css / platform-glass.css 给 .app 设了 position:relative;z-index:1，
+     形成独立层叠上下文；遮罩原先挂在 body 下（z-index:31），31 > 1 会把整个 .app
+     连侧栏(.sidebar z-index:32)一起盖住 —— elementFromPoint 命中 scrim 而非菜单。
+     把遮罩挂进 .app 内部，与侧栏在同一层叠上下文比较：31 < 32，侧栏在上，
+     遮罩仍能盖住主内容、点遮罩关闭也不受影响。 */
+  const scrim=document.createElement('div');scrim.className='ux-drawer-scrim';scrim.setAttribute('aria-hidden','true');
+  const appHost=document.querySelector('.app');
+  if(appHost)appHost.insertBefore(scrim,appHost.firstChild);else document.body.appendChild(scrim);
   const toggle=workspace.querySelector('.ux-mobile-toggle');let drawerSession=null;let _drawerScrollY=0;
-  const close=()=>{if(!sidebar.classList.contains('ux-open'))return;sidebar.classList.remove('ux-open');scrim.classList.remove('ux-open');toggle.setAttribute('aria-expanded','false');drawerSession?.release();drawerSession=null;sidebar.inert=innerWidth<=900;document.body.classList.remove('ux-drawer-open');window.scrollTo(0,_drawerScrollY)};
-  const open=()=>{if(sidebar.classList.contains('ux-open'))return;_drawerScrollY=window.scrollY||document.documentElement.scrollTop||0;sidebar.inert=false;sidebar.classList.add('ux-open');scrim.classList.add('ux-open');toggle.setAttribute('aria-expanded','true');document.body.classList.add('ux-drawer-open');drawerSession=uxDialogSession(sidebar,{onEscape:close,initialFocus:'#uxNavSearch'})};
+  const close=()=>{
+    if(!sidebar.classList.contains('ux-open'))return;
+    sidebar.classList.remove('ux-open');scrim.classList.remove('ux-open');
+    toggle.setAttribute('aria-expanded','false');
+    drawerSession?.release();drawerSession=null;
+    sidebar.inert=innerWidth<=900;
+    document.body.classList.remove('ux-drawer-open');
+    document.body.style.top='';
+    /* 手机端 P0 续：body 从 position:fixed 恢复后布局要下一帧才稳定，而 html 有
+       scroll-behavior:smooth —— 同帧 window.scrollTo 会被平滑动画吞成 0，实测「滚到
+       中途打开抽屉、关闭后跳回顶部」。临时关掉平滑，并下一帧补一次，确保回到原位。 */
+    const _y=_drawerScrollY,_root=document.documentElement,_sb=_root.style.scrollBehavior;
+    _root.style.scrollBehavior='auto';
+    window.scrollTo(0,_y);
+    requestAnimationFrame(()=>{window.scrollTo(0,_y);_root.style.scrollBehavior=_sb});
+  };
+  /* 手机端打开抽屉不再自动聚焦搜索框：聚焦会立刻唤起软键盘，遮掉大半个菜单，
+     且键盘触发的 resize 会重跑 placeSearch() 搬动已聚焦的 input。uxDialogSession
+     支持 initialFocus:false = 明确不抢焦点。 */
+  const open=()=>{if(sidebar.classList.contains('ux-open'))return;_drawerScrollY=window.scrollY||document.documentElement.scrollTop||0;sidebar.inert=false;sidebar.classList.add('ux-open');scrim.classList.add('ux-open');toggle.setAttribute('aria-expanded','true');document.body.classList.add('ux-drawer-open');document.body.style.top=(-_drawerScrollY)+'px';drawerSession=uxDialogSession(sidebar,{onEscape:close,initialFocus:innerWidth<=900?false:'#uxNavSearch'})};
   toggle.onclick=()=>sidebar.classList.contains('ux-open')?close():open();scrim.onclick=close;
+  /* 抽屉里给一个明确可见的关闭入口：手机端不能只靠「点右侧遮罩」，微信 WebView
+     里用户常常不知道那块半透明区域能点（截图里只有一个浏览器级的 X）。 */
+  const drawerClose=document.createElement('button');
+  drawerClose.type='button';drawerClose.className='ux-drawer-close';
+  drawerClose.setAttribute('aria-label','关闭导航菜单');
+  drawerClose.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+  sidebar.insertBefore(drawerClose,sidebar.firstChild);
+  drawerClose.onclick=close;
   const searchBox=workspace.querySelector('.workspace-search'),tools=workspace.querySelector('.workspace-tools');
   const placeSearch=()=>{if(innerWidth<=900){sidebar.insertBefore(searchBox,nav);sidebar.inert=!sidebar.classList.contains('ux-open')}else{close();sidebar.inert=false;tools.prepend(searchBox)}};
   placeSearch();window.addEventListener('resize',placeSearch);

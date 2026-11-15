@@ -218,8 +218,15 @@ ck('V11-c 弹层提交按钮 sticky 在视口内（clubos-ux.css）',
    '.ux-dialog-foot{position:sticky;bottom:0' in read('static/ux/clubos-ux.css'))
 ck('V11-d 本护栏已纳入全量回归',
    'tests/club_static_guard.py' in read('scripts/regression_v025.sh'))
-ck('V12 交付版本戳统一为 %s' % BUMP_TOKEN,
-   all(BUMP_TOKEN in htmls[e] for e in ENDS))
+# V12 原先把「交付版本戳 == 20261114h」写死，之后任何一次 bump 都会让全量回归恒红。
+# 改为形态 + 一致性 + 不低于历史基线：既防回退到旧缓存，也允许正常迭代。
+COMMON_ASSETS = ('static/shared.js', 'static/ux/clubos-ux.js', 'static/ux/clubos-ux.css')
+v12 = {a: {e: (tokens(htmls[e], a) or [''])[0] for e in ENDS} for a in COMMON_ASSETS}
+ck('V12 四端共用文件版本戳形态合法、四端一致且不低于 %s 基线' % BUMP_TOKEN,
+   all(all(re.fullmatch(r'\d{8}[a-z]+', v or '') and (v or '') >= BUMP_TOKEN
+           for v in vals.values()) and len(set(vals.values())) == 1
+       for vals in v12.values()),
+   {k: sorted(set(v.values())) for k, v in v12.items()})
 
 print('\nRESULT:', 'ALL PASS' if OK else 'HAS FAILURE')
 sys.exit(0 if OK else 1)

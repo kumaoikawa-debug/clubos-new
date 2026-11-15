@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""ClubOS 发布前 · 设置中枢回归门禁（2026-11-14）。
+"""ClubOS 发布前 · 设置中枢 / 移动端回归门禁（2026-11-14 建，2026-11-15 扩）。
 
-串联 4 份真浏览器 / 端到端验收脚本，并**独立重算** 4 条不可绕过的硬锁：
+串联 5 份真浏览器 / 端到端验收脚本，并**独立重算** 5 条不可绕过的硬锁：
 
   G1_PREF_WIDTH       4 个偏好控件实测 width > 8px（BUG-HUB-001 复选框被压成 0px）
   G2_OUTBOUND_POLICY  关总开关后，不传 hub 的任意业务通知一律 hub-outbound-disabled
                       （BUG-HUB-002 漏传参数即可绕过「允许外发通知」；站内信不受限）
   G3_NAV_STABLE       匿名会员连续 6 次刷新底部导航状态唯一（BUG-HUB-007 异步竞态）
   G4_SCOPE_DIRTY      有 dirty 时切层级弹二次确认，取消后层级还原且改动保留（BUG-HUB-004）
+  G5_MOBILE_DRAWER    手机端 club/platform 抽屉菜单中心命中菜单本身、tap 后关抽屉并切视图
+                      （2026-11-15 遮罩挂在 body 下盖住 .app，导致菜单整片点不动）
 
 为什么硬锁不复用脚本结果：脚本本身可能被改弱、被跳过，甚至输出 PASS 却没真正断言。
 门禁自己从 DOM / 业务代码重算一遍，任一 FAIL 即退出 1，阻断发布。
@@ -21,7 +23,7 @@
   CLUBOS_GATE_OUT    证据输出目录，默认 /tmp/clubos_hub_gate
   STAGING_PASSWORD   demo 口令，沿用项目 scripts/ 下既有默认值
 
-退出码：0 = 4 份脚本全绿且 4 条硬锁全过；1 = 任一 FAIL
+退出码：0 = 5 份脚本全绿且 5 条硬锁全过；1 = 任一 FAIL
         （实例不可达 / Chrome 不可用 / 脚本无退出码 / 结果 JSON 缺失一律视为 FAIL，不静默跳过）。
 
 本脚本不修改产品代码、不触碰线上；对隔离实例的写操作仅限于「制造 dirty 再取消」，
@@ -46,20 +48,23 @@ BASE = os.getenv('CLUBOS_GATE_BASE', 'http://127.0.0.1:8124').rstrip('/')
 OUT = os.getenv('CLUBOS_GATE_OUT', os.path.join('/tmp', 'clubos_hub_gate'))
 PW = os.getenv('STAGING_PASSWORD', 'Staging-2026-ClubOS-demo!')
 
-# 4 份脚本 -> 各自的结果 JSON。跑前先删旧 JSON，防止「上次跑绿的残留」造成假绿。
+# 5 份脚本 -> 各自的结果 JSON。跑前先删旧 JSON，防止「上次跑绿的残留」造成假绿。
 SCRIPTS = (
     ('p1_verify.py', 'results_p1_verify.json', 'P1 真浏览器定向验收'),
     ('p2_verify.py', 'results_p2_verify.json', 'P2 端到端验收'),
     ('uiux_verify.py', 'results_uiux_verify.json', 'UI/UX 专项验收'),
     ('four_end_verify.py', 'results_four_end_verify.json', '四端真浏览器验证'),
+    ('mobile_nav_verify.py', 'results_mobile_nav_verify.json', '手机端抽屉交互验收'),
 )
 
-LOCKS = ('G1_PREF_WIDTH', 'G2_OUTBOUND_POLICY', 'G3_NAV_STABLE', 'G4_SCOPE_DIRTY')
+LOCKS = ('G1_PREF_WIDTH', 'G2_OUTBOUND_POLICY', 'G3_NAV_STABLE', 'G4_SCOPE_DIRTY',
+         'G5_MOBILE_DRAWER')
 LABEL = {
     'G1_PREF_WIDTH': '4 个偏好控件 width > 8px',
     'G2_OUTBOUND_POLICY': '关总开关后任意业务通知 reason=hub-outbound-disabled',
     'G3_NAV_STABLE': '连续 6 次刷新 nav 状态唯一',
     'G4_SCOPE_DIRTY': '切层级有 dirty 时二次确认',
+    'G5_MOBILE_DRAWER': '手机端抽屉菜单可点、tap 后关抽屉并切视图',
 }
 RESULTS: list[tuple[str, str, object]] = []
 
@@ -289,12 +294,71 @@ def G2_outbound_policy():
         return False, ev
 
 
+
+def G5_mobile_drawer(b):
+    """手机端 club/platform 抽屉菜单必须真的可点（2026-11-15 P0）。
+
+    独立重算，不读 mobile_nav_verify.py 的结果：遮罩挂在 body 下会把 z-index:1 的
+    .app 整层盖住，elementFromPoint 命中 scrim 而不是菜单 —— 所有菜单项都点不动。
+    """
+    rows = []
+    for end, user, view in (('club', 'club1_admin', 'actcats'),
+                            ('platform', 'platform_admin', 'products')):
+        ctx = b.new_context(viewport={'width': 390, 'height': 844},
+                            is_mobile=True, has_touch=True)
+        ctx.new_cdp_session(ctx.new_page()).send('Network.setCacheDisabled',
+                                                 {'cacheDisabled': True})
+        pg = ctx.new_page()
+        try:
+            st = _login(pg, user)
+            pg.goto(BASE + '/' + end + '?club_id=1', wait_until='domcontentloaded')
+            pg.wait_for_timeout(1600)
+            # 用 DOM click 而非 locator.click：后者会 scrollIntoViewIfNeeded 改变滚动基线
+            pg.evaluate("()=>document.querySelector('.ux-mobile-toggle').click()")
+            pg.wait_for_timeout(450)
+            h = pg.evaluate("""(v)=>{
+              const e=document.querySelector('.nav button[data-view="'+v+'"]');
+              if(!e)return {found:false};
+              const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;
+              const t=document.elementFromPoint(x,y),sc=document.querySelector('.ux-drawer-scrim');
+              return {found:true, inside:e.contains(t)||t===e,
+                hit:t?t.tagName+'.'+String(t.className||''):null,
+                scrimInApp:!!sc&&sc.parentElement===document.querySelector('.app'),
+                open:document.querySelector('.sidebar').classList.contains('ux-open')};}""", view)
+            tap_err = ''
+            if h.get('found'):
+                try:
+                    pg.locator('.nav button[data-view="%s"]' % view).first.tap(timeout=7000)
+                    pg.wait_for_timeout(550)
+                except Exception as e:
+                    # 遮罩拦截 pointer events 时 Playwright 会一直重试到超时；这本身就是
+                    # 「菜单点不动」的证据，收进 evidence 让硬锁明确返回 False，
+                    # 而不是把整个 runner 抛崩（runner 的 main 虽会兜底记 FAIL，但丢证据）。
+                    tap_err = (str(e).splitlines() or ['tap failed'])[0][:180]
+            s = pg.evaluate("""(v)=>({open:document.querySelector('.sidebar').classList.contains('ux-open'),
+              active:[...document.querySelectorAll('.view.active')].map(x=>x.id),
+              hash:location.hash})""", view)
+            rows.append({'end': end, 'login': st, 'view': view,
+                         'hit': h.get('inside') is True, 'scrimInApp': h.get('scrimInApp') is True,
+                         'opened': h.get('open') is True, 'closed': s['open'] is False,
+                         'viewOk': view in s['active'] or view in s['hash'],
+                         'hitEl': h.get('hit'), 'tapError': tap_err})
+        finally:
+            ctx.close()
+    ux = read('static/ux/clubos-ux.js')
+    static = "appHost.insertBefore(scrim,appHost.firstChild)" in ux
+    ok = static and len(rows) == 2 and all(
+        x['hit'] and x['scrimInApp'] and x['opened'] and x['closed'] and x['viewOk']
+        and not x['tapError'] for x in rows)
+    return ok, {'staticScrimInApp': static, 'ends': rows}
+
+
 def main() -> int:
     os.makedirs(OUT, exist_ok=True)
     alive, why = connectivity()
     rec('PASS' if alive else 'FAIL', '门禁实例可达', why)
 
-    # ① 4 份脚本：退出码 + 本轮新产出的结果 JSON 双重校验
+    # ① 5 份脚本：退出码 + 本轮新产出的结果 JSON 双重校验
     for name, jname, label in SCRIPTS:
         if not alive:
             rec('FAIL', '脚本 %s · %s' % (name, label), '实例不可达，未执行（视为 FAIL）')
@@ -306,7 +370,7 @@ def main() -> int:
     ok2, ev2 = G2_outbound_policy()
     rec('PASS' if ok2 else 'FAIL', 'G2_OUTBOUND_POLICY ' + LABEL['G2_OUTBOUND_POLICY'], ev2)
 
-    # ③ G1 / G3 / G4 真浏览器硬锁
+    # ③ G1 / G3 / G4 / G5 真浏览器硬锁
     b = None
     pw = None
     if alive:
@@ -318,7 +382,8 @@ def main() -> int:
             rec('FAIL', '真 Chrome 可用', str(e)[:200])
     for marker, fn in (('G1_PREF_WIDTH', G1_pref_width),
                        ('G3_NAV_STABLE', G3_nav_stable),
-                       ('G4_SCOPE_DIRTY', G4_scope_dirty)):
+                       ('G4_SCOPE_DIRTY', G4_scope_dirty),
+                       ('G5_MOBILE_DRAWER', G5_mobile_drawer)):
         if not alive or b is None:
             rec('FAIL', marker + ' ' + LABEL[marker], '实例/浏览器不可用，未执行（视为 FAIL）')
             continue

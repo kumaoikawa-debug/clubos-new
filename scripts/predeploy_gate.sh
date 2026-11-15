@@ -7,7 +7,7 @@
 #
 # 三段任一失败即整体非零退出，禁止发布：
 #   [1/3] 静态安全门禁   —— web root 敏感文件 / .gitignore / 四端版本 / 守卫 / 密钥 / 门禁自检
-#   [2/3] 设置中枢回归门禁 —— 4 份真浏览器脚本 + 4 条独立硬锁（见 predeploy_hub_gate.py）
+#   [2/3] 设置中枢 / 移动端回归门禁 —— 5 份真浏览器脚本 + 5 条独立硬锁（见 predeploy_hub_gate.py）
 #   [3/3] 全量回归       —— scripts/regression_v025.sh（全新临时库，不碰真库）
 #
 # 注意：回归会改写 qa_ecommerce/tests/docs/TEST-RESULTS.json，发布前按既有纪律
@@ -21,7 +21,7 @@ if [ ! -x "$PY" ]; then PY="$(command -v python3)"; fi
 echo "===== [1/3] 静态安全门禁 ====="
 "$PY" scripts/predeploy_security_check.py
 
-echo "===== [2/3] 设置中枢回归门禁（4 脚本 + 4 硬锁）====="
+echo "===== [2/3] 设置中枢 / 移动端回归门禁（5 脚本 + 5 硬锁）====="
 "$PY" scripts/predeploy_hub_gate.py
 
 echo "===== [3/3] 全量回归 ====="

@@ -1686,9 +1686,13 @@ function uxDialogSession(root,{onEscape=null,initialFocus=null}={}){
   _uxDlgStack.push(session);
   if(_uxScrollLocks++===0)document.body.style.overflow='hidden';
   document.addEventListener('keydown',onKey,true);
-  const pick=typeof initialFocus==='string'?root.querySelector(initialFocus):initialFocus;
-  const target=pick||_uxFocusables(root)[0]||root;
-  try{target.focus({preventScroll:true})}catch(_){target?.focus?.()}
+  /* initialFocus:false 表示「明确不要抢焦点」：手机端抽屉自动 focus 搜索框会唤起
+     软键盘遮住菜单。其它调用方传 string / undefined，行为完全不变。 */
+  if(initialFocus!==false){
+    const pick=typeof initialFocus==='string'?root.querySelector(initialFocus):initialFocus;
+    const target=pick||_uxFocusables(root)[0]||root;
+    try{target.focus({preventScroll:true})}catch(_){target?.focus?.()}
+  }
   return session;
 }
 window.uxDialogSession=uxDialogSession;

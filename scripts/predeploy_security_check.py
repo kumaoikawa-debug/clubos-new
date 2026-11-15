@@ -209,15 +209,17 @@ def check_runtime() -> None:
 
 # 10) 发布前设置中枢回归门禁不能被摘除 / 改弱（#927~#930，2026-11-14）
 def check_hub_gate() -> None:
-    """4 份验收脚本 + 4 条硬锁是发布前的必跑项，这里做只读的「存在性」自检。
+    """5 份验收脚本 + 5 条硬锁是发布前的必跑项，这里做只读的「存在性」自检。
 
     动态断言由 scripts/predeploy_hub_gate.py 在真实例 / 真 Chrome 上执行；本函数只保证
     这条链没被删、没被改成恒绿 —— 与 check_guards() 锁并发守卫是同一套思路。
     """
     gate = read('scripts/predeploy_hub_gate.py')
     entry = read('scripts/predeploy_gate.sh')
-    locks = ('G1_PREF_WIDTH', 'G2_OUTBOUND_POLICY', 'G3_NAV_STABLE', 'G4_SCOPE_DIRTY')
-    scripts = ('p1_verify.py', 'p2_verify.py', 'uiux_verify.py', 'four_end_verify.py')
+    locks = ('G1_PREF_WIDTH', 'G2_OUTBOUND_POLICY', 'G3_NAV_STABLE',
+               'G4_SCOPE_DIRTY', 'G5_MOBILE_DRAWER')
+    scripts = ('p1_verify.py', 'p2_verify.py', 'uiux_verify.py',
+               'four_end_verify.py', 'mobile_nav_verify.py')
     problems = []
     if not gate:
         problems.append('predeploy_hub_gate.py 缺失')
@@ -236,10 +238,18 @@ def check_hub_gate() -> None:
     for s in scripts:
         if "sys.exit(0 if s['fail'] == 0 else 1)" not in read('scripts/hub_gate/' + s):
             problems.append(s + ' 缺少 FAIL 退出码')
+    # 手机端抽屉 P0 的核心修复被摘除时，静态自检也要红（不依赖浏览器跑不跑）
+    ux = read('static/ux/clubos-ux.js')
+    if 'appHost.insertBefore(scrim,appHost.firstChild)' not in ux:
+        problems.append('遮罩未挂进 .app（手机端菜单会整片点不动）')
+    if 'initialFocus:innerWidth<=900?false' not in ux:
+        problems.append('手机端抽屉仍会自动聚焦搜索框唤起软键盘')
+    if 'initialFocus!==false' not in read('static/shared.js'):
+        problems.append('uxDialogSession 不再支持 initialFocus:false')
     if problems:
-        rec('FAIL', '发布前设置中枢回归门禁被摘除或改弱', '；'.join(problems[:4]))
+        rec('FAIL', '发布前回归门禁被摘除或改弱', '；'.join(problems[:4]))
     else:
-        rec('PASS', '发布前设置中枢门禁齐全（统一入口 + 4 脚本 + 4 硬锁 + 失败退出码）')
+        rec('PASS', '发布前门禁齐全（统一入口 + 5 脚本 + 5 硬锁 + 失败退出码 + 手机抽屉修复标记）')
 
 
 def main() -> int:
