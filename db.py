@@ -2037,6 +2037,25 @@ def _migrate_v046_campaign_grants(c):
     c.execute("CREATE INDEX IF NOT EXISTS idx_cgl_club_order ON campaign_grant_log(club_id, order_id, gift_type)")
 
 
+def _migrate_v047_platform_marketing(c):
+    """总平台营销对齐（2026-11-15）：平台级「消费送券」规则。
+
+    刻意不复用 coupon_gift_rules —— 那张表有 club_id 外键且归属校验写死 CLUB 券，
+    平台券塞进去会撞外键并污染俱乐部后台。独立表只规则、零回填，旧库自动补建。
+    邀请奖励配置走已有的 platform_settings(key/value)，不需要新表。
+    """
+    c.execute("""CREATE TABLE IF NOT EXISTS platform_coupon_gift_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        threshold_amount REAL NOT NULL,
+        benefit_id INTEGER NOT NULL,
+        per_user_limit INTEGER NOT NULL DEFAULT 1,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(benefit_id) REFERENCES member_benefits(id)
+    )""")
+
+
 def init_db():
     with conn() as c:
         c.executescript(SCHEMA.read_text(encoding='utf-8'))
@@ -2070,6 +2089,8 @@ def init_db():
         _migrate_v045_checkout_settlement(c)
         # 2026-11-13：P6 营销赠送发放闭环（BUY_GIFT / INVITE 赠品发放幂等日志）。
         _migrate_v046_campaign_grants(c)
+        # 2026-11-15：总平台营销能力对齐（平台级消费送券规则）。
+        _migrate_v047_platform_marketing(c)
         if c.execute('SELECT COUNT(*) FROM clubs').fetchone()[0]:
             _seed_v08_defaults(c)
             if os.getenv('CLUBOS_SECURITY_MODE','demo')!='production': _seed_v15_payment_defaults(c)

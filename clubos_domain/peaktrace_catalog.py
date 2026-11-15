@@ -27,11 +27,12 @@ import hashlib
 import json
 import math
 import os
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin, urlsplit, quote as _urlquote
 
 import httpx
 
 from . import stock_control as sc
+from . import integration_config as _icfg
 
 ORIGIN = os.environ.get('PEAKTRACE_ORIGIN', 'https://peaktrace-h5.app.workbuddy.host').rstrip('/')
 
@@ -45,46 +46,87 @@ SYNCED = 'stock_synced'
 UNAVAILABLE = 'catalog_unavailable'
 
 
-def fetch_catalog():
-    """读取上游主数据，返回统一 payload dict（不碰本地数据库）。"""
-    with httpx.Client(timeout=20) as client:
+def fetch_catalog(config: dict | None = None):
+    """读取上游主数据，返回统一 payload dict（不碰本地数据库）。
+
+    2026-11-15：接口地址 / 路径 / 方法 / 令牌 / 字段名全部来自后台「接口配置」页。
+    ``config`` 由调用方（app.py）用 ``integration_config.effective(c)`` 传入；
+    不传时回落内置默认 + 环境变量，保证旧调用与回归单测行为不变。
+    """
+    cfg = _icfg.effective(config=config)
+    origin = cfg['origin']
+    headers = dict(cfg.get('extraHeaders') or {})
+    with httpx.Client(timeout=cfg.get('timeoutSeconds') or 20,
+                      headers=headers or None) as client:
         # 首选：PEAKTRACE B2B 只读目录 —— 一次拿齐已上架商品 + 按 SKU 可售库存。
         try:
-            r = client.get(ORIGIN + '/api/b2b/catalog')
+            r = client.get(origin + cfg['catalogPath'])
             if r.status_code == 200:
                 d = r.json()
-                if (isinstance(d, dict) and isinstance(d.get('products'), list)
-                        and isinstance(d.get('categories'), list)):
+                pk, ck = cfg['productsKey'], cfg['categoriesKey']
+                if (isinstance(d, dict) and isinstance(d.get(pk), list)
+                        and isinstance(d.get(ck), list)):
                     inv = {}
-                    for p in d['products']:
+                    for p in d[pk]:
                         if not isinstance(p, dict):
                             continue
-                        for s in (p.get('skus') or []):
+                        for s in (p.get(cfg['skusKey']) or []):
                             if isinstance(s, dict) and s.get('sku'):
-                                inv[str(s['sku'])] = s.get('available')
-                    return {'products': d['products'], 'categories': d['categories'],
-                            'inventory': inv, 'source': 'b2b', 'origin': ORIGIN,
+                                inv[str(s['sku'])] = s.get(cfg['availableKey'])
+                    return {'products': d[pk], 'categories': d[ck],
+                            'inventory': inv, 'source': 'b2b', 'origin': origin,
                             'generatedAt': d.get('generatedAt')}
         except Exception:
             pass  # 老版本线上实例没有 B2B 接口，走下面的兼容路径
 
-        products = client.get(ORIGIN + '/api/products')
+        products = client.get(origin + cfg['productsPath'])
         products.raise_for_status()
-        categories = client.get(ORIGIN + '/api/categories')
+        categories = client.get(origin + cfg['categoriesPath'])
         categories.raise_for_status()
-        token = os.environ.get('PEAKTRACE_API_TOKEN', 'peaktrace-admin')
+        token = cfg['token']
         inv = {}
         try:
-            # 网关剥离自定义头与查询串，管理令牌只能放 JSON body；库读取失败按「未开放库存」处理，
-            # 不因此中断整次同步（商品资料仍然先接通）。
-            ir = client.post(ORIGIN + '/api/admin/inventory/get', json={'token': token})
+            # 网关剥离自定义头与查询串，管理令牌默认只能放 JSON body；库读取失败按
+            # 「未开放库存」处理，不因此中断整次同步（商品资料仍然先接通）。
+            if cfg['inventoryMethod'] == 'GET':
+                ir = client.get(origin + cfg['inventoryPath'],
+                                params={cfg['tokenField']: token})
+            else:
+                ir = client.post(origin + cfg['inventoryPath'],
+                                 json={cfg['tokenField']: token})
             if ir.status_code == 200 and isinstance(ir.json(), dict):
-                inv = {str(k): (v.get('available') if isinstance(v, dict) else v)
+                inv = {str(k): (v.get(cfg['availableKey']) if isinstance(v, dict) else v)
                        for k, v in ir.json().items()}
         except Exception:
             inv = {}
         return {'products': products.json(), 'categories': categories.json(),
-                'inventory': inv, 'source': 'legacy', 'origin': ORIGIN}
+                'inventory': inv, 'source': 'legacy', 'origin': origin}
+
+
+def probe_catalog(config: dict | None = None) -> dict:
+    """后台「测试连接」：只回报结构与数量，不回传上游响应体或令牌明文。"""
+    import time
+    cfg = _icfg.effective(config=config)
+    t0 = time.monotonic()
+    out = {'origin': cfg['origin'], 'timeoutSeconds': cfg.get('timeoutSeconds'),
+           'elapsedMs': 0}
+    try:
+        payload = fetch_catalog(config)
+        out.update(ok=True, source=payload.get('source'),
+                   products=len(payload.get('products') or []),
+                   categories=len(payload.get('categories') or []),
+                   inventory=len(payload.get('inventory') or {}),
+                   message='接口连通，字段映射可用')
+    except Exception as e:
+        # GET 令牌在查询串里时，httpx 的异常文本会带上 URL，必须先把令牌洗掉。
+        msg = str(e)
+        token = str(cfg.get('token') or '')
+        if token:
+            msg = msg.replace(token, '****').replace(_urlquote(token, safe=''), '****')
+        out.update(ok=False, source=None, products=0, categories=0, inventory=0,
+                   message='%s: %s' % (type(e).__name__, msg[:200]))
+    out['elapsedMs'] = int((time.monotonic() - t0) * 1000)
+    return out
 
 
 def _image(value, origin):

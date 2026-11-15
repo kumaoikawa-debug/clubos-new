@@ -407,6 +407,16 @@ class CheckoutEngine:
                     cash_paid=float(intent['cash_amount']))
             except Exception as _ge:
                 logger.warning("coupon gift failed checkout=%s: %s", intent['id'], _ge)
+        # 总平台「消费送券」（2026-11-15）：平台规则对所有成交订单生效，与俱乐部
+        # 规则并列触发；两者送的是不同归属主体的券，成本各自承担，异常都不阻断支付。
+        if self.benefits:
+            try:
+                from . import platform_marketing
+                coupon_gifts += platform_marketing.process_coupon_gifts(
+                    c, benefits=self.benefits, user_id=int(intent['user_id']),
+                    cash_paid=float(intent['cash_amount']), club_id=int(activity['club_id']))
+            except Exception as _ge:
+                logger.warning('platform coupon gift failed checkout=%s: %s', intent['id'], type(_ge).__name__)
         c.execute('UPDATE checkout_intents SET result_id=? WHERE id=?',(str(rid),intent['id']))
         result={'ok':True,'kind':'activity','checkoutId':intent['id'],'registrationId':rid,'clubPointsEarned':earned,
                 'cashPaid':intent['cash_amount'],'commerceOrderId':commerce_order_id,'pointsPolicy':policy_snapshot,
@@ -478,6 +488,16 @@ class CheckoutEngine:
         self.points.materialize_redemptions(c,intent_id=intent['id'],order_kind='gear',order_id=oid,club_id=int(intent['club_id']))
         if self.benefits:
             self.benefits.consume_vouchers(c,intent_id=intent['id'],order_kind='gear',order_id=oid)
+        # 总平台「消费送券」（2026-11-15）：装备商城订单也参与平台送券规则。
+        platform_coupon_gifts=[]
+        if self.benefits:
+            try:
+                from . import platform_marketing
+                platform_coupon_gifts=platform_marketing.process_coupon_gifts(
+                    c, benefits=self.benefits, user_id=int(intent['user_id']),
+                    cash_paid=float(intent['cash_amount']), club_id=int(intent['club_id']))
+            except Exception as _ge:
+                logger.warning('platform coupon gift failed gear checkout=%s: %s', intent['id'], type(_ge).__name__)
         c.execute('INSERT INTO commission_ledger(club_id,order_id,amount,status) VALUES(?,?,?,?)',(intent['club_id'],oid,commission,'pending'))
         # 外部履约桥（2026-11-06）：含外部品牌（PEAKTRACE 镜像）明细的订单在这里挂
         # 履约记录 —— 只落库，推送上游交给 auto loop / 手动同步，网络调用绝不进支付事务。
@@ -505,7 +525,8 @@ class CheckoutEngine:
                 'grossAmount':gross,'memberGearDiscount':member_cut,
                 'platformPointSubsidy':intent['platform_point_subsidy'],
                 'platformBenefitSubsidy':float(intent.get('platform_benefit_subsidy') or 0),
-                'commerceOrderId':commerce_order_id}
+                'commerceOrderId':commerce_order_id,
+                'platformCouponGifts':platform_coupon_gifts}
         # Persist the confirmed result so async payment polling (get_checkout) can hand back the
         # same receipt shape the synchronous /pay path returns.
         c.execute('UPDATE checkout_intents SET result_json=? WHERE id=?',(json.dumps(result,ensure_ascii=False),intent['id']))

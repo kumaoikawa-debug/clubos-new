@@ -56,6 +56,8 @@ from payment_providers import PaymentAccountService, provider_for_account, merch
 import logistics_engine
 from clubos_domain import stock_control as stock_control
 from clubos_domain import peaktrace_catalog
+from clubos_domain import integration_config
+from clubos_domain import platform_marketing
 from clubos_domain import external_fulfillment
 
 ROOT=Path(__file__).resolve().parent
@@ -4090,6 +4092,100 @@ def platform_campaigns():
     with conn() as c:
         return CampaignEngine().list_campaigns(c, owner_type='PLATFORM')
 
+# ── 总平台营销能力对齐俱乐部端（2026-11-15）──────────────────────────────
+# 平台活动复用 marketing_campaigns(owner_type='PLATFORM')：报价引擎 evaluate()
+# 早已把这类活动纳入所有订单求值，这里只补齐后台的增删改查，不存在「只能看不能用」。
+# 平台送券规则、邀请奖励各自独立存储，绝不写进俱乐部规则表（有 club_id 外键）。
+def _platform_campaign_or_403(c,campaign_id:int):
+    r=c.execute('SELECT owner_type FROM marketing_campaigns WHERE id=?',(int(campaign_id),)).fetchone()
+    if not r: raise HTTPException(404,'营销活动不存在')
+    if str(r[0] or '').upper()!='PLATFORM':
+        raise HTTPException(403,'这是俱乐部自建的营销活动，总平台不能修改')
+
+@app.post('/api/platform/campaigns')
+def platform_add_campaign(payload:dict=Body(...)):
+    try:
+        with conn() as c:
+            return CampaignEngine().create_campaign(c,owner_type='PLATFORM',payload=payload)
+    except ValueError as e: raise HTTPException(400,str(e))
+
+@app.patch('/api/platform/campaigns/{campaign_id}')
+def platform_update_campaign(campaign_id:int,payload:dict=Body(...)):
+    try:
+        with conn() as c:
+            _platform_campaign_or_403(c,campaign_id)
+            return CampaignEngine().update_campaign(c,campaign_id=campaign_id,payload=payload)
+    except LookupError as e: raise HTTPException(404,str(e))
+    except PermissionError as e: raise HTTPException(403,str(e))
+    except ValueError as e: raise HTTPException(400,str(e))
+
+@app.delete('/api/platform/campaigns/{campaign_id}')
+def platform_delete_campaign(campaign_id:int):
+    try:
+        with conn() as c:
+            _platform_campaign_or_403(c,campaign_id)
+            return CampaignEngine().delete_campaign(c,campaign_id=campaign_id)
+    except LookupError as e: raise HTTPException(404,str(e))
+    except PermissionError as e: raise HTTPException(403,str(e))
+
+@app.get('/api/platform/marketing/overview')
+def platform_marketing_overview():
+    with conn() as c: return platform_marketing.overview(c)
+
+@app.get('/api/platform/marketing/grant-log')
+def platform_marketing_grant_log(limit:int=100):
+    """发放记录：平台活动赠品 + 平台券发放，两个来源分开列，前端合并成时间线。"""
+    with conn() as c:
+        ov=platform_marketing.overview(c)
+        return {'campaignGrants':platform_marketing.campaign_grant_log(c,limit),
+                'couponIssues':platform_marketing.coupon_issue_log(c,limit),
+                'stats':{'campaignGrants':ov['campaignGrants'],'couponIssues':ov['couponIssues']}}
+
+@app.get('/api/platform/coupon-gift-rules')
+def platform_coupon_gift_rules():
+    with conn() as c: return platform_marketing.gift_rules(c)
+
+@app.post('/api/platform/coupon-gift-rules')
+def platform_add_coupon_gift_rule(payload:dict=Body(...)):
+    with conn() as c:
+        try: rid=platform_marketing.create_gift_rule(c,payload)
+        except platform_marketing.PlatformMarketingError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'ruleId':rid}
+
+@app.patch('/api/platform/coupon-gift-rules/{rule_id}')
+def platform_update_coupon_gift_rule(rule_id:int,payload:dict=Body(...)):
+    with conn() as c:
+        try: platform_marketing.update_gift_rule(c,rule_id,payload)
+        except platform_marketing.PlatformMarketingError as e: raise HTTPException(400,str(e))
+    return {'ok':True}
+
+@app.delete('/api/platform/coupon-gift-rules/{rule_id}')
+def platform_delete_coupon_gift_rule(rule_id:int):
+    with conn() as c: platform_marketing.delete_gift_rule(c,rule_id)
+    return {'ok':True}
+
+@app.get('/api/platform/invite-reward')
+def platform_invite_reward_get():
+    """平台级邀请奖励：俱乐部自己启用配置时以俱乐部为准，本配置只作全平台兜底。"""
+    with conn() as c:
+        cfg=platform_marketing.invite_reward(c)
+        pool=rows(c.execute("SELECT id,title,mode,cash_value,threshold_amount,discount_percent,stock,status,benefit_type "
+                            "FROM member_benefits WHERE owner_type='PLATFORM' "
+                            "AND benefit_type IN ('activity_coupon','gear_coupon') ORDER BY id DESC"))
+        recs=rows(c.execute("SELECT r.*,u1.name inviter_name,u2.name invitee_name "
+                            "FROM invite_records r LEFT JOIN users u1 ON u1.id=r.inviter_user_id "
+                            "LEFT JOIN users u2 ON u2.id=r.invitee_user_id ORDER BY r.id DESC LIMIT 100"))
+        stat=row(c.execute("SELECT COUNT(*) total,COALESCE(SUM(inviter_points_awarded),0) points_awarded "
+                           "FROM invite_records")) or {}
+    return {'settings':cfg,'pool':pool,'records':recs,'stats':stat,'scope':'PLATFORM'}
+
+@app.put('/api/platform/invite-reward')
+def platform_invite_reward_set(payload:dict=Body(...)):
+    with conn() as c:
+        try: cfg=platform_marketing.save_invite_reward(c,payload)
+        except platform_marketing.PlatformMarketingError as e: raise HTTPException(400,str(e))
+    return {'ok':True,'settings':cfg}
+
 @app.get('/api/public/clubs/{club_id}/membership/purchasable')
 def public_purchasable_tiers(request:Request,club_id:int,user_id:int|None=None):
     """C 端可购买的会员卡 + 当前用户的有效购买记录（俱乐部未开通时返回空列表）。"""
@@ -4558,7 +4654,7 @@ def public_invite_info(request:Request,club_id:int,user_id:int|None=None):
                                   FROM club_members m JOIN users u ON u.id=m.user_id
                                   WHERE m.club_id=? AND m.referred_by=? ORDER BY m.id DESC LIMIT 20''',(club_id,user_id)))
         # 新版「邀请奖励」模块开启时，奖励说明取双向配置；否则降级取旧 referral_coupon_benefit_id。
-        cfg=row(c.execute('SELECT * FROM invite_reward_settings WHERE club_id=? AND enabled=1',(club_id,)))
+        cfg,cfg_owner=platform_marketing.invite_reward_for_club(c,club_id)
         reward=None
         if cfg and (cfg.get('invitee_benefit_id') or cfg.get('inviter_benefit_id')):
             eb=benefit_engine._coupon_row(c,int(cfg['invitee_benefit_id'])) if cfg.get('invitee_benefit_id') else None
@@ -4589,14 +4685,14 @@ def public_join_with_invite(request:Request,club_id:int,payload:dict=Body(...)):
         if not info.get('alreadyBound'):
             inviter_uid=int(info['inviterUserId'])
             # 新版「邀请奖励」模块开启时走双边逻辑（被邀请人领券 → 邀请人得奖励券 + 积分 + 记录）。
-            cfg=row(c.execute('SELECT * FROM invite_reward_settings WHERE club_id=? AND enabled=1',(club_id,)))
+            cfg,cfg_owner=platform_marketing.invite_reward_for_club(c,club_id)
             if cfg and (cfg.get('invitee_benefit_id') or cfg.get('inviter_benefit_id') or cfg.get('inviter_points')):
                 invitee_rid=None; inviter_rid=None; pts_awarded=0
                 if cfg.get('invitee_benefit_id'):
                     eb=benefit_engine._coupon_row(c,int(cfg['invitee_benefit_id']))
                     if eb and str(eb.get('status') or 'active')=='active':
                         try:
-                            r=benefit_engine._issue(c,eb,user_id,club_id,funding='CLUB',note='好友邀请注册赠送')
+                            r=benefit_engine._issue(c,eb,user_id,club_id,funding=cfg_owner,note='好友邀请注册赠送')
                             invitee_rid=r['redemptionId']; gifts.append(r)
                         except Exception: pass
                 inv_bid=cfg.get('inviter_benefit_id') or cfg.get('invitee_benefit_id')
@@ -4604,7 +4700,7 @@ def public_join_with_invite(request:Request,club_id:int,payload:dict=Body(...)):
                     ib=benefit_engine._coupon_row(c,int(inv_bid))
                     if ib and str(ib.get('status') or 'active')=='active':
                         try:
-                            r=benefit_engine._issue(c,ib,inviter_uid,club_id,funding='CLUB',note='成功邀请好友注册赠送')
+                            r=benefit_engine._issue(c,ib,inviter_uid,club_id,funding=cfg_owner,note='成功邀请好友注册赠送')
                             inviter_rid=r['redemptionId']; gifts.append(r)
                         except Exception: pass
                 pts_awarded=max(0,int(cfg.get('inviter_points') or 0))
@@ -12199,11 +12295,15 @@ def _peaktrace_auto_loop():
         now=time.time()
         if now>=next_catalog:
             try:
-                payload=peaktrace_catalog.fetch_catalog()
+                # 2026-11-15：后台「接口配置」页保存后，自动同步下一轮立即按新配置执行。
+                with conn() as c:
+                    cfg=integration_config.effective(c)
+                payload=peaktrace_catalog.fetch_catalog(cfg)
                 with conn() as c:
                     peaktrace_catalog.sync_catalog(c,payload)
             except Exception as e:
-                print('[peaktrace] auto sync skipped:',type(e).__name__,str(e)[:160])
+                # 令牌可能出现在 GET 查询串里，异常文本不打出来，避免密钥进日志。
+                print('[peaktrace] auto sync skipped:',type(e).__name__)
             next_catalog=now+catalog_ttl
         # 外部履约桥：待推订单推上游 + 已推订单拉发货状态（各自独立失败）
         try:
@@ -12281,6 +12381,64 @@ if _auto_confirm_enabled():
     threading.Thread(target=_auto_confirm_loop, name='auto-confirm-receipt', daemon=True).start()
 
 
+# ── 外部接口配置（2026-11-15）──────────────────────────────────────────────
+# 上游接口的地址 / 路径 / 方法 / 令牌 / 返回字段名全部由后台固定配置页维护：
+# 换接口只改页面上的数据，不改代码、不重新发版。配置存 platform_settings，
+# 存量库零迁移；令牌只存服务端，GET 一律返回掩码。
+def _integration_key_or_404(key:str)->str:
+    if key not in integration_config.DEFAULTS:
+        raise HTTPException(404,'未知的接口配置')
+    return key
+
+@app.get('/api/platform/integration-configs')
+def platform_integration_configs():
+    with conn() as c:
+        out=[]
+        for k in integration_config.DEFAULTS:
+            _,meta=integration_config.load(c,k)
+            out.append({'key':k,'label':'PEAKTRACE 商品目录同步',
+                        'source':meta['source'],'updatedAt':meta['updatedAt']})
+        return out
+
+@app.get('/api/platform/integration-configs/{config_key}')
+def platform_integration_config_get(config_key:str):
+    key=_integration_key_or_404(config_key)
+    with conn() as c:
+        return integration_config.public(c,key)
+
+@app.put('/api/platform/integration-configs/{config_key}')
+def platform_integration_config_put(request:Request,config_key:str,payload:dict=Body(...)):
+    key=_integration_key_or_404(config_key)
+    try:
+        with conn() as c:
+            integration_config.save(c,payload,key,operator=_hub_operator(request))
+            return integration_config.public(c,key)
+    except integration_config.ConfigError as e:
+        raise HTTPException(400,str(e))
+
+@app.post('/api/platform/integration-configs/{config_key}/test')
+def platform_integration_config_test(config_key:str,payload:dict=Body(default={})):
+    """测试连接：可用页面草稿先测后存；只回报结构与数量，不回传响应体 / 令牌。"""
+    key=_integration_key_or_404(config_key)
+    draft=payload.get('draft') if isinstance(payload,dict) else None
+    try:
+        with conn() as c:
+            if isinstance(draft,dict):
+                cfg=integration_config.effective(config=integration_config.normalize(c,draft,key))
+            else:
+                cfg=integration_config.effective(c,key)
+    except integration_config.ConfigError as e:
+        raise HTTPException(400,str(e))
+    return peaktrace_catalog.probe_catalog(cfg)
+
+@app.post('/api/platform/integration-configs/{config_key}/reset')
+def platform_integration_config_reset(config_key:str):
+    key=_integration_key_or_404(config_key)
+    with conn() as c:
+        integration_config.reset(c,key)
+        return integration_config.public(c,key)
+
+
 @app.get('/api/platform/brands/peaktrace/status')
 def platform_peaktrace_status():
     """给平台端显示「上次同步时间 / 已接通商品数」，不需要访问上游。"""
@@ -12290,8 +12448,11 @@ def platform_peaktrace_status():
                             WHERE external_sku_id='' AND external_sync_status='stock_synced'"""))
         gone=row(c.execute("""SELECT COUNT(*) n FROM external_product_mappings
                                WHERE external_sku_id='' AND external_sync_status='catalog_unavailable'"""))
-    return {'ok':True,'origin':peaktrace_catalog.ORIGIN,
+        raw,meta=integration_config.load(c,integration_config.PEAKTRACE)
+        cfg=integration_config.effective(c)
+    return {'ok':True,'origin':cfg['origin'],
             'inventoryConnected':True,'autoSync':_peaktrace_auto_sync_enabled(),
+            'customConfig':bool(raw.get('enabled')) and meta['source']=='database',
             'syncedProducts':int((m or {}).get('n') or 0),'lastSyncAt':(m or {}).get('last_at'),
             'upstreamRemoved':int((gone or {}).get('n') or 0)}
 
@@ -12299,9 +12460,11 @@ def platform_peaktrace_status():
 @app.post('/api/platform/brands/peaktrace/sync')
 def platform_sync_peaktrace():
     """PEAKTRACE 主数据全量镜像：上游上架什么就卖什么，资料与库存都以上游为准。"""
-    try: payload=peaktrace_catalog.fetch_catalog()
+    with conn() as c:
+        cfg=integration_config.effective(c)
+    try: payload=peaktrace_catalog.fetch_catalog(cfg)
     except Exception as e:
-        raise HTTPException(502,'PEAKTRACE 商品数据读取失败，请稍后重试；本地商品未改动（%s）' % type(e).__name__)
+        raise HTTPException(502,'PEAKTRACE 商品数据读取失败，请到「接口配置」页检查地址与令牌；本地商品未改动（%s）' % type(e).__name__)
     with conn() as c:
         try:return peaktrace_catalog.sync_catalog(c,payload)
         except ValueError as e:raise HTTPException(409,str(e))

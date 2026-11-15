@@ -195,12 +195,21 @@
         '<span>' + esc(o.label) + '</span></label>';
     }).join('') + '</div>';
   }
+  /* 2026-11-15：支持 optgroup 分组。指定对象全部来自 /api/platform/coupon-scope-options，
+     有多少商品就列多少条，绝不把具体产品写死在页面里（与俱乐部端同一交互）。 */
   function selectHtml(id, options, value, placeholder) {
+    var v = String(value == null ? '' : value);
+    var render = function (o) {
+      return '<option value="' + esc(o.value) + '"' +
+        (String(o.value) === v ? ' selected' : '') + '>' + esc(o.label) + '</option>';
+    };
     var opts = placeholder ? '<option value="">' + esc(placeholder) + '</option>' : '';
     opts += (options || []).map(function (o) {
-      return '<option value="' + esc(o.value) + '"' +
-        (String(o.value) === String(value == null ? '' : value) ? ' selected' : '') + '>' +
-        esc(o.label) + '</option>';
+      if (o && o.group) {
+        return '<optgroup label="' + esc(o.group) + '">' +
+          (o.options || []).map(render).join('') + '</optgroup>';
+      }
+      return render(o);
     }).join('');
     return '<select id="' + id + '">' + opts + '</select>';
   }
@@ -225,11 +234,12 @@
     var scopeData = null;
     try { scopeData = await api('/api/platform/coupon-scope-options'); }
     catch (e) { scopeData = { products: [], categories: [] }; }
-    var scopeOptions = [{ value: 'all', label: '全部装备商品通用（不指定具体商品）' }];
-    [['products','product','指定装备商品'],['categories','category','指定装备分类']].forEach(function (g) {
-      (scopeData[g[0]] || []).forEach(function (x) {
-        scopeOptions.push({ value: g[1] + ':' + x.id, label: g[2] + ' · ' + (x.name || ('#' + x.id)) });
+    var scopeOptions = [{ value: 'all', label: '不指定（适用于全部装备商品）' }];
+    [['products','product','装备商品'],['categories','category','装备分类']].forEach(function (g) {
+      var items = (scopeData[g[0]] || []).map(function (x) {
+        return { value: g[1] + ':' + x.id, label: (x.name || ('#' + x.id)) };
       });
+      if (items.length) scopeOptions.push({ group: '指定' + g[2] + '（' + items.length + '）', options: items });
     });
     var campList = [];
 
@@ -365,7 +375,7 @@
               '<div class="plat-cpe__sec-h"><h3>使用条件</h3><p>券能在哪里用、谁能领。全部俱乐部 = 所有俱乐部的用户；指定城市按注册城市圈人；指定俱乐部只给该俱乐部成员。</p></div>' +
               '<div class="plat-cpe__row"><span>适用范围</span><div>' +
                 selectHtml('cpeScopeRef', scopeOptions, st.scopeRef) +
-                '<em class="plat-cpe__hint">总平台只管理装备商品与装备分类，不涉及具体活动 / 营地。不指定具体商品时，这张券适用于全部装备商品；这里不是必填项。</em>' +
+                '<em class="plat-cpe__hint">下面的商品与分类都从商品库实时读取并分组，新增商品会自动出现，不需要改代码。总平台券不涉及具体活动 / 营地；选「不指定」即适用全部装备商品，此项非必填。</em>' +
               '</div></div>' +
               '<div class="plat-cpe__row"><span>投放范围 <i>*</i></span><div>' +
                 radiosHtml('targetType', [
