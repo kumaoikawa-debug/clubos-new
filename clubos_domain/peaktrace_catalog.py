@@ -36,6 +36,22 @@ from . import integration_config as _icfg
 
 ORIGIN = os.environ.get('PEAKTRACE_ORIGIN', 'https://peaktrace-h5.app.workbuddy.host').rstrip('/')
 
+# 2026-11-16：托管网关对 PEAKTRACE 也启用了 sharecode 门禁——服务器到服务器的
+# 出站请求不带 ?sharecode= 一律被网关挡成 403「链接不完整」页（不是上游业务接口
+# 的鉴权，token 放 header/query/body 都救不了）。码与 external_fulfillment 共用
+# 同一个环境变量，上游换码时只改环境变量、不改代码。
+UPSTREAM_SHARECODE = os.environ.get('PEAKTRACE_SHARECODE', 'Q7CFCS2XP7').strip()
+
+
+def _upstream_url(base: str, path: str) -> str:
+    """拼出能过网关的上游 URL：origin + path + ?sharecode=...（带 query 时用 &）。"""
+    url = str(base).rstrip('/') + str(path)
+    # 路径里已显式填了 sharecode（例如运营在配置页写了带码路径）就不再追加，
+    # 避免双参数让网关取到不确定的值；否则按默认码补齐。
+    if UPSTREAM_SHARECODE and 'sharecode=' not in url.lower():
+        url += ('&' if '?' in url else '?') + 'sharecode=' + UPSTREAM_SHARECODE
+    return url
+
 # 镜像商品的库存归属。inventory_mode 刻意不叫 platform_owned：它仍是外部品牌，
 # 只是库存已经落到本地可售仓，stock_control.owned() 只对这一组合放行。
 MIRROR_MODE = 'external_mirror'
@@ -60,7 +76,7 @@ def fetch_catalog(config: dict | None = None):
                       headers=headers or None) as client:
         # 首选：PEAKTRACE B2B 只读目录 —— 一次拿齐已上架商品 + 按 SKU 可售库存。
         try:
-            r = client.get(origin + cfg['catalogPath'])
+            r = client.get(_upstream_url(origin, cfg['catalogPath']))
             if r.status_code == 200:
                 d = r.json()
                 pk, ck = cfg['productsKey'], cfg['categoriesKey']
@@ -79,9 +95,9 @@ def fetch_catalog(config: dict | None = None):
         except Exception:
             pass  # 老版本线上实例没有 B2B 接口，走下面的兼容路径
 
-        products = client.get(origin + cfg['productsPath'])
+        products = client.get(_upstream_url(origin, cfg['productsPath']))
         products.raise_for_status()
-        categories = client.get(origin + cfg['categoriesPath'])
+        categories = client.get(_upstream_url(origin, cfg['categoriesPath']))
         categories.raise_for_status()
         token = cfg['token']
         inv = {}
@@ -89,10 +105,10 @@ def fetch_catalog(config: dict | None = None):
             # 网关剥离自定义头与查询串，管理令牌默认只能放 JSON body；库读取失败按
             # 「未开放库存」处理，不因此中断整次同步（商品资料仍然先接通）。
             if cfg['inventoryMethod'] == 'GET':
-                ir = client.get(origin + cfg['inventoryPath'],
+                ir = client.get(_upstream_url(origin, cfg['inventoryPath']),
                                 params={cfg['tokenField']: token})
             else:
-                ir = client.post(origin + cfg['inventoryPath'],
+                ir = client.post(_upstream_url(origin, cfg['inventoryPath']),
                                  json={cfg['tokenField']: token})
             if ir.status_code == 200 and isinstance(ir.json(), dict):
                 inv = {str(k): (v.get(cfg['availableKey']) if isinstance(v, dict) else v)

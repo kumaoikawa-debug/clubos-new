@@ -218,3 +218,10 @@ python tests/ux_smoke_v025.py
 # （以 origin/main 基线为准，改码不 bump 会直接红）；弹层单例、字段联动、积分卡 CTA、
 # 未接入类型灰显、sticky 创建条等形态断言。纯静态，不建库、不碰真库。
 python tests/club_static_guard.py
+
+# ── 2026-11-16 · PEAKTRACE 出站 sharecode 门禁 ────────────────────────────────
+# 托管网关对 PEAKTRACE app 也启用了 sharecode 门禁：服务器出站不带 ?sharecode=
+# 一律 403「链接不完整」页（与业务 token 鉴权无关）。此前 fetch_catalog 漏加码，
+# 后台「测试连接」与商品同步全挂。用 MockTransport 锁住总目录/商品/分类/库存
+# 四条出站 URL 都必须带码，不发起真实外网请求、不碰真库。
+python tests/peaktrace_sharecode_gate_regression.py
