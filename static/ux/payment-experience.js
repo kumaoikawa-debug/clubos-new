@@ -145,7 +145,8 @@ window.signupNow=async function(){if(!currentAct||!currentOcc){toast('请先选�
    只是从「页内直接校验」挪到了「弹窗确认后校验」。 */
 async function openParticipantDialog(){
   const n=bookingParticipants.length;
-  const ov=uxDialog({title:'填写参加人资料',desc:'请填写 '+n+' 位参加人的资料。证件类型与证件号码为投保与实名出行所需，付款前必须填齐。',body:'<div id="paxForms"></div>',foot:'<button type="button" class="btn ghost" data-cancel>再想想</button><button type="button" class="btn" id="paxConfirmBtn" style="background:var(--brand,#1a2b23);color:#fff">确认报名并支付</button>',wide:true});
+  /* desc 会被 uxDialog 走 esc()，必须是纯文本，不能塞 <b>。星号用字符本身即可。 */
+  const ov=uxDialog({title:'填写参加人资料',desc:'共 '+n+' 位参加人 · 带 * 为必填，证件用于投保与实名出行。',body:'<div id="paxForms"></div>',foot:'<button type="button" class="btn ghost" data-cancel>再想想</button><button type="button" class="btn" id="paxConfirmBtn" style="background:var(--brand,#1a2b23);color:#fff">确认报名并支付</button>',wide:true});
   if(typeof renderParticipantForms==='function')renderParticipantForms();
   const bodyEl=ov.querySelector('.ux-dialog-body');if(bodyEl){bodyEl.style.maxHeight='68vh';bodyEl.style.overflowY='auto'}
   ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();

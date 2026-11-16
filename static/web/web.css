@@ -865,7 +865,15 @@
   color:var(--w-muted);font-size:11px;cursor:pointer;
 }
 .w-pax__del:active{color:var(--w-accent)}
-.w-pax__grid{margin-top:11px;display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.w-pax__grid{margin-top:11px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+/* 2026-11-17 参加人资料分组：身份 / 联系方式 / 紧急联系人(可后补)。
+   分组标题跨两列；「可后补」一组整体弱化，让顾客一眼分清先后。 */
+.w-pax__sec{grid-column:1/-1;display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:var(--w-brand);margin:4px 0 1px}
+.w-pax__sec::before{content:"";width:3px;height:12px;border-radius:2px;background:var(--w-brand)}
+.w-pax__sec.is-soft{color:var(--w-muted);margin-top:8px}
+.w-pax__sec.is-soft::before{background:var(--w-line)}
+#paxForms .w-fld[data-key="idNumber"]{grid-column:1/-1}
+#paxForms .w-fld.is-soft{opacity:.82}
 .w-fld{display:grid;gap:5px;min-width:0}
 .w-fld>span{font-size:11px;font-weight:600;color:var(--w-muted)}
 .w-fld>span i{color:var(--w-accent);font-style:normal;margin-left:2px}
@@ -3092,3 +3100,25 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
   border-radius:999px;padding:4px 12px;font-size:11.5px;font-weight:700;cursor:pointer;
   font-family:inherit;line-height:1.6}
 .me-camp__delbtn:active{background:#fdecec}
+
+/* ══ 2026-11-17 活动详情信息分层 ══ */
+/* 关键数据卡：只放真实结构化字段（价/地点/日期/规模），4 格均分，窄屏 2×2 */
+.web-shell #publicDetail .w-dfacts{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
+  margin:10px 12px 0;background:var(--w-line,#e3e8e6);border:1px solid var(--w-line,#e3e8e6);
+  border-radius:14px;overflow:hidden}
+.w-dfacts__i{background:#fff;padding:11px 6px;text-align:center;min-width:0}
+.w-dfacts__i b{display:block;font-size:15px;font-weight:750;color:var(--w-brand,#156243);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.w-dfacts__i span{display:block;margin-top:2px;font-size:10.5px;color:var(--w-muted,#7a8a82)}
+@media (max-width:360px){.web-shell #publicDetail .w-dfacts{grid-template-columns:repeat(2,1fr)}}
+/* 长文折叠：只包一层容器，AI 正文原样在内，不改大模型排版。
+   -webkit-line-clamp 不用（内部是 iframe/多 section），改用 max-height 裁切 + 渐隐蒙层。 */
+.web-shell #publicDetail .w-editorial-wrap{position:relative}
+.w-editorial-wrap:not(.is-open) .public-editorial{max-height:420px;overflow:hidden}
+.w-editorial-wrap:not(.is-open)::after{content:"";position:absolute;left:0;right:0;top:340px;height:80px;
+  pointer-events:none;background:linear-gradient(to bottom,rgba(255,255,255,0),#fff)}
+.w-editorial-more{display:block;width:calc(100% - 24px);margin:8px 12px 4px;padding:11px;
+  border:1px solid var(--w-line,#e3e8e6);border-radius:12px;background:#fff;color:var(--w-brand,#156243);
+  font-size:12.5px;font-weight:650;font-family:inherit;cursor:pointer;position:relative;z-index:1}
+.w-editorial-more:active{background:var(--w-brand-soft,#eaf3ec)}
+.w-editorial-wrap.is-open .w-editorial-more{margin-top:4px}

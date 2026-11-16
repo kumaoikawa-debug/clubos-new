@@ -1724,6 +1724,27 @@ function renderLeaderGrid(){
   }
   el.innerHTML=`<div class="w-lead__grid">${LEADERS_ALL.map(leaderCard).join('')}</div>`;
 }
+/* 活动详情「关键数据卡」（2026-11-17 信息分层版）：只取真实结构化字段，
+   绝不信手编造时长/公里数——那些只存在于 AI 正文里，仍由大模型自己排版。
+   没有的字段就不出，避免"¥0 / 未知"这类假信息。 */
+function detailFactsHtml(a){
+  a=a||{};
+  const f=[];
+  if(a.priceFrom!=='pending'&&Number(a.price||0)>0)f.push([money(a.price),'每人']);
+  const loc=String(a.location||'').trim();if(loc)f.push([loc.length>7?loc.slice(0,7)+'…':loc,'地点']);
+  const dt=String(a.event_date||'').trim();if(dt)f.push([dt.slice(5).replace('-','/'),'出发']);
+  if(Number(a.capacity||0)>0)f.push([a.capacity+' 人','规模']);
+  if(!f.length)return '';
+  return '<div class="w-dfacts">'+f.map(x=>`<div class="w-dfacts__i"><b>${esc(x[0])}</b><span>${esc(x[1])}</span></div>`).join('')+'</div>';
+}
+/* 长文折叠：只在外层包一个高度受限容器，AI 正文原样塞进去，不动一个字。
+   展开后完整显示；这是 UI 层的收放，不是改写大模型产出。 */
+function toggleEditorial(btn){
+  const box=document.getElementById('wEditorial');if(!box)return;
+  const open=box.classList.toggle('is-open');
+  btn.textContent=open?'收起介绍':'展开全文';
+  if(!open){const top=box.getBoundingClientRect().top+window.scrollY-16;window.scrollTo({top:top,behavior:'instant'})}
+}
 async function openAct(id){/* 不先切视图的话，详情会被渲染进一个 display:none 的 section ——
    从首页 hero / 本月精选点进来时，页面看起来毫无反应。 */wviewShow('wactivities');
 /* cache:'no-store'（2026-10-10）：活动详情必须每次真回源。后台换一版之后 C 端仍显示旧版，
@@ -1737,7 +1758,7 @@ currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0&&!occExpired(o))
 /* 参加人默认带一位：付款人自己（relationToPayer=本人）。
    证件类型默认「身份证」—— 绝大多数参加人是大陆居民；不是的话号码格式校验会
    逼着顾客把类型换成护照/台胞证等（号码按类型校验，选错类型过不去）。 */
-bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'身份证',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${tripGuideHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);paintPaxSummary();await loadActivityVouchers();await refreshQuote()}
+bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'身份证',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div>${detailFactsHtml(a)}<div class="w-editorial-wrap" id="wEditorial"><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><button type="button" class="w-editorial-more" onclick="toggleEditorial(this)">展开全文</button></div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${tripGuideHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);paintPaxSummary();await loadActivityVouchers();await refreshQuote()}
 /* 回到活动列表。两个入口共用：详情页的「返回活动」、底部「活动」tab。 */
 function showActivityList(){
   const l=$('#activityList');if(l)l.style.display='block';
@@ -2422,10 +2443,10 @@ function bookingHtml(a){
      勾上 = 两类各按系统算出的上限用满（最省），取消 = 都不用。
      封顶依然全部来自后端 maxRedeemable，前端不自己算百分比，否则会出现
      「页面说能抵 30、结账只抵 0」这种对不上的账。 */
-  let pointArea='';
-  if(p.enabled&&(e.acceptClubPoints||e.acceptGearPoints))pointArea=pointPanel();
-  else if(!p.enabled)pointArea='<div class="notice" style="margin-top:14px">本活动不参与积分抵扣。</div>';
-  const earnNote=e.earnClubPoints?'<div class="notice" style="margin-top:10px">报名完成后，本次现金实付金额将按俱乐部规则累计活动积分。</div>':'';
+  /* 2026-11-17 用户要求：报名卡里不再单列积分抵扣面板、也不再放「报名完成后累计积分」提示。
+     积分开关只在下方订单摘要卡里出现一次。但 #clubUse/#gearUse/#pointsUseToggle/#pointsUseCap
+     是报价与摘要开关共用的状态载体，仍由 pointPanel() 以隐藏形式注入，删掉会让开关失效。 */
+  const pointArea=(p.enabled&&(e.acceptClubPoints||e.acceptGearPoints))?pointPanel():'';
   const benefitArea=`<div id="activityBenefitArea" style="margin-top:12px"></div>`;
   const pp=a.participantPolicy||{};
   const maxPax=Number(pp.maxParticipantsPerOrder||8);
@@ -2443,7 +2464,7 @@ function bookingHtml(a){
     <div id="paxSummary" class="w-pax-summary"></div>
     <div class="w-block__foot">${paxFootText(pp,maxPax,cur)}</div>
     <input type="hidden" id="participantCount" value="${cur}"></div>`;
-  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${earnNote}${pointArea}<button type="button" onclick="routeAsk()" style="width:100%;margin:4px 0 12px;padding:12px;border:1px solid var(--line,#e3e8e6);background:#fff;border-radius:12px;color:#1f2a28;font-weight:600;cursor:pointer">有疑问？先咨询这条线路</button><div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
+  return `<div class="booking-card" id="bookingCard"><div class="eyebrow">BOOK THIS TRIP</div><h2 style="margin:6px 0 2px">选择团期</h2><div class="occ-list" role="radiogroup" aria-label="选择团期">${(a.occurrences||[]).map((o,i)=>occCard(o,i)).join('')||'<div class="notice warn">暂无可报名团期</div>'}</div>${(a.occurrences||[]).length>2?'<div class="occ-hint">← 左右滑动查看全部团期 →</div>':''}${participantArea}${benefitArea}${pointArea}<button type="button" onclick="routeAsk()" style="width:100%;margin:4px 0 12px;padding:12px;border:1px solid var(--line,#e3e8e6);background:#fff;border-radius:12px;color:#1f2a28;font-weight:600;cursor:pointer">有疑问？先咨询这条线路</button><div class="quote-box" id="quoteBox"><div class="sub" style="color:#b8c8c2">正在计算…</div></div><button class="w-submit" type="button" onclick="signupNow()"${currentOcc?'':' disabled'}><span>${currentOcc?'立即报名':'暂无可报名团期'}</span><b id="payHint">—</b></button></div>`
 }
 /* 团期卡：横向滑动的竖版卡片。竖排长列表在团期一多时把报名页拉得很长，
    而且「哪天 / 多少钱」要上下扫着比；卡片固定宽、一次并排露出两张左右，
@@ -2528,16 +2549,22 @@ function paintPaxSummary(){
 }
 function renderParticipantForms(){
   const box=$('#paxForms');if(!box)return;
+  /* 2026-11-17 分组重排：身份（必填）/ 联系方式 / 紧急联系人（可后补）。
+     只是视觉分组 + 顺序调整，data-key 全部不变，校验与定位逻辑零改动。 */
+  const sec=(t,soft)=>`<div class="w-pax__sec${soft?' is-soft':''}">${t}</div>`;
   box.innerHTML=bookingParticipants.map((p,i)=>`<div class="w-pax">
     <div class="w-pax__hd"><span class="w-pax__idx">${WI.pax}</span><b>参加人 ${i+1}</b>${i===0?'<span class="w-pax__tag">可与付款人相同</span>':''}
       ${bookingParticipants.length>1?`<button class="w-pax__del" type="button" data-del="${i}" aria-label="移除参加人 ${i+1}">移除</button>`:''}</div>
     <div class="w-pax__grid">
+      ${sec('身份信息 · 投保与实名所需')}
       ${paxField(i,'name','姓名',p.name,{req:1,ph:'与证件一致'})}
-      ${paxField(i,'phone','手机号',p.phone,{req:1,type:'tel',ph:'11 位手机号'})}
       ${paxField(i,'idType','证件类型',p.idType,{req:1,options:1})}
       ${paxField(i,'idNumber','证件号码',p.idNumber,{req:1,ph:idTypePlaceholder(p.idType)})}
-      ${paxField(i,'emergencyContactName','紧急联系人',p.emergencyContactName,{ph:'可支付后补'})}
-      ${paxField(i,'emergencyContactPhone','紧急联系人电话',p.emergencyContactPhone,{ph:'可支付后补'})}
+      ${sec('联系方式')}
+      ${paxField(i,'phone','手机号',p.phone,{req:1,type:'tel',ph:'11 位手机号'})}
+      ${sec('紧急联系人 · 可稍后补',true)}
+      ${paxField(i,'emergencyContactName','紧急联系人',p.emergencyContactName,{ph:'选填'})}
+      ${paxField(i,'emergencyContactPhone','联系人电话',p.emergencyContactPhone,{ph:'选填'})}
     </div></div>`).join('');
 }
 function paxField(i,key,label,val,o){
@@ -2598,18 +2625,17 @@ function selectOcc(id,el){
   if(el.scrollIntoView)try{el.scrollIntoView({behavior:'smooth',block:'nearest',inline:'center'})}catch(e){}
   refreshQuote()
 }
-/* 积分抵扣面板：一个开关 + 一句「本单可抵 ¥X」。
-   刻意不写成本归属、不写上限成因、不写可用余额 —— 那是结算侧的信息。
-   顾客站在付款页上只有两个问题：能省多少、这单用不用。 */
+/* 积分状态载体（2026-11-17 用户要求去掉独立可见面板）：四个 id 保留，整块隐藏。
+   #clubUse/#gearUse 是报价与 checkout 的提交值，#pointsUseToggle 是订单摘要开关
+   togglePointsFromSummary() 翻转的对象，#pointsUseCap 供 syncPointConfirm 写文案。
+   删掉这些节点会同时弄坏摘要开关和积分抵扣，只能隐藏 UI、保留状态。 */
 function pointPanel(){
-  return `<div class="point-pay" id="pointsPanel">
-    <div class="point-pay__hd"><b>积分抵扣</b>
-      <label class="point-toggle"><input type="checkbox" id="pointsUseToggle" checked onchange="togglePoints(this.checked)">使用积分抵扣</label>
-    </div>
-    <div class="point-pay__cap" id="pointsUseCap">正在计算本单最多可抵多少…</div>
+  return `<span id="pointsPanel" hidden aria-hidden="true">
+    <input type="checkbox" id="pointsUseToggle" checked onchange="togglePoints(this.checked)">
+    <span id="pointsUseCap"></span>
     <input type="hidden" id="clubUse" value="0">
     <input type="hidden" id="gearUse" value="0">
-  </div>`;
+  </span>`;
 }
 /* 两类积分共用一个开关：勾选 = 各用系统算出的上限，取消 = 都归零。
    顾客不需要、也没机会填任何数字。 */
