@@ -48,6 +48,46 @@
   .admin-workspace #dash .hero-action .btn{ flex:1 1 100%; width:100%; margin-top:0; min-height:44px; padding:10px 16px; font-size:13px; }
 }
 
+/* ── 活动详情操作区：手机端从「散在渐变上的胶囊」改成紧凑操作面板（2026-11-17）──
+   根因：club-glass.css 的 .act-head__ops 桌面规则 flex:1 1 420px，在窄屏 .act-head 改
+   flex-direction:column 后，420px 的 flex-basis 落到了纵轴 → 操作区被撑成 420px 高，
+   7 个按钮只占 3 行、行距 142px，中间全是空白，视觉上又空又散。这里收口。 */
+@media (max-width:650px){
+  .admin-workspace .act-head__ops{
+    flex:0 0 auto;                       /* 关键：覆盖桌面 flex:1 1 420px，不再撑高 */
+    width:100%;
+    justify-content:flex-start;
+    gap:8px;
+    padding:12px;
+    background:rgba(255,255,255,.60);
+    -webkit-backdrop-filter:blur(10px);
+    backdrop-filter:blur(10px);
+    border:1px solid rgba(255,255,255,.72);
+    border-radius:16px;
+    box-shadow:0 4px 18px rgba(21,61,40,.06);
+  }
+  .admin-workspace .act-head__ops .btn{
+    flex:0 1 auto;
+    min-height:40px;
+    padding:8px 12px;
+    font-size:12px;
+    border-radius:10px;
+  }
+  /* 危险操作（删除）弱化为红字描边并推到最右，和主操作拉开层次，避免误点 */
+  .admin-workspace .act-head__ops .btn[onclick^="deleteActivity"]{
+    margin-left:auto;
+    color:#b4342a;
+    border-color:rgba(180,52,42,.34);
+    background:rgba(255,255,255,.55);
+  }
+  /* 详情锚点导航横滑时末项会被切一半，右侧渐隐提示「可左右滑」，避免被误读成截断 bug */
+  .admin-workspace .act-pane .detail-nav{
+    padding-right:24px;
+    -webkit-mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 24px),transparent 100%);
+    mask-image:linear-gradient(90deg,#000 0,#000 calc(100% - 24px),transparent 100%);
+  }
+}
+
 /* 员工权限 · 模块权限树（两端后台同款） */
 .plat-staff-tree{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
 .plat-staff-group{border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:12px;background:var(--card,#fff)}
