@@ -5172,6 +5172,14 @@ def _product_extras(c, ids:list[int]):
 def _with_extras(c, product_list:list[dict]):
     if not product_list: return product_list
     images,variants=_product_extras(c,[x['id'] for x in product_list])
+    # PEAKTRACE 图片走本站代理：库里仍是上游原图 URL，这里只改对外读取的形状。
+    # 浏览器直连上游会 403（网关 sharecode 门禁），前端 wImgSrc() 只能降级成占位图；
+    # 代理在服务端补 sharecode，因此存量商品不必重同步即可显示真实图片。
+    try:
+        _pt_origin=integration_config.effective(c)['origin']
+    except Exception:
+        _pt_origin=peaktrace_catalog.ORIGIN
+    _pub_img=lambda u: peaktrace_catalog.proxy_image_url(u,_pt_origin)
     # 已完成库存镜像的外部商品可售；其余外部品牌仍只展示（库存不外露）。
     try:
         mirrored_ids={int(r[0]) for r in c.execute("""SELECT DISTINCT product_id FROM external_product_mappings
@@ -5186,15 +5194,15 @@ def _with_extras(c, product_list:list[dict]):
         # 头图优先作为第一张：C 端卡片 / 详情首图都读它；图集里若已有同 url 则不重复。
         all_imgs=[]; seen=set()
         if cover:
-            all_imgs.append({'url':cover,'cover':True}); seen.add(cover)
+            all_imgs.append({'url':_pub_img(cover),'cover':True}); seen.add(cover)
         for g in gal:
             u=g['url']
             if u and u not in seen:
-                all_imgs.append({'url':u}); seen.add(u)
+                all_imgs.append({'url':_pub_img(u)}); seen.add(u)
         if not all_imgs and x.get('image_url'):
-            all_imgs.append({'url':x['image_url']})
+            all_imgs.append({'url':_pub_img(x['image_url'])})
         d['images']=all_imgs
-        d['coverUrl']=cover or (all_imgs[0]['url'] if all_imgs else None)
+        d['coverUrl']=_pub_img(cover) if cover else (all_imgs[0]['url'] if all_imgs else None)
         # 合成图头图裁切区：C 端列表/详情头图按它裁出干净单视图（2026-11-04）。
         d['catalogView']=_parse_catalog_view(x.get('catalog_view'))
         d['variants']=variants.get(pid) or []
@@ -5209,6 +5217,24 @@ def _with_extras(c, product_list:list[dict]):
             for v in d['variants']:v['stock']=None
         out.append(d)
     return out
+
+@app.get('/api/public/peaktrace-image/{asset_path:path}')
+def public_peaktrace_image(asset_path:str):
+    """PEAKTRACE 商品图公开代理（只读、只放行上游域名下的相对路径）。
+
+    上游图片受网关 sharecode 门禁保护，浏览器直连必 403；同步时库里保留原始 URL，
+    这里在服务端补码取图并按天缓存。不接受外部 URL 参数，避免成为开放代理。
+    """
+    try:
+        with conn() as c:
+            origin=integration_config.effective(c)['origin']
+        data,ctype=peaktrace_catalog.fetch_image(asset_path,origin)
+    except ValueError as e:
+        raise HTTPException(400,str(e))
+    except Exception:
+        raise HTTPException(502,'上游图片暂不可用')
+    return Response(content=data,media_type=ctype,
+                    headers={'Cache-Control':'public, max-age=86400','X-Content-Type-Options':'nosniff'})
 
 @app.get('/api/club/{club_id}/mall/products')
 def club_products(club_id:int, *, brand_id:int|None=None, category_id:int|None=None, gender:str|None=None):
@@ -18080,6 +18106,121 @@ def club_operation_activity_refund(club_id: int, order_id: int, payload: dict = 
             raise HTTPException(404, str(e))
         except ValueError as e:
             raise HTTPException(409, str(e))
+
+
+@app.get('/api/club/{club_id}/operation-orders/activity/{order_id}/participants/refund-quotes')
+def club_operation_activity_participant_refund_quotes(club_id: int, order_id: int):
+    """后台代客按参加人退款的报价。每位参加人独立按其交易分摊现金 × 活动退款规则计算，
+    供后台在弹窗里勾选「5 人订单只退其中 3 人」之前先看清金额、比例与命中规则。
+    """
+    club_or_404(club_id)
+    with conn() as c:
+        reg = row(c.execute('SELECT * FROM registrations WHERE id=? AND club_id=?', (order_id, club_id)))
+        if not reg:
+            raise HTTPException(404, '活动订单不存在')
+        a = row(c.execute('SELECT * FROM activities WHERE id=?', (reg['activity_id'],)))
+        occ = row(c.execute('SELECT * FROM activity_occurrences WHERE id=?', (reg['occurrence_id'],))) if reg.get('occurrence_id') else None
+        if not a:
+            raise HTTPException(404, '活动不存在')
+        policy = activity_refund_policy.from_activity(dict(a))
+        people = participant_service.list_for_registration(c, order_id)
+        quotes = []
+        for p in people:
+            pid = int(p['id'])
+            item = {
+                'participantId': pid, 'name': p.get('name'), 'phone': p.get('phone'),
+                'status': p.get('status'), 'refundStatus': p.get('refund_status') or 'none',
+                'eligible': False, 'reason': '', 'cashRefundPercent': 0,
+                'cashRefundAmount': 0, 'cashPaid': 0, 'hoursBefore': None, 'matchedRule': None,
+            }
+            if p.get('status') != 'active' or p.get('refund_status') in ('requested', 'processing', 'succeeded'):
+                item['reason'] = '该参加人已退出或退款正在处理中'
+                quotes.append(item)
+                continue
+            try:
+                alloc = participant_service.financial_allocation(c, pid)
+            except Exception:
+                alloc = None
+            if not alloc:
+                item['reason'] = '缺少该参加人的交易分摊记录'
+                quotes.append(item)
+                continue
+            cash = float(alloc.get('cash_paid') or 0)
+            decision = activity_refund_policy.evaluate(
+                activity=dict(a), occurrence=dict(occ) if occ else None, cash_paid=cash)
+            item.update({
+                'eligible': bool(decision.get('eligible')),
+                'reason': decision.get('reason') or '',
+                'cashRefundPercent': float(decision.get('cashRefundPercent') or 0),
+                'cashRefundAmount': float(decision.get('cashRefundAmount') or 0),
+                'cashPaid': cash, 'hoursBefore': decision.get('hoursBefore'),
+                'matchedRule': decision.get('matchedRule'),
+                'clubPointsUsed': int(alloc.get('club_points_used') or 0),
+                'gearPointsUsed': int(alloc.get('gear_points_used') or 0),
+            })
+            quotes.append(item)
+        return {
+            'orderId': order_id, 'policy': policy.as_dict(), 'participants': quotes,
+            'note': '金额 = 该参加人实付现金 × 活动退款规则命中比例；积分/福利/名额在退款成功后按规则恢复。'
+        }
+
+
+@app.post('/api/club/{club_id}/operation-orders/activity/{order_id}/participants/refund-request')
+def club_operation_activity_participants_refund(club_id: int, order_id: int, payload: dict = Body(default={})):
+    """后台代客对同一订单的部分参加人分别发起退款申请（如 5 人退 3 人）。
+    逐人走 RefundLifecycleEngine.request_activity_participant：每人一条 participant 退款、
+    各自按活动规则算金额；全部退完后订单自动收敛为整单退款。"""
+    club_or_404(club_id)
+    ids = payload.get('participantIds', payload.get('participant_ids', []))
+    if isinstance(ids, (int, str)):
+        ids = [ids]
+    try:
+        pids = [int(x) for x in (ids or [])]
+    except (TypeError, ValueError):
+        raise HTTPException(400, '参加人 ID 格式不正确')
+    if not pids:
+        raise HTTPException(400, '请至少选择一位参加人')
+    if len(set(pids)) != len(pids):
+        raise HTTPException(400, '参加人不能重复选择')
+    reason = str(payload.get('reason') or '').strip()
+    if len(reason) < 2:
+        raise HTTPException(400, '请填写退款原因（至少 2 个字）')
+    with conn() as c:
+        reg = row(c.execute('SELECT * FROM registrations WHERE id=? AND club_id=?', (order_id, club_id)))
+        if not reg:
+            raise HTTPException(404, '活动订单不存在')
+        # 预校验全部目标，避免中途失败造成同一订单部分提交。
+        for pid in pids:
+            p = row(c.execute('SELECT * FROM registration_participants WHERE id=? AND registration_id=?', (pid, order_id)))
+            if not p:
+                raise HTTPException(404, f'参加人 #{pid} 不属于该订单')
+            if p.get('status') != 'active':
+                raise HTTPException(409, f'参加人 {p.get("name") or pid} 已退出或状态不可退款')
+            if p.get('refund_status') in ('requested', 'processing', 'succeeded'):
+                raise HTTPException(409, f'参加人 {p.get("name") or pid} 的退款正在处理或已完成')
+        results, total, refund_ids = [], 0.0, []
+        try:
+            for pid in pids:
+                out = refund_lifecycle.request_activity_participant(
+                    c, registration_id=order_id, participant_id=pid,
+                    requester=f'club:{club_id}', reason=reason)
+                results.append(out)
+                total += float(out.get('cashAmount') or 0)
+                refund_ids.append(out.get('refundRequestId'))
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        order_ops_service.log(
+            c, club_id=club_id, order_kind='activity', order_id=order_id,
+            action='participant_refund_request',
+            after={'participantIds': pids, 'refundIds': refund_ids, 'cashAmount': round(total, 2)},
+            reason=reason, actor=f'club:{club_id}')
+        return {
+            'ok': True, 'count': len(results), 'cashAmount': round(total, 2),
+            'refundRequestIds': refund_ids, 'refunds': results,
+            'note': '退款申请已提交，仍需到「退款审核」逐笔通过后才走支付渠道退款。'
+        }
 
 
 @app.post('/api/club/{club_id}/operation-orders/camp/{order_id}/refund-record')

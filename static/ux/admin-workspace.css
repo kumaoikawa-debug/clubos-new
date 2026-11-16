@@ -41,6 +41,11 @@ body.admin-workspace {
 .admin-workspace .nav-group__items{display:flex;flex-direction:column;gap:3px;padding-left:9px;margin-left:8px;border-left:1px solid var(--line)}
 .admin-workspace .nav-group.is-collapsed .nav-group__items{display:none}
 .admin-workspace .nav-group__items .nav-leaf{font-size:13px;padding-left:14px}
+/* 二级子菜单（经营数据 › 订单信息）：比一级项再缩进一层，用更细的边线与更小的字号
+   表达从属关系；不碰 .sidebar 的 position/transform，手机抽屉照常工作。 */
+.admin-workspace .nav-submenu{display:flex;flex-direction:column;gap:2px;margin:2px 0 3px 22px;padding-left:9px;border-left:1px dashed var(--line)}
+.admin-workspace .nav-submenu .nav-subleaf{font-size:12px;padding-top:7px;padding-bottom:7px;color:#5d7265}
+.admin-workspace .nav-submenu .nav-glyph svg{width:15px;height:15px;opacity:.8}
 .admin-workspace .nav button {border-radius: var(--radius-ctl); padding: 9px 12px; min-height: 40px; font-size: 13px; font-weight: 500; color: #3d5044; transition: background .15s, color .15s, box-shadow .15s;}
 .admin-workspace .nav button.active {color: #fff; background: var(--brand); box-shadow: 0 2px 8px rgba(46, 107, 78, .28); font-weight: 600;}
 .admin-workspace .nav button:hover {background: #eff4ec; border-color: transparent; color: var(--brand-deep);}
@@ -152,7 +157,13 @@ body.admin-workspace {
   .admin-workspace .nav button {min-height: 44px;}
 }
 @media (max-width: 650px) {
-  .admin-workspace .main {padding-inline: 14px;}
+  .admin-workspace .main {padding-inline: 18px;}
+  /* 手机端页头：面包屑与右侧工具（Credits / 搜索）各占一段，放不下就整行换行，
+     不再让 .workspace-bar 的 nowrap 把胶囊顶出屏幕右缘。 */
+  .admin-workspace .workspace-bar {flex-wrap: wrap; row-gap: 6px; column-gap: 10px; padding-inline: 2px;}
+  .admin-workspace .workspace-crumb {flex: 1 1 190px; min-width: 0;}
+  .admin-workspace .workspace-tools {flex: 0 0 auto; margin-left: auto;}
+  .admin-workspace .workspace-credit {font-size: 10px; padding: 5px 9px;}
   .admin-workspace .topbar {align-items: flex-start; flex-wrap: wrap; gap: 10px; margin-bottom: 22px;}
   .admin-workspace .topbar .title {font-size: 22px !important;}
   .admin-workspace .topbar .pill {font-size: 12px;}

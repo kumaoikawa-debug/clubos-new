@@ -906,6 +906,34 @@
 /* P1-5：赠品不是减项，用暖金色区分「本单预计获得」，别让顾客误以为又扣了一笔 */
 .web-shell .quote-box .is-gift{color:#ffd98a;font-weight:650;max-width:62%;text-align:right;line-height:1.35}
 .web-shell .quote-line.total{font-weight:750}
+/* 订单摘要 v2：把会员/券/积分整合进摘要卡，角标汇总已省总额 */
+.web-shell .quote-box .qb-hd{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11px;letter-spacing:.12em;color:rgba(255,255,255,.6);margin-bottom:9px}
+.web-shell .quote-box .qb-save{letter-spacing:0;font-size:11px;color:rgba(255,255,255,.72);background:rgba(255,255,255,.13);border:1px solid rgba(255,255,255,.18);padding:3px 9px;border-radius:999px;white-space:nowrap}
+.web-shell .quote-box .qb-save b{color:#ffd98a;font-size:12px;font-variant-numeric:tabular-nums}
+.web-shell .quote-box .qb-line{display:flex;justify-content:space-between;gap:12px;padding:5px 0;font-size:13px;color:rgba(255,255,255,.86)}
+.web-shell .quote-box .qb-line .is-cut{color:#8fd6ac}
+.web-shell .quote-box .qb-line .is-gift{color:#ffd98a;font-weight:650;max-width:62%;text-align:right;line-height:1.35}
+.web-shell .quote-box .qb-line.qb-total{font-size:16px;font-weight:800;border-top:1px solid #ffffff33;margin-top:7px;padding-top:10px}
+.web-shell .quote-box .qb-deal{display:flex;align-items:center;gap:10px;padding:9px 0;border-top:1px solid rgba(255,255,255,.09)}
+.web-shell .quote-box .qb-deal__ic{flex:none;width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.13)}
+.web-shell .quote-box .qb-deal__ic svg{width:15px;height:15px}
+.web-shell .quote-box .qb-deal:nth-of-type(2) .qb-deal__ic{color:#f4d99a}
+.web-shell .quote-box .qb-deal__body{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.web-shell .quote-box .qb-deal__t{font-size:13px;font-weight:650;color:#fff;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.web-shell .quote-box .qb-deal__sub{font-size:11px;color:rgba(255,255,255,.55);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.web-shell .quote-box .qb-deal__right{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.web-shell .quote-box .qb-deal__amt{color:#8fd6ac;font-size:14px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.web-shell .quote-box .qb-deal__act{font-size:11px;font-weight:650;color:rgba(255,255,255,.78);display:inline-flex;align-items:center;gap:6px}
+.web-shell .quote-box .qb-pill{font-size:10px;font-weight:700;padding:1px 6px;border-radius:5px;line-height:1.6;font-style:normal}
+.web-shell .quote-box .qb-pill--auto{background:rgba(244,217,154,.18);color:#f4d99a}
+.web-shell .quote-box .qb-pill--coupon{background:rgba(255,192,154,.18);color:#ffc09a}
+.web-shell .quote-box .qb-pill--points{background:rgba(143,214,172,.18);color:#8fd6ac}
+.web-shell .quote-box .qb-deal--tap{cursor:pointer;border-radius:8px;transition:background .16s}
+.web-shell .quote-box .qb-deal--tap:active{background:rgba(255,255,255,.08)}
+.web-shell .quote-box .qb-sw{width:34px;height:20px;border-radius:999px;background:rgba(255,255,255,.28);position:relative;display:inline-block;transition:.2s}
+.web-shell .quote-box .qb-sw i{position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:3px;left:3px;transition:.2s}
+.web-shell .quote-box .qb-sw.on{background:#3ddc9c}
+.web-shell .quote-box .qb-sw.on i{left:17px}
 /* V8：订单详情里的「活动优惠 / 本单获得」 */
 .web-shell .me-campaign-got{margin:6px 0;padding:8px 10px;border-radius:9px;background:#eef7f1;border:1px solid #d6ecdd;color:#1f6b4f;font-size:12px;line-height:1.6}
 

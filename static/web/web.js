@@ -2701,6 +2701,11 @@ function paintActivityBenefits(q){
   box.innerHTML=rows.join('')+'<div class="ben-row ben-row--hot" id="benCouponRow" style="display:none"></div>';
   if(rows.length||true)loadCouponBenefit();
 }
+/* 订单摘要 v2：把「会员优惠 / 优惠券 / 积分抵扣」三块整合进同一张摘要卡。
+   角标汇总已省总额与项数；每项一行、金额突出；券行整行可点开选券弹层、积分行带开关。
+   所有金额仍来自后端 price-quote（q.*），前端不做任何自算；选券/积分仍复用原隐藏域与下拉。 */
+const qbIcon={member:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l4.5 4L12 4l4.5 7L21 7l-2 12H5z"/></svg>',coupon:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16v4a2 2 0 0 0 0 4v4H4v-4a2 2 0 0 0 0-4zM12 6v12" stroke-dasharray="2 2"/></svg>',points:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 2.7 5.5 6 .9-4.3 4.2 1 6-5.4-2.8L6.6 19.6l1-6L3.3 9.4l6-.9z"/></svg>'};
+function qbRow(icon,label,pill,sub,amt,extra){return `<div class="qb-deal${extra&&extra.cls?' '+extra.cls:''}"${extra&&extra.attr?extra.attr:''}><span class="qb-deal__ic">${icon}</span><span class="qb-deal__body"><span class="qb-deal__t">${label}${pill?`<em class="qb-pill qb-pill--${extra&&extra.pillTone||'auto'}">${esc(pill)}</em>`:''}</span>${sub?`<span class="qb-deal__sub">${esc(sub)}</span>`:''}</span><span class="qb-deal__right"><b class="qb-deal__amt">${amt>0?'- '+money(amt):'¥0'}</b>${extra&&extra.action?`<span class="qb-deal__act">${extra.action}</span>`:''}</span></div>`}
 async function refreshQuote(depth=0){if(!currentAct||!currentOcc||!$('#quoteBox'))return;let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';
 /* 成本闸门（2026-10-06）：没有对外售价的活动（priceFrom='pending'，老活动的团期价往往是
    成本表推出来的内部单价）根本不该报价。这里直接短路：不去打必然 409 的请求，也绝不
@@ -2711,10 +2716,23 @@ if(currentAct.priceFrom==='pending'||Number(currentAct.price||0)<=0){
   const btn=document.querySelector('#bookBtn,.book-btn,[data-book]');if(btn){btn.disabled=true;btn.setAttribute('aria-disabled','true')}
   return}
 try{let q=await api(`/api/public/activities/${currentAct.id}/price-quote?occurrence_id=${currentOcc.id}&user_id=${USER}&club_points=${cp}&gear_points=${gp}&voucher_codes=${encodeURIComponent(voucher)}&participant_count=${bookingParticipants.length}`);/* 换团期/改人数/刚勾上都会让上限变化，这里把提交值收敛回系统算出的上限，
-   否则会出现「界面写着最多抵 ¥30、实际却按 0 抵扣下单」。depth 只是防呆上限，正常一到两次就稳定。 */let drifted=false;if(q.maxRedeemable)drifted=syncPointConfirm(q.maxRedeemable)/* 抵扣行只在真的减了钱时才出现：没勾积分也画一行「积分抵扣 - ¥0」，
-   顾客会以为系统扣了什么、或者以为抵扣坏了 —— 零减项不是「零」这件事值得看的信息。
-   两类积分在这里合成一行「积分抵扣」：付账时顾客只需要看到一个减项，
-   不需要知道这笔钱最后由俱乐部承担还是由平台补贴（那属于结算侧，不是顾客要判断的事）。 */let lines=`<div class="quote-box__hd">订单摘要</div><div class="quote-line"><span>活动费用（${q.participantCount} 人 × ${money(q.unitPrice)}）</span><span>${money(q.original)}</span></div>`;const ptCut=Number(q.clubPointDiscount||0)+Number(q.platformPointSubsidy||0);if(ptCut>0)lines+=`<div class="quote-line"><span>积分抵扣</span><span class="is-cut">- ${money(ptCut)}</span></div>`;const mCut=Number(q.memberDiscount||0);if(mCut>0)lines+=`<div class="quote-line"><span>会员折扣${Number(q.memberDiscountRate||0)?`（${Number(q.memberDiscountRate)/10} 折）`:''}</span><span class="is-cut">- ${money(mCut)}</span></div>`;(q.benefits?.applied||[]).forEach(v=>{lines+=`<div class="quote-line"><span>${esc(v.title)}</span><span class="is-cut">- ${money(v.cashValue)}</span></div>`});const campApplied=q.campaignsApplied||[];campApplied.forEach(v=>{lines+=`<div class="quote-line"><span>活动优惠 · ${esc(v.title||'营销活动')}</span><span class="is-cut">- ${money(v.amount)}</span></div>`});if(!campApplied.length&&Number(q.campaignDiscount||0)>0)lines+=`<div class="quote-line"><span>活动优惠</span><span class="is-cut">- ${money(q.campaignDiscount)}</span></div>`;const giftTxt=campaignGiftText(q.campaignGifts);if(giftTxt)lines+=`<div class="quote-line"><span>本单预计获得</span><span class="is-gift">${esc(giftTxt)}</span></div>`;lines+=`<div class="quote-line total"><span>需支付</span><span>${money(q.payable)}</span></div>`;/* await 期间详情页可能已被「返回活动」清空（backList 会置空 currentAct/currentOcc），
+   否则会出现「界面写着最多抵 ¥30、实际却按 0 抵扣下单」。depth 只是防呆上限，正常一到两次就稳定。 */let drifted=false;if(q.maxRedeemable)drifted=syncPointConfirm(q.maxRedeemable)/* v2 订单摘要：角标 + 三块优惠整合 + 需支付。
+   减项只在真的减了钱时才显示金额，零减项明确写 ¥0 让人看清「这一项这次没用上」。 */
+const ptCut=Number(q.clubPointDiscount||0)+Number(q.platformPointSubsidy||0);
+const mCut=Number(q.memberDiscount||0);
+const vApplied=q.benefits?.applied||[];const vCut=vApplied.reduce((s,v)=>s+Number(v.cashValue||0),0);
+const campApplied=q.campaignsApplied||[];const campCut=Number(q.campaignDiscount||0)||campApplied.reduce((s,v)=>s+Number(v.amount||0),0);
+const saved=mCut+ptCut+vCut+campCut;
+let cnt=0;if(mCut>0)cnt++;if(ptCut>0)cnt++;if(vCut>0)cnt++;if(campCut>0)cnt++;
+let lines=`<div class="qb-hd"><span>订单摘要</span><span class="qb-save">已省 <b>${money(saved)}</b> · 共 ${cnt} 项</span></div>`;
+lines+=`<div class="qb-line"><span>活动费用（${q.participantCount} 人 × ${money(q.unitPrice)}）</span><span>${money(q.original)}</span></div>`;
+lines+=qbRow(qbIcon.member,'会员优惠',mCut>0?`${Number(q.memberDiscountRate||0)?Number(q.memberDiscountRate)/10+' 折':''}自动享`:'未享会员价',mCut>0?'无需操作，下单自动抵扣':'当前无会员折扣',mCut,{pillTone:'auto'});
+const vSel=$('#benefitUse');const vLabel=vSel&&vSel.selectedIndex>0?vSel.options[vSel.selectedIndex].text:(vApplied[0]?.title||'');
+lines+=qbRow(qbIcon.coupon,'优惠券',vCut>0?'已选 1 张':(activityVouchers&&activityVouchers.length?activityVouchers.length+' 张可用':'暂无可用'),vLabel||'点击选择优惠券',vCut,{cls:'qb-deal--tap',pillTone:'coupon',attr:' onclick="openVoucherSheet()"',action:'选择 ›'});
+const ptOn=ptCut>0;lines+=qbRow(qbIcon.points,'积分抵扣',ptOn?'已抵用':(Number(q.maxRedeemable?.club?.cash||0)+Number(q.maxRedeemable?.gear?.cash||0)>0?'可抵扣':'暂不可用'),ptOn?'本单已自动抵用':(Number(q.maxRedeemable?.club?.cash||0)+Number(q.maxRedeemable?.gear?.cash||0)>0?'本单可抵，点右侧开启':'当前无可用积分'),ptCut,{pillTone:'points',action:`<span class="qb-sw${$('#pointsUseToggle')?.checked?' on':''}" id="qbPointSw" onclick="event.stopPropagation();togglePointsFromSummary()"><i></i></span>`});
+if(campCut>0)lines+=`<div class="qb-line"><span>活动优惠${campApplied.length?' · '+esc((campApplied.map(a=>a.title).filter(Boolean).join('、'))||'营销活动'):''}</span><span class="is-cut">- ${money(campCut)}</span></div>`;
+const giftTxt=campaignGiftText(q.campaignGifts);if(giftTxt)lines+=`<div class="qb-line"><span>本单预计获得</span><span class="is-gift">${esc(giftTxt)}</span></div>`;
+lines+=`<div class="qb-line qb-total"><span>需支付</span><span>${money(q.payable)}</span></div>`;/* await 期间详情页可能已被「返回活动」清空（backList 会置空 currentAct/currentOcc），
    容器没了就不能再往里写 —— 否则这里抛错，还会被下面的 catch 再抛一次。 */
 const qb=$('#quoteBox');if(!qb)return;qb.innerHTML=lines;
 /* 按钮上直接写清要付多少：顾客在点「立即报名」之前唯一真正想知道的就是这个数字，
@@ -2722,6 +2740,15 @@ const qb=$('#quoteBox');if(!qb)return;qb.innerHTML=lines;
 const hint=$('#payHint');if(hint)hint.textContent=money(q.payable);
 paintActivityBenefits(q);
 if(drifted&&depth<4)return refreshQuote(depth+1)}catch(e){const qb2=$('#quoteBox');if(qb2)qb2.textContent=e.message}}
+/* 券选择弹层：复用已缓存的 activityVouchers（loadActivityVouchers 拉取），选中后写回原
+   #benefitUse 下拉并触发报价刷新——选券业务与封顶逻辑完全不变，只换了呈现方式。 */
+async function openVoucherSheet(){if(!activityVouchers||!activityVouchers.length){toast('当前没有可用优惠券');return}
+  const sel=$('#benefitUse');const cur=sel?sel.value:'';
+  const opts=[{value:'',label:'不使用优惠券'}].concat(activityVouchers.map(v=>{const lab=String(v.mode||'fixed')==='discount'?`${Number(v.discount_percent||0)/10} 折`:`抵 ${money(v.cash_value)}`;return {value:String(v.voucher_code),label:`${v.title||'优惠券'} · ${lab}`}}));
+  const v=await showForm({title:'选择优惠券',desc:'选择后自动重新计算，可随时更换。',submitText:'确定',fields:[{name:'code',label:'可用优惠券',type:'select',value:cur,options:opts}]});
+  if(v==null)return;if(sel){sel.value=v.code}refreshQuote()}
+/* 摘要内积分开关：与独立积分面板 #pointsUseToggle 共用同一状态，翻转后走原 togglePoints。 */
+function togglePointsFromSummary(){const t=$('#pointsUseToggle');if(!t||t.disabled){toast('当前没有可抵扣的积分');return}t.checked=!t.checked;togglePoints(t.checked)}
 /* 价格待定的活动连下单接口也不放行（后端与price-quote 同口径），前端先给一句能行动的话，
    而不是把409 的技术文案甩给顾客。 */
 async function signupNow(){if(!currentAct||!currentOcc){showAlert({title:'请选择团期',message:'当前没有可报名的团期，请稍后再试或联系俱乐部。'});return}if(currentAct.priceFrom==='pending'||Number(currentAct.price||0)<=0){showAlert({title:'价格待定',message:'这场活动还没有对外价格，请联系俱乐部咨询报名与报价。'});return}let cp=Number($('#clubUse')?.value||0),gp=Number($('#gearUse')?.value||0),voucher=$('#benefitUse')?.value||'';try{let d=await api(`/api/public/activities/${currentAct.id}/checkout`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:PAYER_NAME,phone:PAYER_PHONE,occurrenceId:currentOcc.id,clubPoints:cp,gearPoints:gp,voucherCodes:voucher?[voucher]:[],participants:bookingParticipants})});let paid=await payCheckout(d);if(!paid)return;await showAlert({title:'报名成功',message:`${paid.participantCount||bookingParticipants.length} 人\n实际支付 ${money(paid.cashPaid)}\n本次获得 ${paid.clubPointsEarned} 活动积分${paid.clubBenefitDiscount?`\n俱乐部福利抵扣 ${money(paid.clubBenefitDiscount)}`:''}${paid.platformBenefitSubsidy?`\n平台福利补贴 ${money(paid.platformBenefitSubsidy)}`:''}${Number(d.campaignDiscount||0)>0?`\n活动优惠已减 ${money(d.campaignDiscount)}`:''}${(typeof campaignGiftText==='function'&&campaignGiftText(d.campaignGifts))?`\n🎁 本单获得：${campaignGiftText(d.campaignGifts)}（成交后自动到账）`:''}${(paid.couponGifts&&paid.couponGifts.length)?`\n🎁 消费送券：${paid.couponGifts.map(g=>g.title).join('、')} 已到券包`:''}`});await loadWallet();openAct(currentAct.id)}catch(e){showAlert({title:'操作失败',message:e.message})}}

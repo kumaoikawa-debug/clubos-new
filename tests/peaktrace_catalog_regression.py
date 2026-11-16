@@ -77,8 +77,57 @@ check('new upstream product is active immediately',
 p = call('GET', f'/api/public/clubs/1/mall/products/{pid}')
 check('published product is purchasable', (not p['displayOnly']) and p['purchaseAvailable'] and p['externalMirrored'])
 check('stock mirrors upstream by SKU', p['stock'] == 10 and [v['stock'] for v in p['variants']] == [6, 4])
-check('absolute images and actual sizes exposed',
-      p['images'][1]['url'].startswith(app.peaktrace_catalog.ORIGIN) and p['sizeOptions'] == ['S', 'M'])
+check('upstream images exposed via local proxy (not blocked host)',
+      p['images'][1]['url'].startswith(app.peaktrace_catalog.IMAGE_PROXY_PREFIX) and p['sizeOptions'] == ['S', 'M'])
+check('public reads never leak blocked upstream host',
+      all(str(p0['url']).startswith(app.peaktrace_catalog.IMAGE_PROXY_PREFIX) and
+          not str(p0['url']).startswith(app.peaktrace_catalog.ORIGIN) for p0 in p['images']))
+with app.conn() as db:
+    check('db keeps raw upstream URL for every synced image',
+          all(str(r[0]).startswith(app.peaktrace_catalog.ORIGIN)
+              for r in db.execute('SELECT url FROM product_images WHERE product_id=?', (pid,)).fetchall()))
+
+# 图片代理：只放行同源相对路径，非法路径 400；服务端补 sharecode 取图（这里打桩不发外网请求）
+_pt = app.peaktrace_catalog
+check('proxy url only rewrites configured origin',
+      _pt.proxy_image_url('https://peaktrace-h5.app.workbuddy.host/assets/a.jpg') == '/api/public/peaktrace-image/assets/a.jpg'
+      and _pt.proxy_image_url('https://evil.example/assets/a.jpg') == 'https://evil.example/assets/a.jpg'
+      and _pt.proxy_image_url('/static/uploads/x.jpg') == '/static/uploads/x.jpg')
+_real_fetch = _pt.fetch_image
+try:
+    _pt.fetch_image = lambda path, origin=None: (b'\xff\xd8\xff\xe0TESTJPEG', 'image/jpeg')
+    r = client.get('/api/public/peaktrace-image/assets/tee.jpg')
+    check('proxy serves upstream image bytes', r.status_code == 200 and r.headers['content-type'].startswith('image/') and r.content.startswith(b'\xff\xd8'))
+    check('proxy rejects traversal', client.get('/api/public/peaktrace-image/../secret').status_code in (400, 404))
+finally:
+    _pt.fetch_image = _real_fetch
+
+# 服务端缓存与 sharecode 补齐（打桩 httpx，不发外网）
+class _FakeResp:
+    status_code = 200
+    headers = {'content-type': 'image/jpeg'}
+    content = b'\xff\xd8\xffCACHED'
+
+class _FakeClient:
+    def __init__(self, *a, **kw): pass
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+    def get(self, url):
+        calls.append(url)
+        return _FakeResp()
+
+calls = []
+_real_client = _pt.httpx.Client
+try:
+    _pt.httpx.Client = _FakeClient
+    _pt._IMAGE_CACHE.clear()
+    _pt.fetch_image('assets/cache.jpg', _pt.ORIGIN)
+    _pt.fetch_image('assets/cache.jpg', _pt.ORIGIN)
+    check('upstream image fetched once and cached', len(calls) == 1)
+    check('server-side fetch carries sharecode', 'sharecode=' in calls[0])
+finally:
+    _pt.httpx.Client = _real_client
+    _pt._IMAGE_CACHE.clear()
 
 st = call('GET', '/api/platform/brands/peaktrace/status')
 check('status endpoint reports connected mirror', st['inventoryConnected'] and st['syncedProducts'] == 1 and st['lastSyncAt'])

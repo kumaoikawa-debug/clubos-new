@@ -52,6 +52,76 @@ def _upstream_url(base: str, path: str) -> str:
         url += ('&' if '?' in url else '?') + 'sharecode=' + UPSTREAM_SHARECODE
     return url
 
+# ---------------------------------------------------------------------------
+# 商品图代理（2026-11-16）
+# 上游图片真实存在（同步时 image/gallery 字段已写进 product_images），但托管网关
+# 对它同样启用了 sharecode 门禁：浏览器直连裸 URL 得到 403，而前端 wImgSrc() 因此
+# 把整个域名降级成山形占位图且不发请求。解法不是「删掉前端降级」——那只会变成
+# 空白 + 403 噪声——而是服务端带 sharecode 取图后经本站公开代理下发。
+#
+# 契约：库里继续存上游原始 URL（不迁移、不覆盖人工图），只在读取商品时把 URL
+# 改写成 /api/public/peaktrace-image/<path>。代理只接受同 origin 的相对路径，
+# 不接受任意 http(s) 参数，避免变成开放 SSRF 代理。
+# ---------------------------------------------------------------------------
+IMAGE_PROXY_PREFIX = '/api/public/peaktrace-image/'
+_IMAGE_CACHE: dict[str, tuple[bytes, str, float]] = {}
+_IMAGE_CACHE_MAX = 240
+_IMAGE_CACHE_TTL = 86400
+
+
+def proxy_image_url(url, origin: str | None = None):
+    """把 PEAKTRACE 上游图片 URL 换成本站公开代理路径；其它来源原样返回。"""
+    raw = str(url or '').strip()
+    if not raw:
+        return url
+    try:
+        sp = urlsplit(raw)
+    except Exception:
+        return url
+    if sp.scheme not in ('http', 'https') or not sp.netloc:
+        return url
+    allowed = {ORIGIN, str(origin or '').rstrip('/'), str(_icfg.effective().get('origin') or '').rstrip('/')}
+    hosts = set()
+    for o in allowed:
+        if o:
+            try:
+                hosts.add(urlsplit(o).netloc.lower())
+            except Exception:
+                pass
+    if sp.hostname.lower() not in hosts:
+        return url
+    path = sp.path.lstrip('/')
+    if not path or '..' in path.split('/') or '\\' in path or path.startswith('@'):
+        return url
+    return IMAGE_PROXY_PREFIX + path
+
+
+def fetch_image(asset_path: str, origin: str | None = None):
+    """服务端取上游图片，返回 (bytes, content_type)。路径必须是不含 .. 的相对路径。"""
+    import time
+    clean = str(asset_path or '').strip().lstrip('/')
+    if (not clean or '..' in clean.split('/') or '\\' in clean
+            or clean.startswith('@') or urlsplit(clean).scheme):
+        raise ValueError('invalid image path')
+    base = str(origin or _icfg.effective().get('origin') or ORIGIN).rstrip('/')
+    key = base + '|' + clean
+    hit = _IMAGE_CACHE.get(key)
+    if hit and time.time() - hit[2] < _IMAGE_CACHE_TTL:
+        return hit[0], hit[1]
+    url = _upstream_url(base, '/' + clean)
+    with httpx.Client(timeout=15, follow_redirects=True) as client:
+        r = client.get(url)
+    if r.status_code != 200:
+        raise RuntimeError('upstream image status %s' % r.status_code)
+    ctype = (r.headers.get('content-type') or 'image/jpeg').split(';')[0].strip().lower()
+    if not ctype.startswith('image/') or len(r.content) > 12 * 1024 * 1024:
+        raise RuntimeError('upstream image payload rejected')
+    if len(_IMAGE_CACHE) >= _IMAGE_CACHE_MAX:
+        _IMAGE_CACHE.clear()
+    _IMAGE_CACHE[key] = (r.content, ctype, time.time())
+    return r.content, ctype
+
+
 # 镜像商品的库存归属。inventory_mode 刻意不叫 platform_owned：它仍是外部品牌，
 # 只是库存已经落到本地可售仓，stock_control.owned() 只对这一组合放行。
 MIRROR_MODE = 'external_mirror'

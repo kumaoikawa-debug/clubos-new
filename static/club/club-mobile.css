@@ -30,7 +30,7 @@
 }
 
 @media (max-width:650px){
-  .admin-workspace .main{ padding-left:14px; padding-right:14px; }
+  .admin-workspace .main{ padding-left:18px; padding-right:18px; }
   .admin-workspace .grid.g2, .admin-workspace .grid.g4{ grid-template-columns:1fr; }
   .admin-workspace .set-tabs{ gap:6px; flex-wrap:wrap; }
   .admin-workspace .set-tab{ font-size:12px; padding:7px 10px; }
@@ -42,6 +42,10 @@
   /* 页头按钮组在极窄屏换行且撑满，命中区不小于 42px */
   .admin-workspace .view > .panel-title > div:has(.btn){ width:100%; }
   .admin-workspace .view > .panel-title .btn{ min-height:42px; }
+  /* 工作台「把活动告诉 ClubOS」的两个按钮是 .hero-action 的直接子节点，
+     窄屏下 display:block 让它们退化成 inline-block 挤在左边缘。这里显式竖排撑满。 */
+  .admin-workspace #dash .hero-action{ display:flex; flex-direction:column; align-items:stretch; gap:12px; padding:18px; }
+  .admin-workspace #dash .hero-action .btn{ flex:1 1 100%; width:100%; margin-top:0; min-height:44px; padding:10px 16px; font-size:13px; }
 }
 
 /* 员工权限 · 模块权限树（两端后台同款） */

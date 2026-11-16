@@ -118,13 +118,15 @@ body.admin-workspace{background:linear-gradient(125deg,#d4ebdd 0%,#c7e6da 26%,#d
 .act-pane .detail-nav{padding:6px 2px;margin:8px 0 2px}
 .act-pane .detail-nav__item{min-height:32px;padding:0 13px;font-size:12px}
 /* 头部：标题一行、元信息一行、操作一行 */
-.act-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin:6px 0 4px;flex-wrap:wrap}
+.act-head{display:flex;align-items:flex-start;justify-content:space-between;gap:18px;margin:8px 0 6px;flex-wrap:wrap}
 .act-head__id{min-width:0;flex:1 1 320px}
 .act-head__id h2{font-size:19px;line-height:1.3;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .act-head__id .sub{margin-top:3px;font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .act-head__id .tag{font-size:10px;padding:2px 7px;vertical-align:1px}
-.act-head__ops{display:flex;gap:6px;flex-wrap:wrap;align-items:center;flex:0 1 auto;justify-content:flex-end}
-.act-head__ops .btn{padding:6px 10px;font-size:11.5px;border-radius:9px;line-height:1.2;white-space:nowrap}
+/* 操作按钮多时有 7 个：给足按钮内边距与行距，让它们自然折成两行，不要让相邻
+   边框挤成一条（2026-11-16 视觉反馈）。窄屏段落 L170 仍会强制整行左对齐。 */
+.act-head__ops{display:flex;gap:10px 12px;flex-wrap:wrap;align-items:center;flex:1 1 420px;max-width:100%;justify-content:flex-end}
+.act-head__ops .btn{padding:8px 14px;font-size:12.5px;border-radius:10px;line-height:1.4;min-height:36px;white-space:nowrap}
 /* 资料来源 + 版本状态压成一行；空内容不占位 */
 .act-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:7px 0 2px;font-size:11.5px;color:var(--muted)}
 .act-meta:empty{display:none}
@@ -136,13 +138,13 @@ body.admin-workspace{background:linear-gradient(125deg,#d4ebdd 0%,#c7e6da 26%,#d
 /* 工作区卡片：收紧默认间距，让封面编辑区尽早进入首屏 */
 .act-pane>.card.section{margin-top:14px;padding:15px 17px}
 /* 活动分类：由大卡压成一条，chips 与「保存分类」同行，帮助文字收进 title */
-.act-pane>.act-cats{padding:11px 14px!important;margin-top:12px!important}
-.act-cats__row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.act-pane>.act-cats{padding:14px 18px!important;margin-top:14px!important}
+.act-cats__row{display:flex;align-items:center;gap:12px 14px;flex-wrap:wrap}
 .act-cats__label{font-size:12.5px;font-weight:800;color:var(--text);flex:0 0 auto;white-space:nowrap}
-.act-cats__chips{display:flex;gap:6px;flex-wrap:wrap;flex:1 1 auto;min-width:0}
+.act-cats__chips{display:flex;gap:8px 10px;flex-wrap:wrap;flex:1 1 auto;min-width:0}
 .act-cats__chips .sub{font-size:11.5px;margin:0}
-.act-cats__save{padding:6px 12px!important;font-size:11.5px!important;border-radius:9px;flex:0 0 auto}
-.act-cats .actcat-pick{padding:4px 10px!important;font-size:11.5px!important;border-radius:999px}
+.act-cats__save{padding:8px 16px!important;font-size:12.5px!important;border-radius:10px;flex:0 0 auto}
+.act-cats .actcat-pick{padding:6px 12px!important;font-size:12.5px!important;border-radius:999px}
 .act-cats .actcat-pick input{width:13px;height:13px}
 
 /* ── #3 手机端后台可操作化（2026-11-12）──────────────────────────────────────

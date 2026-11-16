@@ -84,7 +84,7 @@
           <div class="sub">用户备注 / 特别要求：${escHtml(p.notes||'—')}</div>
           <div class="sub">付款信息：实付 ${moneyText(p.allocation?.cash_paid||0)} · 俱乐部积分 ${p.allocation?.club_points_used||0} · 装备积分 ${p.allocation?.gear_points_used||0} · 已退 ${moneyText(p.participant_refund_cash||0)}</div>
           <div class="sub">保险：${escHtml(p.insurance_status||'pending')} ${escHtml(p.insurance_policy_no||'')} · 签到：${escHtml(p.checkin_status||'pending')}</div>
-          ${p.status==='refunded'?'':`<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn secondary" onclick="adminEditParticipant(${id},${p.id})">补全/修正资料</button><button class="btn ghost" onclick="adminReplaceParticipant(${id},${p.id})">变更参加人</button></div>`}
+          ${p.status==='refunded'?'':`<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><button class="btn secondary" onclick="adminEditParticipant(${id},${p.id})">补全/修正资料</button><button class="btn ghost" onclick="adminReplaceParticipant(${id},${p.id})">变更参加人</button><button class="btn ghost" onclick="orderInfoRefund('activity',${id},null,${p.id})">退出退款</button></div>`}
         </div>`).join('')||'<div class="empty">暂无参加人资料</div>';
         body=`<div class="grid g2" style="align-items:start"><div class="card">
           <div class="panel-title"><h3>订单 / 付款信息</h3><span class="tag">${escHtml(r.status||'')}</span></div>
@@ -128,7 +128,7 @@
     catch(e){showAlert({title:'改价失败',message:e.message})}
   };
 
-  window.orderInfoRefund=async function(kind,id,current){
+  window.orderInfoRefund=async function(kind,id,current,presetPid){
     if(kind==='camp'){
       const v=await uxForm({title:'营地订单 · 线下退款登记',nested:true,submitText:'登记退款',
         hint:'营地订单尚未接入支付渠道原路退款。这里只登记线下退款金额与凭证说明，不会调用支付渠道，也不会自动改订单状态。',
@@ -140,14 +140,51 @@
       catch(e){showAlert({title:'登记失败',message:e.message})}
       return;
     }
-    const v=await uxForm({title:'发起活动退款申请',nested:true,submitText:'提交申请',
-      hint:'提交后仍需到「退款审核」通过，才会走支付渠道退款。请按实际退给顾客的规则填写原因。',
-      fields:[{name:'reason',label:'退款原因',type:'textarea',required:true,full:true,value:'后台代客发起退款'}]});
-    if(!v)return;
-    try{const r=await api(`/api/club/${CLUB}/operation-orders/activity/${id}/refund-request`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)});
-      await showAlert({title:'退款申请已提交',message:`预计现金退款 ${moneyText(r.cashAmount)}\n退款比例 ${Number(r.refundPercent||0)}%\n请到「退款审核」完成审核。`});
-      window._orderInfoOv?.uxClose();window.orderInfoLoad();openOrderInfo('activity',id)}
-    catch(e){showAlert({title:'提交失败',message:e.message})}
+    /* 活动退款：按参加人部分退。金额由后端按活动退款规则逐人算好，这里只负责勾选。 */
+    let d;
+    try{d=await api(`/api/club/${CLUB}/operation-orders/activity/${id}/participants/refund-quotes`)}
+    catch(e){showAlert({title:'读取退款报价失败',message:e.message});return}
+    const pol=d.policy||{},rules=(pol.rules||[]).map(r=>`出发前 ≥ ${Number(r.minHoursBefore)} 小时退 ${Number(r.cashRefundPercent)}%`).join('；')||'默认：活动开始前全额退';
+    const people=d.participants||[];
+    const canPick=people.filter(p=>p.eligible);
+    if(!canPick.length){showAlert({title:'暂无可退参加人',message:'本订单当前没有符合退款规则的参加人（可能已过可退时限、已退或正在处理）。可到「活动管理 → 退款规则」调整规则。'});return}
+    const rowHtml=people.map(p=>{
+      /* 默认全不选：避免运营从列表点「退款」时误勾全部变成整单退。只有从某位参加人的
+         「退出退款」入口进来（presetPid）才预选该人。要退几人就勾几人。 */
+      const on=!!p.eligible,checked=on&&presetPid!=null&&Number(presetPid)===Number(p.participantId);
+      return `<label class="po-refund-row" style="display:flex;gap:11px;align-items:flex-start;padding:11px 12px;border:1px solid var(--line,#e3e8e6);border-radius:11px;${on?'':'opacity:.55;background:#fafbfa'}">
+        <input type="checkbox" class="po-refund-pick" value="${Number(p.participantId)}" data-amt="${Number(p.cashRefundAmount||0)}" data-pct="${Number(p.cashRefundPercent||0)}" ${checked?'checked':''} ${on?'':'disabled'} style="margin-top:3px;width:16px;height:16px;flex:none">
+        <span style="flex:1;min-width:0">
+          <span style="font-weight:700">${escHtml(p.name||'未填写')}</span> <span class="sub">#${Number(p.participantId)}${p.phone?' · '+escHtml(p.phone):''}</span>
+          <span class="sub" style="display:block;margin-top:3px">实付 ${moneyText(p.cashPaid)} · ${on?`命中「${escHtml(p.matchedRule||p.reason||'退款规则')}」${p.hoursBefore==null?'':' · 距出发 '+p.hoursBefore+' 小时'}`:escHtml(p.reason||'当前不可退')}</span>
+        </span>
+        <span style="text-align:right;flex:none">${on?`<b style="color:var(--danger,#c0392b)">退 ${moneyText(p.cashRefundAmount)}</b><span class="sub" style="display:block">${Number(p.cashRefundPercent||0)}%</span>`:'<span class="sub">—</span>'}</span>
+      </label>`
+    }).join('');
+    const body=`<div class="notice" style="margin-bottom:13px">按活动退款规则逐人计算：<b>${escHtml(rules)}</b>；活动开始后现金退 ${Number(pol.afterStartCashRefundPercent||0)}%。可勾选部分参加人一起退（如 5 人订单只退其中 3 人）。提交后仍需到「退款审核」逐笔通过才走支付渠道。</div>
+      <div style="display:flex;flex-direction:column;gap:9px">${rowHtml}</div>
+      <div style="margin-top:14px"><label class="sub" style="display:block;margin-bottom:5px">退款原因 <span style="color:var(--danger,#c0392b)">*</span></label><textarea id="poRefundReason" rows="2" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid var(--line,#d8e3dd);border-radius:10px">后台代客发起部分退款</textarea></div>
+      <div class="notice" id="poRefundTotal" style="margin-top:11px">已选 0 人 · 预计现金退款 ¥0.00</div>`;
+    const ov=uxDialog({title:'发起活动退款申请（按参加人）',wide:true,nested:true,
+      desc:'每位参加人独立按活动退款规则计算金额；只退选中的人，其余名额保留。',
+      body,foot:'<button class="btn" type="button" data-cancel>取消</button><button class="btn secondary" type="button" data-ok>提交退款申请</button>'});
+    const picks=[...ov.querySelectorAll('.po-refund-pick')];
+    const totalEl=ov.querySelector('#poRefundTotal');
+    const recalc=()=>{const sel=picks.filter(x=>x.checked);const amt=sel.reduce((s,x)=>s+Number(x.dataset.amt||0),0);
+      if(totalEl)totalEl.textContent=`已选 ${sel.length} 人 · 预计现金退款 ${moneyText(amt)}`};
+    picks.forEach(x=>x.addEventListener('change',recalc));recalc();
+    const cancelBtn=ov.querySelector('[data-cancel]');if(cancelBtn)cancelBtn.onclick=()=>ov.uxClose();
+    const okBtn=ov.querySelector('[data-ok]');
+    if(okBtn)okBtn.onclick=async()=>{
+      const sel=picks.filter(x=>x.checked).map(x=>Number(x.value));
+      const reason=(ov.querySelector('#poRefundReason')?.value||'').trim();
+      if(!sel.length){showAlert({title:'请选择参加人',message:'请至少勾选一位要退款的参加人。'});return}
+      if(reason.length<2){showAlert({title:'请填写退款原因',message:'退款原因至少 2 个字，便于对账追溯。'});return}
+      try{const r=await api(`/api/club/${CLUB}/operation-orders/activity/${id}/participants/refund-request`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({participantIds:sel,reason})});
+        ov.uxClose();await showAlert({title:'退款申请已提交',message:`已提交 ${r.count} 笔退款申请\n预计现金退款 ${moneyText(r.cashAmount)}\n请到「退款审核」逐笔通过。`});
+        window._orderInfoOv?.uxClose();window.orderInfoLoad();openOrderInfo('activity',id)}
+      catch(e){showAlert({title:'提交失败',message:e.message})}
+    };
   };
 
   window.orderInfoCampGuest=async function(id){

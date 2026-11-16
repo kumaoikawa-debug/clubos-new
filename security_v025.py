@@ -42,6 +42,8 @@ _PUBLIC_READ = (
     re.compile(r'^/api/public/activities/\d+$'),
     re.compile(r'^/api/public/activities/\d+/media/.+$'),
     re.compile(r'^/api/public/clubs/\d+/mall/products$'),
+    # PEAKTRACE 商品图服务端代理：只读、路径白名单在领域层收口，生产环境需免登录。
+    re.compile(r'^/api/public/peaktrace-image/.+$'),
 )
 _AUDIT_PREFIX = ('/api/platform/', '/api/club/', '/api/leader/', '/api/public/', '/api/payments/', '/api/commerce/')
 
