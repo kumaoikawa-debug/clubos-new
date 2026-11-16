@@ -78,6 +78,13 @@
           title: opt.title || '裁剪照片',
           desc: '拖动照片、调整缩放与比例，让主体落在取景框里；「自动适配」会识别主体并自动避开大片天空。',
           wide: true, body: body,
+          /* 2026-11-16 闪退修复：裁剪窗必须显式 nested。
+             根因：本弹窗在 loadImg() 的 onload 异步回调里才打开，
+             P2-1 弹层单例的「同步 click 触发源」判定此刻必然已失效 → 被判成根层，
+             uxRegisterOverlay 会把宿主（营位/营地/商品编辑弹窗）整个 uxClose 掉 ——
+             用户视角＝点了「上传并手动裁剪」，编辑页闪退消失，裁剪完只能重新进来从头编辑。
+             裁剪窗永远从某个弹层内触发，属注释里定义的「嵌套弹层」，这里显式声明。 */
+          nested: true,
           foot: '<button class="btn ghost" type="button" data-cancel>取消</button>'
             + '<button class="btn" type="button" data-ok>使用这张取景</button>',
           onClose: function () { if (!settled) { settled = true; resolve(null); } }

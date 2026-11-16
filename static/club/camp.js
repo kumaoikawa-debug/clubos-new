@@ -501,18 +501,24 @@ async function _mwbPost(kind,id,item){
   if(!r.ok)throw new Error(j.detail||'上传失败');
   return j;
 }
+/* 新建态队列刷入：全部成功返回 true；有失败把失败项及其后未尝试项放回队列并返回 false。
+   返回 false 时调用方必须保持编辑弹窗打开 —— 否则「可点保存重试」无从点起（2026-11-16）。 */
 async function _campFlushQueue(kind,id){
-  if(!id||!CAMP_MWB_QUEUE.length)return;
+  if(!id||!CAMP_MWB_QUEUE.length)return true;
   const q=CAMP_MWB_QUEUE.slice(); CAMP_MWB_QUEUE=[];
   let done=0,err='';
   for(const it of q){
     try{await _mwbPost(kind,id,it);done++;}
     catch(e){err=e.message||'上传失败';break;}
   }
-  q.forEach(it=>{try{URL.revokeObjectURL(it.url);}catch(e){}});
+  /* 2026-11-16 丢图修复：失败那张及其后未尝试的全部项原样放回队列，blob 不 revoke ——
+     否则图片只在内存里存在过一次，用户重试保存也无图可传，只能重新选图。 */
+  CAMP_MWB_QUEUE=q.slice(done);
+  q.slice(0,done).forEach(it=>{try{URL.revokeObjectURL(it.url);}catch(e){}});
   await _campRenderMwb(kind,id);
   if(done)toast(`已自动上传 ${done} 张照片`);
-  if(err)showAlert({title:'部分照片上传失败',message:err});
+  if(err)showAlert({title:'部分照片上传失败',message:err+'（失败照片已保留，可点保存重试）'});
+  return !err;
 }
 window.caMwbRemoveQueued=function(qid){
   const it=CAMP_MWB_QUEUE.find(x=>x.qid===qid);
@@ -730,7 +736,7 @@ async function _campSaveBasic({kind,idRef,ov,apiPath,build,after}){
   ov=ov||CA_OV; if(!ov)return;
   const name=_fv(ov,'name'); if(!name){toast('请填写名称');return;}
   const btn=ov.querySelector('[data-ok]')||document.getElementById('campFormOk');
-  if(btn){btn.disabled=true;btn.textContent='保存中…';}
+  if(btn){btn.dataset.origLabel=btn.textContent;btn.disabled=true;btn.textContent='保存中…';}
   let created=false;
   try{
     const body=build(ov);
@@ -738,7 +744,16 @@ async function _campSaveBasic({kind,idRef,ov,apiPath,build,after}){
     else{ const r=await api(apiPath(0),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
           idRef.v=(r&&r.id)?r.id:idRef.v; created=true; }
     // #813：新建态选好的照片在拿到真实 id 后自动上传，用户无需二次操作
-    if(CAMP_MWB_QUEUE.length) await _campFlushQueue(kind,idRef.v);
+    if(CAMP_MWB_QUEUE.length){
+      const allOk=await _campFlushQueue(kind,idRef.v);
+      /* 2026-11-16：照片上传有失败时留在编辑弹窗内 —— 失败照片仍显示在队列区，
+         用户点掉提示即可点「保存基础信息」重试。此前失败也自动关弹窗，
+         提示却说「可点保存重试」，弹窗一关就成了空话，只能从头再来。 */
+      if(allOk===false){
+        if(btn){btn.disabled=false;btn.textContent=btn.dataset.origLabel||'保存';}
+        return;
+      }
+    }
     if(after) await after(idRef.v);
     /* #821：保存成功后自动关闭对话框并刷新列表。
        过去只弹一句 toast 就停住 —— 用户还得自己点「×」把弹窗关掉，
@@ -748,7 +763,7 @@ async function _campSaveBasic({kind,idRef,ov,apiPath,build,after}){
     toast(created?'已创建':'已保存');
     await _campReloadList();
   }catch(e){showAlert({title:'保存失败',message:e.message||'请重试'});}
-  finally{ if(btn){btn.disabled=false;btn.textContent='保存';} }
+  finally{ if(btn){btn.disabled=false;btn.textContent=btn.dataset.origLabel||'保存';} }
 }
 
 /* ===================== 营地档案 ===================== */

@@ -1733,7 +1733,12 @@ function showConfirm({title='请确认',message='',confirmText='确认',cancelTe
 function showAlert({title='提示',message='',okText='知道了',wide=false}={}){
   return new Promise(res=>{
     let done=false;const fin=()=>{if(done)return;done=true;res()};
-    const ov=uxDialog({title,desc:message,wide,onClose:fin,initialFocus:'[data-ok]',foot:`<button class="btn" type="button" data-ok>${esc(okText)}</button>`});
+    /* 2026-11-16 闪退修复②：alert 永远是顶层通知，必须 nested。
+       alert 多从异步链深处弹出（catch 上传失败 / 校验失败），此时 P2-1 的
+       「同步 click 触发源」判定早已失效 → 被判成根层 → 单例替换会把
+       还开着的宿主弹窗（如营位编辑弹窗）整个关掉 —— 用户视角＝保存失败
+       提示一闪，编辑页闪退，又得重新进来编辑。alert 只该叠在宿主之上。 */
+    const ov=uxDialog({title,desc:message,wide,nested:true,onClose:fin,initialFocus:'[data-ok]',foot:`<button class="btn" type="button" data-ok>${esc(okText)}</button>`});
     ov.querySelector('[data-ok]').onclick=()=>{ov.uxClose();fin()};
   });
 }
