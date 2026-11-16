@@ -10,8 +10,10 @@
 静态断言 + TestClient 行为断言；浏览器走查由 /tmp 脚本完成，不在此文件内起端口。
 """
 import os
+import secrets
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -72,9 +74,10 @@ check('拒绝路径穿越', pt.proxy_image_url('https://peaktrace-h5.app.workbud
 
 # 造一件带上游图片的在售商品，验证对外读取被改写、库里仍是原 URL
 with app.conn() as c:
-    c.execute("UPDATE products SET image_url=?,cover_url=?,source='external_api' WHERE id=1",
+    c.execute("UPDATE products SET image_url=?,cover_url=?,source='external_api',catalog_view=? WHERE id=1",
               ('https://peaktrace-h5.app.workbuddy.host/assets/tee.jpg',
-               'https://peaktrace-h5.app.workbuddy.host/assets/tee.jpg'))
+               'https://peaktrace-h5.app.workbuddy.host/assets/tee.jpg',
+               '[1200,800,0,0,600,800]'))
     c.execute('DELETE FROM product_images WHERE product_id=1')
     c.execute('INSERT INTO product_images(product_id,url,sort) VALUES(1,?,0)',
               ('https://peaktrace-h5.app.workbuddy.host/assets/tee.jpg',))
@@ -86,6 +89,30 @@ check('图集 URL 全部走本地代理',
 with app.conn() as c:
     check('库里仍保存上游原始 URL（不改数据、不覆盖人工图）',
           c.execute('SELECT url FROM product_images WHERE product_id=1').fetchone()[0].startswith(pt.ORIGIN))
+
+# 平台后台商品库（截图场景）：列表与图集弹窗同样要走代理，否则前端 wImgSrc()
+# 判 peaktrace-h5 为坏域名直接降级占位图（列表）或裸链直连 403（弹窗 img）。
+from security_v025 import _hash  # noqa: E402
+with app.conn() as c:
+    c.execute("INSERT INTO auth_accounts(username,password_hash,role,platform_department) VALUES('imgqa','test','platform','operations')")
+    _aid = c.execute('SELECT last_insert_rowid()').fetchone()[0]
+    _tok = secrets.token_urlsafe(32)
+    c.execute('INSERT INTO auth_sessions(token_hash,account_id,csrf_hash,expires_at) VALUES(?,?,?,?)',
+              (_hash(_tok), _aid, _hash('test'), int(time.time()) + 3600))
+_admin_h = {'Authorization': 'Bearer ' + _tok}
+_plist = client.get('/api/platform/products', headers=_admin_h).json()
+_p1 = next((x for x in _plist if x.get('id') == 1), None)
+check('平台后台列表图片走本地代理',
+      _p1 and _p1.get('image_url') == '/api/public/peaktrace-image/assets/tee.jpg'
+      and _p1.get('cover_url') == '/api/public/peaktrace-image/assets/tee.jpg',
+      _p1 and (_p1.get('image_url'), _p1.get('cover_url')))
+check('平台后台列表下发合成图裁切坐标',
+      _p1 and _p1.get('catalogView') and len(_p1['catalogView']) == 6, _p1 and _p1.get('catalogView'))
+_pimg = client.get('/api/platform/products/1/images', headers=_admin_h).json()
+check('平台后台图集弹窗头图与详情图走本地代理',
+      _pimg.get('cover') == '/api/public/peaktrace-image/assets/tee.jpg'
+      and all(i['url'].startswith(pt.IMAGE_PROXY_PREFIX) for i in _pimg.get('images') or []),
+      (_pimg.get('cover'), _pimg.get('images')))
 
 _real_fetch = pt.fetch_image
 try:

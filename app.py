@@ -12264,6 +12264,19 @@ def platform_products(brand_id:int|None=None, category_id:int|None=None,
             r['inventory_status']=_inventory_status(r)
         # 进销存 V1.3：统一采购口径标注（商品库 / 采购单候选 / 补货共用同一事实）
         _procurement_eligibility(c,out)
+        # PEAKTRACE 商品图走本站代理（与 C 端 _with_extras 同一口径）：裸上游 URL 会被
+        # 前端 wImgSrc() 判为坏域名直接降级成占位图、连请求都不发。库里仍存原始 URL，
+        # 这里只改对外读取形状；非 PEAKTRACE 来源的图片 proxy_image_url 会原样返回。
+        # 同时下发 catalog_view：PEAKTRACE 是合成图，列表缩略要按坐标裁出头图那一张。
+        try:
+            _pt_origin=integration_config.effective(c)['origin']
+        except Exception:
+            _pt_origin=peaktrace_catalog.ORIGIN
+        for r in out:
+            for _k in ('image_url','cover_url'):
+                if r.get(_k):
+                    r[_k]=peaktrace_catalog.proxy_image_url(r[_k],_pt_origin)
+            r['catalogView']=_parse_catalog_view(r.get('catalog_view'))
         return out
 
 
@@ -12511,7 +12524,17 @@ def platform_product_images(product_id:int):
         p=row(c.execute('SELECT cover_url FROM products WHERE id=?',(product_id,)))
         if not p: raise HTTPException(404,'商品不存在')
         imgs=rows(c.execute('SELECT id,product_id,url,sort FROM product_images WHERE product_id=? ORDER BY sort,id',(product_id,)))
-        return {'images':imgs,'cover':p['cover_url']}
+        # 图集弹窗的 <img> 不经过前端 wImgSrc() 降级，PEAKTRACE 裸链会被直连成 403；
+        # 与商品列表 / C 端统一走本站代理。非 PEAKTRACE 来源保持原样。
+        try:
+            _pt_origin=integration_config.effective(c)['origin']
+        except Exception:
+            _pt_origin=peaktrace_catalog.ORIGIN
+        for im in imgs:
+            if im.get('url'):
+                im['url']=peaktrace_catalog.proxy_image_url(im['url'],_pt_origin)
+        cover=peaktrace_catalog.proxy_image_url(p['cover_url'],_pt_origin) if p['cover_url'] else None
+        return {'images':imgs,'cover':cover}
 
 @app.post('/api/platform/products/{product_id}/images')
 def add_product_image(product_id:int, payload:dict=Body(...)):
