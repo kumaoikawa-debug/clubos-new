@@ -2118,6 +2118,8 @@ def init_db():
             _backfill_v032_member_discount_default(c)
             # 2026-11-06：活动分类后台化 —— 给没有类别的俱乐部种默认类别 + 正则挂存量活动（仅一次）。
             _backfill_activity_categories(c)
+            # 2026-11-16：存量演示库的演示团期过期后整体平移到未来（demo 模式，幂等）。
+            _backfill_demo_occurrence_dates(c)
             return
         if os.getenv('CLUBOS_SECURITY_MODE','demo')=='production':
             # Never provision sample clubs, consumers, catalog, payments or credits in production.
@@ -2253,6 +2255,56 @@ def _backfill_activity_categories(c):
                 if rx.search(title):
                     c.execute('INSERT OR IGNORE INTO activity_category_links(activity_id,category_id) VALUES(?,?)',(act[0],catid))
     c.execute("INSERT INTO _migrations(name,applied_at) VALUES('activity_categories_seed', datetime('now'))")
+
+
+def _backfill_demo_occurrence_dates(c):
+    # 2026-11-16：演示团期必须始终落在未来（与 _demo_seed 里写 future 日期是同一件事）。
+    # 新库播种时用 date.today()+1 写死未来日期；但存量演示库（回归用的 clubos.db、
+    # 线上演示库）过几天团期就过期，报名/结算/退款报价全部 409，演示站看起来像坏了。
+    # 这里在 demo 模式下遍历所有已发布活动的 open 团期：仅当某个活动的第一个团期已过期时，
+    # 按「原日期间隔」把该活动的 open 团期整体平移到明天 08:00 起，时分秒保持不变。
+    # 未来团期不动；production 模式不碰任何数据。
+    if os.getenv('CLUBOS_SECURITY_MODE', 'demo') == 'production':
+        return
+    from datetime import date as _date, timedelta as _td, datetime as _dt
+
+    def _parse(raw):
+        s = str(raw or '').strip().replace('T', ' ')
+        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d'):
+            try:
+                return _dt.strptime(s, fmt)
+            except ValueError:
+                continue
+        return None
+
+    now = _dt.now()
+    today = _date.today()
+    for act in c.execute("SELECT id FROM activities WHERE status='published' ORDER BY id").fetchall():
+        aid = act['id']
+        occs = c.execute("""SELECT id,start_at,end_at FROM activity_occurrences
+                            WHERE activity_id=? AND status='open' AND start_at IS NOT NULL
+                            ORDER BY start_at, id""", (aid,)).fetchall()
+        if not occs:
+            continue
+        first = _parse(occs[0]['start_at'])
+        if first is None or first >= now:
+            continue
+        first_date = first.date()
+        for o in occs:
+            start = _parse(o['start_at'])
+            if start is None:
+                continue
+            delta_days = (start.date() - first_date).days
+            target = today + _td(days=1 + delta_days)
+            new_start = f"{target.isoformat()} {start.strftime('%H:%M:%S')}"
+            end = _parse(o['end_at'])
+            new_end = f"{target.isoformat()} {end.strftime('%H:%M:%S')}" if end is not None else None
+            if new_end:
+                c.execute("UPDATE activity_occurrences SET start_at=?, end_at=? WHERE id=?", (new_start, new_end, o['id']))
+            else:
+                c.execute("UPDATE activity_occurrences SET start_at=? WHERE id=?", (new_start, o['id']))
+        # 同步活动主表 event_date（列表页 / 详情页展示用），避免「列表显示旧日期、点进去却能报名」。
+        c.execute("UPDATE activities SET event_date=? WHERE id=?", ((today + _td(days=1)).isoformat(), aid))
 
 
 def setting(key,default=None):

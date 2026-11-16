@@ -2833,7 +2833,17 @@ async function loadOrders(){
   if(abox&&!abox.children.length)abox.innerHTML=wSkRows(1);
   if(gbox&&!gbox.children.length)gbox.innerHTML=wSkRows(1);
   let d=await api(`/api/public/users/${USER}/order-center?club_id=${CLUB}`);
-  $('#activityOrders').innerHTML=(d.activityOrders||[]).map(x=>{
+  /* 出发前提醒的 C 端出口：执行端显示「资料待补 N 人」时，顾客必须一眼看到入口。
+     以前只有每条参加人行里的灰色「补资料」，用户反馈等于没有入口 —— 这里升级成页面顶部
+     醒目提示 + 待补参加人的主按钮。 */
+  const pendingPax=(d.activityOrders||[]).reduce((arr,o)=>arr.concat(
+    (o.participants||[]).filter(p=>p.status!=='refunded'&&p.form_status!=='complete')
+      .map(p=>({regId:o.id,pid:p.id,name:p.name||'参加人',title:o.activity_title||'活动报名'}))),[]);
+  const prepBanner=pendingPax.length?`<div class="w-prep-alert" style="margin-bottom:14px;padding:14px 16px;border:1px solid #e9c88b;background:#fff8e8;border-radius:16px">
+    <div style="font-weight:700;color:#7a5215">出发前还有 ${pendingPax.length} 位参加人的资料待补全</div>
+    <div style="font-size:12px;color:#8a6d35;margin:4px 0 10px">证件、紧急联系人等信息用于投保和实名出行；请核对下方标黄的参加人。</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">${pendingPax.slice(0,4).map(p=>`<button class="w-act w-act--primary" type="button" onclick="editParticipant(${p.regId},${p.pid},true)">补全 ${esc(p.name)} 的资料</button>`).join('')}${pendingPax.length>4?`<span class="w-act__note">另有 ${pendingPax.length-4} 位，请在下方订单里补全</span>`:''}</div></div>`:'';
+  $('#activityOrders').innerHTML=prepBanner+(d.activityOrders||[]).map(x=>{
     const rq=x.refundQuote;
     let action='';
     if(x.status==='paid' && ['none','rejected'].includes(x.refund_status||'none')){
@@ -2841,14 +2851,15 @@ async function loadOrders(){
     }
     const ps=(x.participants||[]).map(p=>{
       const refunded=p.status==='refunded';const prq=p.refundQuote;
+      const needsInfo=!refunded&&p.form_status!=='complete';
       const refundBtn=(!refunded&&prq?.eligible&&['none','rejected'].includes(p.refund_status||'none'))?`<button class="w-act w-act--sm" type="button" onclick="requestParticipantRefund(${x.id},${p.id},${prq.cashRefundAmount||0},${prq.cashRefundPercent||0},'${esc(p.name)}')">退出退款</button>`:`<div class="w-pax-row__prog">${esc(p.refundProgress?.label||'')}${p.participant_refund_cash?` · 已退 ${money(p.participant_refund_cash)}`:''}</div>`;
-      return `<div class="w-pax-row${refunded?' is-off':''}">
+      return `<div class="w-pax-row${refunded?' is-off':''}"${needsInfo?' style="background:#fff8e8;border-radius:12px;padding:8px;margin:-8px"':''}>
         <span class="w-pax-row__ic">${WI.pax}</span>
         <div class="w-pax-row__main">
-          <div class="w-pax-row__nm"><b>${esc(p.name)}</b>${refunded?badge('已退出','off'):''}</div>
+          <div class="w-pax-row__nm"><b>${esc(p.name)}</b>${refunded?badge('已退出','off'):needsInfo?badge('资料待补','wait'):''}</div>
           <div class="w-pax-row__meta">${esc(p.phone||'')}${refunded?'':` · 资料${p.form_status==='complete'?'完整':'待补'} · 保险 ${insSt(p.insurance_status||'pending')} · 签到 ${ckSt(p.checkin_status||p.checkinStatus)}`}</div>
           ${refunded?'':`<div class="w-pax-row__ops">
-            <button class="w-act w-act--sm" type="button" onclick="editParticipant(${x.id},${p.id})">补资料</button>
+            <button class="w-act w-act--sm${needsInfo?' w-act--primary':''}" type="button" onclick="editParticipant(${x.id},${p.id},${needsInfo})">${needsInfo?'立即补全':'编辑资料'}</button>
             <button class="w-act w-act--sm" type="button" onclick="replaceParticipant(${x.id},${p.id})">转名额</button>
             ${refundBtn}</div>`}
         </div></div>`}).join('');
@@ -2908,20 +2919,29 @@ async function loadOrders(){
     </div>`).join('')||'<div class="w-empty">'+WI.receipt+'<div>没有待支付订单</div><div style="margin-top:4px">未完成付款的订单会出现在这里</div></div>';
   }
 }catch(e){loaderError('#activityOrders',e,'loadOrders 加载失败')}}
-async function editParticipant(regId,pid){
+async function editParticipant(regId,pid,needsInfo){
   const d=await api(`/api/public/registrations/${regId}/participants`),p=(d.participants||[]).find(x=>x.id===pid);if(!p)return;
   /* 补资料与报名共用同一份证件清单与同一套号码校验（shared.js ID_TYPES / idNumberError）；
      后端对补资料接口做同样校验 —— 这份资料是投保用的，乱号进了保单出险时才暴露。 */
-  const v=await showForm({title:'编辑报名资料',submitText:'保存',
-    fields:[
-      {name:'idType',label:'证件类型',type:'select',required:true,value:p.id_type||'身份证',options:ID_TYPES.map(t=>({value:t.v,label:t.label}))},
-      {name:'idNumber',label:'证件号码',required:true,value:p.id_number||''},
-      {name:'ec',label:'紧急联系人',value:p.emergency_contact_name||''},
-      {name:'ep',label:'紧急联系人电话',value:p.emergency_contact_phone||''}
-    ],
+  const fields=[
+    {name:'idType',label:'证件类型',type:'select',required:true,value:p.id_type||'身份证',options:ID_TYPES.map(t=>({value:t.v,label:t.label}))},
+    {name:'idNumber',label:'证件号码',required:true,value:p.id_number||''},
+    {name:'ec',label:'紧急联系人',value:p.emergency_contact_name||''},
+    {name:'ep',label:'紧急联系人电话',value:p.emergency_contact_phone||''},
+    {name:'notes',label:'备注 / 特别要求',type:'textarea',value:p.notes||''}
+  ];
+  // 老订单姓名/手机号为空时允许在这里补上；已有值要改必须走转名额（保险/名单口径不同）。
+  if(!p.name)fields.unshift({name:'name',label:'姓名',required:true,value:''});
+  if(!p.phone)fields.unshift({name:'phone',label:'手机号',required:true,value:''});
+  const v=await showForm({title:needsInfo?'补全报名资料':'编辑报名资料',
+    desc:needsInfo?'出发前请核对证件与紧急联系人；证件用于投保，号码会按证件类型校验。':'证件用于投保；如需更换参加人，请用「转名额」。',
+    submitText:'保存资料',fields,
     validate:vals=>{const e=idNumberError(vals.idType,vals.idNumber);if(e){toast(e);return false}return true}});
   if(!v)return;
-  try{await api(`/api/public/registrations/${regId}/participants/${pid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({idType:v.idType,idNumber:v.idNumber,emergencyContactName:v.ec,emergencyContactPhone:v.ep})});toast('报名资料已更新');loadOrders()}catch(e){showAlert({title:'保存失败',message:e.message})}
+  const body={idType:v.idType,idNumber:v.idNumber,emergencyContactName:v.ec,emergencyContactPhone:v.ep,notes:v.notes||''};
+  if(!p.name)body.name=v.name;
+  if(!p.phone)body.phone=v.phone;
+  try{await api(`/api/public/registrations/${regId}/participants/${pid}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast(needsInfo?'资料已补全，出发提醒会同步消除':'报名资料已更新');loadOrders()}catch(e){showAlert({title:'保存失败',message:e.message})}
 }
 async function replaceParticipant(regId,pid){
   /* 转名额同样要证件：replace 走后端 normalize_for_checkout，证件必选硬闸对新参加人

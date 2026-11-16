@@ -2860,3 +2860,19 @@ CREATE TABLE IF NOT EXISTS campaign_grant_log (
 );
 CREATE INDEX IF NOT EXISTS idx_cgl_club_order ON campaign_grant_log(club_id, order_id, gift_type);
 
+-- 后台「订单信息」统一操作留痕：改价 / 代客补资料 / 变更参加人 / 线下退款登记。
+-- 不改动原订单的支付快照；每一笔人工干预都能倒查操作前后、操作人和原因。
+CREATE TABLE IF NOT EXISTS club_order_admin_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  club_id INTEGER NOT NULL,
+  order_kind TEXT NOT NULL,
+  order_id INTEGER NOT NULL,
+  action TEXT NOT NULL,
+  before_json TEXT,
+  after_json TEXT,
+  reason TEXT,
+  actor TEXT NOT NULL DEFAULT 'club',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_order_admin_logs_order ON club_order_admin_logs(club_id, order_kind, order_id, id DESC);
+

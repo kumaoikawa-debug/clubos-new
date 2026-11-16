@@ -59,6 +59,7 @@ from clubos_domain import peaktrace_catalog
 from clubos_domain import integration_config
 from clubos_domain import platform_marketing
 from clubos_domain import external_fulfillment
+from clubos_domain import order_ops
 
 ROOT=Path(__file__).resolve().parent
 STATIC=ROOT/'static'
@@ -288,6 +289,7 @@ membership_engine.on_upgrade=benefit_engine.process_tier_rewards
 from clubos_domain.points_mall import PointsMallEngine
 points_mall_engine=PointsMallEngine(benefit_engine)
 participant_service=ParticipantService()
+order_ops_service=order_ops.OrderOpsService()
 execution_service=ActivityExecutionService()
 commission_engine=CommissionSettlementEngine(setting)
 # 外部履约桥：已签收 → 冻结佣金（域模块不能反向 import app 的 commission_engine 实例，这里注入）
@@ -10575,8 +10577,18 @@ def public_update_participant(registration_id:int,participant_id:int,payload:dic
     with conn() as c:
         p=row(c.execute('SELECT * FROM registration_participants WHERE id=? AND registration_id=?',(participant_id,registration_id)))
         if not p: raise HTTPException(404,'参加人不存在')
-        supplement={k:v for k,v in payload.items() if k in {'idType','idNumber','emergencyContactName','emergencyContactPhone','notes'}}
-        if not supplement: raise HTTPException(400,'补充资料接口不允许直接更换姓名/手机号；请使用转名额功能')
+        allowed={'idType','idNumber','emergencyContactName','emergencyContactPhone','notes'}
+        supplement={k:v for k,v in payload.items() if k in allowed}
+        # 老订单可能连姓名/手机号都是空的：这种「填空」算补资料；已有姓名/手机号要改，
+        # 仍必须走转名额（换人涉及保险与名单），避免绕过 replace 的证件与留痕规则。
+        for key in ('name','phone'):
+            if key in payload:
+                if str(p.get(key) or '').strip():
+                    raise HTTPException(400,f'{("姓名" if key=="name" else "手机号")}已存在；如需更换参加人请使用转名额')
+                val=str(payload.get(key) or '').strip()
+                if not val: raise HTTPException(400,f'{("姓名" if key=="name" else "手机号")}不能为空')
+                supplement[key]=val
+        if not supplement: raise HTTPException(400,'没有可补充的资料字段')
         try:return participant_service.update(c,participant_id=participant_id,payload=supplement,actor_type='c_end')
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
@@ -17940,3 +17952,161 @@ def camp_ai_template_samples(club_id: int, limit: int = 20):
             """SELECT id,target_kind,target_id,template_id,job_id,media_count,summary,created_at
                FROM camp_ai_template_samples WHERE club_id=?
                ORDER BY id DESC LIMIT ?""", (club_id, max(1, min(100, limit)))))]}
+
+
+# ==========================================================================
+# 订单信息台 / 资料补全（2026-11-16 用户截图反馈）
+# 背景：活动执行页一直提醒「资料待补」，但后台没有代客补入口、C 端入口不明显，
+# 会员详情里的历史订单也点不开。这里统一补：后台代客补资料 + 订单详情二级页 +
+# 经营数据下的「订单信息」（活动 / 营地两类）与人工干预留痕。
+# ==========================================================================
+@app.patch('/api/club/{club_id}/registrations/{registration_id}/participants/{participant_id}/profile')
+def club_update_participant_profile(club_id: int, registration_id: int, participant_id: int,
+                                    payload: dict = Body(...)):
+    club_or_404(club_id)
+    with conn() as c:
+        p = row(c.execute("""SELECT * FROM registration_participants
+                             WHERE id=? AND registration_id=? AND club_id=?""",
+                          (participant_id, registration_id, club_id)))
+        if not p:
+            raise HTTPException(404, '参加人不存在')
+        allowed = {'name', 'phone', 'relationToPayer', 'idType', 'idNumber',
+                   'emergencyContactName', 'emergencyContactPhone', 'notes'}
+        data = {k: v for k, v in payload.items() if k in allowed}
+        if not data:
+            raise HTTPException(400, '没有可保存的资料字段')
+        try:
+            after = participant_service.update(c, participant_id=participant_id, payload=data,
+                                               actor_type=f'club:{club_id}', note='后台代客补全/修正报名资料')
+            order_ops_service.log(c, club_id=club_id, order_kind='activity', order_id=registration_id,
+                                  action='profile_update', before=p, after=after,
+                                  reason=str(payload.get('reason') or '后台代客补全/修正报名资料'))
+            return after
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+
+
+@app.post('/api/club/{club_id}/registrations/{registration_id}/participants/{participant_id}/replace')
+def club_replace_participant(club_id: int, registration_id: int, participant_id: int,
+                             payload: dict = Body(...)):
+    """后台变更参加人：跳过自助转名额的出发前 24h 闸门，但保留证件校验与全量留痕。"""
+    club_or_404(club_id)
+    with conn() as c:
+        p = row(c.execute("""SELECT * FROM registration_participants
+                             WHERE id=? AND registration_id=? AND club_id=?""",
+                          (participant_id, registration_id, club_id)))
+        if not p:
+            raise HTTPException(404, '参加人不存在')
+        try:
+            after = participant_service.replace(c, participant_id=participant_id, payload=payload,
+                                                actor_type=f'club:{club_id}',
+                                                reason=str(payload.get('reason') or '后台变更参加人'),
+                                                admin_override=True)
+            order_ops_service.log(c, club_id=club_id, order_kind='activity', order_id=registration_id,
+                                  action='participant_replace', before=p, after=after,
+                                  reason=str(payload.get('reason') or '后台变更参加人'))
+            return after
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+
+
+@app.get('/api/club/{club_id}/operation-orders')
+def club_operation_orders(club_id: int, kind: str = 'activity', query: str = '', status: str = '',
+                          dateFrom: str = '', dateTo: str = '', limit: int = 300):
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            return order_ops_service.list(c, club_id=club_id, kind=kind, query=query, status=status,
+                                          date_from=dateFrom, date_to=dateTo, limit=limit)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get('/api/club/{club_id}/operation-orders/{kind}/{order_id}')
+def club_operation_order_detail(club_id: int, kind: str, order_id: int):
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            if kind == 'activity':
+                return order_ops_service.activity_detail(c, club_id=club_id, order_id=order_id,
+                                                         participant_service=participant_service)
+            if kind == 'camp':
+                return order_ops_service.camp_detail(c, club_id=club_id, order_id=order_id,
+                                                     camp_out=_camp_order_out)
+            raise ValueError('订单类型无效')
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.patch('/api/club/{club_id}/operation-orders/{kind}/{order_id}/price')
+def club_operation_order_price(club_id: int, kind: str, order_id: int, payload: dict = Body(...)):
+    """后台账面改价：改的是 ClubOS 订单金额快照，不调用支付渠道、不生成支付流水。"""
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            return order_ops_service.adjust_price(c, club_id=club_id, kind=kind, order_id=order_id,
+                                                  amount=payload.get('amount'),
+                                                  reason=str(payload.get('reason') or ''),
+                                                  participant_service=participant_service)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.post('/api/club/{club_id}/operation-orders/activity/{order_id}/refund-request')
+def club_operation_activity_refund(club_id: int, order_id: int, payload: dict = Body(default={})):
+    """后台代客发起活动退款申请；仍需在退款审核里通过后才走渠道退款。"""
+    club_or_404(club_id)
+    with conn() as c:
+        reg = row(c.execute('SELECT * FROM registrations WHERE id=? AND club_id=?', (order_id, club_id)))
+        if not reg:
+            raise HTTPException(404, '活动订单不存在')
+        try:
+            out = refund_lifecycle.request_activity(c, registration_id=order_id,
+                                                    requester=f'club:{club_id}',
+                                                    reason=str(payload.get('reason') or '后台代客发起退款'))
+            order_ops_service.log(c, club_id=club_id, order_kind='activity', order_id=order_id,
+                                  action='refund_request', after=out,
+                                  reason=str(payload.get('reason') or '后台代客发起退款'))
+            return out
+        except LookupError as e:
+            raise HTTPException(404, str(e))
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+
+
+@app.post('/api/club/{club_id}/operation-orders/camp/{order_id}/refund-record')
+def club_operation_camp_refund_record(club_id: int, order_id: int, payload: dict = Body(...)):
+    """营地订单线下退款登记（不是支付渠道原路退款，UI 必须写清）。"""
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            return order_ops_service.record_offline_refund(c, club_id=club_id, order_id=order_id,
+                                                            amount=payload.get('amount'),
+                                                            reason=str(payload.get('reason') or ''))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+
+
+@app.patch('/api/club/{club_id}/operation-orders/camp/{order_id}/guest')
+def club_operation_camp_guest(club_id: int, order_id: int, payload: dict = Body(...)):
+    club_or_404(club_id)
+    try:
+        with conn() as c:
+            return order_ops_service.update_camp_guest(c, club_id=club_id, order_id=order_id,
+                                                       name=str(payload.get('name') or ''),
+                                                       phone=str(payload.get('phone') or ''),
+                                                       reason=str(payload.get('reason') or '后台变更营地预订人'))
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(409, str(e))

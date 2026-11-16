@@ -225,3 +225,9 @@ python tests/club_static_guard.py
 # 后台「测试连接」与商品同步全挂。用 MockTransport 锁住总目录/商品/分类/库存
 # 四条出站 URL 都必须带码，不发起真实外网请求、不碰真库。
 python tests/peaktrace_sharecode_gate_regression.py
+
+# ── 2026-11-16 · 订单信息台 / 资料补全门禁 ────────────────────────────────────
+# 执行端「资料待补」必须有 C 端补全入口和后台代客入口；历史订单详情要能点开；
+# 经营数据下新增活动/营地两类订单列表，改价/退款/变更参加人全部留痕。
+# 本脚本用全新临时库，覆盖 C 端 PATCH、后台 PATCH/POST、审计表、静态入口硬锁。
+python tests/order_info_profile_regression.py

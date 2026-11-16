@@ -257,7 +257,7 @@ class ParticipantService:
                   before=before, after=after, actor_type=actor_type, note=note)
         return after
 
-    def replace(self, c, *, participant_id: int, payload: dict[str, Any], actor_type: str = "c_end", reason: str = "转名额/更换参加人") -> dict[str, Any]:
+    def replace(self, c, *, participant_id: int, payload: dict[str, Any], actor_type: str = "c_end", reason: str = "转名额/更换参加人", admin_override: bool = False) -> dict[str, Any]:
         before = self.get(c, participant_id)
         if not before:
             raise LookupError("参加人不存在")
@@ -269,17 +269,20 @@ class ParticipantService:
         activity = c.execute("SELECT * FROM activities WHERE id=?", (before["activity_id"],)).fetchone()
         occurrence = c.execute("SELECT * FROM activity_occurrences WHERE id=?", (before["occurrence_id"],)).fetchone()
         policy = self.from_activity(dict(activity)).data if activity else DEFAULT_POLICY
-        if not policy.get("allowParticipantReplacement"):
-            raise ValueError("本活动不允许更换参加人")
-        if occurrence and occurrence["start_at"]:
-            try:
-                start = datetime.fromisoformat(str(occurrence["start_at"]).replace("Z", "+00:00")).replace(tzinfo=None)
-                hours = (start - datetime.now()).total_seconds() / 3600
-                if hours < float(policy.get("replacementCutoffHours") or 0):
-                    raise ValueError(f"距离出发不足 {policy.get('replacementCutoffHours')} 小时，不支持自助转名额")
-            except ValueError as e:
-                if "不支持自助转名额" in str(e):
-                    raise
+        # 后台人工改参加人不受「距出发 24h」自助闸门限制（用户现场名单纠错必须能做），
+        # 但仍然走同一套证件/必填校验，并且每一步都落 participant_change_logs。
+        if not admin_override:
+            if not policy.get("allowParticipantReplacement"):
+                raise ValueError("本活动不允许更换参加人")
+            if occurrence and occurrence["start_at"]:
+                try:
+                    start = datetime.fromisoformat(str(occurrence["start_at"]).replace("Z", "+00:00")).replace(tzinfo=None)
+                    hours = (start - datetime.now()).total_seconds() / 3600
+                    if hours < float(policy.get("replacementCutoffHours") or 0):
+                        raise ValueError(f"距离出发不足 {policy.get('replacementCutoffHours')} 小时，不支持自助转名额")
+                except ValueError as e:
+                    if "不支持自助转名额" in str(e):
+                        raise
         normalized, _ = self.normalize_for_checkout(activity=dict(activity), payer_name=str(payload.get("name") or ""), payer_phone=str(payload.get("phone") or ""), participants=[payload])
         p = normalized[0]
         c.execute('''UPDATE registration_participants SET name=?,phone=?,relation_to_payer=?,id_type=?,id_number=?,
