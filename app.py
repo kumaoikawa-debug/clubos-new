@@ -15558,16 +15558,35 @@ def platform_purchase_order_detail(po_id:str):
         except LookupError as e: raise HTTPException(404,str(e))
 
 @app.post('/api/platform/procurement/purchase-orders/{po_id}/approve')
-def platform_approve_purchase_order(request:Request,po_id:str):
+def platform_approve_purchase_order(request:Request,po_id:str,payload:dict=Body(default={})):
     with conn() as c:
-        try:return inventory_engine.approve_purchase_order(c,po_id=po_id,approved_by=_operator_label(request))
+        try:return inventory_engine.approve_purchase_order(c,po_id=po_id,approved_by=_operator_label(request),note=str(payload.get('note') or ''))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
 
 @app.post('/api/platform/procurement/purchase-orders/{po_id}/order')
-def platform_place_purchase_order(request:Request,po_id:str):
+def platform_place_purchase_order(request:Request,po_id:str,payload:dict=Body(default={})):
     with conn() as c:
-        try:return inventory_engine.place_purchase_order(c,po_id=po_id,ordered_by=_operator_label(request))
+        try:return inventory_engine.place_purchase_order(c,po_id=po_id,ordered_by=_operator_label(request),note=str(payload.get('note') or ''))
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(409,str(e))
+
+@app.post('/api/platform/procurement/purchase-orders/{po_id}/reject')
+def platform_reject_purchase_order(request:Request,po_id:str,payload:dict=Body(...)):
+    """审核不同意 / 确认下单驳回：stage=audit|order，reason 必填；已下单或已入库单据不可退回。"""
+    stage=str(payload.get('stage') or '').strip()
+    reason=str(payload.get('reason') or '').strip()
+    if stage not in ('audit','order'): raise HTTPException(400,'退回阶段必须为 audit 或 order')
+    if not reason: raise HTTPException(400,'请填写退回 / 驳回原因')
+    with conn() as c:
+        try:return inventory_engine.reject_purchase_order(c,po_id=po_id,stage=stage,reason=reason,rejected_by=_operator_label(request))
+        except LookupError as e: raise HTTPException(404,str(e))
+        except ValueError as e: raise HTTPException(409,str(e))
+
+@app.post('/api/platform/procurement/purchase-orders/{po_id}/resubmit')
+def platform_resubmit_purchase_order(request:Request,po_id:str,payload:dict=Body(default={})):
+    with conn() as c:
+        try:return inventory_engine.resubmit_purchase_order(c,po_id=po_id,note=str(payload.get('note') or ''))
         except LookupError as e: raise HTTPException(404,str(e))
         except ValueError as e: raise HTTPException(409,str(e))
 

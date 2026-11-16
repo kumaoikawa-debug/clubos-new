@@ -58,30 +58,30 @@ FIELD_SPECS: dict[str, list[dict]] = {
          'help': '关闭后同步会回到系统内置默认接口，已填写的内容保留不删除。'},
         {'key': 'origin', 'label': '上游服务地址 Origin', 'type': 'text', 'group': '① 基础',
          'placeholder': 'https://peaktrace-h5.app.workbuddy.host',
-         'help': '只填域名根地址，结尾不要带 /；公网必须 https。'},
+         'help': '例：https://supplier.example.com。只填域名，结尾不要带 /，也不要带路径；公网必须 https。'},
         {'key': 'timeoutSeconds', 'label': '请求超时（秒）', 'type': 'number', 'group': '① 基础',
          'min': 1, 'max': 120, 'help': '上游无响应时最多等待多少秒，建议 10～30。'},
         {'key': 'catalogPath', 'label': '商品总目录接口（优先）', 'type': 'text', 'group': '② 接口路径',
-         'help': 'GET。返回对象里同时有商品数组和分类数组就算成功，一次拿齐商品与库存。'},
+         'help': 'GET。只填路径，如 /api/b2b/catalog。返回 JSON 要同时含 products 与 categories 两个数组（字段名可在④修改）。'},
         {'key': 'productsPath', 'label': '商品列表接口（兼容回退）', 'type': 'text', 'group': '② 接口路径',
-         'help': 'GET。总目录接口不可用（上游是旧版本）时改用这个。'},
+         'help': 'GET。只填路径。总目录接口不可用（上游是旧版本）时才用这个，返回商品数组。'},
         {'key': 'categoriesPath', 'label': '分类列表接口（兼容回退）', 'type': 'text', 'group': '② 接口路径',
-         'help': 'GET。与商品列表接口配套。'},
+         'help': 'GET。只填路径。与商品列表接口配套，返回分类数组，如 [{"id":"1","name":"冲锋衣"}]。'},
         {'key': 'inventoryPath', 'label': '库存接口（兼容回退）', 'type': 'text', 'group': '② 接口路径',
-         'help': '按 SKU 返回可售库存；读不到不阻断同步，只是库存按「未开放」处理。'},
+         'help': '只填路径。返回 {"商品id|尺码": 数量} 或 {"商品id|尺码":{"available":数量}}；读不到库存按 0，不阻断商品同步。'},
         {'key': 'inventoryMethod', 'label': '库存接口请求方法', 'type': 'select', 'group': '② 接口路径',
          'options': [{'value': 'POST', 'label': 'POST（令牌放 JSON body）'},
                      {'value': 'GET', 'label': 'GET（令牌放查询串）'}],
          'help': '托管网关会剥掉自定义请求头，令牌通常只能放 body 或查询串。'},
         {'key': 'tokenField', 'label': '令牌参数名', 'type': 'text', 'group': '③ 鉴权',
-         'help': '请求里携带令牌的字段名，默认 token。只能用字母、数字、下划线。'},
+         'help': '令牌放进请求时的字段名，默认 token。只能用字母、数字、下划线、点、连字符；填 token 就是 POST {"token":"..."}。'},
         {'key': 'token', 'label': '接口令牌', 'type': 'secret', 'group': '③ 鉴权',
          'placeholder': '不修改请留空', 'help': '只保存在服务端数据库，页面永远只显示掩码。留空＝保持当前值。'},
         {'key': 'clearToken', 'label': '清除已保存的令牌', 'type': 'bool', 'group': '③ 鉴权',
          'help': '勾选后清空令牌，之后回落到服务器环境变量 PEAKTRACE_API_TOKEN。'},
         {'key': 'extraHeaders', 'label': '额外请求头（JSON 对象）', 'type': 'json', 'group': '③ 鉴权',
          'placeholder': '{"X-Vendor": "clubos"}',
-         'help': '可留空。Host / Content-Length 等会被服务端忽略。注意：请求头值会以明文回显给后台，高敏令牌请填上面的「接口令牌」。'},
+         'help': '可留空填 {}。例：{"X-Vendor":"clubos"}。Host / Content-Length 会被忽略；请求头值会明文回显后台，高敏令牌请填上面的「接口令牌」。'},
         {'key': 'productsKey', 'label': '商品数组字段名', 'type': 'text', 'group': '④ 返回字段映射',
          'help': '上游把商品数组改名时，在这里填新字段名，无需改代码。'},
         {'key': 'categoriesKey', 'label': '分类数组字段名', 'type': 'text', 'group': '④ 返回字段映射'},
@@ -92,6 +92,69 @@ FIELD_SPECS: dict[str, list[dict]] = {
         {'key': 'notes', 'label': '备注（仅后台可见）', 'type': 'textarea', 'group': '⑤ 其他',
          'placeholder': '例如：上游 2026-12 换域名，由张三更新', 'help': '记录本次变更原因，方便交接。'},
     ]
+}
+
+# 分组一句话说明：让运营先知道「这一组到底在解决什么」，再填具体字段。
+GROUP_GUIDE = {
+    '① 基础': '先确定上游域名与超时。这里只决定「去哪个服务器取数」，不填接口路径。',
+    '② 接口路径': '所有路径都只填以 / 开头的部分，系统会自动拼到上面的域名后面。总目录能用就优先用总目录。',
+    '③ 鉴权': '告诉系统令牌叫什么、令牌是什么。留空＝不修改已保存令牌；高敏令牌不要放请求头。',
+    '④ 返回字段映射': '只有当上游返回的字段名和系统默认的 products/categories/skus/available 不一样时才需要改。',
+    '⑤ 其他': '给交接留一句话，说明这次是谁因为什么改的。',
+}
+
+# 标准数据说明：页面顶部折叠卡直接展示，避免用户不知道「上游到底该吐什么 JSON」。
+# {origin}/{catalogPath} 等占位符由前端按当前配置实时替换；令牌只显示 <令牌>，不回显明文。
+STANDARD_GUIDE = {
+    'title': '标准数据说明（先看这里，再填下面）',
+    'intro': 'ClubOS 只读取上游的商品、分类、库存三类数据，不改上游任何内容。按下面 3 步填，填完点「测试连接」，通过后再保存。',
+    'steps': [
+        {'title': '第 1 步：填域名', 'text': '「上游服务地址 Origin」只填 https://域名，结尾不要带 /，也不要带接口路径。'},
+        {'title': '第 2 步：填路径', 'text': '「接口路径」只填 /api/... 这一段。优先用总目录接口一次拿齐商品+分类；没有总目录再填兼容接口。'},
+        {'title': '第 3 步：填鉴权', 'text': '令牌参数名一般是 token；令牌只在「接口令牌」里填一次，页面之后只显示掩码。'},
+    ],
+    'examples': [
+        {
+            'title': '① 商品总目录（优先）：一次拿齐商品 + 分类 + 库存',
+            'request': 'GET {origin}{catalogPath}',
+            'response': '''{
+  "products": [
+    {"id":"P001","name":"轻量冲锋衣","price":599,"category":"1",
+     "image":"/img/p001.jpg","gallery":["/img/p001-b.jpg"],
+     "sizes":["M","L"],"spec":"均码","sub":"轻量防水","desc":"适合春夏",
+     "fabric":"GORE-TEX","catalog_view":[1200,800,0,0,1200,800],
+     "skus":[{"sku":"P001|M","available":12},{"sku":"P001|L","available":3}]}
+  ],
+  "categories": [{"id":"1","name":"冲锋衣"}]
+}''',
+            'note': '两个数组必须同时存在且字段名与「④ 返回字段映射」一致；skus/available 读不到只会把库存按 0 处理，不阻断商品同步。',
+        },
+        {
+            'title': '② 兼容回退：商品列表 + 分类列表（总目录不可用才填）',
+            'request': 'GET {origin}{productsPath}　/　GET {origin}{categoriesPath}',
+            'response': '''# 商品列表：数组
+[{"id":"P001","name":"轻量冲锋衣","price":599,"category":"1",
+  "image":"/img/p001.jpg","gallery":[],"sizes":["M","L"]}]
+# 分类列表：数组
+[{"id":"1","name":"冲锋衣"}]''',
+            'note': '商品 id / name / price 必填；图片可用相对路径，系统会自动补域名。尺码没有时按 spec 建一个「均码」。',
+        },
+        {
+            'title': '③ 库存接口（兼容回退）：按 SKU 返回可售量',
+            'request': '{inventoryMethod} {origin}{inventoryPath}　令牌放 JSON body（POST）或查询串（GET），字段名 = {tokenField}',
+            'response': '''{
+  "P001|M": 12,
+  "P001|L": {"available": 3}
+}''',
+            'note': 'key 必须与商品的「上游 id|尺码」完全一致；值是数字或含 available 字段的对象。读不到整个接口时商品仍会先同步，库存按 0。',
+        },
+    ],
+    'rules': [
+        '路径字段只填路径，不要把域名再写一遍；写了域名会保存失败。',
+        'extraHeaders 必须是 JSON 对象，例如 {"X-Vendor":"clubos"}；空就填 {}。',
+        '字段名映射只有上游改了 JSON key 才动；乱改会导致测试连接显示 0 商品。',
+        '测试连接只读不写；通过后再点「保存配置」，下一次同步立即按新配置执行。',
+    ],
 }
 
 _IDENT = re.compile(r'^[A-Za-z_][A-Za-z0-9_.-]*$')
@@ -278,6 +341,8 @@ def public(c, key: str = PEAKTRACE) -> dict:
         'label': 'PEAKTRACE 商品目录同步',
         'description': '上游接口的地址、路径、鉴权与返回字段都在这里填写。保存后点「同步 PEAKTRACE」或等待自动同步即按新配置执行，不需要改代码或重新发布。',
         'fields': FIELD_SPECS[key],
+        'groupGuide': GROUP_GUIDE,
+        'standardGuide': STANDARD_GUIDE,
         'config': view,
         'defaults': {k: v for k, v in dft.items() if k != 'token'},
         'hasToken': bool(cfg.get('token')),

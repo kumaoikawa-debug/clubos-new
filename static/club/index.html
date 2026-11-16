@@ -63,7 +63,6 @@
 <div class="set-tabs" id="setTabs">
 <button type="button" class="set-tab active" onclick="setTab('brand')">品牌与展示</button>
 <button type="button" class="set-tab" onclick="setTab('leaders')">领队资源库</button>
-<button type="button" class="set-tab" onclick="setTab('biz')">业务介绍</button>
 <button type="button" class="set-tab" onclick="setTab('modsw')">经营业态开关</button>
 <button type="button" class="set-tab" onclick="setTab('home')">首页轮播</button>
 <button type="button" class="set-tab" onclick="setTab('cprofile')">我的页文案</button>
@@ -78,10 +77,18 @@
 <div id="pane-mpset" class="set-pane" style="display:none"><div id="mpSetBody"><div class="empty">正在加载设置…</div></div></div>
 <div id="pane-brand" class="set-pane"><div id="settingsBody"><div class="empty">正在加载设置…</div></div></div>
 <div id="pane-leaders" class="set-pane" style="display:none"><div class="pool-head" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:4px 0 10px"><button type="button" class="btn" id="lpAddBtn" onclick="lpToggleForm()">＋ 新增领队</button></div><div class="leader-summary" id="lpSummary"></div><div id="lpRoster"></div><div id="lpForm"></div><div id="lpInbox"></div></div>
-<div id="pane-biz" class="set-pane" style="display:none">
+<div id="pane-modsw" class="set-pane" style="display:none">
+<div class="set-tabs" id="modswSubTabs" style="margin:0 0 14px">
+<button type="button" class="set-tab active" data-modsub="sw" onclick="modSwSubTab('sw')">业态开关</button>
+<button type="button" class="set-tab" data-modsub="biz" onclick="modSwSubTab('biz')">业务介绍</button>
+</div>
+<div id="modswSub-sw">
+<div class="card section"><div class="panel-title"><h3>经营业态开关</h3><span class="tag">C 端显隐单一数据源</span></div><div id="modswForm"><div class="empty">正在加载开关…</div></div></div>
+</div>
+<div id="modswSub-biz" style="display:none">
 <div class="card section"><div class="panel-title"><h3>展示开关与文案</h3><span class="tag" id="bizStateTag">读取中…</span></div><div id="bizForm"></div></div>
-<div class="card section"><div class="panel-title"><h3>业务条目</h3><span class="tag">最多 8 条</span></div><div id="bizItems"></div><div style="margin-top:12px"><button class="btn" type="button" onclick="addBizItem()">＋ 添加业务</button></div></div></div>
-<div id="pane-modsw" class="set-pane" style="display:none"><div class="card section"><div class="panel-title"><h3>经营业态开关</h3><span class="tag">C 端显隐单一数据源</span></div><div id="modswForm"><div class="empty">正在加载开关…</div></div></div></div>
+<div class="card section"><div class="panel-title"><h3>业务条目</h3><span class="tag">最多 8 条</span></div><div id="bizItems"></div><div style="margin-top:12px"><button class="btn" type="button" onclick="addBizItem()">＋ 添加业务</button></div></div>
+</div></div>
 <div id="pane-home" class="set-pane" style="display:none">
 <div class="card section"><div class="panel-title"><h3>轮播开关与节奏</h3><span class="tag" id="homeStateTag">读取中…</span></div><div id="homeForm"></div></div>
 <div class="card section"><div class="panel-title"><h3>轮播条目</h3><span class="tag">最多 8 张</span></div><div id="homeItems"></div><div style="margin-top:12px"><button class="btn" type="button" onclick="addHomeItem()">＋ 添加轮播图</button></div></div></div>
@@ -135,4 +142,4 @@
 <div id="createModal" class="modal"><div class="modal-box"><div class="modal-head"><div><h2 style="margin:0">智能发一个活动</h2><div class="sub">少问，先做。明确资料直接用，只有真正冲突才提示。</div></div><button class="x" onclick="modal('createModal',false)">×</button></div><div id="createEngine" class="ux-create-engine" role="status" aria-live="polite"></div><form id="createForm"><div class="field"><label>简单说一下活动</label><textarea name="prompt" placeholder="例如：10月24日带30个会员去蓥华山，上午瑜伽，下午6公里徒步。或者直接上传活动方案。"></textarea></div><div class="field"><label>或者贴一条链接</label><input name="link" type="url" inputmode="url" autocomplete="off" placeholder="https://mp.weixin.qq.com/s/…（公众号推文 / 活动网页都行）" style="width:100%"><div class="sub" style="margin-top:6px;font-size:12px">把公众号推文、自家活动页、别人家的活动链接粘进来，智能会读里面的正文当方案，并把文中配图一起下载回来排进详情。链接和上传资料可以同时给。</div></div><div class="field"><label>活动城市（可选）</label><select name="city" id="createCity"><option value="">（暂不选 / 由智能从资料推断）</option></select></div><div class="drop"><strong>上传资料</strong><br>PPTX / DOCX / PDF / 海报 / 活动照片（手机 HEIC 照片直接传即可），或直接用上面的链接<br><input name="files" type="file" multiple style="margin-top:12px"></div><div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px"><button type="button" class="btn ghost" onclick="modal('createModal',false)">取消</button><button class="btn" id="genBtn">智能直接生成详情</button></div></form></div></div>
 
 <script src="/static/shared.js?v=20261116a"></script><script src="/static/channel-render.js?v=20261104free1"></script><script src="/static/ux/qr-local.js?v=20261014a"></script>
-<script src="/static/ux/clubos-cities.js?v=20261023a"></script><script src="/static/club/club.js?v=20261116c"></script><script src="/static/ux/camp-image-crop.js?v=20261116a"></script><script src="/static/club/camp.js?v=20261116a"></script><link rel="stylesheet" href="/static/ux/coupon-faces.css?v=20261027c"><script src="/static/ux/coupon-faces.js?v=20261027c"></script><script src="/static/ux/clubos-ux.js?v=20261116b"></script><script src="/static/ux/workflows-club.js?v=20261115a"></script><script src="/static/ux/experience-core.js?v=20261028b"></script><script src="/static/ux/workflows-completion-club.js?v=20261022a"></script><script src="/static/club/club-glass-init.js?v=20261101a"></script><script src="/static/ux/admin-compact.js?v=20261108b"></script></body></html>
+<script src="/static/ux/clubos-cities.js?v=20261023a"></script><script src="/static/club/club.js?v=20261116f"></script><script src="/static/ux/camp-image-crop.js?v=20261116a"></script><script src="/static/club/camp.js?v=20261116a"></script><link rel="stylesheet" href="/static/ux/coupon-faces.css?v=20261027c"><script src="/static/ux/coupon-faces.js?v=20261027c"></script><script src="/static/ux/clubos-ux.js?v=20261116b"></script><script src="/static/ux/workflows-club.js?v=20261115a"></script><script src="/static/ux/experience-core.js?v=20261028b"></script><script src="/static/ux/workflows-completion-club.js?v=20261022a"></script><script src="/static/club/club-glass-init.js?v=20261101a"></script><script src="/static/ux/admin-compact.js?v=20261108b"></script></body></html>

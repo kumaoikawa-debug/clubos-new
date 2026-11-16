@@ -170,6 +170,28 @@ def _preset(name: str | None) -> dict[str, Any]:
     return PROVIDER_PRESETS.get(str(name or '').strip().lower(), {})
 
 
+def _preset_endpoint(name: str) -> str:
+    return str(_preset(name).get('base_url') or '').strip()
+
+
+def _foreign_preset_model(preset_name: str, model: str) -> str | None:
+    """模型名是否属于另一个预设的默认值。
+
+    2026-11-16 实际故障：后台把服务商切成 qwen，但文本模型还留着 deepseek-chat，
+    DashScope 对 /chat/completions 返回 404 model_not_found。这里给出明确的中文
+    错配提示，避免用户只看到一句「404 Not Found」。
+    """
+    target = str(model or '').strip().lower()
+    if not target or target == 'custom':
+        return None
+    for code, meta in PROVIDER_PRESETS.items():
+        if code == str(preset_name or '').strip().lower():
+            continue
+        if target == str(meta.get('default_model') or '').strip().lower():
+            return code
+    return None
+
+
 def _db_ai_config() -> dict[str, Any]:
     """总平台在后台保存的模型接入配置；仅总平台可写。"""
     try:
@@ -438,8 +460,28 @@ def update_platform_provider_config(payload: dict[str, Any]) -> dict[str, Any]:
             if field in block:
                 value = block.get(field)
                 current[field] = '' if value is None else str(value).strip()
+        if current.get('preset'):
+            current['preset'] = str(current['preset']).strip().lower()
         if 'preset' in block and current.get('preset') and current['preset'] not in PROVIDER_PRESETS:
             raise ValueError(f'不支持的 Provider 预设: {current["preset"]}')
+        # 切换服务商时，端点必须跟着切；否则会拿新密钥继续打旧厂商的 /chat/completions。
+        if 'preset' in block and 'baseUrl' not in block and current.get('preset'):
+            old_url = str(current.get('baseUrl') or '').strip()
+            foreign_urls = {u for code, meta in PROVIDER_PRESETS.items()
+                            if code != current['preset'] for u in [str(meta.get('base_url') or '').strip()] if u}
+            if not old_url or old_url in foreign_urls:
+                current['baseUrl'] = _preset_endpoint(current['preset'])
+        # 服务商与模型必须配套：deepseek-chat 不能拿去请求 DashScope（404 model_not_found）。
+        foreign = _foreign_preset_model(current.get('preset') or '', current.get('model') or '')
+        if foreign:
+            suggested = str(_preset(current.get('preset')).get('default_model') or '')
+            raise ValueError(
+                f'{role} 服务商是「{_preset(current.get("preset")).get("label", current.get("preset"))}」，'
+                f'但文本模型「{current.get("model")}」属于「{_preset(foreign).get("label", foreign)}」。'
+                + (f'请改用「{suggested}」，或在弹窗里重新选择服务商后保存。' if suggested else '请重新选择服务商后保存。')
+            )
+        if current.get('preset') == 'custom' and not current.get('baseUrl'):
+            raise ValueError('自定义服务商必须填写「接口地址（OpenAI 兼容完整 URL）」')
         if 'enabled' in block:
             current['enabled'] = _truthy(block.get('enabled'), True)
         if 'apiKey' in block:
@@ -474,9 +516,16 @@ async def test_provider_connection(role: str = 'primary') -> dict[str, Any]:
     if role not in {'primary', 'secondary'}:
         return {'ok': False, 'error': 'role 只能是 primary 或 secondary'}
     if effective_gateway_mode()[0] == 'mock':
+        # 即便不真正发包，也要把当前配置回给前端，否则自检卡只剩「—」，用户看不出验的是谁。
+        matched = [p for p in _providers() if p.role == role]
+        provider = matched[0] if matched else None
         return {
             'ok': False,
             'mode': 'mock',
+            'role': role,
+            'preset': provider.preset if provider else '',
+            'model': _model_for_task(provider, 'ping') if provider else '',
+            'baseUrl': provider.base_url if provider else '',
             'error': '当前为 mock 演示模式，不会真实调用模型；请在总平台「AI 模型接入」里切换到「真实调用」，或设置 MOCK_AI=0 并配置密钥。',
         }
     matched = [p for p in _providers() if p.role == role]
@@ -494,9 +543,15 @@ async def test_provider_connection(role: str = 'primary') -> dict[str, Any]:
             r.raise_for_status()
             raw = r.json()
         sample = ((raw.get('choices') or [{}])[0].get('message') or {}).get('content', '')
-        return {'ok': True, 'role': role, 'preset': provider.preset, 'model': model, 'sample': str(sample)[:60]}
+        return {'ok': True, 'role': role, 'preset': provider.preset, 'model': model,
+                'baseUrl': provider.base_url, 'sample': str(sample)[:60]}
     except Exception as exc:
-        return {'ok': False, 'role': role, 'preset': provider.preset, 'model': model, 'error': _explain(exc)[:400]}
+        msg = _explain(exc)
+        if 'model_not_found' in msg or 'does not exist' in msg or '404' in msg:
+            msg += ('　排查：404 通常是「服务商与模型名不匹配」或「端点路径被重复拼接」。'
+                    '请打开「配置模型接入」，重新选择服务商让系统自动填入配套模型/端点，再保存自检。')
+        return {'ok': False, 'role': role, 'preset': provider.preset, 'model': model,
+                'baseUrl': provider.base_url, 'error': msg[:600]}
 
 
 # ---------------------------------------------------------------------------

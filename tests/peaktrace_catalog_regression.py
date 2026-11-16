@@ -41,7 +41,7 @@ categories = [{'id': 'tee', 'name': '山系T恤'}]
 inventory = {'tee-1|S': 6, 'tee-1|M': 4}
 
 
-def payload():
+def payload(config=None):
     return {'products': copy.deepcopy(feed), 'categories': categories,
             'inventory': dict(inventory), 'source': 'b2b', 'origin': app.peaktrace_catalog.ORIGIN}
 
@@ -129,7 +129,7 @@ check('manual hide survives a sync',
 call('PATCH', f'/api/platform/products/{pid}', {'status': 'active'})
 
 # 上游下架 → 本地下架且不允许手工复活
-app.peaktrace_catalog.fetch_catalog = lambda: {'products': [], 'categories': categories,
+app.peaktrace_catalog.fetch_catalog = lambda config=None: {'products': [], 'categories': categories,
                                                'inventory': {}, 'source': 'b2b',
                                                'origin': app.peaktrace_catalog.ORIGIN}
 sync = call('POST', url)
@@ -149,14 +149,14 @@ check('invalid upstream data changes nothing',
       call('GET', f'/api/public/clubs/1/mall/products/{pid}')['price'] == 219)
 feed.pop()
 bad_stock = dict(inventory); bad_stock['tee-1|S'] = 'oops'
-app.peaktrace_catalog.fetch_catalog = lambda: {'products': copy.deepcopy(feed), 'categories': categories,
+app.peaktrace_catalog.fetch_catalog = lambda config=None: {'products': copy.deepcopy(feed), 'categories': categories,
                                                'inventory': bad_stock, 'source': 'b2b',
                                                'origin': app.peaktrace_catalog.ORIGIN}
 call('POST', url, status=409)
 check('invalid upstream stock changes nothing',
       call('GET', f'/api/public/clubs/1/mall/products/{pid}')['stock'] == 7)
 
-app.peaktrace_catalog.fetch_catalog = lambda: (_ for _ in ()).throw(RuntimeError('network failure'))
+app.peaktrace_catalog.fetch_catalog = lambda config=None: (_ for _ in ()).throw(RuntimeError('network failure'))
 call('POST', url, status=502)
 check('network failure preserves last valid catalog',
       call('GET', f'/api/public/clubs/1/mall/products/{pid}')['price'] == 219)

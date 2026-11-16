@@ -701,6 +701,13 @@
 .po-detail__tbl td{vertical-align:top}
 .po-detail__sub>td{background:var(--panel-2,#f7f9f8);font-size:12.5px;color:var(--muted,#5a6b64)}
 
+.po-decide{margin-top:16px;border-top:1px solid var(--line,#dde6e1);padding-top:12px}
+.po-decide__lb{display:block;font-size:12.5px;font-weight:700;color:var(--muted,#5a6b64);margin:8px 0 5px}
+.po-decide__ta{width:100%;padding:9px 11px;border:1px solid var(--line,#d7e2dd);border-radius:9px;font:inherit;font-size:13px;background:var(--panel,#fff);color:inherit;resize:vertical}
+.po-decide__reject .po-decide__lb{color:#b45309}
+.po-decide__reject .po-decide__ta{border-color:#e8c9a1}
+.btn.danger{border-color:#c0392b;background:#fff;color:#c0392b}
+.btn.danger:hover{background:#c0392b;color:#fff}
 /* 采购单列表：操作按钮组（2026-11-03 修复排版错乱）
    旧模板把 list-row__end（状态标签）误嵌进 list-row__main，且最外层 list-row
    永远没闭合 → 每行互相嵌套、文字被压成竖排单字。现已抽成 .po-actions 独立
@@ -997,6 +1004,57 @@
 .plat-api__probemetrics b{color:#1b3a2c}
 .plat-api__probe .sub{font-size:11.5px;margin-top:5px}
 #apiConfigRoot.is-busy{opacity:.72;pointer-events:none}
+.plat-api__groupnote{font-size:12px;color:#6b7d75;line-height:1.6;margin:-2px 0 8px}
+.plat-api__guide{margin-bottom:12px;padding:0;overflow:hidden}
+.plat-api__guide>summary{cursor:pointer;padding:14px 18px;font-weight:800;color:#1b3a2c;
+  background:linear-gradient(120deg,#f2f9f5,#f7fbf9);list-style:none;display:flex;align-items:center;gap:8px}
+.plat-api__guide>summary::-webkit-details-marker{display:none}
+.plat-api__guide>summary::after{content:'▾';margin-left:auto;color:#5b7a6a}
+.plat-api__guide[open]>summary::after{content:'▴'}
+.plat-api__guidebody{padding:14px 18px 18px;border-top:1px solid var(--line)}
+.plat-api__steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.plat-api__step{padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:#fff}
+.plat-api__step b{display:block;font-size:12.5px;margin-bottom:4px;color:#245743}
+.plat-api__step span{font-size:11.5px;color:#6b7d75;line-height:1.6}
+.plat-api__example{border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px 12px;margin-bottom:10px}
+.plat-api__example h4{font-size:12.5px;margin-bottom:6px;color:#314a3d}
+.plat-api__example pre{margin:6px 0 0;padding:10px;background:#f5f8f6;border-radius:8px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;line-height:1.6;
+  white-space:pre-wrap;word-break:break-word;color:#244334}
+.plat-api__req{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
+  color:#245743;background:#f1f6f3;padding:4px 8px;border-radius:6px;display:inline-block}
+
+/* ---- 模型接入配置弹窗（平台独占） -------------------------------------- */
+.plat-ai-form{display:flex;flex-direction:column;gap:14px}
+.plat-ai-tip{padding:10px 12px;border-radius:10px;background:#f1f7f3;border:1px solid #cfe5d7;
+  font-size:12px;line-height:1.7;color:#315342}
+.plat-ai-warn{display:inline-block;margin-top:4px;color:#a5422f;font-weight:700}
+.plat-ai-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 16px}
+.plat-ai-block{border:1px solid var(--line);border-radius:12px;padding:13px 14px}
+.plat-ai-block h4{font-size:13px;font-weight:850;color:#1b3a2c;margin-bottom:10px}
+.plat-ai-field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.plat-ai-field--full{grid-column:1/-1}
+.plat-ai-field>span{font-size:12px;font-weight:750;color:#314a3d}
+.plat-ai-field>span b{color:#c44732}
+.plat-ai-input{width:100%;min-height:38px;padding:8px 10px;border:1px solid var(--line);
+  border-radius:9px;background:#fff;font-size:13px;color:#1b3a2c;outline:none}
+.plat-ai-input:focus{border-color:#245743;box-shadow:0 0 0 3px #24574318}
+.plat-ai-field small{font-size:11px;color:#7c8e85;line-height:1.5}
+.plat-ai-hint{margin-top:9px;font-size:11.5px;color:#245743;line-height:1.6;min-height:18px}
+.plat-ai-error{padding:10px 12px;border-radius:9px;background:#fff4f2;border:1px solid #efc3ba;
+  color:#a5422f;font-size:12px;line-height:1.7}
+.plat-ai-test{margin-top:12px;padding:11px 13px;border-radius:10px;border:1px solid var(--line);background:#fff}
+.plat-ai-test.is-ok{background:#f1f8f3;border-color:#b9dec7}
+.plat-ai-test.is-bad{background:#fff4f2;border-color:#efc3ba}
+.plat-ai-test__title{font-size:13px;font-weight:850;margin-bottom:4px}
+.plat-ai-test.is-ok .plat-ai-test__title{color:#1e6b43}
+.plat-ai-test.is-bad .plat-ai-test__title{color:#b4422e}
+.plat-ai-test__meta{font-size:11.5px;color:#5b7468;word-break:break-all;line-height:1.6}
+.plat-ai-test__msg{margin-top:5px;font-size:11.5px;line-height:1.7;color:#486057;word-break:break-word}
+@media(max-width:900px){
+  .plat-api__steps{grid-template-columns:1fr}
+  .plat-ai-grid{grid-template-columns:1fr}
+}
 
 /* ---- 手机端 -------------------------------------------------------------- */
 @media(max-width:900px){

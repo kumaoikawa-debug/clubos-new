@@ -18,7 +18,7 @@ class ProcurementEngine:
     physical warehouse receipt happened.
     """
 
-    PO_STATUSES={"draft","approved","ordered","partially_received","received","cancelled"}
+    PO_STATUSES={"draft","approved","ordered","partially_received","received","cancelled","rejected"}
 
     def __init__(self, warehouse_engine=None, finance_engine=None):
         self.warehouse=warehouse_engine
@@ -248,24 +248,46 @@ class ProcurementEngine:
         sql+=' ORDER BY po.created_at DESC,po.id DESC'
         return [dict(r) for r in c.execute(sql,args).fetchall()]
 
-    def approve_purchase_order(self, c, *, po_id: str, approved_by: str='platform') -> dict[str, Any]:
+    def approve_purchase_order(self, c, *, po_id: str, approved_by: str='platform', note: str='') -> dict[str, Any]:
         po=self.get_purchase_order(c,po_id)
         if po['status']=='approved': return {**po,'idempotent':True}
         if po['status']!='draft': raise ValueError(f"当前采购单状态不能审核: {po['status']}")
-        c.execute("UPDATE purchase_orders SET status='approved',approved_by=?,approved_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(approved_by,po_id))
+        c.execute("UPDATE purchase_orders SET status='approved',approved_by=?,approved_at=CURRENT_TIMESTAMP,approve_note=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",(approved_by,str(note or '').strip()[:500],po_id))
         return self.get_purchase_order(c,po_id)
 
-    def place_purchase_order(self, c, *, po_id: str, ordered_by: str = 'platform') -> dict[str, Any]:
+    def place_purchase_order(self, c, *, po_id: str, ordered_by: str = 'platform', note: str='') -> dict[str, Any]:
         po=self.get_purchase_order(c,po_id)
         if po['status'] in ('ordered','partially_received','received'): return {**po,'idempotent':True}
         if po['status']!='approved': raise ValueError(f"当前采购单状态不能下单: {po['status']}")
-        c.execute("UPDATE purchase_orders SET status='ordered',ordered_by=?,ordered_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(ordered_by,po_id))
+        c.execute("UPDATE purchase_orders SET status='ordered',ordered_by=?,ordered_at=CURRENT_TIMESTAMP,order_note=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",(ordered_by,str(note or '').strip()[:500],po_id))
         # V1.1 在途联动（任务书 5.1）：确认下单 → 全部订购量进入 WMS「在途」。
         # on_order 只是实物库存之外的期望量（可售=on_hand-reserved，不包含在途），下单幂等性
         # 由状态机保证：只有 approved→ordered 这一次会走这里，重复调用在上面就返回了。
         for x in po['items']:
             if int(x['quantity_ordered'] or 0)>0:
                 self._on_order_delta(c,product_id=int(x['product_id']),delta=int(x['quantity_ordered']))
+        return self.get_purchase_order(c,po_id)
+
+    def reject_purchase_order(self, c, *, po_id: str, stage: str, reason: str, rejected_by: str='platform') -> dict[str, Any]:
+        """审核不同意（draft→rejected）/ 确认下单驳回（approved→rejected）。原因必填，fail-closed。
+        stage 必须为 audit 或 order，且与当前状态匹配；已下单/已入库的单据一律拒绝退回。"""
+        reason=str(reason or '').strip()
+        if not reason: raise ValueError('退回 / 驳回必须填写原因说明')
+        if stage not in ('audit','order'): raise ValueError('退回阶段不合法')
+        po=self.get_purchase_order(c,po_id)
+        expected='draft' if stage=='audit' else 'approved'
+        if po['status']=='rejected': return {**po,'idempotent':True}
+        if po['status']!=expected: raise ValueError(f"当前采购单状态不能{'退回' if stage=='audit' else '驳回'}: {po['status']}")
+        c.execute("UPDATE purchase_orders SET status='rejected',reject_reason=?,rejected_by=?,rejected_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=?",(reason[:500],rejected_by,po_id))
+        return self.get_purchase_order(c,po_id)
+
+    def resubmit_purchase_order(self, c, *, po_id: str, note: str='', resubmitted_by: str='platform') -> dict[str, Any]:
+        """被退回/驳回的采购单可修改后重新提交审核（rejected→draft），保留历史原因与操作人。"""
+        po=self.get_purchase_order(c,po_id)
+        if po['status']=='draft': return {**po,'idempotent':True}
+        if po['status']!='rejected': raise ValueError(f"当前采购单状态不能重新提交: {po['status']}")
+        extra=str(note or '').strip()
+        c.execute("UPDATE purchase_orders SET status='draft',note=CASE WHEN ?!='' THEN COALESCE(note,'')||' | '||? ELSE note END,updated_at=CURRENT_TIMESTAMP WHERE id=?",(extra,extra,po_id))
         return self.get_purchase_order(c,po_id)
 
     def cancel_purchase_order(self, c, *, po_id: str, note: str='') -> dict[str, Any]:

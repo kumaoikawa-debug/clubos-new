@@ -3574,14 +3574,30 @@ const SET_TAB_LOAD={brand:()=>loadSettings(),
   mpinfo:async()=>{await loadMpInfo()},
   mpstaff:async()=>{await loadMpStaffTab()},
   mpset:async()=>{await loadMpSettings()},modsw:async()=>{await loadModSw()}};
+/* 2026-11-16：原顶栏「业务介绍」入口并入「经营业态开关」页内子 tab。
+   内容卡片、DOM id、渲染与保存函数全部不变；仅切换入口位置。
+   记住上次子页，从其它视图返回设置时仍停在原处（与原来的独立 tab 体验一致）。 */
+let MODSW_SUB_LAST='sw';
+window.modSwSubTab=which=>{
+  const key=which==='biz'?'biz':'sw';
+  MODSW_SUB_LAST=key;
+  document.querySelectorAll('#modswSubTabs .set-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('data-modsub')===key));
+  const sw=$('#modswSub-sw'),biz=$('#modswSub-biz');
+  if(sw)sw.style.display=key==='sw'?'':'none';
+  if(biz)biz.style.display=key==='biz'?'':'none';
+  if(key==='biz'&&typeof loadBizSection==='function')loadBizSection().catch(()=>{});
+};
 window.setTab=async name=>{
+  const legacyBiz=name==='biz';                 // 兼容旧深链 ?view=settings&tab=biz
+  if(legacyBiz)name='modsw';
   if(!SET_TAB_LOAD[name])name='brand';
   SETTINGS_TAB=name;
   document.querySelectorAll('#setTabs .set-tab').forEach(b=>b.classList.toggle('active',b.getAttribute('onclick')===`setTab('${name}')`));
-  ['brand','leaders','biz','modsw','home','cprofile','credits','pay','mpinfo','mpstaff','mpset'].forEach(p=>{
+  ['brand','leaders','modsw','home','cprofile','credits','pay','mpinfo','mpstaff','mpset'].forEach(p=>{
     const el=document.getElementById('pane-'+p);
     if(el)el.style.display=p===name?'':'none';
   });
+  if(name==='modsw')window.modSwSubTab(legacyBiz?'biz':MODSW_SUB_LAST);
   try{await SET_TAB_LOAD[name]()}catch(e){}
 };
 async function loadSettings(){

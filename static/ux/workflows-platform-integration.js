@@ -55,7 +55,38 @@
       esc(f.label) + '</label>' + input + help + '</div>';
   }
 
-  function grouped(fields, cfg) {
+  function guideHtml(spec) {
+    var g = spec.standardGuide;
+    if (!g) return '';
+    var cfg = spec.config || {};
+    function fill(s) {
+      return String(s == null ? '' : s)
+        .replace(/\{origin\}/g, cfg.origin || '{origin}')
+        .replace(/\{catalogPath\}/g, cfg.catalogPath || '{catalogPath}')
+        .replace(/\{productsPath\}/g, cfg.productsPath || '{productsPath}')
+        .replace(/\{categoriesPath\}/g, cfg.categoriesPath || '{categoriesPath}')
+        .replace(/\{inventoryPath\}/g, cfg.inventoryPath || '{inventoryPath}')
+        .replace(/\{inventoryMethod\}/g, cfg.inventoryMethod || '{inventoryMethod}')
+        .replace(/\{tokenField\}/g, cfg.tokenField || '{tokenField}');
+    }
+    var steps = (g.steps || []).map(function (s, i) {
+      return '<div class="plat-api__step"><b>' + (i + 1) + '. ' + esc(s.title) + '</b><span>' + esc(s.text) + '</span></div>';
+    }).join('');
+    var examples = (g.examples || []).map(function (e) {
+      return '<div class="plat-api__example"><h4>' + esc(e.title) + '</h4>' +
+        '<span class="plat-api__req">' + esc(fill(e.request)) + '</span>' +
+        '<pre>' + esc(fill(e.response)) + '</pre>' +
+        (e.note ? '<div class="plat-api__help">' + esc(e.note) + '</div>' : '') + '</div>';
+    }).join('');
+    var rules = (g.rules || []).map(function (r) { return '<li>' + esc(r) + '</li>'; }).join('');
+    return '<details class="card plat-api__guide" open><summary>' + esc(g.title) + '</summary>' +
+      '<div class="plat-api__guidebody"><div class="sub">' + esc(g.intro) + '</div>' +
+      '<div class="plat-api__steps">' + steps + '</div>' + examples +
+      '<ul class="plat-api__help">' + rules + '</ul></div></details>';
+  }
+
+  function grouped(spec) {
+    var fields = spec.fields || [], cfg = spec.config || {}, guides = spec.groupGuide || {};
     var groups = [], map = {};
     fields.forEach(function (f) {
       var g = f.group || '其他';
@@ -63,9 +94,10 @@
       map[g].push(f);
     });
     return groups.map(function (g, i) {
+      var note = guides[g] ? '<div class="plat-api__groupnote">' + esc(guides[g]) + '</div>' : '';
       return '<div class="card plat-api__group">' +
         '<div class="panel-title"><h3>' + esc(g) + '</h3>' +
-        '<span class="tag">' + (i + 1) + ' / ' + groups.length + '</span></div>' +
+        '<span class="tag">' + (i + 1) + ' / ' + groups.length + '</span></div>' + note +
         '<div class="plat-api__grid">' + map[g].map(function (f) { return fieldHtml(f, cfg); }).join('') + '</div>' +
         '</div>';
     }).join('');
@@ -119,7 +151,8 @@
         '</div>' +
       '</div>' +
       '<div id="apiConfigProbe">' + probeHtml(state.probe) + '</div>' +
-      grouped(spec.fields, spec.config) +
+      guideHtml(spec) +
+      grouped(spec) +
       '<div class="card plat-api__foot">' +
         '<div class="sub">保存后，手动点「同步 PEAKTRACE」或等待自动同步，都会按新配置执行；不需要改代码、不需要重新发布。</div>' +
         '<div class="plat-api__actions"><button class="btn" type="button" onclick="saveApiConfig(this)">保存配置</button>' +

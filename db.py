@@ -600,6 +600,12 @@ def _run_compat_migrations(c):
     _ensure_column(c,'purchase_receipts','request_hash','request_hash TEXT')
     # 采购单「确认下单」操作人留痕（2026-11-02：单据需留存采购/审核/确认/入库各环节操作人）。
     _ensure_column(c,'purchase_orders','ordered_by','ordered_by TEXT')
+    # 采购单审核流转：同意/确认备注 + 驳回原因与操作留痕（旧库幂等补列）。
+    _ensure_column(c,'purchase_orders','approve_note','approve_note TEXT')
+    _ensure_column(c,'purchase_orders','order_note','order_note TEXT')
+    _ensure_column(c,'purchase_orders','reject_reason','reject_reason TEXT')
+    _ensure_column(c,'purchase_orders','rejected_by','rejected_by TEXT')
+    _ensure_column(c,'purchase_orders','rejected_at','rejected_at TEXT')
     c.execute('CREATE UNIQUE INDEX IF NOT EXISTS idx_receipt_request ON purchase_receipts(request_key)')
     _ensure_column(c,'purchase_return_items','variant_id','variant_id INTEGER')
     # 品牌档案补全 + 来源 / 商城展示状态

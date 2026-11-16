@@ -22,15 +22,44 @@
    }).join('');
    return `<table class="table po-detail__tbl"><thead><tr><th>商品 / 规格</th><th>采购数量</th><th>采购单价</th><th>小计</th></tr></thead><tbody>${rowsHtml}</tbody><tfoot><tr><td colspan="3" style="text-align:right;font-weight:700">合计</td><td style="font-weight:700">${money(total)}</td></tr></tfoot></table>`;
  }
+ // 审核 / 下单确认弹窗：明细核对 + 两个决策（同意/退回、确认/驳回）。
+ // 同意/确认可写备注说明；退回/驳回必须填写原因（后端也 fail-closed 校验）。
  async function poReviewDialog(id,opts){
    const po=await api('/api/platform/procurement/purchase-orders/'+id);
    const detail=await poDetailTable(po);
-   const ov=uxDialog({title:opts.title+id,wide:true,desc:opts.desc,body:detail,foot:'<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-submit>'+opts.submitText+'</button>'});
+   const stage=opts.stage; // audit | order
+   const body=detail+'<div class="po-decide">'
+     +'<label class="po-decide__lb" for="poNote">'+esc(opts.noteLabel||'备注说明（选填）')+'</label>'
+     +'<textarea id="poNote" class="po-decide__ta" rows="2" maxlength="500" placeholder="'+esc(opts.notePlaceholder||'可填写审核 / 确认依据')+'"></textarea>'
+     +'<div class="po-decide__reject">'
+     +'<label class="po-decide__lb" for="poReason">'+esc(opts.rejectLabel||'驳回原因（必填）')+'</label>'
+     +'<textarea id="poReason" class="po-decide__ta" rows="2" maxlength="500" placeholder="'+esc(opts.rejectPlaceholder||'请写明退回 / 驳回的具体原因')+'"></textarea>'
+     +'</div></div>';
+   const foot='<button class="btn ghost" type="button" data-cancel>取消</button>'
+     +'<button class="btn danger" type="button" data-reject>'+esc(opts.rejectText)+'</button>'
+     +'<button class="btn" type="button" data-submit>'+esc(opts.submitText)+'</button>';
+   const ov=uxDialog({title:opts.title+id,wide:true,desc:opts.desc,body:body,foot:foot});
    ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
-   ov.querySelector('[data-submit]').onclick=async()=>{try{await post(opts.endpoint);ov.uxClose();toast(opts.toastMsg);loadSupplyChain()}catch(e){showAlert({title:'操作失败',message:e.message})}};
+   ov.querySelector('[data-submit]').onclick=async()=>{
+     const note=(ov.querySelector('#poNote').value||'').trim();
+     try{await post(opts.endpoint,{note});ov.uxClose();toast(opts.toastMsg);loadSupplyChain()}
+     catch(e){showAlert({title:'操作失败',message:e.message})}
+   };
+   ov.querySelector('[data-reject]').onclick=async()=>{
+     const reason=(ov.querySelector('#poReason').value||'').trim();
+     if(!reason){toast('请先填写'+(opts.rejectLabel||'驳回原因'));ov.querySelector('#poReason').focus();return}
+     try{await post('/api/platform/procurement/purchase-orders/'+id+'/reject',{stage:stage,reason:reason});ov.uxClose();toast(opts.rejectToastMsg);loadSupplyChain()}
+     catch(e){showAlert({title:'驳回失败',message:e.message})}
+   };
  }
- window.approvePO=id=>uxTask(async()=>{await poReviewDialog(id,{title:'审核采购单 · ',desc:'审核采购预算与供货关系；审核不改变实物库存及应付账款。请先核对以下采购明细。',endpoint:'/api/platform/procurement/purchase-orders/'+id+'/approve',submitText:'确认审核',toastMsg:'采购单已审核，待确认下单'})});
- window.orderPO=id=>uxTask(async()=>{await poReviewDialog(id,{title:'确认向供应商下单 · ',desc:'请先核实采购数量、采购价、MOQ 与交货承诺。确认下单只增加在途，不会入库。请先核对以下采购明细。',endpoint:'/api/platform/procurement/purchase-orders/'+id+'/order',submitText:'确认采购下单',toastMsg:'采购单已确认下单'})});
+ window.approvePO=id=>uxTask(async()=>{await poReviewDialog(id,{stage:'audit',title:'审核采购单 · ',desc:'审核采购预算与供货关系；审核不改变实物库存及应付账款。同意可填备注，不同意须写明原因后退回。请先核对以下采购明细。',endpoint:'/api/platform/procurement/purchase-orders/'+id+'/approve',submitText:'同意审核',toastMsg:'采购单已审核，待确认下单',rejectText:'不同意并退回',rejectLabel:'退回原因（必填）',rejectPlaceholder:'请写明预算 / 供货关系等不同意的原因',rejectToastMsg:'采购单已退回'})});
+ window.orderPO=id=>uxTask(async()=>{await poReviewDialog(id,{stage:'order',title:'确认向供应商下单 · ',desc:'请先核实采购数量、采购价、MOQ 与交货承诺。确认下单只增加在途，不会入库；驳回须写明原因。请先核对以下采购明细。',endpoint:'/api/platform/procurement/purchase-orders/'+id+'/order',submitText:'确认采购下单',toastMsg:'采购单已确认下单',rejectText:'驳回',rejectLabel:'驳回原因（必填）',rejectPlaceholder:'请写明 MOQ / 价格 / 交期等驳回原因',rejectToastMsg:'采购单已驳回'})});
+ window.resubmitPO=id=>uxTask(async()=>{
+   const v=await uxForm({title:'重新提交审核 · '+id,subtitle:'退回 / 驳回的采购单修改后可重新提交审核。原驳回原因会保留在单据留痕里。',fields:[{name:'note',label:'修改说明（选填）',type:'textarea',full:true,maxLength:500,placeholder:'如：已重新议价 / 已调整数量'}],submitText:'重新提交'});
+   if(!v)return;
+   try{await post('/api/platform/procurement/purchase-orders/'+id+'/resubmit',{note:v.note});toast('采购单已回到草稿，可重新审核');loadSupplyChain()}
+   catch(e){showAlert({title:'重新提交失败',message:e.message})}
+ });
  window.receiveAS=id=>uxTask(async()=>{const d=await uxForm({title:'确认收到退货 · '+id,subtitle:'实物已经到达仓库后才执行。待检、不合格商品不可恢复为可售库存。',fields:[{name:'restock',label:'退回商品检验结果',type:'select',options:[{value:'no',label:'待检 / 不合格：不入可售库存'},{value:'yes',label:'已检合格：恢复可售库存'}],required:true,full:true},{name:'note',label:'检验/收货记录',type:'textarea',full:true,required:true,placeholder:'如：外包装完好、规格核对无误'}],submitText:'确认收货结果'});if(!d)return;const r=await post('/api/platform/after-sales/'+id+'/receive-return',{restock:d.restock==='yes',note:d.note});toast(d.restock==='yes'?'售后退货已确认，合格件入库':'退货已确认，未恢复可售库存');loadAfterSales();loadWarehouse();if(r.commerceSync?.some(x=>x.status==='error'))toast('真实入库已记录，Medusa 同步等待重试')});
  window.monthlyRoll=()=>uxTask(async()=>{if(!await uxConfirm({title:'生成本月 AI 套餐账单',message:'按当前订阅生成本月待付款账单；生成账单不会提前发放 Credits。重复月份账单由服务端幂等保护。',confirmText:'生成账单'}))return;const r=await post('/api/platform/ai-credit/monthly-roll',{});toast('本月已生成 / 确认 '+(r.orders?.length||0)+' 份账单');loadCredits()});
  window.releaseCommissions=()=>uxTask(async()=>{const r=await post('/api/platform/commissions/release',{});toast('已按售后冻结规则刷新佣金状态');loadCommissions();return r});
@@ -49,7 +78,7 @@
   let po;
   try{ po=await api('/api/platform/procurement/purchase-orders/'+poId); }
   catch(e){ showAlert({title:'读取采购单失败',message:e.message}); return; }
-  const st={draft:'草稿',approved:'已审核',ordered:'已下单',partially_received:'部分到货',received:'已完成',cancelled:'已取消'};
+  const st={draft:'草稿',approved:'已审核',ordered:'已下单',partially_received:'部分到货',received:'已完成',cancelled:'已取消',rejected:'已退回/驳回'};
   const opLabel=v=>{ if(!v||v==='platform') return '平台系统'; if(v==='replenishment') return '智能补货'; return v; };
   const dt=v=> v? String(v).replace('T',' ').slice(0,19) : '—';
   let total=0;
@@ -64,6 +93,9 @@
   }).join('');
   const audit=[['创建（采购）',po.created_by,po.created_at],['审核',po.approved_by,po.approved_at],['确认下单',po.ordered_by,po.ordered_at],['入库',po.received_by,po.received_at]];
   const auditHtml=audit.map(function(r){ return '<tr><td style="color:#6b7f76">'+r[0]+'</td><td><b>'+esc(opLabel(r[1]))+'</b></td><td>'+dt(r[2])+'</td></tr>'; }).join('');
+  const extraRows=[['审核说明',po.approve_note],['下单确认说明',po.order_note],['驳回原因',po.reject_reason]].filter(r=>r[1]);
+  const extraHtml=extraRows.length?'<h2>审批说明 / 驳回原因</h2><table class="audit"><thead><tr><th>环节</th><th>说明</th></tr></thead><tbody>'+extraRows.map(r=>'<tr><td style="color:#6b7f76">'+r[0]+'</td><td>'+esc(r[1])+'</td></tr>').join('')+'</tbody></table>':'';
+  const rejectHtml=po.reject_reason?'<div class="note" style="color:#b45309"><b>驳回操作人：</b>'+esc(opLabel(po.rejected_by))+' · <b>时间：</b>'+dt(po.rejected_at)+'</div>':'';
   const html='<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>采购单 '+esc(po.id)+'</title>'
     +'<style>@page{size:A4;margin:16mm}*{box-sizing:border-box}body{font:14px/1.7 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;color:#1a2b23;margin:0;padding:8px}'
     +'h1{font-size:22px;margin:0 0 4px}.en{color:#8a9a92;font-size:12px;letter-spacing:1px}.top{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #1a2b23;padding-bottom:10px;margin-bottom:14px}'
@@ -77,6 +109,7 @@
     +'<div><span>供应商</span><b>'+esc(po.supplier_name||'—')+'</b></div><div><span>供应商编码</span><b>'+esc(po.supplier_code||'—')+'</b></div></div>'
     +'<h2>采购明细</h2><table class="tbl"><thead><tr><th>商品 / 规格</th><th>采购数量</th><th>采购单价</th><th>小计</th></tr></thead><tbody>'+rowsHtml+'<tr><td colspan="3" style="text-align:right;font-weight:700">合计</td><td style="font-weight:700">'+money(total)+'</td></tr></tbody></table>'
     +'<h2>审批流转（操作留痕）</h2><table class="audit"><thead><tr><th>环节</th><th>操作人</th><th>时间</th></tr></thead><tbody>'+auditHtml+'</tbody></table>'
+    + extraHtml + rejectHtml
     + (po.note?('<h2>备注</h2><div class="note">'+esc(po.note)+'</div>'):'')
     +'<div class="foot">本采购单由 ClubOS 自动生成 · 单据编号 '+esc(po.id)+'</div>'
     +'<div class="noprint" style="text-align:center"><button class="btn" type="button" onclick="window.print()">打印 / 另存为 PDF</button></div>'
