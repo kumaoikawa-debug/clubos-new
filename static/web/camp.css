@@ -546,6 +546,14 @@ body.cp-lock{overflow:hidden}
 .cp-dt__sec--text .cp-dt__sectxt p{margin-bottom:0}
 .cp-dt__ai--magazine .cp-dt__sec--full .cp-dt__fig img{aspect-ratio:4/3}
 .cp-dt__ai--spec .cp-dt__sec p{font-size:12.5px}
+/* 营地叙事长图：章节序号 + 留白呼吸感（学习「流萤花谷」式杂志排版） */
+.cp-dt__ai--story .cp-dt__sec{padding:14px 2px;border-top:1px solid var(--cp-line,rgba(0,0,0,.08))}
+.cp-dt__ai--story .cp-dt__sec:first-child{border-top:0}
+.cp-dt__ai--story .cp-dt__sec--full.cp-dt__sec:first-child .cp-dt__fig img{aspect-ratio:16/9}
+.cp-dt__ai--story .cp-dt__sectxt h4{font-size:15px;letter-spacing:.02em}
+.cp-dt__ai--story .cp-dt__sectxt h4:before{counter-increment:cpChap;content:counter(cpChap,decimal-leading-zero)" · "}
+.cp-dt__ai--story{counter-reset:cpChap}
+.cp-dt__ai--story .cp-dt__sec--text{background:transparent}
 @media(min-width:520px){
   .cp-dt__sec--split{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
   .cp-dt__sec--split .cp-dt__secimgs{order:1}

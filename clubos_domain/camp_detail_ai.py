@@ -41,7 +41,7 @@ SYSTEM_PROMPT = """你是户外营地的内容编辑，负责把营地老板提�
 - 「资料图片观察」是系统对每张照片的真实画面分析，**必须据此选图与写场景描述**：哪张是开阔湖景、哪张是设施特写，就让对应段落引用对应序号，不要随机编号。
 - 不要出现成本、毛利、内部结算等经营数据；不要出现其他平台、竞品或联系方式。
 - 图片只能按 mediaRefs 的序号引用，序号从 0 开始且必须小于「可用媒体清单」的条数；纯文字段落填空数组。
-- 段落 sections 控制在 3~6 段，每段 headline 不超过 14 字，body 60~160 字。
+- 段落 sections 控制在 3~7 段（章节叙事模板可到 7 段），每段 headline 不超过 14 字，body 60~160 字；章节叙事模板的引言与各章正文可放宽到 80~180 字。
 - highlights 3~5 条，每条不超过 12 字；specs 4~8 条（label/value 都要短）；facilities 4~8 条；policies 2~4 条（label/text）。
 - description 只写一句 40 字以内的列表页短简介，**不要把规则原文、退订条款整段抄进来**（长内容放 sections）。
 
@@ -177,6 +177,39 @@ def _local_detail(*, base: dict, source_text: str, media: list[dict],
     scene_txt = (f"照片里是{scene}。" if scene else '现场照片已上传，画面以 C 端实景图廊为准。')
 
     def body_for(headline: str, idx: int) -> str:
+        # 章节叙事模板（story）：按主题给场景化正文，避免整篇都是规则/参数套话。
+        if re_search(headline, '写在前面|前言|引言'):
+            lead = (f'在城市待久了，总会想念一片草地、一顶帐篷，和炊烟慢慢升起的傍晚。'
+                    f'{name}就在这样的地方——') if scene else f'{name}，把时间交还给自然的一处营地。'
+            return (lead + (f'照片里是{scene}。' if scene else '')
+                    + ' 这篇介绍，就带你从进门开始，走一遍这里的湖、树与夜色。'
+                    + ' 画面随季节变化，以到店实景为准。')[:400]
+        if re_search(headline, '初见|抵达|遇见|一眼'):
+            return ((f'第一眼看到的是{scene}。' if scene else '走进营地，视野先被眼前的开阔接住。')
+                    + '沿路的风与脚下的草地，把脚步放得很慢。'
+                    + ' 图片为本次上传的实景，具体景致随季节不同。')[:400]
+        if re_search(headline, '安营|扎寨|营位|住宿|入住'):
+            base_txt = f'营地照片里是{scene}。' if scene else '营位安在树荫与草地之间。'
+            if specs or facilities:
+                return (base_txt + f' {spec_txt}。{fac_txt}')[:400]
+            return (base_txt + ' 具体配置以本页参数为准。')[:400]
+        if re_search(headline, '逐水|玩乐|体验|游玩|活动'):
+            return ((f'照片里是{scene}。' if scene else '这里可以慢慢玩上一整天。')
+                    + (f' 现场可见{"、".join(facilities[:5])}。' if facilities else '')
+                    + (f' 画面标签：{"、".join(tags[:4])}。' if tags else '')
+                    + ' 具体开放项目与时段请到店咨询工作人员。')[:400]
+        if re_search(headline, '烟火|围炉|餐|烧烤|美食'):
+            return ('傍晚的营地，是从一炉炭火开始的。围坐一圈，闲聊与食物的香气一起升起来——'
+                    + (f' 照片里是{scene}。' if scene else '')
+                    + ' 食物不只是果腹，更是把人聚在一起的方式。'
+                    + ' 是否提供餐食及可否自带食材，以现场公示为准。')[:400]
+        if re_search(headline, '相伴|时光|亲子|手作|游戏'):
+            return ('露营的意义，是让相伴变得具体：一起动手，一起撒野，'
+                    + '把平凡的日子过得有声有色。'
+                    + (f' 照片里有{scene}。' if scene else '')
+                    + ' 亲子与团体项目以现场安排为准。')[:400]
+        if re_search(headline, '须知|提示|规则|退改'):
+            return (rule_txt + ' 请在预订日期携带订单号或预留手机号到店办理。')[:400]
         if re_search(headline, '概览|一眼|实拍|实景|看见'):
             # #814：概览只讲画面，绝不再把老板写的规则/参数原文粘进来
             return (scene_txt

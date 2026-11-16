@@ -457,7 +457,7 @@ function _detailPayload(ov){
 let CAMP_MWB_QUEUE=[];                       // 新建态待上传：[{qid,file,url,params}]
 let CAMP_MWB_SEQ=1;
 let CAMP_MWB_DRAFT={prompt:'',docs:[],template:'classic'};  // 重绘时保留说明 / 资料 / 版式选择
-let CAMP_MWB_TPLS=[{id:'classic',name:'经典图文'},{id:'magazine',name:'杂志大图'},{id:'spec',name:'参数优先'}];
+let CAMP_MWB_TPLS=[{id:'classic',name:'经典图文'},{id:'magazine',name:'杂志大图'},{id:'spec',name:'参数优先'},{id:'story',name:'营地叙事长图'}];
 function _mwbTplName(id){const t=(CAMP_MWB_TPLS||[]).find(x=>x.id===id);return t?t.name:(id||'经典图文');}
 function _campMediaSectionHtml(kind,id){return `<div class="ca-mwb" id="caMwb" data-kind="${kind}" data-id="${id}"></div>`;}
 function _mwbCaptureDraft(){

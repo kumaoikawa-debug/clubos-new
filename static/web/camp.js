@@ -701,7 +701,7 @@ function _shortSlogan(c){
     .replace(/\s+/g,' ').trim();
   return s.length>30?s.slice(0,30)+'…':s;
 }
-function _tplName(id){return ({classic:'经典图文',magazine:'杂志大图',spec:'参数优先'}[id]||'经典图文');}
+function _tplName(id){return ({classic:'经典图文',magazine:'杂志大图',spec:'参数优先',story:'营地叙事长图'}[id]||'经典图文');}
 function _aiMedia(d){
   /* 优先用 AI 生成时登记的媒体池（含上传资料图）；老数据回退到商品图廊 */
   const ai=d&&d.aiDetail;
@@ -719,7 +719,7 @@ function _paintHighlights(d){
 function _paintAiSections(d){
   const ai=d.aiDetail;
   if(!ai||!Array.isArray(ai.sections)||!ai.sections.length)return '';
-  const tpl=['classic','magazine','spec'].indexOf(String(ai.templateId||'classic'))>=0?String(ai.templateId):'classic';
+  const tpl=['classic','magazine','spec','story'].indexOf(String(ai.templateId||'classic'))>=0?String(ai.templateId):'classic';
   const media=_aiMedia(d);
   const blocks=(ai.sections||[]).map(sec=>{
     const refs=Array.isArray(sec.mediaRefs)?sec.mediaRefs:[];

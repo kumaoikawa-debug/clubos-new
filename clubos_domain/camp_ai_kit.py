@@ -56,6 +56,22 @@ TEMPLATES: dict[str, dict] = {
             {'headline': '租借与退改', 'layout': 'text', 'maxImages': 0},
         ],
     },
+    # 章节叙事型营地介绍（学习用户提供的「流萤花谷」式长图模板）：
+    # 引言 → 目录不必单列 → 五个主题章节（初见/安营/玩乐/烟火/相伴）→ 出行须知。
+    # 只用 full/split/grid/text 四种既有 layout，C 端渲染零改动即可承接。
+    'story': {
+        'id': 'story', 'name': '营地叙事长图',
+        'desc': '杂志式章节叙事：引言铺垫 → 初见 → 安营 → 玩乐 → 烟火 → 相伴 → 出行须知，适合整篇营地介绍长图',
+        'blueprint': [
+            {'headline': '写在前面', 'layout': 'full', 'maxImages': 2},
+            {'headline': '初见营地', 'layout': 'full', 'maxImages': 2},
+            {'headline': '安营扎寨', 'layout': 'split', 'maxImages': 2},
+            {'headline': '逐水而行', 'layout': 'grid', 'maxImages': 3},
+            {'headline': '围炉烟火', 'layout': 'grid', 'maxImages': 3},
+            {'headline': '相伴时光', 'layout': 'split', 'maxImages': 2},
+            {'headline': '出行须知', 'layout': 'text', 'maxImages': 0},
+        ],
+    },
 }
 DEFAULT_TEMPLATE = 'classic'
 LAYOUTS = {'full', 'split', 'grid', 'text'}
@@ -80,6 +96,15 @@ def template_prompt(tid: Any) -> str:
         lines.append(f"  第{i + 1}段 headline 建议「{b['headline']}」，"
                      f"最多引 {b['maxImages']} 张图（0 表示纯文字）。")
     lines.append('段落标题可微调，但顺序与配图密度要贴合模板；正文只写资料里有的事实。')
+    if str(tid or '').strip() == 'story':
+        lines.extend([
+            '这是一篇营地介绍长图，请用杂志式章节叙事口吻，而非商品清单口吻：',
+            '  · 「写在前面」用一段场景化的引言把读者带进营地（如城市待久了对自然的想念），40~100 字；',
+            '  · 中间各章按「抵达看到的画面 → 在这里能做什么 → 一段真实的感官细节」展开，',
+            '    多用画面与动作（湖面的风、落日把帐篷染金、桨板划向深处），少用形容词堆砌；',
+            '  · 章节之间语气连贯，像带人走一遍营地；「出行须知」只列已知规则，不编造。',
+            '  · 每段 body 可放宽到 80~180 字，让叙事有呼吸感；仍不得编造价格/容量/规则。',
+        ])
     return '\n'.join(lines)
 
 
@@ -94,13 +119,16 @@ def apply_blueprint(sections: list, tid: Any, media_count: int) -> list[dict]:
         layout = str(s.get('layout') or spec['layout'])
         if layout not in LAYOUTS:
             layout = spec['layout']
+        # maxImages=0 表示纯文字段，必须裁成 0 张；原写法 `int(...) or 3` 会把 0 误当 3。
+        cap = max(0, int(spec['maxImages'])) if spec.get('maxImages') is not None else 3
         refs = [int(x) for x in (s.get('mediaRefs') or [])
-                if isinstance(x, (int, float)) and 0 <= int(x) < media_count][:max(0, int(spec['maxImages']) or 3)]
+                if isinstance(x, (int, float)) and 0 <= int(x) < media_count][:cap]
         d = dict(s)
         d['layout'] = layout
         d['mediaRefs'] = refs
         out.append(d)
-    return out[:6]
+    # 上限 7：章节叙事模板 story 有 7 段；旧模板 blueprint 仅 4 段不受影响。
+    return out[:7]
 
 
 # ── 本地视觉观察（纯 PIL，无外部模型依赖） ────────────────────────────────────
