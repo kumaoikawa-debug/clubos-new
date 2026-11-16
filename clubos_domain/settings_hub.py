@@ -44,7 +44,7 @@ REGISTRY = (
      'probe': {'sql': 'SELECT c_profile_json FROM clubs WHERE id=?', 'mode': 'scalar'},
      'toggleable': False, 'note': '联系我们 / 关于俱乐部文案'},
     {'key': 'mpSettings', 'label': '小程序装修', 'group': 'branding',
-     'page': '/static/club/index.html', 'api': '/api/club/{club_id}/mp-settings',
+     'page': '/static/club/index.html', 'api': '/api/club/{club_id}/miniprogram/settings',
      'probe': {'sql': 'SELECT settings_json FROM club_mp_settings WHERE club_id=?', 'mode': 'scalar'},
      'toggleable': False, 'note': '小程序首页轮播与图文位'},
     {'key': 'pageLayout', 'label': '界面装修器', 'group': 'branding',

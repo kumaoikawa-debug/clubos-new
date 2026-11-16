@@ -66,8 +66,22 @@ ck('存在活动专属状态表 ACT_ST', 'const ACT_ST=' in ME)
 ck('活动 paid 用出行语义而非待发货', "paid:{t:'已报名 · 待出行'" in ME)
 ck('订单卡按 kind 分派状态文案', 'meOrderSt(o.status,kind)' in ME)
 ck('我的报名按活动语义显示状态', "meOrderSt(o.status,'activity')" in ME)
-ck('商城订单有「活动报名」专属分类', "['activity','活动报名']" in ME
-   and "else if(tab==='activity')" in ME)
+# BUG-ORD-MIX / 2026-11-16：商城订单不再混入活动报名单——
+# 「商城订单」只放装备订单，活动报名归「我的订单」独立入口。
+# 旧版断言要求 SUB_ME.orders 里存在 ['activity','活动报名'] tab，正好锁住了这个缺陷，
+# 现改为「商城订单无活动 tab + 活动订单仍走独立入口」双向断言。
+_me_orders_body = ME[ME.find('SUB_ME.orders='):ME.find('SUB_ME.aftersale=')]
+ck('商城订单不再混入「活动报名」分类（BUG-ORD-MIX）',
+   "['activity','活动报名']" not in _me_orders_body
+   and "items=meGear().slice()" in _me_orders_body)
+ck('活动订单仍在「我的订单」独立入口正常渲染',
+   "meOrderSt(o.status,'activity')" in ME
+   and "onclick=\"meSetTab('activity')\"" in ME)
+# 对照组：证明上面的隔离断言抓得住旧缺陷（把旧代码塞回检测区必须翻假）
+_fake_orders = _me_orders_body.replace(
+   "const tabs=[['all','全部']", "const tabs=[['activity','活动报名'],['all','全部']", 1)
+ck('对照：商城订单混回活动 tab 会被检测抓到',
+   "['activity','活动报名']" in _fake_orders)
 ck('订单状态徽标不折行（窄屏不出现两行状态）',
    '.me-card2__hd .me-badge{white-space:nowrap' in CSS)
 

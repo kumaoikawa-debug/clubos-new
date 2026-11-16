@@ -9,6 +9,7 @@
 import json
 import os
 import re
+import sqlite3
 from pathlib import Path
 from urllib.parse import urlparse
 from urllib.request import urlopen
@@ -16,12 +17,24 @@ from urllib.request import urlopen
 from playwright.sync_api import sync_playwright
 
 BASE = os.getenv('CLUBOS_QA_BASE', 'http://127.0.0.1:8262')
+FIXTURE_DB = Path(os.getenv('CLUBOS_QA_DB', '/tmp/clubos_full_ui.db'))
+
+def reset_click_flow_fixture():
+    """点击流夹具复位：把上一轮已消费的待打款/待签收数据恢复到可操作前置状态。"""
+    if not FIXTURE_DB.exists():
+        return
+    with sqlite3.connect(str(FIXTURE_DB)) as db:
+        db.execute("UPDATE commission_settlements SET status='requested', payment_ref='', paid_at=NULL")
+        db.execute("UPDATE commission_ledger SET status='available', settlement_id=NULL, settled_at=NULL WHERE ledger_type='earn' AND status='settled'")
+        db.execute("UPDATE gear_orders SET status='shipped', delivered_at=NULL, commerce_sync_status='shipped' WHERE status='delivered'")
+
+reset_click_flow_fixture()
 ROOT = str(Path(__file__).resolve().parents[1])
 CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 VIEWS = ['pdash', 'clubs', 'credits-acct', 'credits-plans', 'credits-topup', 'ai-config', 'api-config',
          'ppoints', 'pbenefits', 'products', 'supp-po', 'supp-move', 'supp-return', 'warehouse',
          'fin-settle', 'fin-profit', 'costbom', 'an-pending', 'an-health', 'an-biz',
-         'orders', 'aftersales', 'commissions', 'pksettle']
+         'orders', 'aftersales', 'commissions', 'pksettle', 'staff']
 BAD = ['加载失败', 'is not a function', 'Cannot read', 'Internal Server Error', 'undefined is not']
 
 R = {'checks': [], 'views': [], 'api_paths': set(), 'api_failures': [], 'page_errors': [], 'shots': []}
@@ -62,7 +75,7 @@ def scan_views(browser, label, w, h):
     page.wait_for_timeout(1800)
     rec(f'{label} 平台后台首屏可打开', page.locator('section.view.active').count() == 1,
         'navButtons=' + str(page.locator('button[data-view]').count()), label)
-    rec(f'{label} 导航入口覆盖 24 个视图', page.locator('button[data-view]').count() == 24,
+    rec(f'{label} 导航入口覆盖 {len(VIEWS)} 个视图', page.locator('button[data-view]').count() == len(VIEWS),
         'count=' + str(page.locator('button[data-view]').count()), label)
 
     for v in VIEWS:
@@ -206,7 +219,7 @@ rec('全视图 API 无 5xx/服务端异常', len(fails) == 0, fails[:5], 'both')
 rec('全视图 API 无 4xx 契约错误', len(soft4xx) == 0, soft4xx[:5], 'both')
 rec('全视图零脚本 pageerror', len(R['page_errors']) == 0, R['page_errors'][:5], 'both')
 rec('覆盖 API 端点数 ≥ 40', len(R['api_paths']) >= 40, len(R['api_paths']), 'both')
-rec('24 视图 × 双视口全部扫描完成', len(R['views']) == 48, len(R['views']), 'both')
+rec(f'{len(VIEWS)} 视图 × 双视口全部扫描完成', len(R['views']) == len(VIEWS) * 2, len(R['views']), 'both')
 
 R['api_paths'] = sorted(R['api_paths'])
 total = len(R['checks'])

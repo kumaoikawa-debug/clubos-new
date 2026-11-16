@@ -1,4 +1,4 @@
-navInit();window.onView=v=>{if(v==='clubs')loadClubs();if(v==='ai-config')loadAiProviders();if(v==='ppoints')loadPointPolicy();if(v==='pbenefits'){try{loadPlatformCoupons()}catch(e){}}if(v==='products'){loadProducts();loadVisibilityRequests()}if(v==='warehouse')loadWarehouse();if(v==='costbom')loadCostBom();if(v==='orders')loadOrders();if(v==='aftersales')loadAfterSales();if(v==='commissions')loadCommissions();if(v==='pksettle')loadPeaktraceSettlement();if(v==='supp-po'||v==='supp-move'||v==='supp-return')loadSupplyChain();if(v==='an-pending'||v==='an-health'||v==='an-biz'){loadAnalytics();loadPendingListing()}if(v==='fin-settle'||v==='fin-profit')loadFinance();if(v==='credits-acct'||v==='credits-plans'||v==='credits-topup')loadCredits()};
+navInit();window.onView=v=>{if(v==='staff')loadPlatformStaff();if(v==='clubs')loadClubs();if(v==='ai-config')loadAiProviders();if(v==='ppoints')loadPointPolicy();if(v==='pbenefits'){try{loadPlatformCoupons()}catch(e){}}if(v==='products'){loadProducts();loadVisibilityRequests()}if(v==='warehouse')loadWarehouse();if(v==='costbom')loadCostBom();if(v==='orders')loadOrders();if(v==='aftersales')loadAfterSales();if(v==='commissions')loadCommissions();if(v==='pksettle')loadPeaktraceSettlement();if(v==='supp-po'||v==='supp-move'||v==='supp-return')loadSupplyChain();if(v==='an-pending'||v==='an-health'||v==='an-biz'){loadAnalytics();loadPendingListing()}if(v==='fin-settle'||v==='fin-profit')loadFinance();if(v==='credits-acct'||v==='credits-plans'||v==='credits-topup')loadCredits()};
 /* logo 裂图兜底用事件委托绑一次（俱乐部表整块重渲染，逐个绑 onerror 会漏）。 */
 document.addEventListener('error',platLogoFallback,true);
 async function dash(){let d=await api('/api/platform/dashboard'),ai=d.aiBilling||{};$('#pMetrics').innerHTML=[['入驻俱乐部',d.clubs],['活跃俱乐部',d.activeClubs],['本月积分收入',money(ai.cashRevenueCny||0)],['装备GMV',money(d.gearGMV)]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');loadPlatformAttention()}
@@ -327,7 +327,7 @@ function clearProductFilter(){['#prodFilterBrand','#prodFilterCat','#prodFilterQ
 function prodRowHtml(x){
   const brand=x.brand_name?esc(x.brand_name):'<span class="sub">未设品牌</span>';
   const cat=x.category_name?esc(x.category_name)+(x.parent_category_name?`<div class="sub">${esc(x.parent_category_name)}</div>`:''):'<span class="sub">未分类</span>';
-  return `<tr><td><div class="plat-prod-cell">${productCoverHtml(x)}<div><strong>${esc(x.name)}</strong><div class="sub">${esc(x.gender?PROD_GENDERS.find(g=>g.value===x.gender)?.label||x.gender:'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0} · ${x.description?'有介绍':'无介绍'}</div></div></div></td><td>${brand}<div class="sub">${cat}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.source==='external_api'?'—':x.stock}<div class="sub">${x.source==='external_api'?'仅展示 · 暂不可购买':invStatusTag(x)}</div></td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(x.source==='external_api'&&x.status==='active'?'展示中':enumCn(x.status))}</span></td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="editProduct(${x.id})">编辑</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`;
+  return `<tr><td><div class="plat-prod-cell">${productCoverHtml(x)}<div><strong>${esc(x.name)}</strong><div class="sub">${esc(x.gender?PROD_GENDERS.find(g=>g.value===x.gender)?.label||x.gender:'')} · 规格 ${x.variants_count||0} · 图 ${x.images_count||0} · ${x.description?'有介绍':'无介绍'}</div></div></div></td><td>${brand}<div class="sub">${cat}</div></td><td>${esc(x.sku)}</td><td>${money(x.price)}</td><td>${money(x.average_cost||0)}</td><td>${x.source==='external_api'?'—':x.stock}<div class="sub">${x.source==='external_api'?'仅展示 · 暂不可购买':invStatusTag(x)}</div></td><td>${x.reorder_point||0}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${esc(x.source==='external_api'&&x.status==='active'?'展示中':enumCn(x.status))}</span>${x.procurementEligible===false?`<span class="tag" title="${esc(x.procurementBlockReason||'不进平台采购')}" style="cursor:help">${x.inventory_mode==='external_mirror'?'镜像库存':'外部库存'}</span>`:''}</td><td>${Math.round(x.commission_rate*100)}%</td><td><button class="btn secondary" onclick="toggleProduct(${x.id},'${x.status}')">${x.status==='active'?'下架':'上架'}</button> <button class="btn ghost" onclick="editProduct(${x.id})">编辑</button> <button class="btn ghost" onclick="linkSupplier(${x.id})">供货商</button> <button class="btn ghost" onclick="manageVariants(${x.id})">规格</button> <button class="btn ghost" onclick="manageImages(${x.id})">图片</button></td></tr>`;
 }
 /* 进销存 V1：库存状态标签（与商品上架状态分离，已上架商品仍可显示「售罄」）。 */
 function invStatusTag(x){
@@ -1093,7 +1093,8 @@ async function exchangeShipAS(id){const v=await showForm({title:'填写换货物
 
 async function loadSupplyChain(){
   skel('#inventorySummary',4);try{let [sum,sups,pos,moves]=await Promise.all([api('/api/platform/inventory/summary'),api('/api/platform/suppliers'),api('/api/platform/procurement/purchase-orders'),api('/api/platform/inventory/movements?limit=80')]);
-  $('#inventorySummary').innerHTML=[['库存 SKU',sum.skuCount],['现货件数',sum.units],['库存成本',money(sum.inventoryValue)],['在途采购',`${sum.openPurchaseOrders} 单 · ${money(sum.openPurchaseValue)}`]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');
+  $('#inventorySummary').innerHTML=[['库存 SKU',sum.skuCount],['现货件数',sum.units],['库存成本',money(sum.inventoryValue)],
+    ['在途采购',`${sum.openPurchaseOrders} 单 · ${money(sum.openPurchaseValue)}`+(Number(sum.draftPurchaseOrders)>0?`<div class="sub">另有草稿 ${sum.draftPurchaseOrders} 单 · ${money(sum.draftPurchaseValue)} 待审核下单</div>`:'')]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');
   $('#supplierList').innerHTML=`<div class="sup-grid">`+sups.map(x=>{const ini=(x.name||'?').trim().charAt(0).toUpperCase();const on=x.status==='active';return `<div class="sup-card">
     <div class="sup-card__hd">
       <div class="sup-card__ava">${esc(ini)}</div>
@@ -1127,17 +1128,14 @@ async function deleteSupplier(id){
   catch(e){ showAlert({title:'无法删除',message:e.message||'删除失败'}); }
 }
 async function linkSupplier(productId=null,supplierId=null){let ps=await api('/api/platform/products');let ss=await api('/api/platform/suppliers?status=active');if(!ps.length||!ss.length){showAlert({title:'缺少数据',message:'需要先有商品和供应商。'});return}const v=await showForm({title:'建立供货关系',submitText:'保存',fields:[{name:'pid',label:'商品',type:'select',value:String(productId||ps[0].id),options:ps.map(x=>({value:String(x.id),label:x.name}))},{name:'sid',label:'供应商',type:'select',value:String(supplierId||ss[0].id),options:ss.map(x=>({value:String(x.id),label:x.name}))},{name:'price',label:'采购单价',type:'number',value:100,min:0},{name:'moq',label:'最小采购量 MOQ',type:'number',value:1,min:1}]});if(!v)return;const pid=Number(v.pid),sid=Number(v.sid);await api(`/api/platform/products/${pid}/suppliers`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({supplierId:sid,purchasePrice:Number(v.price||0),minOrderQty:Number(v.moq||1),isPrimary:true})});toast('供货关系已保存');loadSupplyChain();if($('#products').classList.contains('active'))loadProducts()}
-/* createPO 真身在 ux/workflows-platform.js（该文件在 platform.js 之后加载，会整体覆盖本处定义）。
-   V1.2 修复：V1.1 把「采购单内联快速建商品」误写在这里，被后加载的 workflows-platform.js 覆盖，
-   导致线上采购单从 V1.1 起一直只能选已有商品、无法现场建新商品。现统一收口到 workflows-platform.js。
-   请勿在此重复定义 createPO —— 改这里不会生效。 */
+/* createPO 真身在 platform/inventory-workflow.js（所有 workflows-*.js 之后加载、最终生效）。
+   V1.3 收口：此前 workflows-platform.js 里还有一份 createPO 死代码（加载顺序靠前被覆盖），
+   注释方向写反导致多次维护踩坑，现已删除。采购候选统一用后端 procurementEligible 标注。 */
 async function approvePO(id){await api(`/api/platform/procurement/purchase-orders/${id}/approve`,{method:'POST'});toast('采购单已审核');loadSupplyChain()}
 async function cancelPO(id){const v=await showForm({title:'取消采购单',desc:'取消后该草稿采购单不可再审核或下单。',submitText:'确认取消',danger:true,fields:[{name:'note',label:'取消原因',type:'textarea',value:'采购计划调整',required:true}]});if(!v)return;await api(`/api/platform/procurement/purchase-orders/${id}/cancel`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({note:v.note})});toast('采购单已取消');loadSupplyChain()}
 async function orderPO(id){await api(`/api/platform/procurement/purchase-orders/${id}/order`,{method:'POST'});toast('采购单已确认下单');loadSupplyChain()}
-/* receivePO / poOpenBarcodeCamera 真身在 ux/workflows-platform.js（该文件在 platform.js 之后加载，
-   会整体覆盖本处定义）。V1.2 修复：V1.2.1 把「条码扫码入库」误写在这里被覆盖，
-   导致线上收货扫码从没真正生效；现已把带扫码版收口到 workflows-platform.js。
-   请勿在此重复定义 receivePO —— 改这里不会生效。 */
+/* receivePO / poOpenBarcodeCamera 同 createPO：唯一真身在 platform/inventory-workflow.js，
+   此处不重复定义（V1.3 收口，原 workflows-platform.js 死代码已删除）。 */
 /* V1.1 拒收/异常登记（任务书 4.2③）：到货短少/破损/错发登记后不再计入未到货，
    采购单才能在「永远不会到的量」上正常收完。 */
 async function registerPOException(poId){
@@ -1566,16 +1564,67 @@ async function manageVariants(pid){
 async function manageImages(pid){ return openProductImageManager(pid); }
 
 
-/* ===== 成本 BOM（#641）：统一成本清单，一次性录入物流/包材/其他，启用后自动分摊到每笔订单 ===== */
+/* ===== 成本 BOM（#641 / #649）：统一成本清单，开放式自定义成本项 =====
+   原则：这里的成本＝物品成本以外的其他成本（如物流费、包材费），
+   不含税费、人工、后台运营成本。每项只需 名称 + 单价，金额＝单价 × 订单件数。 */
 let _bomState=null;
-async function loadCostBom(){const root=$('#costbomRoot');if(!root)return;root.innerHTML='<div class="sub">加载成本清单…</div>';let bom;try{bom=await api('/api/platform/cost-bom');}catch(e){root.innerHTML='<div class="empty">加载失败</div>';return;}_bomState={id:bom.id,name:bom.name||'',note:bom.note||'',enabled:!!bom.isActive,lines:(bom.lines||[]).map(l=>({label:l.label,category:l.category,calcType:l.calcType,baseValue:l.baseValue,rateValue:l.rateValue,enabled:l.enabled}))};renderBom(root);}
-function renderBom(root){const s=_bomState;root.innerHTML=`<div class="card"><div class="panel-title"><div><h2>成本 BOM（统一成本清单）</h2><div class="sub">一次性录入所有会涉及的成本（物流 / 包材 / 其他）。启用后系统按规则自动分摊到每一笔订单，不必逐单手填；单笔订单仍可手动覆盖或恢复 BOM。</div></div><label class="switch"><input type="checkbox" id="bomEnabled" ${s.enabled?'checked':''} onchange="bomSetEnabled(this.checked)"><span>启用自动核算</span></label></div><div class="grid g2 section"><div><div class="field"><label>清单名称</label><input id="bomName" class="plat-bom-in" value="${esc(s.name)}" oninput="bomField('name',this.value)" placeholder="如：默认成本清单"></div><div class="field"><label>备注</label><input id="bomNote" class="plat-bom-in" value="${esc(s.note)}" oninput="bomField('note',this.value)" placeholder="选填"></div></div><div class="bom-preview" id="bomPreview"><div class="sub">预览：保存并启用后，系统会按下方规则对每笔订单计算。</div></div></div><div class="card section"><div class="panel-title"><div><h3>成本项</h3><div class="sub">计算方式：每单固定＝每笔订单固定金额；按件数＝单价×订单件数；净销售%/成本%＝按该比例计提。</div></div><button class="btn" onclick="bomAddLine()">＋ 添加成本项</button></div><div class="plat-bom-table"><table class="table"><thead><tr><th>名称</th><th>类别</th><th>计算方式</th><th>基础值</th><th>比例%</th><th>启用</th><th></th></tr></thead><tbody id="bomLinesBody"></tbody></table></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn" onclick="bomSave()">保存成本清单</button></div></div>`;renderBomLines();bomPreview();}
-function renderBomLines(){const body=$('#bomLinesBody');if(!body)return;const s=_bomState;if(!s.lines.length){body.innerHTML='<tr><td colspan="7" class="sub">还没有成本项，点「＋ 添加成本项」。</td></tr>';return;}body.innerHTML=s.lines.map((l,i)=>`<tr data-i="${i}"><td><input class="plat-bom-in" value="${esc(l.label||'')}" oninput="bomLineField(${i},'label',this.value)" placeholder="如：顺丰陆运"></td><td>${uxChoiceHtml({value:l.category||'logistics',options:[{value:'logistics',label:'物流'},{value:'packaging',label:'包材'},{value:'other',label:'其他'}],onchange:'bomLineField('+i+',\'category\',this.value)',cls:'plat-bom-choice'})}</td><td>${uxChoiceHtml({value:l.calcType||'fixed',options:[{value:'fixed',label:'每单固定'},{value:'per_item',label:'按件数'},{value:'percent_net',label:'净销售%'},{value:'percent_cogs',label:'成本%'}],onchange:'bomLineField('+i+',\'calcType\',this.value)',cls:'plat-bom-choice'})}</td><td><input class="plat-bom-in" type="number" step="0.01" min="0" value="${Number(l.baseValue||0)}" oninput="bomLineField(${i},'baseValue',this.value)"></td><td><input class="plat-bom-in" type="number" step="0.01" min="0" value="${Number(l.rateValue||0)}" oninput="bomLineField(${i},'rateValue',this.value)"></td><td><input type="checkbox" ${l.enabled!==0?'checked':''} onchange="bomLineEnabled(${i},this.checked)"></td><td><button class="btn ghost sm" onclick="bomRemoveLine(${i})">删除</button></td></tr>`).join('');}
+async function loadCostBom(){const root=$('#costbomRoot');if(!root)return;root.innerHTML='<div class="sub">加载成本清单…</div>';let bom;try{bom=await api('/api/platform/cost-bom');}catch(e){root.innerHTML='<div class="empty">加载失败</div>';return;}_bomState={id:bom.id,name:bom.name||'',note:bom.note||'',enabled:!!bom.isActive,lines:(bom.lines||[]).map(l=>({label:l.label,price:Number(l.baseValue||0),enabled:l.enabled}))};renderBom(root);}
+function renderBom(root){const s=_bomState;root.innerHTML=`<div class="card"><div class="panel-title"><div><h2>成本 BOM（统一成本清单）</h2><div class="sub">这里的成本＝物品成本以外的其他成本（如物流费、包材费），不含税费、人工、后台运营成本。启用后按清单自动分摊到每一笔订单，不必逐单手填；单笔订单仍可手动覆盖或恢复 BOM。</div></div><label class="switch"><input type="checkbox" id="bomEnabled" ${s.enabled?'checked':''} onchange="bomSetEnabled(this.checked)"><span>启用自动核算</span></label></div><div class="grid g2 section"><div><div class="field"><label>清单名称</label><input id="bomName" class="plat-bom-in" value="${esc(s.name)}" oninput="bomField('name',this.value)" placeholder="如：默认成本清单"></div><div class="field"><label>备注</label><input id="bomNote" class="plat-bom-in" value="${esc(s.note)}" oninput="bomField('note',this.value)" placeholder="选填"></div></div><div class="bom-preview" id="bomPreview"><div class="sub">预览：保存并启用后，系统会按清单对每笔订单计算。</div></div></div><div class="card section"><div class="panel-title"><div><h3>成本项</h3><div class="sub">开放式自定义项目：只需填成本名称和单价，金额＝单价 × 该笔订单件数。</div></div><button class="btn" onclick="bomAddLine()">＋ 添加成本项</button></div><div class="plat-bom-table"><table class="table"><thead><tr><th>成本名称</th><th>单价（元/件）</th><th>启用</th><th></th></tr></thead><tbody id="bomLinesBody"></tbody></table></div><div style="display:flex;gap:8px;margin-top:12px"><button class="btn" onclick="bomSave()">保存成本清单</button></div></div>`;renderBomLines();bomPreview();}
+function renderBomLines(){const body=$('#bomLinesBody');if(!body)return;const s=_bomState;if(!s.lines.length){body.innerHTML='<tr><td colspan="4" class="sub">还没有成本项，点「＋ 添加成本项」。</td></tr>';return;}body.innerHTML=s.lines.map((l,i)=>`<tr data-i="${i}"><td><input class="plat-bom-in" value="${esc(l.label||'')}" oninput="bomLineField(${i},'label',this.value)" placeholder="如：顺丰陆运"></td><td><input class="plat-bom-in" type="number" step="0.01" min="0" value="${Number(l.price||0)}" oninput="bomLineField(${i},'price',this.value)"></td><td><input type="checkbox" ${l.enabled!==0?'checked':''} onchange="bomLineEnabled(${i},this.checked)"></td><td><button class="btn ghost sm" onclick="bomRemoveLine(${i})">删除</button></td></tr>`).join('');}
 function bomField(k,v){_bomState[k]=v;}
 function bomSetEnabled(v){_bomState.enabled=!!v;}
-function bomAddLine(){_bomState.lines.push({label:'',category:'logistics',calcType:'fixed',baseValue:0,rateValue:0,enabled:1});renderBomLines();}
+function bomAddLine(){_bomState.lines.push({label:'',price:0,enabled:1});renderBomLines();
+  /* 修复「添加后没反应」：新行追加在表格末尾，落在视口外时看起来毫无变化。
+     主动滚到新行并聚焦名称输入框，让添加动作有明确反馈。 */
+  const body=$('#bomLinesBody');const row=body&&body.querySelector('tr[data-i]:last-of-type');
+  if(row){row.scrollIntoView({behavior:'smooth',block:'center'});const inp=row.querySelector('input.plat-bom-in');if(inp)setTimeout(()=>inp.focus(),350);}else{toast('已添加一项成本，请填写名称和单价');}}
 function bomRemoveLine(i){_bomState.lines.splice(i,1);renderBomLines();}
-function bomLineField(i,k,v){const l=_bomState.lines[i];if(k==='baseValue'||k==='rateValue')l[k]=Number(v||0);else l[k]=v;}
+function bomLineField(i,k,v){const l=_bomState.lines[i];if(k==='price')l[k]=Math.max(0,Number(v||0));else l[k]=v;}
 function bomLineEnabled(i,checked){_bomState.lines[i].enabled=checked?1:0;}
-async function bomSave(){const s=_bomState;if(s.enabled&&!s.lines.some(l=>l.enabled&&(l.label||'').trim())){toast('启用前请至少添加一个有名称的成本项');return;}await api('/api/platform/cost-bom',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:s.name,note:s.note,enabled:s.enabled,lines:s.lines.map(l=>({label:l.label,category:l.category,calcType:l.calcType,baseValue:Number(l.baseValue||0),rateValue:Number(l.rateValue||0),enabled:l.enabled!==0?1:0}))})});toast('成本清单已保存'+(s.enabled?'并启用':''));loadCostBom();}
-async function bomPreview(){const box=$('#bomPreview');if(!box)return;try{const d=await api('/api/platform/cost-bom/preview');if(!d||d.orderId==null){box.innerHTML='<div class="sub">暂无订单可用于预览。</div>';return;}const lines=(d.bomLines||[]).map(b=>`${esc(b.label||'')}（${b.category}·${b.calcType}） ${money(b.amount)}`).join('<br>')||'—';box.innerHTML=`<div class="sub">预览（订单 #${d.orderId} · 来源：${d.costSource==='BOM'?'BOM自动':d.costSource==='manual'?'手动覆盖':'无成本'}）</div><div class="bom-preview__row">物流 ${money(d.shipping)} · 包材 ${money(d.packaging)} · 其他 ${money(d.otherCost)}</div><div class="bom-preview__lines">${lines}</div>`;}catch(e){box.innerHTML='<div class="sub">预览不可用</div>';}}
+async function bomSave(){const s=_bomState;if(s.enabled&&!s.lines.some(l=>l.enabled&&(l.label||'').trim())){toast('启用前请至少添加一个有名称的成本项');return;}await api('/api/platform/cost-bom',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:s.name,note:s.note,enabled:s.enabled,lines:s.lines.map(l=>({label:l.label,category:'other',calcType:'per_item',baseValue:Number(l.price||0),rateValue:0,enabled:l.enabled!==0?1:0}))})});toast('成本清单已保存'+(s.enabled?'并启用':''));loadCostBom();}
+async function bomPreview(){const box=$('#bomPreview');if(!box)return;try{const d=await api('/api/platform/cost-bom/preview');if(!d||d.orderId==null){box.innerHTML='<div class="sub">暂无订单可用于预览。</div>';return;}const lines=(d.bomLines||[]).map(b=>`${esc(b.label||'')}（单价 × 件数） ${money(b.amount)}`).join('<br>')||'—';box.innerHTML=`<div class="sub">预览（订单 #${d.orderId} · 来源：${d.costSource==='BOM'?'BOM自动':d.costSource==='manual'?'手动覆盖':'无成本'}）</div><div class="bom-preview__row">成本合计 ${money(Number(d.otherCost||0))}</div><div class="bom-preview__lines">${lines}</div>`;}catch(e){box.innerHTML='<div class="sub">预览不可用</div>';}}
+
+/* ── 员工权限分配管理（总平台）────────────────────────────────────── */
+let PLAT_STAFF_TREE=null;
+function platStaffPermText(key){
+  if(!PLAT_STAFF_TREE)return esc(key);
+  const hits=[];
+  for(const g of PLAT_STAFF_TREE.tree||[])for(const it of g.items||[])if(it.key===key)hits.push(it);
+  return hits.length?esc(hits.map(x=>x.label).join(' / ')):esc(key);
+}
+async function loadPlatformStaff(){
+  try{
+    const [list,tree]=await Promise.all([api('/api/platform/staff-accounts'),api('/api/platform/staff-perm-tree')]);
+    PLAT_STAFF_TREE=tree;
+    const rowsEl=$('#platStaffRows');if(!rowsEl)return;
+    rowsEl.innerHTML=(Array.isArray(list)?list:[]).map(x=>`<tr><td><strong>${esc(x.displayName)}</strong>${x.isSelf?'<span class="tag">当前登录</span>':''}</td><td>${esc(x.username)}</td><td>${esc(x.departmentCn)}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${x.status==='active'?'启用':'停用'}</span></td><td>${esc(String(x.createdAt||'').slice(0,16))}</td><td>${x.isSelf?'<span class="sub">—</span>':`<button class="btn ghost sm" onclick="platStaffForm(${x.id})">编辑</button> <button class="btn ghost sm" onclick="platStaffStatus(${x.id},'${x.status==='active'?'disabled':'active'}')">${x.status==='active'?'停用':'启用'}</button> <button class="btn ghost sm" onclick="platStaffDel(${x.id})" style="color:var(--orange)">删除</button>`}</td></tr>`).join('')||'<tr><td colspan="6"><div class="empty">还没有员工账户</div></td></tr>';
+    const treeEl=$('#platStaffTree');if(!treeEl)return;
+    treeEl.innerHTML=(tree.tree||[]).map(g=>`<div class="plat-staff-group"><div class="plat-staff-group__t">${esc(g.group)}</div><div class="plat-staff-items">${g.items.map(it=>`<div class="plat-staff-item"><b>${esc(it.label)}</b><span>${(it.depts||[]).map(d=>esc((tree.departments||[]).find(x=>x.key===d)?.label||d)).join(' · ')}</span></div>`).join('')}</div></div>`).join('');
+  }catch(e){loaderError('#platStaffRows',e,'员工列表加载失败')}
+}
+async function platStaffForm(id){
+  let cur=null;
+  try{if(id)cur=(await api('/api/platform/staff-accounts')).find(x=>Number(x.id)===Number(id));}
+  catch(e){toast(e.message);return}
+  const v=await showForm({title:cur?'编辑员工':'添加员工',submitText:cur?'保存':'创建',fields:[
+    {name:'username',label:'登录账号',value:cur?cur.username:'',required:true,help:'3-64 位小写字母/数字/._-'},
+    {name:'displayName',label:'姓名',value:cur?cur.displayName:'',required:true},
+    {name:'department',label:'岗位',type:'select',value:cur?cur.department:'operations',options:[['all','超级管理员'],['operations','运营'],['warehouse','仓储履约'],['procurement','采购'],['finance','财务']]},
+    {name:'password',label:cur?'重置密码（留空不改）':'初始密码',type:'password',value:'',help:'至少 14 位'}
+  ]});
+  if(!v)return;
+  const body={username:String(v.username||'').trim().toLowerCase(),displayName:String(v.displayName||'').trim(),department:v.department};
+  if(v.password)body.password=v.password;
+  try{
+    if(cur)await api(`/api/platform/staff-accounts/${cur.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    else await api('/api/platform/staff-accounts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    toast(cur?'员工已更新':'员工已创建');loadPlatformStaff();
+  }catch(e){toast(e.message)}
+}
+async function platStaffStatus(id,status){
+  try{await api(`/api/platform/staff-accounts/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});toast(status==='active'?'已启用':'已停用');loadPlatformStaff()}catch(e){toast(e.message)}
+}
+async function platStaffDel(id){
+  if(!confirm('确认删除该员工账户？其登录会话会立即失效。'))return;
+  try{await api(`/api/platform/staff-accounts/${id}`,{method:'DELETE'});toast('已删除');loadPlatformStaff()}catch(e){toast(e.message)}
+}

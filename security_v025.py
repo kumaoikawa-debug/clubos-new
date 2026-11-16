@@ -110,6 +110,14 @@ def install_tables() -> None:
 
     with conn() as c:
         if 'platform_department' not in {r[1] for r in c.execute('PRAGMA table_info(auth_accounts)')}:c.execute("ALTER TABLE auth_accounts ADD COLUMN platform_department TEXT NOT NULL DEFAULT 'all'")
+    # 员工权限分配管理（2026-11-16）：
+    #   display_name       —— 员工显示名（列表/顶栏用）
+    #   staff_perms_json   —— 员工受限视图白名单 JSON（{"views":["mall-orders",...]}）；
+    #                         NULL = 全权账户（老板/平台管理员），兼容既有账户行为。
+    with conn() as c:
+        _cols={r[1] for r in c.execute('PRAGMA table_info(auth_accounts)')}
+        if 'display_name' not in _cols:c.execute("ALTER TABLE auth_accounts ADD COLUMN display_name TEXT")
+        if 'staff_perms_json' not in _cols:c.execute("ALTER TABLE auth_accounts ADD COLUMN staff_perms_json TEXT")
     # 2026-11-03 关闭内测免登录（CLUBOS_TEST_OPEN）后，总平台需一个管理员账户才能登录。
     # 幂等：只在「还没有任何 active 平台账户」时创建一次。账号/密码优先读环境变量，
     # 未配置时落默认值（≥14 位，满足 hash_password 要求）；部署后请尽快改密。
@@ -219,8 +227,59 @@ def platform_department_allowed(identity,path,method,payload=None):
 
 
 def public_identity(account: dict) -> dict:
+    import json as _json
+    sv=None
+    raw=account.get('staff_perms_json')
+    if raw:
+        try:
+            parsed=_json.loads(raw)
+            if isinstance(parsed,dict) and isinstance(parsed.get('views'),list):
+                sv=[str(v) for v in parsed['views'] if str(v).strip()]
+        except Exception:sv=None
     return {'platformDepartment':account.get('platform_department') or 'all','accountId':account['id'],'username':account['username'],'role':account['role'],
+            'displayName':account.get('display_name') or account['username'],
+            'staffViews':sv,
             'clubId':account.get('club_id'),'userId':account.get('user_id')}
+
+
+# ── 员工权限分配管理（2026-11-16）────────────────────────────────────
+# 俱乐部端受限员工：staffViews 非 None 时，非 GET 写操作按「视图 → API 前缀」
+# 白名单拦截；未映射前缀 fail-closed 拒绝。GET/HEAD 一律放行（可看不可改）。
+# 平台端岗位门禁复用既有 platform_department_allowed，无需新增映射。
+CLUB_VIEW_SCOPES={
+  'activities':('/activities','/occurrences','/activity-categories','/regs','/registrations','/checkins','/rosters','/waitlist','/group-buys','/execution','/refund'),
+  'content':('/content','/page-layouts','/banners','/home-banners','/home-bundle'),
+  'members-list':('/members','/member-tags','/users'),
+  'members-tiers':('/membership','/tier-','/tiers','/member-cards'),
+  'members-benefits':('/campaigns','/coupons','/referral-coupon','/gift-cards','/stored-value','/affiliate'),
+  'members-mall':('/points-mall','/points-redeem-rate','/points-default','/points'),
+  'mall-products':('/products','/stores','/store-products','/inventory','/stock','/reconcil'),
+  'mall-orders':('/gear-orders','/mall-orders','/checkouts','/settlements','/shipments','/gear-checkout'),
+  'mall-aftersales':('/aftersales','/returns'),
+  'mall-settle':('/commissions','/settlement-account','/payouts'),
+  'camp':('/camp-','/pitches','/pitch-status','/rental-items','/routes'),
+  'info':('/inquiries','/tickets','/notification-'),
+  'settings':('/settings','/mp/','/pay-account','/ai/'),
+}
+CLUB_VIEW_SCOPES={k:list(v) for k,v in CLUB_VIEW_SCOPES.items()}
+
+def club_staff_allowed(identity,method,subpath:str)->bool:
+    """subpath = /api/club/{club_id} 之后的剩余路径（以 / 开头）。"""
+    sv=identity.get('staffViews')
+    if sv is None and identity.get('staff_perms_json'):
+        # authorize_request 传的是原始 auth_accounts 行（没有 staffViews 派生字段）
+        try:
+            parsed=json.loads(identity['staff_perms_json'])
+            sv=[str(v) for v in (parsed.get('views') or []) if str(v).strip()] if isinstance(parsed,dict) else []
+        except Exception:sv=[]
+    if sv is None: return True                     # 全权账户（老板）
+    if method in ('GET','HEAD'): return True       # 只读放行
+    if subpath.startswith('/staff-accounts') or subpath.startswith('/staff-perm-tree'):
+        return False                               # 员工管理本身仅老板可用
+    for view in sv:
+        for pref in CLUB_VIEW_SCOPES.get(view,()):
+            if subpath.startswith(pref): return True
+    return False
 
 
 def get_identity(request: Request) -> tuple[dict | None, str | None]:
@@ -474,6 +533,9 @@ async def _authorize_shared(request: Request, strict: bool) -> dict | None:
     elif path.startswith('/api/club/'):
         m = re.match(r'^/api/club/(\d+)(?:/|$)',path)
         if role!='club' or not m or int(m[1])!=identity['club_id']: _forbidden()
+        # 受限员工（员工权限分配管理）：非 GET 写操作按视图白名单拦截。
+        if not club_staff_allowed(identity,method,path[len('/api/club/'+m.group(1)):]):
+            _forbidden('当前员工无权执行此操作')
     elif path.startswith('/api/leader/'):
         if role!='leader': _forbidden()
         m = re.search(r'/occurrences/(\d+)',path)

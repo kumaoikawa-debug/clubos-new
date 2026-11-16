@@ -1016,3 +1016,12 @@
 
 /* OBS-02：空态首次引导按钮容器（状态型空态共用，无 CTA 时仍是普通空态） */
 .plat-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:11px}
+
+/* 员工权限 · 岗位权限树 */
+.plat-staff-tree{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.plat-staff-group{border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:12px;background:var(--card,#fff)}
+.plat-staff-group__t{font-weight:700;margin-bottom:8px}
+.plat-staff-items{display:grid;gap:6px}
+.plat-staff-item{display:flex;flex-direction:column;gap:3px;font-size:12px;padding:6px 8px;border-radius:6px;background:var(--soft,#f6f7f9)}
+.plat-staff-item span{color:var(--muted,#6b7280);line-height:1.5}
+@media(max-width:600px){.plat-staff-tree{grid-template-columns:1fr}}

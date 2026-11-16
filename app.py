@@ -3125,6 +3125,120 @@ def club_mp_staff_delete(club_id:int,staff_id:int):
         c.execute('DELETE FROM club_mp_staff WHERE id=?',(staff_id,))
     return {'ok':True}
 
+# ── 员工权限分配管理（俱乐部端）──────────────────────────────────────
+# 与「小程序助手员工」不同：这里管理的是能登录本后台的俱乐部员工账户。
+# auth_accounts(role='club',club_id=X)，staff_perms_json 记录可写视图白名单；
+# NULL（老板账户）= 全权。security_v025.club_staff_allowed 负责非 GET 拦截。
+_CLB_VIEW_CN={'activities':'活动与报名','content':'内容与宣发','members-list':'会员列表','members-tiers':'等级与会员卡',
+  'members-benefits':'俱乐部营销','members-mall':'积分商城','mall-products':'商品与上架','mall-orders':'商城订单',
+  'mall-aftersales':'售后进度','mall-settle':'佣金结算','camp':'营地经营','info':'信息中心','settings':'俱乐部设置'}
+_CLB_STAFF_GROUPS=[('活动经营',['activities','content']),('客户与会员',['members-list','members-tiers','members-benefits','members-mall']),
+  ('装备商城',['mall-products','mall-orders','mall-aftersales','mall-settle']),('基础',['camp','info','settings'])]
+
+def _club_owner_only(request:Request,club_id:int):
+    from security_v025 import TEST_OPEN, test_open_identity
+    ident,_=get_identity(request)
+    if not ident and TEST_OPEN:
+        ident=test_open_identity('club',club_id)
+        if not ident:
+            # 内测库可能没有俱乐部账户行；免登录模式下合成一名老板身份，
+            # 避免前端 api() 收到 401 后跳登录页把当前视图弹回工作台。
+            ident={'id':0,'role':'club','club_id':int(club_id),'username':'demo-owner',
+                   'display_name':'演示管理员','staff_perms_json':None,'platform_department':'all'}
+    if not ident: raise HTTPException(401,'authentication required')
+    if ident['role']!='club' or int(ident.get('club_id') or 0)!=int(club_id): raise HTTPException(403,'无权管理本俱乐部员工')
+    if ident.get('staff_perms_json') is not None: raise HTTPException(403,'只有管理员可以管理员工权限')
+    return ident
+
+def _club_staff_public(r,self_id=None):
+    sv=[]
+    if r['staff_perms_json']:
+        try:sv=(json.loads(r['staff_perms_json']) or {}).get('views') or []
+        except Exception:pass
+    return {'id':r['id'],'username':r['username'],'displayName':r['display_name'] or r['username'],
+            'views':sv,'status':r['status'],'createdAt':r['created_at'],
+            'isSelf':self_id is not None and int(r['id'])==int(self_id)}
+
+@app.get('/api/club/{club_id}/staff-perm-tree')
+def club_staff_perm_tree(club_id:int):
+    club_or_404(club_id)
+    from security_v025 import CLUB_VIEW_SCOPES
+    return {'groups':[{'name':g,'items':[{'key':k,'label':_CLB_VIEW_CN.get(k,k),'apis':list(CLUB_VIEW_SCOPES.get(k,()))} for k in keys]} for g,keys in _CLB_STAFF_GROUPS]}
+
+@app.get('/api/club/{club_id}/staff-accounts')
+def club_staff_accounts(request:Request,club_id:int):
+    ident=_club_owner_only(request,club_id)
+    with conn() as c:
+        data=rows(c.execute("SELECT * FROM auth_accounts WHERE role='club' AND club_id=? AND staff_perms_json IS NOT NULL ORDER BY id",(club_id,)))
+    return [_club_staff_public(x,ident.get('id')) for x in data]
+
+@app.post('/api/club/{club_id}/staff-accounts')
+def club_staff_add(request:Request,club_id:int,payload:dict=Body(...)):
+    ident=_club_owner_only(request,club_id)
+    club_or_404(club_id)
+    from security_v025 import CLUB_VIEW_SCOPES
+    username=str(payload.get('username') or '').strip().lower()
+    if not (3<=len(username)<=64) or not re.fullmatch(r'[a-z0-9_.-]+',username):raise HTTPException(400,'登录账号为 3-64 位小写字母/数字/._-')
+    pwd=str(payload.get('password') or '')
+    if len(pwd)<14:raise HTTPException(400,'初始密码至少 14 位')
+    display=str(payload.get('displayName') or '').strip()[:40]
+    if not display:raise HTTPException(400,'员工姓名必填')
+    views=payload.get('views')
+    if not isinstance(views,list):raise HTTPException(400,'权限视图必须为列表')
+    views=[str(v) for v in views]
+    bad=[v for v in views if v not in CLUB_VIEW_SCOPES]
+    if bad:raise HTTPException(400,'未知权限视图：'+','.join(bad[:3]))
+    try:ph=hash_password(pwd)
+    except ValueError as e:raise HTTPException(400,str(e))
+    with conn() as c:
+        if c.execute('SELECT 1 FROM auth_accounts WHERE username=?',(username,)).fetchone():raise HTTPException(409,'登录账号已存在')
+        cur=c.execute("INSERT INTO auth_accounts(username,password_hash,role,club_id,status,display_name,staff_perms_json) VALUES(?,?,'club',?,'active',?,?)",
+                      (username,ph,club_id,display,json.dumps({'views':views},ensure_ascii=False)))
+        r=row(c.execute('SELECT * FROM auth_accounts WHERE id=?',(cur.lastrowid,)))
+    return _club_staff_public(r,ident.get('id'))
+
+@app.patch('/api/club/{club_id}/staff-accounts/{account_id}')
+def club_staff_update(request:Request,club_id:int,account_id:int,payload:dict=Body(...)):
+    ident=_club_owner_only(request,club_id)
+    from security_v025 import CLUB_VIEW_SCOPES
+    with conn() as c:
+        r=row(c.execute("SELECT * FROM auth_accounts WHERE id=? AND role='club' AND club_id=? AND staff_perms_json IS NOT NULL",(account_id,club_id)))
+        if not r:raise HTTPException(404,'员工不存在')
+        status=str(payload.get('status') or r['status']).strip()
+        if status not in ('active','disabled'):raise HTTPException(400,'状态不合法')
+        display=str(payload.get('displayName') or r['display_name'] or '').strip()[:40] or r['username']
+        if 'views' in payload:
+            views=payload['views']
+            if not isinstance(views,list):raise HTTPException(400,'权限视图必须为列表')
+            views=[str(v) for v in views]
+            bad=[v for v in views if v not in CLUB_VIEW_SCOPES]
+            if bad:raise HTTPException(400,'未知权限视图：'+','.join(bad[:3]))
+            perms=json.dumps({'views':views},ensure_ascii=False)
+        else:perms=r['staff_perms_json']
+        sets='status=?,display_name=?,staff_perms_json=?'
+        args=[status,display,perms]
+        if payload.get('password'):
+            pwd=str(payload['password'])
+            if len(pwd)<14:raise HTTPException(400,'新密码至少 14 位')
+            try:args.append(hash_password(pwd))
+            except ValueError as e:raise HTTPException(400,str(e))
+            sets+=',password_hash=?'
+        args.append(account_id)
+        c.execute(f'UPDATE auth_accounts SET {sets} WHERE id=?',args)
+        if status=='disabled':c.execute('UPDATE auth_sessions SET revoked_at=CURRENT_TIMESTAMP WHERE account_id=? AND revoked_at IS NULL',(account_id,))
+        r2=row(c.execute('SELECT * FROM auth_accounts WHERE id=?',(account_id,)))
+    return _club_staff_public(r2,ident.get('id'))
+
+@app.delete('/api/club/{club_id}/staff-accounts/{account_id}')
+def club_staff_delete(request:Request,club_id:int,account_id:int):
+    _club_owner_only(request,club_id)
+    with conn() as c:
+        if not c.execute("SELECT 1 FROM auth_accounts WHERE id=? AND role='club' AND club_id=? AND staff_perms_json IS NOT NULL",(account_id,club_id)).fetchone():
+            raise HTTPException(404,'员工不存在')
+        c.execute('DELETE FROM auth_sessions WHERE account_id=?',(account_id,))
+        c.execute('DELETE FROM auth_accounts WHERE id=?',(account_id,))
+    return {'ok':True,'id':account_id}
+
 @app.get('/api/public/clubs/{club_id}/logo.{ext}')
 def public_club_logo(club_id:int,ext:str):
     """C 端公开代理（无登录态）。生产只放行 active 俱乐部。"""
@@ -5541,7 +5655,10 @@ def _load_published_schema(c, club_id, page_key):
 def list_page_layouts(club_id:int):
     club_or_404(club_id)
     with conn() as c:
-        rs = rows(c.execute('SELECT id,club_id,page_key,title,status,updated_at FROM page_layouts WHERE club_id=? ORDER BY id', (club_id,)))
+        rs = rows(c.execute('SELECT id,club_id,page_key,title,status,schema_json,updated_at FROM page_layouts WHERE club_id=? ORDER BY id', (club_id,)))
+    # 装修器 V2：列表必须回带 components——旧版漏掉 schema_json，编辑器刷新后配置全空（表现为「每次进来都是白纸」）。
+    for r in rs:
+        r['components'] = page_layout.loads(r.pop('schema_json', None))
     return rs
 
 @app.post('/api/club/{club_id}/page-layouts')
@@ -11319,6 +11436,111 @@ def platform_dashboard():
                 'gearGMV':c.execute('SELECT COALESCE(SUM(total),0) FROM gear_orders').fetchone()[0],
                 'orders':c.execute('SELECT COUNT(*) FROM gear_orders').fetchone()[0], 'aiBilling':ai}
 
+# ── 员工权限分配管理（总平台）────────────────────────────────────────
+# 账户沿用 auth_accounts(role='platform')，岗位沿用 platform_department；
+# 新增 display_name 显示名。平台岗位写权限由 security_v025.platform_department_allowed
+# 统一拦截；本组管理端点只有 department='all' 可进（非 all 走 else→False）。
+_PLAT_DEPTS=('all','operations','warehouse','procurement','finance')
+_PLAT_DEPT_CN={'all':'超级管理员','operations':'运营','warehouse':'仓储履约','procurement':'采购','finance':'财务'}
+_PLAT_PERM_TREE=[
+  {'group':'平台治理','items':[{'key':'clubs','label':'俱乐部入驻','depts':['all']},{'key':'ai-config','label':'模型接入','depts':['all']},{'key':'api-config','label':'接口配置','depts':['all']},{'key':'staff','label':'员工权限','depts':['all']}]},
+  {'group':'商品与供应链','items':[{'key':'products','label':'商品与价格','depts':['all','operations','warehouse']},{'key':'warehouse','label':'仓库库存','depts':['all','warehouse']},{'key':'supp-po','label':'采购单','depts':['all','procurement','warehouse']},{'key':'supp-move','label':'库存调拨','depts':['all','warehouse']},{'key':'supp-return','label':'采购退货','depts':['all','warehouse']}]},
+  {'group':'交易与履约','items':[{'key':'orders','label':'订单查看','depts':['all','operations','warehouse','procurement','finance']},{'key':'aftersales','label':'售后','depts':['all','operations','finance']},{'key':'commissions','label':'佣金台账','depts':['all','finance']}]},
+  {'group':'财务','items':[{'key':'fin-settle','label':'结算打款','depts':['all','finance']},{'key':'fin-profit','label':'经营利润','depts':['all','finance']},{'key':'credits','label':'积分与账单','depts':['all','finance']},{'key':'pksettle','label':'供应商结算','depts':['all','finance']}]},
+]
+
+def _plat_identity(request:Request):
+    from security_v025 import TEST_OPEN
+    ident,_=get_identity(request)
+    if not ident and TEST_OPEN:
+        # 内测免登录：平台端同样放行（中间件在 TEST_OPEN 下本就跳过角色校验）；
+        # 取一名启用中的超管作为操作者，不碰登录门槛的生产语义。
+        with conn() as c:
+            r=row(c.execute("SELECT * FROM auth_accounts WHERE role='platform' AND status='active' AND platform_department='all' ORDER BY id LIMIT 1"))
+        if r:ident=dict(r)
+    return ident
+
+def _plat_staff_public(r,self_id=None):
+    d=r['platform_department'] or 'all'
+    return {'id':r['id'],'username':r['username'],'displayName':r['display_name'] or r['username'],
+            'department':d,'departmentCn':_PLAT_DEPT_CN.get(d,d),'status':r['status'],
+            'createdAt':r['created_at'],'isSelf':self_id is not None and int(r['id'])==int(self_id)}
+
+@app.get('/api/platform/staff-accounts')
+def platform_staff_accounts(request:Request):
+    ident=_plat_identity(request)
+    with conn() as c:
+        data=rows(c.execute("SELECT id,username,display_name,platform_department,status,created_at FROM auth_accounts WHERE role='platform' ORDER BY id"))
+    return [_plat_staff_public(x,ident.get('id') if ident else None) for x in data]
+
+@app.get('/api/platform/staff-perm-tree')
+def platform_staff_perm_tree():
+    return {'departments':[{'key':k,'label':v} for k,v in _PLAT_DEPT_CN.items()],'tree':_PLAT_PERM_TREE}
+
+@app.post('/api/platform/staff-accounts')
+def platform_staff_add(request:Request,payload:dict=Body(...)):
+    ident=_plat_identity(request)
+    if not ident: raise HTTPException(401,'authentication required')
+    username=str(payload.get('username') or '').strip().lower()
+    if not (3<=len(username)<=64) or not re.fullmatch(r'[a-z0-9_.-]+',username):raise HTTPException(400,'登录账号为 3-64 位小写字母/数字/._-')
+    pwd=str(payload.get('password') or '')
+    if len(pwd)<14:raise HTTPException(400,'初始密码至少 14 位')
+    dept=str(payload.get('department') or 'operations').strip()
+    if dept not in _PLAT_DEPTS:raise HTTPException(400,'岗位不合法')
+    display=str(payload.get('displayName') or '').strip()[:40] or username
+    try:ph=hash_password(pwd)
+    except ValueError as e:raise HTTPException(400,str(e))
+    with conn() as c:
+        if c.execute('SELECT 1 FROM auth_accounts WHERE username=?',(username,)).fetchone():raise HTTPException(409,'登录账号已存在')
+        cur=c.execute("INSERT INTO auth_accounts(username,password_hash,role,status,platform_department,display_name) VALUES(?,?,'platform','active',?,?)",(username,ph,dept,display))
+        r=row(c.execute('SELECT * FROM auth_accounts WHERE id=?',(cur.lastrowid,)))
+    return _plat_staff_public(r,ident.get('id'))
+
+@app.patch('/api/platform/staff-accounts/{account_id}')
+def platform_staff_update(request:Request,account_id:int,payload:dict=Body(...)):
+    ident=_plat_identity(request)
+    if not ident: raise HTTPException(401,'authentication required')
+    with conn() as c:
+        r=row(c.execute("SELECT * FROM auth_accounts WHERE id=? AND role='platform'",(account_id,)))
+        if not r:raise HTTPException(404,'员工不存在')
+        status=str(payload.get('status') or r['status']).strip()
+        if status not in ('active','disabled'):raise HTTPException(400,'状态不合法')
+        dept=str(payload.get('department') or r['platform_department'] or 'all').strip()
+        if dept not in _PLAT_DEPTS:raise HTTPException(400,'岗位不合法')
+        if int(account_id)==int(ident['id']) and (status=='disabled' or dept!='all'):
+            raise HTTPException(400,'不能停用自己或降低自己的岗位')
+        if (r['status']=='active' and (r['platform_department'] or 'all')=='all') and (status=='disabled' or dept!='all'):
+            n=c.execute("SELECT COUNT(*) FROM auth_accounts WHERE role='platform' AND status='active' AND platform_department='all'").fetchone()[0]
+            if n<=1:raise HTTPException(400,'至少保留一名启用中的超级管理员')
+        display=str(payload.get('displayName') or r['display_name'] or '').strip()[:40] or r['username']
+        sets='status=?,platform_department=?,display_name=?'
+        args=[status,dept,display]
+        if payload.get('password'):
+            pwd=str(payload['password'])
+            if len(pwd)<14:raise HTTPException(400,'新密码至少 14 位')
+            try:args.append(hash_password(pwd))
+            except ValueError as e:raise HTTPException(400,str(e))
+            sets+=',password_hash=?'
+        args.append(account_id)
+        c.execute(f'UPDATE auth_accounts SET {sets} WHERE id=?',args)
+        r2=row(c.execute('SELECT * FROM auth_accounts WHERE id=?',(account_id,)))
+    return _plat_staff_public(r2,ident.get('id'))
+
+@app.delete('/api/platform/staff-accounts/{account_id}')
+def platform_staff_delete(request:Request,account_id:int):
+    ident=_plat_identity(request)
+    if not ident: raise HTTPException(401,'authentication required')
+    if int(account_id)==int(ident['id']):raise HTTPException(400,'不能删除自己的账户')
+    with conn() as c:
+        r=row(c.execute("SELECT * FROM auth_accounts WHERE id=? AND role='platform'",(account_id,)))
+        if not r:raise HTTPException(404,'员工不存在')
+        if r['status']=='active' and (r['platform_department'] or 'all')=='all':
+            n=c.execute("SELECT COUNT(*) FROM auth_accounts WHERE role='platform' AND status='active' AND platform_department='all'").fetchone()[0]
+            if n<=1:raise HTTPException(400,'至少保留一名启用中的超级管理员')
+        c.execute('DELETE FROM auth_sessions WHERE account_id=?',(account_id,))
+        c.execute('DELETE FROM auth_accounts WHERE id=?',(account_id,))
+    return {'ok':True,'id':account_id}
+
 @app.get('/api/platform/clubs')
 def platform_clubs():
     with conn() as c:
@@ -12002,6 +12224,8 @@ def platform_products(brand_id:int|None=None, category_id:int|None=None,
         # 进销存 V1：派生库存状态（与库存状态机分离，商品上架仍可显示售罄）
         for r in out:
             r['inventory_status']=_inventory_status(r)
+        # 进销存 V1.3：统一采购口径标注（商品库 / 采购单候选 / 补货共用同一事实）
+        _procurement_eligibility(c,out)
         return out
 
 
@@ -12012,6 +12236,44 @@ def _inventory_status(p:dict) -> str:
     if oo>0 and stock<=rp: return 'restocking'
     if stock<=rp: return 'low_stock'
     return 'in_stock'
+
+
+def _procurement_eligibility(c, products:list[dict]) -> None:
+    """进销存 V1.3：给商品列表统一标注「是否可进平台采购」与不可采购原因。
+
+    根因修复：商品库列表展示全部商品，而采购单候选此前在前端用一套独立口径过滤
+    （inventory_mode/source，缺 fulfillment_mode 与待核对检查），导致
+    「商品库明明有货、采购单却选不到/选了报错」的口径漂移。判定顺序与
+    stock_control.owned() + sku() 完全一致：
+      ① 镜像库存放行（external_mirror + 平台履约 + stock_synced 映射）
+      ② 外部品牌/外部来源拒绝
+      ③ 库存模式非 platform_owned 拒绝
+      ④ 履约模式非 platform_warehouse 拒绝
+      ⑤ 有 pending 实盘核对的商品拒绝（create_purchase_order 走 sku() 会被拦）
+    批量查询避免 N+1；商品池在几百 SKU 量级下开销可忽略。
+    """
+    if not products: return
+    brand_ids={int(p['brand_id']) for p in products if p.get('brand_id')}
+    ext_brands:set[int]=set()
+    if brand_ids:
+        ph=','.join('?'*len(brand_ids))
+        ext_brands={int(r['id']) for r in c.execute(f'SELECT id FROM product_brands WHERE id IN ({ph}) AND source_type=\'external_api\'',list(brand_ids)).fetchall()}
+    pending_rec={int(r['product_id']) for r in c.execute("SELECT product_id FROM stock_reconciliation WHERE status='pending'").fetchall()}
+    mirrored_ids={int(r['product_id']) for r in c.execute("SELECT DISTINCT product_id FROM external_product_mappings WHERE external_sku_id='' AND external_sync_status='stock_synced'").fetchall()}
+    for p in products:
+        pid=int(p['id']); reason:str|None=None
+        if p.get('inventory_mode')=='external_mirror' and p.get('fulfillment_mode')=='platform_warehouse' and pid in mirrored_ids:
+            reason=None  # 镜像库存已落本地，与 owned() 放行口径一致
+        elif p.get('source')=='external_api' or (p.get('brand_id') and int(p['brand_id']) in ext_brands):
+            reason='外部品牌商品由品牌独立库存和履约，不进平台采购'
+        elif p.get('inventory_mode')!='platform_owned':
+            reason=f'库存模式为「{p.get("inventory_mode") or "未设置"}」，不是自营库存，不进平台采购'
+        elif p.get('fulfillment_mode')!='platform_warehouse':
+            reason=f'履约模式为「{p.get("fulfillment_mode") or "未设置"}」，不由平台仓发货，不进平台采购'
+        elif pid in pending_rec:
+            reason='历史库存待实盘核对，核对完成前暂停采购入库'
+        p['procurementEligible']=reason is None
+        p['procurementBlockReason']=reason or ''
 
 
 def _resync_product_stock(c, product_id:int):
@@ -13125,6 +13387,14 @@ def platform_add_product(payload:dict=Body(...)):
                 if v['stock']:
                     c.execute('UPDATE product_variants SET stock=0 WHERE id=?',(v['id'],))
                     inventory_engine.adjust_stock(c,product_id=pid,variant_id=v['id'],quantity_delta=v['stock'],reason='自营商品期初入库',reference_type='product_opening',reference_id=f'{pid}:{v["id"]}')
+        # 进销存 V1.3：建档即带期初成本（此时必然无采购入库史）。外部商品成本由品牌同步，不接受手填。
+        avg_cost=payload.get('averageCost',payload.get('average_cost'))
+        if avg_cost not in (None,''):
+            if external: raise HTTPException(400,'外部商品成本由品牌同步，不接受期初成本手填')
+            try: cost=round(float(avg_cost),4)
+            except (TypeError,ValueError): raise HTTPException(400,'平均成本必须是数字')
+            if cost<0: raise HTTPException(400,'平均成本不能小于 0')
+            c.execute('UPDATE products SET average_cost=? WHERE id=?',(cost,pid))
         if _norm_product_status(payload.get('status'))=='active':
             _validate_product_publish(c,pid)
             c.execute("UPDATE products SET status='active' WHERE id=?",(pid,))
@@ -13325,6 +13595,18 @@ def platform_update_product(product_id:int,payload:dict=Body(...)):
                 raise HTTPException(409,'该商品库存以 PEAKTRACE 为准，请在品牌后台调整后重新同步')
             try: inventory_engine.set_absolute_stock(c,product_id=product_id,new_stock=max(0,int(payload.get('stock') or 0)),reason=str(payload.get('stockReason') or '平台手工修改库存'))
             except ValueError as e: raise HTTPException(409,str(e))
+        # 进销存 V1.3：期初成本录入。成本真源是采购验收的滚动加权；只有从未有
+        # 采购入库事实的商品（建档即有货、外部转自营）才允许手工定一次期初成本，
+        # 否则库存价值/毛利会被一次手工改动整体扭曲 —— fail-closed。
+        if 'averageCost' in payload or 'average_cost' in payload:
+            raw=payload.get('averageCost',payload.get('average_cost'))
+            if raw not in (None,''):
+                try: cost=round(float(raw),4)
+                except (TypeError,ValueError): raise HTTPException(400,'平均成本必须是数字')
+                if cost<0: raise HTTPException(400,'平均成本不能小于 0')
+                if c.execute("SELECT 1 FROM inventory_movements WHERE product_id=? AND movement_type='purchase_inbound' LIMIT 1",(product_id,)).fetchone():
+                    raise HTTPException(409,'该商品已有采购入库记录，成本由采购验收滚动加权计算，不能手工修改')
+                c.execute('UPDATE products SET average_cost=? WHERE id=?',(cost,product_id))
         for k in ('source','inventory_mode','fulfillment_mode'):
             if k in payload and payload[k]!=p.get(k) and c.execute('SELECT 1 FROM warehouse_inventory WHERE product_id=? AND (on_hand>0 OR reserved>0)',(product_id,)).fetchone():
                 raise HTTPException(409,'已有仓储事实的商品不能直接切换库存归属，请先对账处理')
@@ -15100,7 +15382,7 @@ def platform_cost_bom_get():
 def platform_cost_bom_save(payload:dict=Body(...)):
     lines=payload.get('lines') or []
     for ln in lines:
-        ct=str(ln.get('calcType') or 'fixed')
+        ct=str(ln.get('calcType') or 'per_item')
         if ct not in ('fixed','per_item','percent_net','percent_cogs'):raise HTTPException(400,'不支持的计算方式: '+ct)
         cat=str(ln.get('category') or 'other')
         if cat not in ('logistics','packaging','other'):raise HTTPException(400,'不支持的成本类别: '+cat)
@@ -15179,6 +15461,14 @@ def platform_ship_purchase_return(return_id:str):
 def platform_credit_purchase_return(return_id:str,payload:dict=Body(default={})):
     with conn() as c:
         try:return inventory_engine.credit_purchase_return(c,return_id=return_id,credit_amount=payload.get('creditAmount'),note=str(payload.get('note') or ''))
+        except LookupError as e:raise HTTPException(404,str(e))
+        except ValueError as e:raise HTTPException(409,str(e))
+
+@app.post('/api/platform/procurement/purchase-returns/{return_id}/cancel')
+def platform_cancel_purchase_return(return_id:str,payload:dict=Body(default={})):
+    """进销存 V1.3：草稿/已审核退货单可作废（此前 schema 预留 cancelled_at 但没有取消能力）。"""
+    with conn() as c:
+        try:return inventory_engine.cancel_purchase_return(c,return_id=return_id,note=str(payload.get('note') or ''))
         except LookupError as e:raise HTTPException(404,str(e))
         except ValueError as e:raise HTTPException(409,str(e))
 

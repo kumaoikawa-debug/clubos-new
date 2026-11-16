@@ -1329,6 +1329,8 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
   quantity_received INTEGER NOT NULL DEFAULT 0,
   unit_cost REAL NOT NULL DEFAULT 0,
   line_total REAL NOT NULL DEFAULT 0,
+  variant_id INTEGER,
+  sku_plan_json TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(purchase_order_id,product_id),
   FOREIGN KEY(purchase_order_id) REFERENCES purchase_orders(id),
@@ -1344,6 +1346,8 @@ CREATE TABLE IF NOT EXISTS purchase_receipts (
   received_by TEXT NOT NULL DEFAULT 'platform',
   note TEXT,
   total_cost REAL NOT NULL DEFAULT 0,
+  request_key TEXT,
+  request_hash TEXT,
   received_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(purchase_order_id) REFERENCES purchase_orders(id),
   FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
@@ -1475,6 +1479,7 @@ CREATE INDEX IF NOT EXISTS idx_purchase_returns_supplier_status ON purchase_retu
 CREATE TABLE IF NOT EXISTS purchase_return_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT, purchase_return_id TEXT NOT NULL, purchase_order_item_id INTEGER NOT NULL,
   product_id INTEGER NOT NULL, quantity INTEGER NOT NULL, unit_cost REAL NOT NULL DEFAULT 0, line_total REAL NOT NULL DEFAULT 0,
+  variant_id INTEGER,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(purchase_return_id) REFERENCES purchase_returns(id),
   FOREIGN KEY(purchase_order_item_id) REFERENCES purchase_order_items(id), FOREIGN KEY(product_id) REFERENCES products(id)
 );
@@ -1789,6 +1794,8 @@ CREATE TABLE IF NOT EXISTS purchase_order_exceptions (
   product_id INTEGER NOT NULL,
   exception_type TEXT NOT NULL,  -- shortage(短少) / damaged(破损) / wrong_item(错发) / rejected(拒收) / other(其他)
   quantity INTEGER NOT NULL,
+  variant_id INTEGER,
+  resolution TEXT NOT NULL DEFAULT 'closed',  -- pending(等待补发，保留在途) / closed(确认关闭余量) / resolved(补发已到并收完)
   note TEXT,
   registered_by TEXT NOT NULL DEFAULT 'platform',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,

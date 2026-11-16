@@ -33,7 +33,8 @@ BADGE_MAX = 20
 BUTTON_MAX = 20
 LINK_MAX = 500
 
-TARGET_TYPES = ('activity', 'product', 'page', 'external', 'marketing', 'route')
+# 装备商城（product）不开放自定义：落库层直接不接受该目标类型，旧数据保存时自动降级为纯展示。
+TARGET_TYPES = ('activity', 'page', 'external', 'marketing', 'route')
 MARKETING_LINKS = ('member', 'points', 'coupon', 'activity', 'invite')  # 营销入口类型
 
 
@@ -62,12 +63,12 @@ def _route_key(value):
 
 
 def _target(raw_type, raw_id):
-    """归一化跳转目标。活动/商品/页面需要有效 id，否则降级为纯展示。"""
+    """归一化跳转目标。活动/页面需要有效 id，否则降级为纯展示。product（装备商城）不开放自定义。"""
     tt = str(raw_type or '').strip()
     tid = None
     if tt not in TARGET_TYPES:
         return '', None
-    if tt in ('activity', 'product', 'page'):
+    if tt in ('activity', 'page'):
         try:
             tid = int(raw_id)
             if tid <= 0:

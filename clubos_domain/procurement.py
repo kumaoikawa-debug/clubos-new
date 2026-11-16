@@ -577,6 +577,19 @@ class ProcurementEngine:
         credit=self.finance.create_credit(c,supplier_id=int(r['supplier_id']),source_type='purchase_return',source_id=return_id,amount=amount,note=note or f'采购退货 {return_id} 供应商贷项') if self.finance and amount>0 else None
         c.execute("UPDATE purchase_returns SET status='credited',credit_amount=?,credited_at=CURRENT_TIMESTAMP,note=CASE WHEN ?!='' THEN ? ELSE note END,updated_at=CURRENT_TIMESTAMP WHERE id=?",(amount,note,note,return_id)); return {**self.get_purchase_return(c,return_id),'supplierCredit':credit}
 
+    def cancel_purchase_return(self,c,*,return_id:str,note:str='',cancelled_by:str='platform')->dict[str,Any]:
+        """V1.3：草稿/已审核退货单可作废（schema 预留 cancelled_at 但一直缺取消能力）。
+
+        已出库（shipped）或已贷项（credited）的退货单已有库存与财务事实，不允许取消，
+        只能走正常流程收尾 —— fail-closed，不提供「撤销出库」的捷径。
+        """
+        r=self.get_purchase_return(c,return_id)
+        if r['status']=='cancelled': return {**r,'idempotent':True}
+        if r['status'] not in ('draft','approved'):
+            raise ValueError(f"当前采购退货状态不能取消: {r['status']}（已出库/已贷项的退货单已有库存与财务事实，请走正常流程）")
+        c.execute("UPDATE purchase_returns SET status='cancelled',cancelled_at=CURRENT_TIMESTAMP,note=CASE WHEN ?!='' THEN ? ELSE note END,updated_at=CURRENT_TIMESTAMP WHERE id=?",(note,note,return_id))
+        return self.get_purchase_return(c,return_id)
+
     def list_receipts(self,c,*,po_id:str|None=None,supplier_id:int|None=None) -> list[dict[str,Any]]:
         sql='''SELECT r.*,s.name supplier_name FROM purchase_receipts r JOIN suppliers s ON s.id=r.supplier_id WHERE 1=1''';args=[]
         if po_id: sql+=' AND r.purchase_order_id=?';args.append(po_id)
@@ -601,5 +614,9 @@ class ProcurementEngine:
                        FROM products WHERE inventory_mode='platform_owned' AND source!='external_api'
                        ''').fetchone()
         open_po=c.execute("SELECT COUNT(*),COALESCE(SUM(total_amount),0) FROM purchase_orders WHERE status IN ('approved','ordered','partially_received')").fetchone()
+        # V1.3：草稿单未确认下单不计在途，但单独带出 —— 运营刚保存的采购草稿
+        # 不再让「在途采购 0 单」看起来像丢了。
+        draft_po=c.execute("SELECT COUNT(*),COALESCE(SUM(total_amount),0) FROM purchase_orders WHERE status='draft'").fetchone()
         return {'skuCount':int(r['sku_count'] or 0),'units':int(r['units'] or 0),'inventoryValue':round(float(r['inventory_value'] or 0),2),
-                'lowStockCount':int(r['low_stock_count'] or 0),'openPurchaseOrders':int(open_po[0] or 0),'openPurchaseValue':round(float(open_po[1] or 0),2)}
+                'lowStockCount':int(r['low_stock_count'] or 0),'openPurchaseOrders':int(open_po[0] or 0),'openPurchaseValue':round(float(open_po[1] or 0),2),
+                'draftPurchaseOrders':int(draft_po[0] or 0),'draftPurchaseValue':round(float(draft_po[1] or 0),2)}

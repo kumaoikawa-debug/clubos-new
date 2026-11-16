@@ -200,6 +200,9 @@
                 <em>${isEdit ? '库存按规格维护；下方新填的数量计入「本次追加」' : '不能手填：由下方每个颜色的尺码数量实时汇总'}</em></label>
               <label class="plat-pe__f"><span>补货点</span>
                 <input id="peReorder" type="number" min="0" step="1" value="${prod ? (prod.reorder_point == null ? 5 : prod.reorder_point) : 5}"></label>
+              <label class="plat-pe__f"><span>平均成本（元）</span>
+                <input id="peAvgCost" type="number" min="0" step="0.01" value="${prod && prod.average_cost != null ? prod.average_cost : ''}" placeholder="0.00">
+                <em>期初成本参考；有过采购入库后由验收滚动加权自动维护，不能再手改</em></label>
               <label class="plat-pe__f"><span>仓库</span>
                 <input id="peWarehouse" type="text" maxlength="40" placeholder="例如：成都主仓 / 双流三号仓" value="${esc(prod ? (prod.warehouse || '') : '')}">
                 <em>记录这批货存在哪个仓</em></label>
@@ -787,6 +790,7 @@
         gender: val('#peGender') || 'unisex',
         status: wantActive ? 'pending_listing' : (val('#peStatus') || 'active'),
         reorderPoint: Number(val('#peReorder') || 0),
+        ...(val('#peAvgCost') !== '' ? { averageCost: Number(val('#peAvgCost') || 0) } : {}),
         brand_id: val('#peBrand') ? Number(val('#peBrand')) : null,
         category_id: val('#peCategory') ? Number(val('#peCategory')) : null,
         season: (val('#peSeason') || '').trim() || null,

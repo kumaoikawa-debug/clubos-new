@@ -7,20 +7,44 @@ const refresh=()=>Promise.all([loadSupplyChain(),loadProducts()]);
 const requestKey=()=>crypto.randomUUID();
 const active=v=>String(v.status||'active')==='active';
 const label=(p,v)=>`${p.name} · ${v.color||''} ${v.size||v.name||''} · ${v.sku||''}`;
+/* V1.3 口径统一（修复「商品库有货、采购单选不到」）：
+   采购候选不再前端自拼口径，直接用后端 /api/platform/products 标注的
+   procurementEligible（与 create_purchase_order 的 owned()/sku() 校验完全一致）。
+   返回 {options, blocked}：blocked 用于在弹窗里给出「为什么选不到」的明确原因。 */
 async function skuOptions(){
- const ps=(await api('/api/platform/products')).filter(p=>p.inventory_mode==='platform_owned'&&p.source!=='external_api');
- return (await Promise.all(ps.map(async p=>(await api(`/api/platform/products/${p.id}/variants`)).filter(active).map(v=>({p,v}))))).flat();
+ const ps=(await api('/api/platform/products'));
+ const blocked=ps.filter(p=>p.procurementEligible===false);
+ const options=(await Promise.all(ps.filter(p=>p.procurementEligible!==false)
+   .map(async p=>(await api(`/api/platform/products/${p.id}/variants`)).filter(active).map(v=>({p,v}))))).flat()
+   .filter(x=>x.p.procurementEligible!==false);
+ return {options,blocked};
 }
 window.createPO=async()=>uxTask(async()=>{
  const suppliers=await api('/api/platform/suppliers?status=active');if(!suppliers.length)return toast('请先建立供应商档案');
- let options=await skuOptions();
- const dlg=uxDialog({title:'采购下单',desc:'按 SKU 填写计划数量和成本；验收沿用这份计划，零售价和图片由运营上架时完善。',wide:true,body:`<div style="margin-bottom:10px"><span style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">供应商</span>${uxChoiceHtml({id:'poSupplier',name:'poSupplier',value:String(suppliers[0]&&suppliers[0].id!=null?suppliers[0].id:''),options:suppliers.map(s=>({value:String(s.id),label:s.name}))})}</div><div style="overflow-x:auto"><table class="table"><thead><tr><th>商品 / 颜色 / 尺码 / SKU</th><th>计划数量</th><th>采购单价</th><th></th></tr></thead><tbody id="poSkuRows"></tbody></table></div><div class="actions"><button class="btn secondary" id="poAddRow">添加 SKU</button><button class="btn secondary" id="poQuickProduct">快速建档并带入规格</button></div><label>期望到货时间<input id="poExpectedAt" type="datetime-local" placeholder="预计供应商送达日期"></label><label>采购备注<input id="poNote" value="平台采购"></label><div id="poError" role="alert"></div>`,foot:'<button class="btn ghost" data-cancel>取消</button><button class="btn" data-submit>保存采购草稿</button>'});
+ const {options,blocked}=await skuOptions();
+ const blockedNames=blocked.slice(0,3).map(b=>b.name).join('、')+(blocked.length>3?' 等':'');
+ const blockedNote=blocked.length
+  ?('<div class="notice" style="margin:0 0 10px">另有 '+blocked.length+' 个商品不进平台采购：'+esc(blockedNames)+'。'+esc(blocked[0].procurementBlockReason||'')+'</div>')
+  :'';
+ const quickBtn='<button class="btn secondary" id="poQuickProduct">快速建档并带入规格</button>';
+ const emptyBody=options.length?''
+  :('<div class="empty" id="poEmptyTip">商品库里没有可进平台采购的 SKU。'+(blocked.length?'可采购商品均被排除（见上方原因）。':'请先在「商品管理」建档，或用下方入口快速建档。')+'</div>');
+ const rowsBody='<div style="margin-bottom:10px"><span style="display:block;font-size:13px;font-weight:600;margin-bottom:6px">供应商</span>'
+  +uxChoiceHtml({id:'poSupplier',name:'poSupplier',value:String(suppliers[0]&&suppliers[0].id!=null?suppliers[0].id:''),options:suppliers.map(s=>({value:String(s.id),label:s.name}))})
+  +'</div><div style="overflow-x:auto"><table class="table"><thead><tr><th>商品 / 颜色 / 尺码 / SKU</th><th>计划数量</th><th>采购单价</th><th></th></tr></thead><tbody id="poSkuRows"></tbody></table></div>'
+  +(options.length?('<div class="actions"><button class="btn secondary" id="poAddRow">添加 SKU</button>'+quickBtn+'</div>'):('<div class="actions">'+quickBtn+'</div>'));
+ const dlg=uxDialog({title:'采购下单',desc:'按 SKU 填写计划数量和成本；验收沿用这份计划，零售价和图片由运营上架时完善。',wide:true,
+  body:blockedNote+emptyBody+rowsBody
+  +'<label>期望到货时间<input id="poExpectedAt" type="datetime-local" placeholder="预计供应商送达日期"></label><label>采购备注<input id="poNote" value="平台采购"></label><div id="poError" role="alert"></div>',
+  foot:'<button class="btn ghost" data-cancel>取消</button><button class="btn" data-submit>保存采购草稿</button>'});
  dlg.classList.add('inventory-workflow');
  function add(vid,q=1,cost=''){
   const tr=document.createElement('tr');tr.innerHTML=`<td><select aria-label="采购 SKU">${options.map(x=>`<option value="${x.v.id}"${Number(vid)===x.v.id?' selected':''}>${esc(label(x.p,x.v))}</option>`).join('')}</select></td><td data-label="计划数量"><input aria-label="计划数量" type="number" min="1" step="1" value="${q}" style="width:90px"></td><td data-label="采购单价"><input aria-label="采购单价" type="number" min="0" step="0.01" value="${cost}" placeholder="使用供货价" style="width:110px"></td><td><button class="btn ghost" aria-label="移除此采购行">移除</button></td>`;tr.querySelector('button').onclick=()=>tr.remove();dlg.querySelector('#poSkuRows').appendChild(tr);
  }
- if(options.length)add();dlg.querySelector('#poAddRow').onclick=()=>options.length?add():toast('请先建商品规格');
- dlg.querySelector('#poQuickProduct').onclick=async()=>{const q=await quickCreateInventoryProduct(undefined,Number(dlg.querySelector('#poSupplier').value));if(!q)return;options=await skuOptions();for(const r of q.skuItems||[])add(r.variantId,r.quantity,q.cost??'');};
+ if(options.length)add();
+ const addRowBtn=dlg.querySelector('#poAddRow');
+ if(addRowBtn)addRowBtn.onclick=()=>options.length?add():toast('请先建商品规格');
+ dlg.querySelector('#poQuickProduct').onclick=async()=>{const q=await quickCreateInventoryProduct(undefined,Number(dlg.querySelector('#poSupplier').value));if(!q)return;options=(await skuOptions()).options;for(const r of q.skuItems||[])add(r.variantId,r.quantity,q.cost??'');};
  dlg.querySelector('[data-cancel]').onclick=()=>dlg.uxClose();
  dlg.querySelector('[data-submit]').onclick=async e=>{
   const btn=e.currentTarget;btn.disabled=true;
@@ -74,7 +98,7 @@ window.registerSupplierShipment=async id=>uxTask(async()=>{
 });
 const oldSupply=window.loadSupplyChain;
 window.loadSupplyChain=async function(){await oldSupply();const ps=await api('/api/platform/procurement/purchase-orders');for(const p of ps.filter(x=>['ordered','partially_received'].includes(x.status))){const receive=[...document.querySelectorAll('#purchaseOrderList button')].find(b=>(b.getAttribute('onclick')||'').includes(`receivePO('${p.id}')`));if(receive&&!receive.parentNode.querySelector('[data-supplier-ship]')){const b=document.createElement('button');b.className='btn ghost';b.dataset.supplierShip='1';b.textContent='供应商发货';b.onclick=()=>registerSupplierShipment(p.id);receive.before(b);}}};
-window.manualAdjust=async()=>uxTask(async()=>{const options=await skuOptions();if(!options.length)return toast('没有自营 SKU');const f=await uxForm({title:'自营 SKU 库存调整',subtitle:'仅用于有凭证的实盘差异；采购到货请走验收。',fields:[{name:'vid',label:'商品 / 颜色 / 尺码',type:'select',options:options.map(x=>({value:x.v.id,label:label(x.p,x.v)})),required:true,full:true},{name:'quantityDelta',label:'差异数量（调减填负数）',type:'number',step:1,value:0,required:true},{name:'reason',label:'实盘依据 / 原因',required:true,full:true}],submitText:'记录库存调整'});if(!f)return;const x=options.find(x=>x.v.id===Number(f.vid));await post('/api/platform/inventory/adjustments',{productId:x.p.id,variantId:x.v.id,quantityDelta:Number(f.quantityDelta),reason:f.reason});refresh();});
+window.manualAdjust=async()=>uxTask(async()=>{const {options}=await skuOptions();if(!options.length)return toast('没有可进平台采购的自营 SKU（外部品牌商品不在此调整）');const f=await uxForm({title:'自营 SKU 库存调整',subtitle:'仅用于有凭证的实盘差异；采购到货请走验收。',fields:[{name:'vid',label:'商品 / 颜色 / 尺码',type:'select',options:options.map(x=>({value:x.v.id,label:label(x.p,x.v)})),required:true,full:true},{name:'quantityDelta',label:'差异数量（调减填负数）',type:'number',step:1,value:0,required:true},{name:'reason',label:'实盘依据 / 原因',required:true,full:true}],submitText:'记录库存调整'});if(!f)return;const x=options.find(x=>x.v.id===Number(f.vid));await post('/api/platform/inventory/adjustments',{productId:x.p.id,variantId:x.v.id,quantityDelta:Number(f.quantityDelta),reason:f.reason});refresh();});
 // Replace the brittle table-column hook with explicit row data from the server renderer.
 window.retryOrderCommerce=async id=>uxTask(async()=>{const r=await post(`/api/platform/orders/${id}/shipment/sync-commerce`);toast(r.status==='synced'?'交易引擎已同步':r.message||'仍待同步');loadOrders();});
 // 「创建拣货」按钮改由 orderRowHtml 按后端 pickState 渲染（2026-11-06）：这里不再补挂，

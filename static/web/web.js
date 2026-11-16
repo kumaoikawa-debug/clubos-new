@@ -964,18 +964,9 @@ function productDetailHtml(){
           return `<tr${so?' class="is-out"':''}>${colors.length&&hasSize?`<td>${s.color?esc(s.color):'<span class="sub">—</span>'}</td>`:''}<td>${esc(s.name)}${so?'<i class="w-pd__soldout">缺货</i>':''}</td><td>${money(smp)}</td></tr>`;
         }).join('')}</tbody>
       </table>
-      <p class="w-pd__tabnote">${displayOnly?'尺码与价格来自品牌方，当前仅供浏览。':vs.length?'价格为实时数据，以下单瞬间的结算结果为准。':'该商品当前只有一个规格；后台新增规格后，这里会出现尺码对照表。'}</p>
     </div>
   </section>
   ${pdRecCards(p)}
-  <div class="w-pd__tips">
-    <b>温馨提示</b>
-    <ul>
-      <li>${displayOnly?'页面展示品牌方提供的商品价格。':'会员价按会员等级自动计算，最终金额以提交订单后的服务端结算为准。'}</li>
-      <li>${displayOnly?esc(p.brand_name||'品牌方')+' 商品由品牌方独立管理，当前仅供浏览。':'实物商品由平台仓库统一发货，下单前需先填写收货地址。'}</li>
-      <li>${displayOnly?'商品资料来自品牌方，当前暂不开放购买。':'售罄规格无法下单，价格实时变动。'}</li>
-    </ul>
-  </div>
   <footer class="w-pd__foot">
     <button class="w-pd__fcart" type="button" aria-label="购物车" onclick="openCart()"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/></svg><i class="w-pd__barbadge" id="pdFootBadge" hidden>0</i></button>
     <button class="w-pd__fadd" type="button"${out?' disabled':''} onclick="pdOpenSheet('cart')">加入购物车</button>
@@ -1595,7 +1586,7 @@ function openHelp(){
     ['报名与名额','每位参加人占 1 个名额。付款人和参加人可以不同；身份证、紧急联系人等资料可支付后于「我的订单」补填，活动要求支付前补齐时会在提交时提示。'],
     ['积分抵扣','活动积分与装备积分可在报名时勾选抵扣。上限由系统按活动规则和你的余额算好，你只需要选择用或不用，不需要自己填数字。'],
     ['退款规则','每个活动有自己的退款政策，详情页会列出出发前不同时段对应的退款比例。提交申请后按政策计算，积分与福利券按规则恢复。'],
-    ['装备售后','装备订单由平台统一发货，售后（仅退款 / 退货退款 / 换货）由平台审核处理，可在「我的订单 → 装备订单」发起并填写退货物流。']
+    ['装备售后','装备订单的仅退款 / 退货退款 / 换货可在「我的订单 → 装备订单」发起，按页面指引填写退货物流即可。']
   ];
   uxDialog({title:'常见问题',desc:'报名、积分、退款与售后',
     body:`<div class="w-help">${rows.map(([q,a])=>`<div class="w-help__item"><b>${esc(q)}</b><p>${esc(a)}</p></div>`).join('')}</div>`,
@@ -2312,7 +2303,7 @@ function pointsPolicyHtml(a){
     const gpPct=Number(e.gearPointsRedeemPercent||0);
     lines.push('装备积分（平台补贴）可在结算时抵扣报名费用：总平台已为本俱乐部设定单笔最多可抵订单金额的 '+gpPct+'%。');
   }
-  return `<section class="w-block"><div class="w-block__head"><div><b>活动积分规则</b><div class="w-block__hint">积分的累计与抵扣由俱乐部与平台规则共同决定，具体以结算页计算为准。</div></div></div><div class="w-policy">${lines.map(t=>`<p>${esc(t)}</p>`).join('')}</div></section>`;
+  return `<section class="w-block"><div class="w-block__head"><div><b>活动积分规则</b></div></div><div class="w-policy">${lines.map(t=>`<p>${esc(t)}</p>`).join('')}</div></section>`;
 }
 function refundPolicyHtml(a){
   const p=a.refundPolicy||{};
@@ -2320,7 +2311,7 @@ function refundPolicyHtml(a){
   const rules=(p.rules||[]).map(r=>`<li>${esc(r.label||('出发前'+Number(r.minHoursBefore||0)+'小时以上'))}：现金退款 ${Number(r.cashRefundPercent||0)}%</li>`).join('');
   const after=(p.afterStartCashRefundPercent!=null&&p.afterStartCashRefundPercent!=='')?`<li>活动开始后：现金退款 ${Number(p.afterStartCashRefundPercent)}%</li>`:'';
   const note=p.note?`<p class="w-block__hint" style="margin-top:8px">${esc(p.note)}</p>`:'';
-  return `<section class="w-block"><div class="w-block__head"><div><b>活动退款规则</b><div class="w-block__hint">系统按你申请退款时距团期开始的时间自动计算现金退款比例；积分与福利券按规则恢复。</div></div></div><ul class="w-policy__list">${rules}${after}</ul>${note}</section>`;
+  return `<section class="w-block"><div class="w-block__head"><div><b>活动退款规则</b><div class="w-block__hint">退款比例按上表对应时段计算；积分与福利券按规则恢复。</div></div></div><ul class="w-policy__list">${rules}${after}</ul>${note}</section>`;
 }
 function participantPolicyHtml(a){
   const p=a.participantPolicy||{};const max=Number(p.maxParticipantsPerOrder||8);
@@ -2809,7 +2800,7 @@ async function loadMemberCenter(){
     const lines=[];
     lines.push(on
       ? `会员权益：装备商城 <b>${esc(gd.discountZhe)} 折</b> —— 在活动出行清单与装备商城里直接看到会员价。`
-      : '装备商城按原价结算；装备折扣由平台按俱乐部订阅的套餐提供。');
+      : '装备商城按原价结算。');
     $('#memberTierPerks').innerHTML=lines.join(' ');
   }
   /* #860 券与积分解耦：券就是券，顾客侧不再显示「X 积分可兑换这张券」。

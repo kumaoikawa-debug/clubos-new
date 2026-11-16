@@ -368,7 +368,6 @@
 }
 .w-shop__tabs button.on{color:var(--w-ink);font-weight:700}
 .w-shop__tabs button:focus-visible{outline:2px solid var(--w-brand);outline-offset:2px;border-radius:4px}
-.w-shop__note{padding:14px 0 0;font-size:11.5px;color:var(--w-muted);line-height:1.6}
 
 /* 商品卡：**必须保留 .web-card 类** —— experience-consumer.js 是靠 `#publicProducts .web-card`
    数商品张数的，卡片换个类名它就会认为「0 件在售」并把容器内容整个换成空态。
@@ -1152,7 +1151,6 @@
 .w-pd__sizetab thead th{font-size:11px;font-weight:600;color:var(--w-muted)}
 .w-pd__sizetab tbody tr:last-child td{border-bottom:0}
 .w-pd__sizetab tr.is-out td{color:var(--w-muted);text-decoration:line-through}
-.w-pd__tabnote{margin:10px 0 0;font-size:11px;line-height:1.6;color:var(--w-muted)}
 /* 商品推荐：三列小卡（图 + 名称两行 + 分类 + 价格） */
 .w-pd__rec{margin-top:10px;padding:16px 16px 18px;background:#fff}
 .w-pd__rechd{margin:0 0 12px;font-size:14px;font-weight:700;color:var(--w-ink)}
@@ -1164,11 +1162,6 @@
 .w-pd__recsub{margin-top:2px;font-size:10.5px;color:var(--w-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .w-pd__recprice{margin-top:3px;font-size:13px;font-weight:700;color:var(--w-ink);font-variant-numeric:tabular-nums}
 /* 温馨提示：浅灰圆角卡，只写真实规则（会员价 / 发货 / 库存） */
-.w-pd__tips{margin:10px 0 0;padding:14px 16px;background:#f4f5f3;border-radius:12px}
-.w-pd__tips b{display:block;font-size:12.5px;font-weight:700;color:var(--w-ink)}
-.w-pd__tips ul{margin:8px 0 0;padding:0;list-style:none;display:grid;gap:6px}
-.w-pd__tips li{position:relative;padding-left:11px;font-size:11.5px;line-height:1.7;color:var(--w-muted)}
-.w-pd__tips li:before{content:'·';position:absolute;left:0;top:-1px;font-weight:700}
 /* 吸底操作条：购物车（描边小钮）+ 加入购物车（描边）+ 立即购买（实心黑） */
 .w-pd__foot{
   position:sticky;bottom:var(--w-navh);z-index:35;display:flex;align-items:center;gap:10px;
@@ -2461,10 +2454,15 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 }
 .web-shell .me-tier-row__disc{margin-left:auto;font-size:12px;color:var(--w-brand);font-weight:600}
 .web-shell .me-tier-row__cond{margin-top:5px;line-height:1.5}
-/* 标签行：最后一个不被容器边距切掉半颗 */
-.web-shell .me-tabs{flex-wrap:wrap;overflow:visible;gap:8px;padding:0 0 10px;margin:0}
-/* 六个标签在 390px 上排不进一行：横滑会把「退款」藏在屏幕外（看不见就当没有），
-   换行显示全部更符合「一眼看到有哪几类」的用法。 */
+/* 标签行：固定一行，放不下时左右横滑（UX 定稿 2026-11-16）。
+   之前换行占两行、把内容顶下去一屏；现在 nowrap + overflow-x:auto，
+   隐藏滚动条但保留滑动，并用 scroll-snap 让每颗标签停在完整位置。 */
+.web-shell .me-tabs{
+  flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;gap:8px;padding:0 0 10px;margin:0;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;
+}
+.web-shell .me-tabs::-webkit-scrollbar{display:none}
+.web-shell .me-tabs::-webkit-scrollbar-thumb{display:none}
 
 /* ── 会员信息页：进度条/升级提示/统计行收进白卡（原来散在页底、颜色还按深色卡写）── */
 .web-shell .me-mc__card{
@@ -3049,7 +3047,6 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 .me-cpn__ops button{border:1px solid #d9e2da;background:#fff;color:#156243;
   border-radius:999px;padding:6px 12px;font-size:12px;font-weight:650;cursor:pointer}
 .me-cpn__ops button:active{background:#eaf3ec}
-.me-cpn__tip{flex:0 0 100%;font-size:11px;color:#8b988f;line-height:1.5;margin-top:2px}
 
 /* ══ #837 me 页订单左滑删除 ══ */
 .me-camp-wrap{position:relative;overflow:hidden;border-radius:18px}

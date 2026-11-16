@@ -12,10 +12,10 @@
    自己，会无限递归）。 */
  window.addProduct=async()=>uxTask(async()=>{await platformAddProduct()});
  window.addSupplier=async()=>uxTask(async()=>{const d=await uxForm({title:'新增供应商',subtitle:'供应商档案用于采购、到货和应付账款。品牌一并建档，入库弹窗「品牌按供应商选」才能选到它。',fields:[{name:'name',label:'供应商名称',required:true,full:true},{name:'brandName',label:'品牌名称',full:true,help:'该供应商对应的品牌。填了会一并创建品牌并自动与该供应商关联；留空则只建供应商。'},{name:'contactName',label:'联系人',required:true},{name:'phone',label:'联系电话',required:true},{name:'leadTimeDays',label:'默认交期（天）',type:'number',min:0,max:365,step:1,value:7,required:true},{name:'paymentTerms',label:'账期说明',placeholder:'例如：月结30天',full:true}],submitText:'保存供应商'});if(!d)return;const sup=await post('/api/platform/suppliers',d);toast('供应商已创建');const bn=String(d.brandName||'').trim();if(bn&&sup&&sup.id){try{const br=await post('/api/platform/brands',{name:bn});await post('/api/platform/brands/'+br.id+'/suppliers',{supplierId:sup.id,isPrimary:true});toast('品牌「'+bn+'」已关联该供应商')}catch(e){toast('品牌关联未完成：'+(e.message||e))}}loadSupplyChain()});
-/* V1.2 修复（进销存任务 bug）：此前「采购单内联快速建商品」写在 platform.js 的 createPO 里，
-   但本文件在 platform.js 之后加载、整体覆盖了它，导致线上采购单从 V1.1 起一直只能用已有商品、
-   看不到「➕ 快速新建商品」。现把真身收口到此处（本文件才是真正生效的版本）。
-   商品下拉列出全部商品（不限于在售）+ 置顶「➕ 快速新建商品…」；零商品时也能现场建。 */
+/* V1.3 收口（进销存口径统一）：createPO / receivePO / manualAdjust 的唯一真身在
+   platform/inventory-workflow.js（该文件在所有 workflows-*.js 之后加载、最终生效）。
+   本文件此前的重复定义是被覆盖的死代码，已删除 —— 在这里定义同名函数不会生效。
+   采购候选统一使用后端 /api/platform/products 的 procurementEligible 标注。 */
 /* V1.2 修复（进销存任务）：快速新建商品改为「规格矩阵」编辑器 —— 同一货号可逐行加多个
    颜色/尺码（含非对称：黑色 S/M/L、红色 M/L），每行可录条码供收货扫码；不填规格行则
    只建一个默认规格。替代原先只有单个颜色/尺码输入框、无法表达多规格的版本。 */
@@ -207,117 +207,6 @@ async function quickCreateProduct(unitCost,supplierId){
 }
  window.quickCreateInventoryProduct=quickCreateProduct;
  window.inventoryBarcodeCamera=poOpenBarcodeCamera;
- window.createPO=async()=>uxTask(async()=>{
-  let [ss,ps]=await Promise.all([api('/api/platform/suppliers?status=active'),api('/api/platform/products')]);
-  if(!ss.length){toast('请先创建供应商');return}
-  const productOptions=[{value:'__new__',label:'➕ 快速新建商品…'},...option(ps,x=>x.name+' · '+x.sku+' · 可售 '+x.stock)];
-  const d=await uxForm({title:'创建采购单草稿',subtitle:'选择供应商与商品 → 确认数量与采购价 → 生成草稿。',steps:'01 / 采购信息 → 02 / 审核 → 03 / 下单 → 04 / 入库',hint:'创建草稿、审核、下单都不会增加库存。只有确认实物到货，才会发生入库。',fields:[
-    {name:'supplierId',label:'供应商',type:'select',required:true,options:option(ss,x=>x.name+' · 交期 '+(x.lead_time_days||x.leadTimeDays||'—')+'天'),full:true},
-    {name:'productId',label:'商品 / SKU（没有可现场新建）',type:'select',required:true,options:productOptions,full:true},
-    {name:'quantity',label:'采购数量',type:'number',min:1,step:1,value:1,help:'选「快速新建商品」时由「颜色 × 尺码」数量自动汇总带入，无需手填；选已有商品时才需要填写。'},
-    {name:'unitCost',label:'采购单价（元，可留空）',type:'number',min:0,step:0.01,placeholder:'留空使用供货价',help:'系统将按后台供应商供货关系校验 MOQ 和采购价格。'},
-    {name:'note',label:'采购备注',type:'textarea',full:true,value:'平台采购'}
-  ],submitText:'生成采购草稿'});
-  if(!d)return;
-  let productId=Number(d.productId), unitCost=(d.unitCost!==undefined&&d.unitCost!==''&&d.unitCost!=null)?Number(d.unitCost):undefined;
-  let qty=Number(d.quantity)||1;
-  let qcSupplierId=Number(d.supplierId);
-  if(d.productId==='__new__'){
-    /* ① 品牌按供应商选：把采购单已选的供应商传进入库弹窗，品牌下拉只列该供应商关联的品牌。 */
-    const qc=await quickCreateProduct(unitCost,Number(d.supplierId));
-    if(!qc)return;
-    productId=Number(qc.id);
-    if(qc.cost!==undefined)unitCost=qc.cost;
-    if(qc.supplierId)qcSupplierId=Number(qc.supplierId);
-    /* 入库逻辑要求「总数 = 所有颜色尺码数量之和」，不再让人手填一个拍脑袋的数：
-       规格矩阵里每行录多少件，汇总就是采购数量（用户原话：总数不是手动填写的）。 */
-    if(qc.totalQty>0){ qty=qc.totalQty; }
-    toast('商品已创建 · 采购数量按规格合计自动带入 '+qty+' 件');
-  }
-  const item={productId,quantity:qty};
-  if(unitCost!==undefined)item.unitCost=unitCost;
-  const r=await post('/api/platform/procurement/purchase-orders',{supplierId:qcSupplierId,items:[item],note:d.note});
-  toast('采购草稿已创建'+(r?.id?' #'+r.id:''));loadSupplyChain();
- });
- window.receivePO=async id=>uxTask(async()=>{
-  let po=await api('/api/platform/procurement/purchase-orders/'+id);
-  const rows=(po.items||[]).filter(x=>Number(x.quantity_outstanding??(x.quantity_ordered-x.quantity_received))>0);
-  if(!rows.length){toast('采购单已经全部到货');return}
-  const varMap={};
-  await Promise.all([...new Set(rows.map(r=>r.product_id))].map(async pid=>{try{varMap[pid]=await api('/api/platform/products/'+pid+'/variants')}catch(e){varMap[pid]=[]}}));
-  // V1.2 修复（进销存任务）：收货须确认入哪个仓 —— 拉取仓库/可售库位列表，弹窗内提供「入仓」下拉。
-  let whOpts=[];
-  try{const whs=await api('/api/platform/warehouses');whOpts=(whs||[]).flatMap(w=>(w.locations||[]).filter(l=>String(l.zone_type)==='sellable').map(l=>({value:l.id,label:(w.name||'仓库')+' · '+(l.name||l.code||'库位')+'（'+(l.code||'')+'）',def:!!l.is_default})));}catch(e){whOpts=[]}
-  // V1.2 收货扫码：按 规格SKU/条码(barcode)/货号(product_sku) 建索引，扫到即确认颜色尺码并定位到对应行。
-  const scanIdx={};
-  for(const r of rows){
-    const vs=(varMap[r.product_id]||[]).filter(v=>String(v.status||'active')==='active');
-    // 单规格商品的收货输入框 data-vid 为空（后端靠 product_id 解析），扫码要用空 vid 命中那一行。
-    const useVid = vs.length===1 ? '' : null;
-    for(const v of vs){
-      const vid = useVid===null ? v.id : '';
-      const key=(v.sku||'').trim().toLowerCase(); if(key) scanIdx[key]={iid:r.id,vid,sku:v.sku,name:r.product_name,color:v.color,size:v.size};
-      const bc=(v.barcode||'').trim().toLowerCase(); if(bc) scanIdx[bc]={iid:r.id,vid,sku:v.sku,name:r.product_name,color:v.color,size:v.size};
-    }
-    // 单规格商品：货号（款号）也能直接扫 —— 多规格时货号不唯一，需扫具体规格条码。
-    if(vs.length===1){
-      const psk=(r.product_sku||'').trim().toLowerCase(); if(psk) scanIdx[psk]={iid:r.id,vid:'',sku:r.product_sku,name:r.product_name,color:vs[0].color||'',size:vs[0].size||''};
-    }
-  }
-  let html='';
-  for(const r of rows){
-    const remain=Number(r.quantity_outstanding??(r.quantity_ordered-r.quantity_received));
-    const vs=(varMap[r.product_id]||[]).filter(v=>String(v.status||'active')==='active');
-    if(vs.length>1){
-      html+=`<div class="sub" style="margin:12px 0 4px;font-weight:700">${esc(r.product_name)} · 未到货 ${remain}（多规格逐行填写，可只填其中几行）</div>`;
-      for(const v of vs) html+=`<label style="display:flex;gap:10px;align-items:center;margin:4px 0"><span style="flex:1">${esc(v.name||v.sku||('规格 #'+v.id))}${v.color?` · ${esc(v.color)}`:''}${v.size?` / ${esc(v.size)}`:''}<span class="sub"> · 现存 ${v.stock||0}</span></span><input type="number" min="0" value="0" class="rx" data-iid="${r.id}" data-vid="${v.id}" data-remain="${remain}" style="width:90px"></label>`;
-    }else{
-      html+=`<label style="display:flex;gap:10px;align-items:center;margin:4px 0"><span style="flex:1">${esc(r.product_name)}<span class="sub"> · 未到货 ${remain}</span></span><input type="number" min="0" value="${remain}" class="rx" data-iid="${r.id}" data-vid="" data-remain="${remain}" style="width:90px"></label>`;
-    }
-  }
-  const ov=uxDialog({title:'确认到货入库',desc:'先选择入仓，再扫条码 / 输入货号确认颜色尺码，然后填实收数量；数量合计不能超过未到货量。',
-    body:`<div style="position:sticky;top:0;background:#fff;z-index:2;padding-bottom:6px;border-bottom:1px solid #eee;margin-bottom:8px">`
-      + (whOpts.length?`<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><span style="font-size:13px;white-space:nowrap;color:#3a4651">入仓</span><div style="flex:1">${uxChoiceHtml({id:'poLoc',value:(whOpts.find(o=>o.def)||{}).value||'',options:whOpts})}</div></div>`:'')
-      +`<div style="display:flex;gap:8px;align-items:center"><input id="poScanInput" placeholder="扫条码或输入货号/SKU 后回车，系统确认颜色尺码" style="flex:1;padding:9px;border:1px solid #cdd5cf;border-radius:8px" autocomplete="off">`
-      +`<button class="btn ghost" type="button" id="poScanCam">📷 扫一扫</button></div>`
-      +`<div id="poScanResult" style="font-size:13px;margin-top:6px;min-height:18px"></div></div>`
-      +'<div>'+html+'</div>',initialFocus:'#poScanInput',
-    foot:'<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-submit>确认入库</button>'});
-  ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
-  const applyScan=(raw)=>{
-    const val=String(raw||'').trim().toLowerCase(); if(!val)return;
-    const res=ov.querySelector('#poScanResult');
-    const m=scanIdx[val];
-    if(!m){res.style.color='#b45309';res.textContent=`⚠ 货号/条码「${raw}」不在本采购单中`;return;}
-    const inp=ov.querySelector(m.vid ? `input.rx[data-iid="${m.iid}"][data-vid="${m.vid}"]` : `input.rx[data-iid="${m.iid}"]`);
-    if(inp){inp.value=String((Number(inp.value||0))+1);inp.style.background='#e6f4ea';inp.style.boxShadow='0 0 0 2px #34a853 inset';}
-    res.style.color='#1a7f37';
-    res.textContent=`✓ 已匹配：${esc(m.name)} · 货号 ${esc(m.sku||'—')}${m.color?` · ${esc(m.color)}`:''}${m.size?` / ${esc(m.size)}`:''}（实收 +1）`;
-  };
-  const sinp=ov.querySelector('#poScanInput');
-  sinp.addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();applyScan(sinp.value);sinp.value='';sinp.focus();} });
-  ov.querySelector('#poScanCam').onclick=()=>poOpenBarcodeCamera(applyScan);
-  ov.querySelector('[data-submit]').onclick=async()=>{
-    const items=[];let over=null;
-    ov.querySelectorAll('input.rx').forEach(inp=>{
-      const q=Number(inp.value||0);if(q<=0)return;
-      const remain=Number(inp.dataset.remain||0);
-      if(remain&&q>remain&&!over)over=inp;
-      items.push({purchaseOrderItemId:Number(inp.dataset.iid),quantity:q,variantId:inp.dataset.vid?Number(inp.dataset.vid):undefined});
-    });
-    if(over){over.classList.add('ux-invalid');over.focus();return}
-    if(!items.length){toast('请至少填写一个规格的实收数量');return}
-    try{
-      const locEl=ov.querySelector('#poLoc');
-      const payload={items,note:'平台仓库确认到货'};
-      if(locEl&&locEl.value)payload.locationId=Number(locEl.value);
-      let r=await api('/api/platform/procurement/purchase-orders/'+id+'/receive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-      let badSync=(r.commerceSync||[]).filter(x=>x.status==='error');
-      toast(badSync.length?'已入库；Medusa库存同步待重试':'到货已入库');
-      ov.uxClose();loadSupplyChain();loadProducts();
-    }catch(e){toast('入库失败：'+e.message)}
-  };
- });
 // V1.2 收货相机扫码：用浏览器原生 BarcodeDetector 解商品一维条码（货号/条码）；
 // 不支持的浏览器（或桌面无摄像头）自动降级为「扫码枪/手动输入」，不阻塞入库。
 async function poOpenBarcodeCamera(apply){
@@ -347,7 +236,6 @@ async function poOpenBarcodeCamera(apply){
   ov.querySelector('[data-cc]').onclick=()=>{stop();ov.uxClose();};
  }
 
- window.manualAdjust=async()=>uxTask(async()=>{const ps=await api('/api/platform/products');if(!ps.length){toast('暂无商品');return}const d=await uxForm({title:'库存盘点调整',subtitle:'调整将产生可追溯流水，不会覆盖原记录。',hint:'盘盈输入正数，盘亏输入负数；必须填写原因。',fields:[{name:'productId',label:'商品',type:'select',options:option(ps,x=>x.name+' · 当前可售 '+x.stock),required:true,full:true},{name:'quantityDelta',label:'调整数量',type:'number',step:1,required:true,value:1,validate:v=>v===0?'调整数量不能为 0':''},{name:'reason',label:'调整原因',required:true,placeholder:'例如：季度盘点发现差异',full:true}],submitText:'确认记入库存流水'});if(!d)return;await post('/api/platform/inventory/adjustments',{productId:Number(d.productId),quantityDelta:d.quantityDelta,reason:d.reason});toast('库存调整已记入流水');loadSupplyChain();loadProducts()});
  window.setReplenishmentPolicy=async()=>uxTask(async()=>{const p=await api('/api/platform/replenishment/policy');const d=await uxForm({title:'补货计算策略',subtitle:'修改后重新计算建议，不会自动下单。',fields:[{name:'salesWindowDays',label:'销量观察窗口（天）',type:'number',min:7,max:180,required:true,value:p.salesWindowDays},{name:'targetCoverDays',label:'目标库存覆盖（天）',type:'number',min:7,max:120,required:true,value:p.targetCoverDays},{name:'safetyDays',label:'安全库存（天）',type:'number',min:0,max:60,required:true,value:p.safetyDays},{name:'slowMovingDays',label:'无销售视作慢动销（天）',type:'number',min:30,max:365,required:true,value:p.slowMovingDays}],hint:'使用近窗净销量、供应商交期、在途采购和 MOQ；低销量商品需要人工审核。',submitText:'保存策略'});if(!d)return;await patch('/api/platform/replenishment/policy',d);toast('补货策略已更新');loadAnalytics()});
  window.createReplenishmentPO=async(productId,qty)=>uxTask(async()=>{const d=await uxForm({title:'确认补货建议',subtitle:'只创建采购草稿，仍须人工审批、确认下单和到货入库。',fields:[{name:'quantity',label:'建议采购数量',type:'number',min:1,step:1,value:qty,required:true}],submitText:'创建采购草稿'});if(!d)return;const r=await post('/api/platform/replenishment/products/'+productId+'/create-po',{quantity:d.quantity});toast('采购草稿已创建 #'+r.purchaseOrder.id);loadAnalytics()});
  window.paySupplier=async(supplierId,outstanding)=>uxTask(async()=>{if(Number(outstanding)<=0){toast('当前无应付余额');return}const d=await uxForm({title:'登记供应商付款',subtitle:'请先核对银行/支付凭证。重复凭证将由服务端幂等保护。',hint:'本操作只记录已经实际完成的付款，不会在银行发起转账。',fields:[{name:'amount',label:'本次付款金额（元）',type:'number',min:.01,max:Number(outstanding),step:.01,value:Number(outstanding).toFixed(2),required:true},{name:'paymentRef',label:'付款凭证号',required:true,full:true},{name:'note',label:'备注',value:'平台供应商付款',full:true}],submitText:'确认已付款并记账'});if(!d)return;await post('/api/platform/finance/supplier-payments',{supplierId,amount:d.amount,paymentRef:d.paymentRef,paymentMethod:'bank',note:d.note});toast('付款已登记');loadFinance()});

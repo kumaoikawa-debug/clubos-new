@@ -1074,7 +1074,6 @@ SUB_ME.coupons=function(){
         <button type="button" id="meCpnLocate" onclick="meLocateCity(true)">重新定位</button>
         <button type="button" onclick="meSetCity()">手动调整</button>
       </span>
-      <span class="me-cpn__tip">优先按系统定位的本地城市发放城市定向优惠券；手动调整后会固定使用所选城市，不再被自动定位覆盖。</span>
     </div>`;
   const parts=[];
   if(claimable.length) parts.push(`<div class="me-cpn__grp"><h4>可领取</h4><div class="me-cpn__list">${claimable.map(v=>meCouponFace(v,true)).join('')}</div></div>`);
@@ -1193,7 +1192,7 @@ function meLocateCity(force){
 async function meSetCity(){
   const cities=(window.CLUBOS_CITIES||[]);
   const opts=[{value:'',label:'不设置'}].concat(cities.map(c=>({value:c,label:c})));
-  const v=await showForm({title:'手动调整所在城市',desc:'默认是系统定位的本地城市；手动选择后会固定使用这个城市，不再被自动定位覆盖。',fields:[{name:'city',label:'所在城市',type:'select',options:opts,value:ME.city||''}],submitText:'保存'});
+  const v=await showForm({title:'手动调整所在城市',fields:[{name:'city',label:'所在城市',type:'select',options:opts,value:ME.city||''}],submitText:'保存'});
   if(!v) return;
   try{
     await api(`/api/public/users/${USER}/city`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({city:v.city})});
@@ -1203,14 +1202,16 @@ async function meSetCity(){
   }catch(e){ toast((e&&e.message)||e); }
 }
 SUB_ME.orders=function(st){
+  /* 「商城订单」只放装备商城订单：活动报名走「我的订单」（活动订单/营地订单），
+     之前这里把 allOrders（活动+装备合并）当「全部」、还挂了「活动报名」tab，
+     顾客在商城里翻到报名单，以为买装备买出了活动（BUG-ORD-MIX / 2026-11-16）。 */
   const tab=st||'all';
-  const tabs=[['all','全部'],['activity','活动报名'],['pending','待付款'],['paid','待发货'],['shipped','待收货'],['completed','待评价'],['refund','退款']];
+  const tabs=[['all','全部'],['pending','待付款'],['paid','待发货'],['shipped','待收货'],['completed','待评价'],['refund','退款']];
   const tabHtml=tabs.map(([k,t])=>`<button class="me-tab${k===tab?' on':''}" onclick="meSetTab('${k}')">${esc(t)}</button>`).join('');
   let items=[];
-  if(tab==='all') items=meAll().map(x=>(Object.assign({},x.order,{_kind:x.kind})));
-  else if(tab==='activity') items=meActivity().map(o=>Object.assign({},o,{_kind:'activity'}));
-  else if(tab==='pending') items=mePending();
-  else if(tab==='refund') items=meGear().filter(meIsRefund).concat(meActivity().filter(meIsRefund));
+  if(tab==='all') items=meGear().slice();
+  else if(tab==='pending') items=mePending().filter(x=>x.orderKind!=='activity');
+  else if(tab==='refund') items=meGear().filter(meIsRefund);
   else items=meGear().filter(o=>o.status===tab);
   const list=items.length?items.map(meOrderCard).join(''):empty('该分类下暂无订单');
   return `<div class="me-tabs">${tabHtml}</div><div class="me-list2">${list}</div>`;

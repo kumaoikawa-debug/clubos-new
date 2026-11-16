@@ -4,76 +4,203 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>ClubOS NEW · 页面装修</title>
-  <link rel="stylesheet" href="/static/shared.css?v=20261113a">
+  <link rel="stylesheet" href="/static/shared.css?v=20261116b">
   <link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261114a">
   <link rel="stylesheet" href="/static/club/club-glass.css?v=20261112b">
   <style>
-    body{margin:0;background:#f5f7f6;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:#16362b}
-    .wrap{max-width:880px;margin:0 auto;padding:18px}
-    .top{display:flex;align-items:center;gap:12px;margin-bottom:14px}
-    .top h1{font-size:18px;margin:0}
-    .top select{padding:6px 10px;border-radius:8px;border:1px solid #d7e2dd}
-    .card{background:#fff;border:1px solid #e7edea;border-radius:14px;padding:14px;margin-bottom:12px}
-    .card h3{margin:0 0 10px;font-size:15px}
-    .comp{border:1px solid #e7edea;border-radius:12px;padding:12px;margin-bottom:10px;background:#fafcfb}
-    .comp__head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-    .comp__type{font-weight:700}
-    .row{display:flex;gap:8px;align-items:center;margin:6px 0;flex-wrap:wrap}
-    .row label{font-size:12px;color:#5d7a6e;min-width:84px}
-    .row input,.row select,.row textarea{padding:6px 8px;border:1px solid #d7e2dd;border-radius:8px;font-size:13px;flex:1;min-width:140px}
-    .row textarea{min-height:54px}
-    .btn{padding:7px 14px;border-radius:9px;border:1px solid #0a7d52;background:#0a7d52;color:#fff;font-size:13px;cursor:pointer}
-    .btn.ghost{background:#fff;color:#0a7d52}
-    .btn.sm{padding:4px 9px;font-size:12px}
-    .btn.danger{border-color:#c0392b;background:#fff;color:#c0392b}
-    .mini-img{width:54px;height:54px;object-fit:cover;border-radius:8px;border:1px solid #e0e8e4}
-    .empty{color:#8aa39a;text-align:center;padding:18px}
-    .status{font-size:12px;padding:3px 9px;border-radius:20px;background:#eee}
-    .status.pub{background:#e3f6ec;color:#0a7d52}
+    /* 可视化页面装修器 V2：左组件库 · 中手机预览 · 模块结构列表 · 右属性面板。
+       参考主流小程序装修台（微盟/有赞式）交互：点组件库加模块、点预览或列表选中、
+       拖拽 ≡ 排序、右侧只改当前模块。 */
+    :root{--pd-green:#0a7d52;--pd-line:#e3ece8;--pd-bg:#f2f6f4;--pd-ink:#16362b;--pd-sub:#5d7a6e}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--pd-bg);font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;color:var(--pd-ink)}
+    .pd-top{display:flex;align-items:center;gap:10px;padding:10px 16px;background:#fff;border-bottom:1px solid var(--pd-line);position:sticky;top:0;z-index:20;flex-wrap:wrap}
+    .pd-top h1{font-size:16px;margin:0}
+    .pd-top .back{font-size:13px;color:var(--pd-sub);text-decoration:none}
+    .pd-top select{padding:6px 10px;border-radius:8px;border:1px solid var(--pd-line);font-size:13px}
+    .status{font-size:12px;padding:3px 10px;border-radius:20px;background:#eee}
+    .status.pub{background:#e3f6ec;color:var(--pd-green)}
     .status.draft{background:#f3f0e6;color:#92751f}
-    .tip{font-size:12px;color:#8aa39a;margin:2px 0 10px}
+    .pd-top .grow{flex:1}
+    .btn{padding:7px 14px;border-radius:9px;border:1px solid var(--pd-green);background:var(--pd-green);color:#fff;font-size:13px;cursor:pointer}
+    .btn.ghost{background:#fff;color:var(--pd-green)}
+    .btn.danger{border-color:#c0392b;background:#fff;color:#c0392b}
+    .btn.sm{padding:4px 9px;font-size:12px}
+    .btn[disabled]{opacity:.5;cursor:not-allowed}
+    .pd-dirty{display:none;font-size:12px;color:#b3620b}
+    .pd-dirty.on{display:inline}
+
+    .pd-workspace{display:grid;grid-template-columns:208px minmax(300px,380px) 236px 1fr;gap:14px;padding:14px;align-items:start;max-width:1560px;margin:0 auto}
+    .pd-col{background:#fff;border:1px solid var(--pd-line);border-radius:14px;padding:12px;min-height:520px}
+    .pd-col h3{margin:0 0 8px;font-size:14px}
+    .pd-hint{font-size:12px;color:#8aa39a;line-height:1.5}
+
+    /* 左：组件库 */
+    .pd-lib__group{font-size:12px;color:var(--pd-sub);margin:10px 0 6px;font-weight:700}
+    .pd-lib__note{font-weight:400;color:#a9bcb3;margin-left:6px}
+    .pd-lib__group--lock{color:#b08c5a}
+    .pd-lib__grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .pd-tile{border:1px solid var(--pd-line);border-radius:10px;background:#fff;padding:12px 6px;text-align:center;cursor:pointer;transition:.15s;user-select:none}
+    .pd-tile:hover{border-color:var(--pd-green);box-shadow:0 2px 8px rgba(10,125,82,.12);transform:translateY(-1px)}
+    .pd-tile__ico{font-size:20px;line-height:1}
+    .pd-tile__lb{font-size:12px;margin-top:6px;color:var(--pd-ink)}
+
+    /* 中：手机预览 */
+    .pd-canvas{display:flex;flex-direction:column;align-items:center}
+    .pd-phone{width:340px;max-width:100%;background:#fafcfb;border:1px solid var(--pd-line);border-radius:26px;overflow:hidden;box-shadow:0 6px 24px rgba(22,54,43,.08)}
+    .pd-phone__bar{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#fff;border-bottom:1px solid var(--pd-line);font-size:13px;font-weight:700}
+    .pd-phone__bar span{font-size:11px;color:var(--pd-sub);font-weight:400}
+    .pd-phone__body{min-height:430px;max-height:520px;overflow-y:auto;padding:10px}
+    .pd-empty{color:#8aa39a;text-align:center;padding:60px 16px;font-size:13px;line-height:1.7}
+
+    /* 预览块（对齐 C 端 pl-* 观感） */
+    .pv-block{position:relative;border-radius:14px;margin-bottom:10px;cursor:pointer;outline:2px solid transparent;transition:.12s}
+    .pv-block:hover{outline-color:rgba(10,125,82,.25)}
+    .pv-block.sel{outline:2px solid var(--pd-green)}
+    .pv-block__tag{position:absolute;top:6px;left:6px;z-index:3;font-size:11px;background:var(--pd-green);color:#fff;border-radius:10px;padding:1px 8px;opacity:0;transition:.12s}
+    .pv-block.sel .pv-block__tag,.pv-block:hover .pv-block__tag{opacity:1}
+    .pv-block__ph{padding:26px 10px;text-align:center;color:#9db5aa;font-size:12px;border:1px dashed #c8d8d0;border-radius:14px;background:#fff}
+    .pv-carousel{position:relative;overflow:hidden;border-radius:14px;min-height:130px;background:#e8efeb}
+    .pv-carousel img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+    .pv-carousel__scrim{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.02),rgba(0,0,0,.5))}
+    .pv-carousel__copy{position:absolute;left:12px;right:12px;bottom:10px;color:#fff}
+    .pv-carousel__copy b{font-size:16px;display:block}
+    .pv-carousel__copy p{margin:2px 0 0;font-size:12px;opacity:.9}
+    .pv-carousel__badge{display:inline-block;font-size:11px;background:#fff;color:#16362b;border-radius:20px;padding:1px 8px;margin-bottom:4px}
+    .pv-carousel__btn{display:inline-block;font-size:12px;background:#fff;color:#16362b;border-radius:20px;padding:3px 12px;margin-top:6px;font-weight:600}
+    .pv-carousel__dots{position:absolute;right:10px;bottom:10px;display:flex;gap:4px}
+    .pv-carousel__dots i{width:5px;height:5px;border-radius:50%;background:rgba(255,255,255,.5)}
+    .pv-carousel__dots i:first-child{background:#fff}
+    .pv-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px;background:#fff;border-radius:14px}
+    .pv-grid__it{display:flex;flex-direction:column;align-items:center;gap:5px}
+    .pv-grid__ico{width:42px;height:42px;border-radius:12px;background:#eef4f1;display:flex;align-items:center;justify-content:center;font-size:20px;object-fit:cover}
+    .pv-grid__lb{font-size:11px}
+    .pv-acts{background:#fff;border-radius:14px;padding:10px}
+    .pv-acts__t{font-size:14px;font-weight:700;margin-bottom:8px}
+    .pv-act{display:flex;justify-content:space-between;align-items:center;border:1px solid #eef0ee;border-radius:10px;padding:9px 10px;margin-bottom:7px}
+    .pv-act b{font-size:13px;display:block}
+    .pv-act i{font-style:normal;font-size:11px;color:#9aa8a1}
+    .pv-act em{font-style:normal;font-weight:700;color:var(--pd-green);font-size:13px}
+    .pv-mkt{background:#fff;border-radius:14px;padding:10px}
+    .pv-mkt__t{font-size:14px;font-weight:700;margin-bottom:8px}
+    .pv-mkt__grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+    .pv-mkt__it{display:flex;flex-direction:column;align-items:center;gap:5px}
+    .pv-mkt__ico{width:42px;height:42px;border-radius:12px;background:#fff7e8;display:flex;align-items:center;justify-content:center;font-size:20px;object-fit:cover}
+    .pv-mkt__lb{font-size:11px}
+    .pv-notice{background:#fff8e8;border-radius:12px;padding:9px 12px;font-size:12px;color:#a8650b}
+    .pv-notice div{padding:3px 0}
+    .pv-free{background:#fff;border-radius:14px;padding:12px}
+    .pv-free img{width:100%;border-radius:10px;margin-bottom:8px}
+    .pv-free b{font-size:14px}
+    .pv-free p{margin:6px 0 0;font-size:12px;color:#555;line-height:1.5;white-space:pre-wrap}
+
+    /* 结构列表 */
+    .pd-struct__list{display:flex;flex-direction:column;gap:6px}
+    .pd-row{display:flex;align-items:center;gap:6px;border:1px solid var(--pd-line);border-radius:10px;padding:8px;background:#fff;cursor:grab}
+    .pd-row.sel{border-color:var(--pd-green);background:#f2faf6}
+    .pd-row.drag-over{border-top:2px solid var(--pd-green)}
+    .pd-row__h{color:#b6c6bf;font-size:14px;cursor:grab}
+    .pd-row__main{flex:1;min-width:0}
+    .pd-row__t{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .pd-row__s{font-size:11px;color:#8aa39a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .pd-row__ops{display:flex;gap:2px}
+    .pd-row__ops button{border:0;background:none;cursor:pointer;font-size:12px;color:var(--pd-sub);padding:2px 3px;border-radius:6px}
+    .pd-row__ops button:hover{background:#eef4f1;color:var(--pd-green)}
+    .pd-row__ops .del:hover{color:#c0392b;background:#fdecea}
+
+    /* 右：属性面板 */
+    .pd-tabs{display:flex;gap:6px;margin-bottom:10px}
+    .pd-tab{flex:1;text-align:center;font-size:13px;padding:7px 0;border-radius:9px;border:1px solid var(--pd-line);background:#fff;cursor:pointer}
+    .pd-tab.on{background:var(--pd-green);border-color:var(--pd-green);color:#fff}
+    .pd-pane{display:none}
+    .pd-pane.on{display:block}
+    .row{display:flex;gap:8px;align-items:center;margin:7px 0;flex-wrap:wrap}
+    .row label{font-size:12px;color:var(--pd-sub);min-width:76px}
+    .row input,.row select,.row textarea{padding:6px 8px;border:1px solid #d7e2dd;border-radius:8px;font-size:13px;flex:1;min-width:120px;background:#fff}
+    .row textarea{min-height:64px}
+    .mini-img{width:48px;height:48px;object-fit:cover;border-radius:8px;border:1px solid #e0e8e4}
+    .comp{border:1px solid var(--pd-line);border-radius:12px;padding:10px;margin:8px 0;background:#fafcfb}
+    .switch{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}
+    .switch input{width:36px;height:20px;appearance:none;background:#d5e0db;border-radius:20px;position:relative;transition:.15s;cursor:pointer}
+    .switch input:checked{background:var(--pd-green)}
+    .switch input::after{content:'';position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:.15s}
+    .switch input:checked::after{left:18px}
+
+    /* 窄屏：四栏折叠为纵向 */
+    @media (max-width:1120px){
+      .pd-workspace{grid-template-columns:1fr 1fr}
+      .pd-canvas{order:-1;grid-column:1/-1}
+    }
+    @media (max-width:680px){
+      .pd-workspace{grid-template-columns:1fr;padding:10px;gap:10px}
+      .pd-col{min-height:0}
+      .pd-lib__grid{grid-template-columns:repeat(3,1fr)}
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="top">
-      <h1>页面装修</h1>
-      <select id="pageKey">
-        <option value="club_home">俱乐部主页 (club_home)</option>
-        <option value="activity_detail">活动详情页 (activity_detail)</option>
-      </select>
-      <span id="statusPill" class="status draft">未配置</span>
-    </div>
-    <div class="tip">组件化装修：俱乐部可自由拼装「轮播图 / 导航宫格 / 活动列表 / 营销入口 / 公告栏 / 自由容器」。保存为草稿，发布后 C 端立即生效；未发布时 C 端回落默认页面。</div>
-
-    <div class="card">
-      <h3>组件列表</h3>
-      <div class="row"><label>布局标题</label><input id="titleInput" placeholder="如：冬季主页（仅后台标记用）"></div>
-      <div id="comps"></div>
-      <div class="row" style="margin-top:10px">
-        <select id="addType">
-          <option value="carousel">轮播图</option>
-          <option value="nav_grid">导航宫格</option>
-          <option value="activity_list">活动列表</option>
-          <option value="marketing_entry">营销入口</option>
-          <option value="notice">公告栏</option>
-          <option value="free_container">自由容器</option>
-        </select>
-        <button class="btn sm" id="addBtn">＋ 添加组件</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="row" style="justify-content:flex-end">
-        <button class="btn ghost" id="saveBtn">保存草稿</button>
-        <button class="btn ghost" id="publishBtn">发布</button>
-        <button class="btn ghost" id="unpublishBtn">转为草稿</button>
-        <button class="btn danger" id="deleteBtn">删除布局</button>
-      </div>
-    </div>
+  <div class="pd-top">
+    <a class="back" id="backLink" href="/club">← 返回俱乐部后台</a>
+    <h1>页面装修</h1>
+    <select id="pageKey">
+      <option value="club_home">俱乐部主页</option>
+      <option value="activity_detail">活动详情页</option>
+    </select>
+    <span id="statusPill" class="status draft">未配置</span>
+    <span id="dirtyPill" class="pd-dirty">● 有未保存修改</span>
+    <span class="grow"></span>
+    <button class="btn ghost" id="saveBtn">保存草稿</button>
+    <button class="btn" id="publishBtn">保存并发布</button>
   </div>
 
-  <script src="/static/shared.js?v=20261113a"></script>
-  <script src="/static/club/page-decorator.js?v=20261113a"></script>
+  <div class="pd-workspace">
+    <!-- 左：组件库 -->
+    <aside class="pd-col pd-lib">
+      <h3>组件库</h3>
+      <div class="pd-hint">点一下组件，自动加到页面末尾</div>
+      <div id="libGroups"></div>
+    </aside>
+
+    <!-- 中：手机预览 -->
+    <section class="pd-col pd-canvas">
+      <h3>实时预览</h3>
+      <div class="pd-hint" style="margin-bottom:8px">点预览里的模块即可选中并编辑，与 C 端观感一致</div>
+      <div class="pd-phone">
+        <div class="pd-phone__bar"><span id="phoneTitle">俱乐部主页</span><span>预览</span></div>
+        <div class="pd-phone__body" id="phoneBody"></div>
+      </div>
+    </section>
+
+    <!-- 结构列表 -->
+    <section class="pd-col pd-struct">
+      <h3>页面结构</h3>
+      <div class="pd-hint">拖住 ≡ 上下拖动调整顺序；操作列可上移/下移/删除</div>
+      <div class="pd-struct__list" id="structList"></div>
+    </section>
+
+    <!-- 右：属性面板 -->
+    <aside class="pd-col pd-props">
+      <div class="pd-tabs">
+        <div class="pd-tab on" data-tab="module">模块配置</div>
+        <div class="pd-tab" data-tab="global">全局配置</div>
+      </div>
+      <div class="pd-pane on" id="paneModule">
+        <div id="propsForm"></div>
+      </div>
+      <div class="pd-pane" id="paneGlobal">
+        <div class="row"><label>布局标题</label><input id="titleInput" placeholder="如：冬季主页（仅后台标记用）"></div>
+        <div class="row" style="margin-top:12px">
+          <label class="switch"><input type="checkbox" id="pubSwitch"> <span><b>发布到 C 端</b><br><span style="font-size:12px;color:#8aa39a">开启后 C 端使用此装修，关闭则回落默认页面</span></span></label>
+        </div>
+        <div class="row" style="margin-top:16px;justify-content:flex-start">
+          <button class="btn ghost danger" id="deleteBtn">删除此布局</button>
+        </div>
+        <div class="pd-hint" style="margin-top:14px">组件为空（如轮播没传图）保存时会被自动忽略，C 端不会渲染空板块。</div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="/static/shared.js?v=20261116b"></script>
+  <script src="/static/club/page-decorator.js?v=20261116c"></script>
 </body>
 </html>

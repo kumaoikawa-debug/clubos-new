@@ -1,6 +1,6 @@
 let CLUB=1;let currentActivity=null;
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
-window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='actcats')await loadActCats();if(v==='content'||v==='content-channel'||v==='content-recap'||v==='content-list')await loadContent();if(v==='regs'||v==='regs-list'||v==='regs-refund')await loadRegs();if(v==='execution')await loadExecution();if(v==='members'||v==='members-list'||v==='members-tiers'||v==='members-benefits'||v==='members-mall')await loadMembers();if(v==='mall'||v==='mall-overview'||v==='mall-products'||v==='mall-orders'||v==='mall-aftersales'||v==='mall-settle')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='info')await loadInfoCenter();if(v==='camp')await loadCamp();if(v==='settings')await setTab(SETTINGS_TAB)}
+window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='actcats')await loadActCats();if(v==='content'||v==='content-channel'||v==='content-recap'||v==='content-list')await loadContent();if(v==='regs'||v==='regs-list'||v==='regs-refund')await loadRegs();if(v==='execution')await loadExecution();if(v==='members'||v==='members-list'||v==='members-tiers'||v==='members-benefits'||v==='members-mall')await loadMembers();if(v==='mall'||v==='mall-overview'||v==='mall-products'||v==='mall-orders'||v==='mall-aftersales'||v==='mall-settle')await loadMall();if(v==='analytics')await loadClubBI();if(v==='points')await loadPointsPolicy();if(v==='info')await loadInfoCenter();if(v==='camp')await loadCamp();if(v==='settings')await setTab(SETTINGS_TAB);if(v==='staffperms')await loadStaffPerms()}
 /* 侧栏「设置中枢」入口：跳到独立的能力总览页 settings-hub.html，
    自动带上当前 club_id 与 sharecode（沿用当前页 query，避免二次鉴权失败）。
    注意用绝对路径 /static/club/settings-hub.html，SPA 入口在根路径，相对路径会 404。 */
@@ -3591,6 +3591,7 @@ async function loadSettings(){
   try{s=await api(`/api/club/${CLUB}/settings`,{cache:'no-store'})}
   catch(e){loaderError('#settingsBody',e,'设置读取失败');return}
   clubLogoUrl=s.logoUrl||'';
+  window.__clubSettings=s;   // 保存时需要对比 mapKey 是否被清空（修复 s 越界引用）
   applyClubName(s.name);   // 进设置页也校一次：顶栏永远等于后端当前名字
   box.innerHTML=`
   <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
@@ -3626,7 +3627,7 @@ async function saveClubSettings(){
   const wan=($('#setInsuranceWan')?.value||'').trim();
   if(wan)payload.insurance_coverage_wan=wan;
   const mk=($('#setMapKey')?.value||'').trim();
-  if(mk||s.mapKey)payload.mapKey=mk;
+  if(mk||((window.__clubSettings||{}).mapKey))payload.mapKey=mk;
   try{
     await api(`/api/club/${CLUB}/settings`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     // 顶栏 / 浏览器标题当场跟着改：不等刷新，也不留「这里改了后台没同步」的错觉
@@ -4252,7 +4253,10 @@ Object.assign(window,{
   setOrderRange,inviteTab,infoSetKind,infoSetStatus,mpStaffTab,createActivityManual,
   applyOrderRange,lpToggleForm,addBizItem,addHomeItem,loadCredits,loadPayAccount,
   loadClubAttention,addActCat,recalcMembership,loadPointsPolicy,bulkEditPoints,
-  loadInfoCenter,infoSearchInput
+  loadInfoCenter,infoSearchInput,
+  /* 员工权限管理（2026-11-16）：这四个函数被 index.html/模板里的 inline onclick
+     引用，IIFE 内定义不会自动挂 window —— 不导出则「编辑/停用/删除/加载」点了没反应。 */
+  loadStaffPerms,clubStaffForm,clubStaffStatus,clubStaffDel
 });
 
 /* ===== P2-7（2026-11-14）俱乐部营销页信息架构 =====
@@ -4356,3 +4360,60 @@ else initMarketingTabs();
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',apply);
   else apply();
 })();
+
+/* ── 员工权限分配管理（俱乐部端）────────────────────────────────────── */
+let CLUB_STAFF_TREE=null;
+function clubStaffViewsText(views){
+  if(!Array.isArray(views)||!views.length)return '只读';
+  const m={};for(const g of (CLUB_STAFF_TREE?.groups||[]))for(const it of (g.items||[]))m[it.key]=it.label;
+  return views.map(v=>m[v]||v).join('、');
+}
+async function loadStaffPerms(){
+  try{
+    const [list,tree]=await Promise.all([api(`/api/club/${CLUB}/staff-accounts`),api(`/api/club/${CLUB}/staff-perm-tree`)]);
+    CLUB_STAFF_TREE=tree;
+    const rowsEl=$('#clubStaffRows');if(!rowsEl)return;
+    rowsEl.innerHTML=(Array.isArray(list)?list:[]).map(x=>`<tr><td><strong>${esc(x.displayName)}</strong>${x.isSelf?'<span class="tag">当前登录</span>':''}</td><td>${esc(x.username)}</td><td>${esc(clubStaffViewsText(x.views))}</td><td><span class="tag ${x.status==='active'?'':'orange'}">${x.status==='active'?'启用':'停用'}</span></td><td>${esc(String(x.createdAt||'').slice(0,16))}</td><td>${x.isSelf?'<span class="sub">—</span>':`<button class="btn ghost sm" onclick="clubStaffForm(${x.id})">编辑</button> <button class="btn ghost sm" onclick="clubStaffStatus(${x.id},'${x.status==='active'?'disabled':'active'}')">${x.status==='active'?'停用':'启用'}</button> <button class="btn ghost sm" onclick="clubStaffDel(${x.id})" style="color:var(--orange)">删除</button>`}</td></tr>`).join('')||'<tr><td colspan="6"><div class="empty">还没有员工账户</div></td></tr>';
+    const treeEl=$('#clubStaffTree');if(!treeEl)return;
+    treeEl.innerHTML=(tree.groups||[]).map(g=>`<div class="plat-staff-group"><div class="plat-staff-group__t">${esc(g.name)}</div><div class="plat-staff-items">${g.items.map(it=>`<div class="plat-staff-item"><b>${esc(it.label)}</b><span>${(it.apis||[]).slice(0,3).map(esc).join(' · ')}</span></div>`).join('')}</div></div>`).join('');
+  }catch(e){loaderError('#clubStaffRows',e,'员工列表加载失败')}
+}
+async function clubStaffForm(id){
+  try{
+    const [list,tree]=await Promise.all([api(`/api/club/${CLUB}/staff-accounts`),api(`/api/club/${CLUB}/staff-perm-tree`)]);
+    CLUB_STAFF_TREE=tree;
+    const cur=id?list.find(x=>Number(x.id)===Number(id)):null;
+    const chosen=new Set(cur?(cur.views||[]):[]);
+    const body=`<div class="ux-field"><label for="csfUser">登录账号</label><input id="csfUser" type="text" value="${esc(cur?cur.username:'')}" placeholder="例如：ops_zhang" ${cur?'disabled':''}></div>
+      <div class="ux-field"><label for="csfName">员工姓名</label><input id="csfName" type="text" value="${esc(cur?cur.displayName:'')}" placeholder="姓名"></div>
+      <div class="ux-field"><label for="csfPwd">${cur?'重置密码（留空不改）':'初始密码'}</label><input id="csfPwd" type="password" placeholder="至少 14 位"></div>
+      <div class="club-staff-perms"><div class="club-staff-perms__t">可写模块（未勾选 = 只读）</div>${(tree.groups||[]).map(g=>`<div class="club-staff-perms__g"><b>${esc(g.name)}</b><div>${g.items.map(it=>`<label class="club-staff-check"><input type="checkbox" value="${esc(it.key)}" ${chosen.has(it.key)?'checked':''}> ${esc(it.label)}</label>`).join('')}</div></div>`).join('')}</div>`;
+    const ov=uxDialog({title:cur?'编辑员工':'添加员工',desc:'员工用独立账号登录本后台；可写模块按所选范围限制。',body,wide:true,
+      foot:'<button class="btn ghost" type="button" data-cancel>取消</button><button class="btn" type="button" data-ok>'+(cur?'保存':'创建')+'</button>'});
+    ov.querySelector('[data-cancel]').onclick=()=>ov.uxClose();
+    ov.querySelector('[data-ok]').onclick=async()=>{
+      const username=String(ov.querySelector('#csfUser')?.value||'').trim().toLowerCase();
+      const displayName=String(ov.querySelector('#csfName')?.value||'').trim();
+      const password=String(ov.querySelector('#csfPwd')?.value||'');
+      const views=[...ov.querySelectorAll('.club-staff-check input:checked')].map(x=>x.value);
+      if(!displayName){toast('请填写员工姓名');return}
+      if(!cur&&!/^[a-z0-9_.-]{3,64}$/.test(username)){toast('登录账号需 3-64 位小写字母/数字/._-');return}
+      if(!cur&&password.length<14){toast('初始密码至少 14 位');return}
+      if(cur&&password&&password.length<14){toast('新密码至少 14 位');return}
+      const payload={displayName,views};if(password)payload.password=password;
+      if(!cur)payload.username=username;
+      try{
+        if(cur)await api(`/api/club/${CLUB}/staff-accounts/${cur.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        else await api(`/api/club/${CLUB}/staff-accounts`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        ov.uxClose();toast(cur?'员工已更新':'员工已创建');loadStaffPerms();
+      }catch(e){toast(e.message)}
+    };
+  }catch(e){toast(e.message)}
+}
+async function clubStaffStatus(id,status){
+  try{await api(`/api/club/${CLUB}/staff-accounts/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});toast(status==='active'?'已启用':'已停用');loadStaffPerms()}catch(e){toast(e.message)}
+}
+async function clubStaffDel(id){
+  if(!confirm('确认删除该员工账户？其登录会话会立即失效。'))return;
+  try{await api(`/api/club/${CLUB}/staff-accounts/${id}`,{method:'DELETE'});toast('已删除');loadStaffPerms()}catch(e){toast(e.message)}
+}

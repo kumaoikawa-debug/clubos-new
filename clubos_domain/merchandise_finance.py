@@ -389,7 +389,12 @@ class MerchandiseFinanceEngine:
         return {"id": t["id"], "name": t["name"], "note": t["note"] or "", "isActive": t["is_active"], "lines": norm}
 
     def save_bom(self, c, *, name: str, note: str, enabled: bool, lines: list) -> dict[str, Any]:
-        """upsert 平台级成本 BOM：替换首个/同名模板的全部成本项。enabled 控制是否启用自动核算。#641"""
+        """upsert 平台级成本 BOM：替换首个/同名模板的全部成本项。enabled 控制是否启用自动核算。#641
+
+        V2（#649）：成本项为开放式自定义项目——只需 名称 + 单价，金额＝单价 × 订单件数。
+        前端统一按 calcType='per_item'、category='other' 提交；这里保留缺省归一，
+        兼容旧数据字段（fixed/percent_* 仍按原逻辑参与计算，保存后逐步收敛为按件计价）。
+        """
         t0 = c.execute(
             "SELECT * FROM cost_bom_templates WHERE scope='all' ORDER BY id LIMIT 1"
         ).fetchone()
@@ -415,7 +420,7 @@ class MerchandiseFinanceEngine:
                     tid,
                     str(ln.get("label") or ""),
                     str(ln.get("category") or "other"),
-                    str(ln.get("calcType") or "fixed"),
+                    str(ln.get("calcType") or "per_item"),
                     float(ln.get("baseValue") or 0),
                     float(ln.get("rateValue") or 0),
                     int(ln.get("sort") or i),

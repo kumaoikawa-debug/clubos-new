@@ -43,3 +43,18 @@
   .admin-workspace .view > .panel-title > div:has(.btn){ width:100%; }
   .admin-workspace .view > .panel-title .btn{ min-height:42px; }
 }
+
+/* 员工权限 · 模块权限树（两端后台同款） */
+.plat-staff-tree{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.plat-staff-group{border:1px solid var(--line,#e5e7eb);border-radius:10px;padding:12px;background:var(--card,#fff)}
+.plat-staff-group__t{font-weight:700;margin-bottom:8px}
+.plat-staff-items{display:grid;gap:6px}
+.plat-staff-item{display:flex;flex-direction:column;gap:3px;font-size:12px;padding:6px 8px;border-radius:6px;background:var(--soft,#f6f7f9)}
+.plat-staff-item span{color:var(--muted,#6b7280);line-height:1.5}
+.club-staff-perms{margin-top:12px;border-top:1px solid var(--line,#e5e7eb);padding-top:10px;max-height:42vh;overflow:auto}
+.club-staff-perms__t{font-weight:700;margin-bottom:8px}
+.club-staff-perms__g{margin:8px 0}
+.club-staff-perms__g>div{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px}
+.club-staff-check{display:inline-flex;align-items:center;gap:4px;padding:5px 8px;border:1px solid var(--line,#e5e7eb);border-radius:6px;font-size:12px;cursor:pointer}
+.club-staff-check:has(input:checked){border-color:var(--green,#1D9E75);background:rgba(29,158,117,.08)}
+@media(max-width:600px){.plat-staff-tree{grid-template-columns:1fr}}
