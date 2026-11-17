@@ -526,31 +526,75 @@ class MerchandiseFinanceEngine:
         return [self.order_profit(c, x) for x in ids]
 
     def product_profit(self, c) -> list[dict[str, Any]]:
+        """商品毛利：COGS 仍取商品成本快照；BOM/手动运营成本按订单内净销售额占比分摊。
+
+        先把订单级运营成本（物流+包材+其他，来自 BOM 自动核算或手动覆盖）由 order_profit
+        算出，再按该订单全部商品行的净销售额比例跨商品分摊，保证
+        Σ商品 bomCost = Σ订单运营成本（含一单多商品场景）。
+        """
+        order_costs: dict[int, float] = {}
+        for o0 in c.execute("SELECT id FROM gear_orders").fetchall():
+            oid = int(o0["id"])
+            pp = self.order_profit(c, oid)
+            order_costs[oid] = round(
+                float(pp.get("shippingCost") or 0)
+                + float(pp.get("packagingCost") or 0)
+                + float(pp.get("otherCost") or 0), 2)
+        order_lines: dict[int, list[dict[str, Any]]] = {}
+        for i0 in c.execute(
+            "SELECT i.*,o.status FROM gear_order_items i JOIN gear_orders o ON o.id=i.order_id"
+        ).fetchall():
+            i = dict(i0)
+            oid = int(i["order_id"])
+            returned = self._restocked_qty(c, oid, int(i["id"]), str(i["status"]))
+            net = max(0, int(i["quantity"]) - returned)
+            order_lines.setdefault(oid, []).append({
+                "orderId": oid,
+                "productId": int(i["product_id"]),
+                "net": net,
+                "gross": round(net * float(i["unit_price"] or 0), 2),
+                "cogs": round(net * float(i.get("unit_cost_snapshot") or 0), 2),
+            })
+        alloc: dict[tuple[int, int], float] = {}
+        for oid, olines in order_lines.items():
+            cost = order_costs.get(oid, 0.0)
+            if cost <= 0:
+                continue
+            weights = [x["gross"] for x in olines]
+            total_weight = round(sum(weights), 2)
+            if total_weight <= 0:
+                weights = [x["net"] for x in olines]
+                total_weight = sum(weights)
+            if total_weight <= 0:
+                continue
+            allocated = 0.0
+            for idx, x in enumerate(olines):
+                amt = round(cost * weights[idx] / total_weight, 2) if idx < len(olines) - 1 else round(max(0.0, cost - allocated), 2)
+                alloc[(oid, x["productId"])] = alloc.get((oid, x["productId"]), 0.0) + amt
+                allocated += amt
         out = []
         for p0 in c.execute("SELECT * FROM products ORDER BY id").fetchall():
             p = dict(p0)
-            gross, cogs, qty = 0.0, 0.0, 0
-            for i0 in c.execute(
-                "SELECT i.*,o.status FROM gear_order_items i JOIN gear_orders o ON o.id=i.order_id WHERE i.product_id=?",
-                (p["id"],),
-            ).fetchall():
-                i = dict(i0)
-                returned = self._restocked_qty(c, int(i["order_id"]), int(i["id"]), str(i["status"]))
-                net = max(0, int(i["quantity"]) - returned)
-                qty += net
-                gross += net * float(i["unit_price"] or 0)
-                cogs += net * float(i.get("unit_cost_snapshot") or 0)
+            relevant = [x for olines in order_lines.values() for x in olines if x["productId"] == p["id"]]
+            gross = round(sum(x["gross"] for x in relevant), 2)
+            cogs = round(sum(x["cogs"] for x in relevant), 2)
+            qty = sum(x["net"] for x in relevant)
+            bom_cost = round(sum(alloc.get((x["orderId"], p["id"]), 0.0) for x in relevant), 2)
             gp = round(gross - cogs, 2)
+            contribution = round(gp - bom_cost, 2)
             out.append(
                 {
                     "productId": p["id"],
                     "name": p["name"],
                     "sku": p["sku"],
                     "netUnits": qty,
-                    "netSales": round(gross, 2),
-                    "cogs": round(cogs, 2),
+                    "netSales": gross,
+                    "cogs": cogs,
                     "grossProfit": gp,
                     "grossMarginPct": round(gp / gross * 100, 2) if gross else 0.0,
+                    "bomCost": bom_cost,
+                    "contributionProfit": contribution,
+                    "contributionMarginPct": round(contribution / gross * 100, 2) if gross else 0.0,
                     "currentAverageCost": self._money(p.get("average_cost")),
                 }
             )

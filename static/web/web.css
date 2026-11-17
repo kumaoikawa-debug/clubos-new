@@ -769,10 +769,30 @@
 .w-field--shop{margin:0}
 /* 活动页搜索（BUG-CUX-003）：顶栏放大镜切到本页并聚焦这个框。整宽、与商城搜索
    同一套 .w-field 笔画，放在分类磁贴上方，不新增导航层级。 */
-.w-field--acts{margin:0 0 10px}
-/* 搜索结果摘要：只在有内容时占位，保持活动页首屏紧凑 */
-.w-actcount{margin:0 0 8px;font-size:11.5px;line-height:1.4;color:#7a8b80}
-.w-actcount:empty{display:none}
+/* 搜索栏 + 城市按钮同一行（2026-11-17：城市图标移到搜索栏后面，搜索栏缩短）。
+   搜索框 flex:1 自动缩短，城市按钮固定宽度排在搜索栏之后。 */
+.w-searchrow{display:flex;align-items:center}
+.w-searchrow .w-field--acts{flex:1;min-width:0;margin:0}
+.w-citybar__btn{
+  display:inline-flex;align-items:center;flex:0 0 auto;margin-left:8px;
+  padding:12px 14px;border:1px solid #e6e9e4;border-radius:99px;background:#fff;color:#39443d;
+  font-size:13px;font-weight:650;line-height:1;cursor:pointer;white-space:nowrap;
+}
+.w-citybar__btn.is-on{background:#121714;border-color:#121714;color:#fff}
+.w-citybar__pin{font-size:12px;margin-right:5px}
+.w-citybar__txt{max-width:128px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.w-citybar__car{margin-left:7px;font-size:10px;opacity:.72;transition:transform .18s ease}
+.w-citybar__car.is-open{transform:rotate(180deg)}
+/* 城市下拉面板：点城市按钮展开，选中城市后收起 */
+.w-citypanel{margin:10px 0 2px;padding:13px 13px 5px;border:1px solid #e6e9e4;border-radius:14px;background:#fff;box-shadow:0 10px 28px rgba(20,40,30,.09)}
+.w-citypanel[hidden]{display:none}
+.w-citypanel__hd{display:flex;align-items:center;padding:0 3px 9px}
+.w-citypanel__t{font-size:12px;font-weight:750;color:#16241c}
+.w-citypanel__sub{margin-left:auto;font-size:10.5px;color:#7e8a84}
+.w-citypanel__grid{padding:0;margin:0;flex-wrap:wrap;overflow:visible}
+.w-citypanel__grid .w-chip i{font-style:normal;margin-left:4px;font-size:11px;opacity:.62}
+/* 搜索结果摘要：2026-11-17 用户要求去掉「共 N 场可报名」，节点保留仅为兼容写入，隐藏 */
+.w-actcount{display:none}
 
 /* ── 报名区 ────────────────────────────────────────────────────────────── */
 .web-shell .booking-card{

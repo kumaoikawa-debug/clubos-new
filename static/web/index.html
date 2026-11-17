@@ -2,7 +2,7 @@
 <!-- 内联 SVG 图标：省掉 /favicon.ico 的 404（浏览器默认会去请求它）。
      用山形描边，和底部导航的图标同一套笔画。 -->
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23121714'/%3E%3Cpath d='M3.5 23.5 12 11l4.6 7.6 3-4.8 8.9 9.7z' fill='none' stroke='%237fd0a4' stroke-width='2.1' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
-<link rel="stylesheet" href="/static/shared.css?v=20261111ab"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261115f"><link rel="stylesheet" href="/static/ux/coupon-faces.css?v=20261024c"><link rel="stylesheet" href="/static/web/web.css?v=20261117b"><link rel="stylesheet" href="/static/web/camp.css?v=20261116a"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
+<link rel="stylesheet" href="/static/shared.css?v=20261111ab"><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261115f"><link rel="stylesheet" href="/static/ux/coupon-faces.css?v=20261024c"><link rel="stylesheet" href="/static/web/web.css?v=20261117c"><link rel="stylesheet" href="/static/web/camp.css?v=20261116a"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body>
 
 <!-- C 端骨架：5 个导航视图（首页 / 活动 / 装备 / 户外能力 / 我的）
      + 1 个不导航的隐藏视图 #wleaders（领队团队专区，2026-10-28 按要求从首页导航移除）。
@@ -54,15 +54,21 @@
              再嵌一层会让「#wactivities 里有哪些子块」这类静态断言按第一个
              section 闭合标签切分时提前截断（tests/web_act_view_guard.py）。 -->
         <div class="w-sec w-pad w-sec--cats">
-          <!-- 顶栏放大镜落到这个输入框（BUG-CUX-003）：活动页此前只有分类磁贴与城市 chips，
-               图标点了只切 tab、根本没有可输入的地方。用 label，不新增 section
-               （tests/web_act_view_guard.py 按首个 section 闭合标签切分活动视图）。 -->
-          <label class="w-field w-field--acts"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.4"/><path d="m16 16 4.2 4.2"/></svg><input id="actSearch" type="search" placeholder="搜索活动名称或地点" aria-label="搜索活动" autocomplete="off"></label>
+          <!-- 搜索栏 + 城市按钮同一行（2026-11-17：城市入口移到搜索栏后面，搜索栏缩短） -->
+          <div class="w-searchrow">
+            <!-- 顶栏放大镜落到这个输入框（BUG-CUX-003）。用 label，不新增 section
+                 （tests/web_act_view_guard.py 按首个 section 闭合标签切分活动视图）。 -->
+            <label class="w-field w-field--acts"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.4"/><path d="m16 16 4.2 4.2"/></svg><input id="actSearch" type="search" placeholder="搜索活动名称或地点" aria-label="搜索活动" autocomplete="off"></label>
+            <button class="w-citybar__btn" type="button" id="actCityBtn" aria-expanded="false" aria-label="选择城市"><span class="w-citybar__pin">📍</span><span class="w-citybar__txt" id="actCityBarLabel">全部城市</span><span class="w-citybar__car" id="actCityCar">▾</span></button>
+          </div>
           <div class="w-cats" id="actCats"></div>
-          <div class="w-chips w-chips--acts" id="activityChips"></div>
-          <!-- 活动搜索/筛选结果摘要（BUG-CUX-003）：renderActivityList 写 #actCount，
-               节点必须与输入框同批恢复，否则「搜索「…」· 共 N 场」永远不会显示。 -->
-          <div class="w-actcount" id="actCount" aria-live="polite"></div>
+          <!-- 城市筛选面板：chips 收进下拉，点城市按钮展开（2026-11-17） -->
+          <div class="w-citypanel" id="actCityPanel" hidden>
+            <div class="w-citypanel__hd"><span class="w-citypanel__t">按城市筛选</span><span class="w-citypanel__sub" id="actCityLocated">选择城市查看对应活动</span></div>
+            <div class="w-chips w-citypanel__grid" id="activityChips"></div>
+          </div>
+          <!-- 「共 N 场可报名」计数提示已移除（2026-11-17 用户要求）：节点保留仅为兼容渲染逻辑写入，不显示。 -->
+          <div class="w-actcount" id="actCount" aria-live="polite" hidden></div>
         </div>
         <div class="w-waterfall" id="publicActivities"></div>
         <div id="activityEmpty"></div>
@@ -241,7 +247,7 @@
 
 <script src="/static/shared.js?v=20261116a"></script>
 <script src="/static/ux/clubos-cities.js?v=20261023a"></script>
-<script src="/static/ux/coupon-faces.js?v=20261027c"></script><script src="/static/web/web.js?v=20261117b"></script>
+<script src="/static/ux/coupon-faces.js?v=20261027c"></script><script src="/static/web/web.js?v=20261117c"></script>
 <script src="/static/web/address-sheet.js?v=20261109a"></script>
 <script src="/static/web/web-biz.js?v=20261115c"></script>
 <script src="/static/web/me.js?v=20261117e&rev=20261117e"></script>

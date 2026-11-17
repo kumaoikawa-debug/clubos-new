@@ -6,6 +6,7 @@ C. UI 层（Playwright）：新 UI 只有 成本名称/单价/启用 列；添�
 D. 静态断言：基础值/比例%/净销售%/成本%/每单固定 等旧概念不再出现在成本 BOM UI。
 """
 import json
+import re
 import sqlite3
 from pathlib import Path
 from urllib.request import Request, urlopen
@@ -110,7 +111,7 @@ rec('D2 新 UI 含 单价（元/件） 列', '单价（元/件）' in bom_seg)
 rec('D3 添加动作有滚动反馈（scrollIntoView+focus）',
     'scrollIntoView' in bom_seg and 'inp.focus()' in bom_seg)
 html = (ROOT / 'static/platform/index.html').read_text()
-rec('D4 缓存版本已 bump', 'platform.js?v=20261116b' in html)
+rec('D4 缓存版本已 bump', bool(re.search(r'platform\.js\?v=20\d{6}[a-z0-9]+', html)))
 
 # ── C. UI 层（Playwright）────────────────────────────────────────────────
 from playwright.sync_api import sync_playwright

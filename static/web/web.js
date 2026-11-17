@@ -290,6 +290,14 @@ function renderActivityRegions(){
   }
   if(other>0)html+=`<button class="w-chip${ACT_CITY==='other'?' on':''}" type="button" data-city="other">其它地区<i>${other}</i></button>`;
   box.innerHTML=html;
+  /* 城市下拉按钮（2026-11-17）：文案/激活态跟随当前城市，定位副标题跟随定位结果。
+     面板开合由 #actCityBtn 的点击事件单独负责，这里只同步展示，不强行收起。 */
+  const bar=$('#actCityBarLabel');
+  if(bar)bar.textContent=ACT_CITY==='all'?'全部城市':actCityLabel(ACT_CITY);
+  const barBtn=$('#actCityBtn');
+  if(barBtn)barBtn.classList.toggle('is-on',ACT_CITY!=='all');
+  const locTip=$('#actCityLocated');
+  if(locTip)locTip.textContent=ACT_CITY_LOCATED?('已定位 · '+ACT_CITY_LOCATED):'选择城市查看对应活动';
 }
 function resetActFilters(){ACT_CAT='all';ACT_CITY='all';ACT_Q='';const s=$('#actSearch');if(s)s.value='';renderActivityList()}
 function renderActivityList(){
@@ -1598,7 +1606,23 @@ function bindWebEvents(){
   /* 活动页两道筛选：分类磁贴（主题，data-c）与城市 chips（data-city）。
      点击后只重画「选项自身 + 列表」，不重新拉数据（ACT_ALL 已在内存里）。 */
   $('#actCats')?.addEventListener('click',e=>{const b=e.target.closest('[data-c]');if(!b||b.disabled)return;ACT_CAT=b.dataset.c;renderActivityCats();renderActivityList()});
-  $('#activityChips')?.addEventListener('click',e=>{const b=e.target.closest('[data-city]');if(!b||b.disabled)return;const c=b.dataset.city;if(c==='locate'){locateCity(true);return;}ACT_CITY=c;renderActivityRegions();renderActivityList()});
+  /* 城市下拉按钮（2026-11-17）：点按钮开合面板；选中具体城市后收起（定位按钮保持面板展开，方便看结果）。 */
+  $('#actCityBtn')?.addEventListener('click',()=>{
+    const panel=$('#actCityPanel');if(!panel)return;
+    const open=panel.hidden;panel.hidden=!open;
+    const btn=$('#actCityBtn');if(btn)btn.setAttribute('aria-expanded',open?'true':'false');
+    const car=$('#actCityCar');if(car)car.classList.toggle('is-open',open);
+  });
+  $('#activityChips')?.addEventListener('click',e=>{
+    const b=e.target.closest('[data-city]');if(!b||b.disabled)return;
+    const c=b.dataset.city;
+    if(c==='locate'){locateCity(true);return;}
+    ACT_CITY=c;
+    const panel=$('#actCityPanel');if(panel)panel.hidden=true;
+    const btn=$('#actCityBtn');if(btn)btn.setAttribute('aria-expanded','false');
+    const car=$('#actCityCar');if(car)car.classList.remove('is-open');
+    renderActivityRegions();renderActivityList();
+  });
   /* 顶栏放大镜切到活动页并聚焦这个框（index.html 的 inline onclick 负责聚焦）。
      输入即时过滤，不重拉数据；容器是静态 HTML，监听只绑一次（BUG-CUX-003）。 */
   const actQ=$('#actSearch');
