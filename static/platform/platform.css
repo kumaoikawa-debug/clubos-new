@@ -872,7 +872,10 @@
 /* ===== 成本 BOM（#641）：统一成本清单 ===== */
 .plat-bom-in{width:100%;padding:6px 8px;border:1px solid var(--line,#e3e3e8);border-radius:8px;background:#fff;font-size:13px;box-sizing:border-box}
 .plat-bom-table{overflow:auto;margin-top:8px}
-.plat-bom-table table input[type=number]{max-width:110px}
+.plat-bom-table table input[type=number]{max-width:96px}
+.plat-bom-table table select.plat-bom-in{min-width:104px;max-width:180px;cursor:pointer}
+.plat-bom-val{display:inline-flex;align-items:center;gap:5px}
+.plat-bom-unit{font-style:normal;color:#8a8a93;font-size:12px;white-space:nowrap}
 .bom-preview{background:#f7f8fa;border:1px dashed #d7d9e0;border-radius:10px;padding:12px;min-height:84px}
 .bom-preview__row{font-weight:600;margin:4px 0;color:#1f2430}
 .bom-preview__lines{color:#555;font-size:13px;line-height:1.65}
