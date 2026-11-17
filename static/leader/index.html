@@ -24,6 +24,19 @@
 .leader-mini{display:inline-flex;vertical-align:-4px;margin-right:5px}
 .leader-mini>*{margin-left:-6px;border:1.5px solid #eef2f0;border-radius:50%;display:inline-flex}
 .leader-mini>*:first-child{margin-left:0}
+/* 我的场次切换条（2026-11-17）：一屏看全部分配场次，横滑切换。手机单手场景下不换行、不占高。 */
+.occ-switch{margin:2px 0 12px}
+.occ-switch__hd{display:flex;align-items:baseline;gap:8px;margin:0 2px 7px;font-size:12px;color:#5d6b63}
+.occ-switch__hd>span{font-weight:700;color:#17342c}
+.occ-switch__hd>a{margin-left:auto;color:#2f6b48;font-weight:700;text-decoration:none}
+.occ-switch__list{display:flex;gap:8px;overflow-x:auto;overscroll-behavior-x:contain;-webkit-overflow-scrolling:touch;scrollbar-width:none;padding:2px 2px 6px}
+.occ-switch__list::-webkit-scrollbar{display:none}
+.occ-chip{flex:0 0 auto;min-width:120px;max-width:170px;display:flex;flex-direction:column;gap:3px;
+  padding:9px 11px;border:1px solid var(--line);border-radius:12px;background:#fff;color:#17342c;text-decoration:none}
+.occ-chip.is-on{background:#17342c;border-color:#17342c;color:#fff}
+.occ-chip__t{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.occ-chip__s{font-size:10.5px;opacity:.72}
+.occ-chip:active{transform:translateY(1px)}
 @media(max-width:520px){.leader-cards{grid-template-columns:1fr}}
 /* 扫码签到浮层（2026-10-30） */
 .scan-ov{position:fixed;inset:0;z-index:1500;background:rgba(13,20,16,.66);display:none;align-items:center;justify-content:center;padding:20px}
@@ -35,4 +48,4 @@
 .scan-reticle::after{content:"";position:absolute;inset:0;border:2px solid #6fe3a033;border-radius:14px}
 .scan-msg{font-size:12.5px;color:#5d6b63;text-align:center;min-height:18px;line-height:1.45}
 .scan-actions{display:flex;gap:8px}
-.scan-actions .btn{flex:1;justify-content:center}</style><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261115f"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body><div class="leader-shell"><div class="leader-head"><div class="eyebrow">LEADER EXECUTION</div><h2 id="ltitle" style="margin:4px 0">活动执行</h2><div id="lmeta" class="sub"></div></div><div id="leaderInbox"></div><div id="leaderBody"></div></div><script src="/static/shared.js?v=20261116a"></script><script src="/static/leader/vendor/jsQR.js?v=20261030a"></script><script src="/static/leader/leader.js?v=20261105e&rev=20261105e"></script><script src="/static/ux/clubos-ux.js?v=20261116c"></script><script src="/static/ux/leader-experience.js?v=20261014a"></script></body></html>
+.scan-actions .btn{flex:1;justify-content:center}</style><link rel="stylesheet" href="/static/ux/clubos-ux.css?v=20261115f"><link rel="stylesheet" href="/static/ux/open-props.css?v=20261014a"><link rel="stylesheet" href="/static/ux/clubos-polish.css?v=20261014a"></head><body><div class="leader-shell"><div class="leader-head"><div class="eyebrow">LEADER EXECUTION</div><h2 id="ltitle" style="margin:4px 0">活动执行</h2><div id="lmeta" class="sub"></div></div><div id="leaderInbox"></div><div id="occSwitchBar"></div><div id="leaderBody"></div></div><script src="/static/shared.js?v=20261116a"></script><script src="/static/leader/vendor/jsQR.js?v=20261030a"></script><script src="/static/leader/leader.js?v=20261117a&rev=20261117a"></script><script src="/static/ux/clubos-ux.js?v=20261116c"></script><script src="/static/ux/leader-experience.js?v=20261014a"></script></body></html>

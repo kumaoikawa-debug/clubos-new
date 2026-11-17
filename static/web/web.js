@@ -1724,19 +1724,8 @@ function renderLeaderGrid(){
   }
   el.innerHTML=`<div class="w-lead__grid">${LEADERS_ALL.map(leaderCard).join('')}</div>`;
 }
-/* 活动详情「关键数据卡」（2026-11-17 信息分层版）：只取真实结构化字段，
-   绝不信手编造时长/公里数——那些只存在于 AI 正文里，仍由大模型自己排版。
-   没有的字段就不出，避免"¥0 / 未知"这类假信息。 */
-function detailFactsHtml(a){
-  a=a||{};
-  const f=[];
-  if(a.priceFrom!=='pending'&&Number(a.price||0)>0)f.push([money(a.price),'每人']);
-  const loc=String(a.location||'').trim();if(loc)f.push([loc.length>7?loc.slice(0,7)+'…':loc,'地点']);
-  const dt=String(a.event_date||'').trim();if(dt)f.push([dt.slice(5).replace('-','/'),'出发']);
-  if(Number(a.capacity||0)>0)f.push([a.capacity+' 人','规模']);
-  if(!f.length)return '';
-  return '<div class="w-dfacts">'+f.map(x=>`<div class="w-dfacts__i"><b>${esc(x[0])}</b><span>${esc(x[1])}</span></div>`).join('')+'</div>';
-}
+/* 2026-11-17 撤销「关键数据卡」固定模板：头图 meta 已含地点/日期/价格，
+   再摆一组地点/出发/规模四格卡是重复且死板。详情事实仍以头图 meta 与 AI 正文为准。 */
 /* 长文折叠：只在外层包一个高度受限容器，AI 正文原样塞进去，不动一个字。
    展开后完整显示；这是 UI 层的收放，不是改写大模型产出。 */
 function toggleEditorial(btn){
@@ -1758,7 +1747,7 @@ currentOcc=(a.occurrences||[]).find(o=>Number(o.remaining||0)>0&&!occExpired(o))
 /* 参加人默认带一位：付款人自己（relationToPayer=本人）。
    证件类型默认「身份证」—— 绝大多数参加人是大陆居民；不是的话号码格式校验会
    逼着顾客把类型换成护照/台胞证等（号码按类型校验，选错类型过不去）。 */
-bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'身份证',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div>${detailFactsHtml(a)}<div class="w-editorial-wrap" id="wEditorial"><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><button type="button" class="w-editorial-more" onclick="toggleEditorial(this)">展开全文</button></div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${tripGuideHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);paintPaxSummary();await loadActivityVouchers();await refreshQuote()}
+bookingParticipants=[{name:PAYER_NAME,phone:PAYER_PHONE,relationToPayer:'本人',idType:'身份证',idNumber:'',emergencyContactName:'',emergencyContactPhone:''}];const listEl=$('#activityList');if(listEl)listEl.style.display='none';if($('#publicActivities'))$('#publicActivities').style.display='';$('#publicDetail').innerHTML=`<button class="w-back" type="button" onclick="backList()">${WI.back}返回活动</button><div class="w-detailhero${a.cover?'':' is-fallback'}">${a.cover?`<img src="${esc(a.cover)}" alt="">`:''}<div class="w-detailhero__cap"><h2>${esc(a.title)}</h2><div class="w-detailhero__meta"><span>${esc(a.location||'户外')}</span>${a.event_date?`<span>${esc(a.event_date)}</span>`:''}<span>${priceHtml(a.price,{unit:' / 人',pending:a.priceFrom==='pending'})}</span></div></div></div><div class="w-editorial-wrap" id="wEditorial"><div class="public-editorial">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><button type="button" class="w-editorial-more" onclick="toggleEditorial(this)">展开全文</button></div>${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,canBuy:true,skip:infoStackSkip(a.detail,a.activityMaster)})}${leadersHtml(a)}${bookingHtml(a)}${tripGuideHtml(a)}${pointsPolicyHtml(a)}${refundPolicyHtml(a)}${participantPolicyHtml(a)}${noticesHtml(a)}${disclaimerHtml(a)}`;window.scrollTo(0,0);paintPaxSummary();await loadActivityVouchers();await refreshQuote()}
 /* 回到活动列表。两个入口共用：详情页的「返回活动」、底部「活动」tab。 */
 function showActivityList(){
   const l=$('#activityList');if(l)l.style.display='block';

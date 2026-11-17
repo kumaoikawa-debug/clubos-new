@@ -1,11 +1,40 @@
 const qs=new URLSearchParams(location.search),OCC=Number(qs.get('occurrence')||0);let CLUB=Number(qs.get('club_id')||1);
 const labels={preparing:'准备中',departed:'已出发',in_progress:'进行中',completed:'已完成'};
 let _scanStream=null,_scanRAF=null,_scanDone=false;
-async function loadLeader(){if(!OCC){return loadLeaderPicker()}let d=await api(`/api/leader/occurrences/${OCC}?club_id=${CLUB}`),o=d.occurrence||{},s=d.summary||{},st=d.settings||{};renderLeaderHead(o,d.leaders||[]);$('#lmeta').textContent=`${o.label||o.start_at||''} · ${o.activity_location||''}`;let seq=['preparing','departed','in_progress','completed'],cur=o.execution_status||'preparing';$('#leaderBody').innerHTML=`<div class="card"><div class="exec-step">${seq.map(x=>`<span class="${x===cur?'active':''}">${labels[x]}</span>`).join('')}</div><div class="grid g4 section">${[['参加',s.participantCount],['已签到',s.checkedInCount],['未到',s.noShowCount],['保险待办',s.insurancePendingCount]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]||0}</div></div>`).join('')}</div><div class="leader-actions"><button class="btn" onclick="advance('${cur}')">推进活动状态</button></div></div>
+async function loadLeader(){if(!OCC){return loadLeaderPicker()}let d=await api(`/api/leader/occurrences/${OCC}?club_id=${CLUB}`),o=d.occurrence||{},s=d.summary||{},st=d.settings||{};renderLeaderHead(o,d.leaders||[]);$('#lmeta').textContent=`${o.label||o.start_at||''} · ${o.activity_location||''}`;renderOccSwitcher(OCC);let seq=['preparing','departed','in_progress','completed'],cur=o.execution_status||'preparing';$('#leaderBody').innerHTML=`<div class="card"><div class="exec-step">${seq.map(x=>`<span class="${x===cur?'active':''}">${labels[x]}</span>`).join('')}</div><div class="grid g4 section">${[['参加',s.participantCount],['已签到',s.checkedInCount],['未到',s.noShowCount],['保险待办',s.insurancePendingCount]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]||0}</div></div>`).join('')}</div><div class="leader-actions"><button class="btn" onclick="advance('${cur}')">推进活动状态</button></div></div>
 ${leaderCardsHtml(d.leaders||[])}<div class="card section"><h3>集合 / 应急</h3><div><strong>${esc(st.meeting_time||'集合时间待设置')}</strong></div><div class="sub">${esc(st.meeting_location||'集合地点待设置')}</div><div class="sub" style="margin-top:8px">应急电话：${esc(st.emergency_phone||'待设置')}</div>${st.leader_note?`<div class="notice" style="margin-top:10px">${esc(st.leader_note)}</div>`:''}</div>
 ${d.issues?.length?`<div class="notice warn section"><strong>待处理</strong><div class="sub">${d.issues.map(esc).join('；')}</div></div>`:''}
 <div class="card section"><h3>已发送通知</h3>${(d.notices||[]).map(n=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(n.title)}</div><div class="list-row__sub">${esc(n.content)}</div></div></div>`).join('')||'<div class="empty">暂无通知</div>'}</div>
 <div class="section"><div class="panel-title"><h3>出发签到</h3><span class="tag">${s.checkedInCount||0}/${s.participantCount||0}</span><button class="btn primary" style="margin-left:auto" onclick="openScan()">扫码签到</button></div><div class="leader-list">${(d.participants||[]).map(p=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(p.name)}</div><div class="list-row__sub">${esc(p.phone||'')} · ${esc(p.vehicle_group||'未分车')}</div><div class="list-row__sub">保险 ${({pending:'待投保',enrolling:'投保中',insured:'已投保',cancelling:'退保中',cancelled:'已退保',failed:'投保失败',cancel_failed:'退保失败',not_required:'无需保险',submitted:'已提交',processing:'办理中',done:'已投保',completed:'已投保'})[p.insurance_status]||esc(p.insurance_status||'待投保')}${p.insurance_policy_no?` · ${esc(p.insurance_policy_no)}`:''}${p.effective_at?` · 生效 ${esc(String(p.effective_at).slice(0,10))}`:''} · 资料 ${p.form_status==='complete'?'完整':'待补'}</div></div><div class="list-row__end"><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><span class="tag ${p.checkin_status==='checked_in'?'':'orange'}">${esc(p.checkin_status||'pending')}</span><div class="leader-actions" style="margin:0"><button class="btn secondary" onclick="checkin(${p.id},'checked_in')">到场</button><button class="btn ghost" onclick="checkin(${p.id},'no_show')">未到</button><button class="btn ghost" onclick="checkin(${p.id},'cancelled')">临时取消</button></div></div></div></div>`).join('')||'<div class="empty">暂无参加人</div>'}</div></div>`}
+/* 我的场次切换条（2026-11-17）：后台给领队分配 N 场后，不管从哪个入口进来
+   ——后台「打开领队执行页」带 occurrence、或从 C 端咨询/书签进来——单场执行页
+   顶部都能看到「全部分配场次」并一键切换，不再只看到眼前这一场。
+   数据走 /api/leader/occurrences：后端按领队本人身份过滤 + 字段白名单，
+   与裸开 /leader 的列表页同一口径，不含价格/售出等经营字段，越权场次天然不可见。
+   切场用整页跳转（<a href>），让浏览器自然重置扫码流/展开态等瞬时状态，零副作用。 */
+let _myOccCache=null;
+async function myOccurrences(){
+  if(_myOccCache)return _myOccCache;
+  _myOccCache=await api(`/api/leader/occurrences?club_id=${CLUB}`);
+  return _myOccCache;
+}
+function renderOccSwitcher(currentId){
+  const host=document.getElementById('occSwitchBar');if(!host)return;
+  myOccurrences().then(list=>{
+    if(!list||!list.length){host.innerHTML='';return;}
+    const chips=list.map(o=>{
+      const on=Number(o.id)===Number(currentId),st=o.execution_status||'preparing';
+      return `<a class="occ-chip${on?' is-on':''}" href="/leader?occurrence=${o.id}&club_id=${CLUB}" title="${esc(o.activity_title||'')}">`
+        +`<span class="occ-chip__t">${esc(o.label||o.start_at||('第'+o.id+'场'))}</span>`
+        +`<span class="occ-chip__s">${esc(labels[st]||st)} · ${o.named_participants||0} 人</span></a>`;
+    }).join('');
+    host.innerHTML=`<div class="occ-switch"><div class="occ-switch__hd">`
+      +`<span>我的场次 · ${list.length}</span><a href="/leader?club_id=${CLUB}">全部场次 ›</a></div>`
+      +`<div class="occ-switch__list">${chips}</div></div>`;
+    const on=host.querySelector('.occ-chip.is-on');
+    if(on&&on.scrollIntoView)try{on.scrollIntoView({behavior:'instant',inline:'center',block:'nearest'})}catch(e){}
+  }).catch(()=>{host.innerHTML=''});
+}
 async function checkin(pid,status){try{await api(`/api/leader/occurrences/${OCC}/participants/${pid}/checkin?club_id=${CLUB}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});toast('签到已更新');loadLeader()}catch(e){showAlert({title:'签到失败',message:e.message})}}
 async function advance(cur){let seq=['preparing','departed','in_progress','completed'],next=seq[Math.min(seq.indexOf(cur)+1,seq.length-1)];if(cur==='completed'){toast('活动已完成');return}if(!(await showConfirm({title:'推进活动状态',message:`${labels[cur]} → ${labels[next]}？`,confirmText:'确认推进'})))return;try{await api(`/api/leader/occurrences/${OCC}/status?club_id=${CLUB}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({status:next})});toast('状态已更新');loadLeader()}catch(e){showAlert({title:'操作失败',message:e.message})}}
 /* 领队落地页：裸开 /leader（URL 里没有 occurrence）时，列出现有场次让领队自己点进去。

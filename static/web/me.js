@@ -115,6 +115,44 @@ function meOrderCounts(){
   return c;
 }
 
+/* ── 入口角标「已看水位」（2026-11-17 用户反馈：数字点开看过还不消）────────
+   宫格和商城订单五态上的数字既是「有多少」也被用户当成「有没有新的没看」：
+   点开看过就该熄。但直接清零又会丢掉「待发货 2」这种真待办数。
+   做法：按入口记一份「已看内容 id 列表」存 localStorage（club+user 命名空间）：
+     · 从没点开过 → 亮当前全部数量（这是用户第一次进来看到的提示）
+     · 点开看过且内容没变 → 熄灭
+     · 看过之后又新增/变化 → 只亮新增的那几条
+   用 id 列表而不是纯计数，避免「看一笔又来一笔、总数没变」漏报。 */
+function meBadgeKey(){ return 'clubos_badge_seen_'+CLUB+'_'+USER; }
+function meBadgeMap(){ try{ return JSON.parse(localStorage.getItem(meBadgeKey())||'{}')||{}; }catch(e){ return {}; } }
+function meBadgeSave(m){ try{ localStorage.setItem(meBadgeKey(),JSON.stringify(m)); }catch(e){} }
+function meBadgeIds(entry){
+  const id=x=>String((x&&x.id!=null)?x.id:((x&&(x.title||x.checkoutId))||''));
+  const keep=a=>(a||[]).map(id).filter(Boolean);
+  if(entry==='q:myregs') return keep([...meActivity(),...(ME.campOrders||[])]);
+  if(entry==='q:member') return keep(meBenefits());
+  if(entry==='q:address') return keep(ME.addr||[]);
+  if(entry==='q:coupons') return keep(ME.vch||[]);
+  const st=String(entry).slice(2);
+  if(st==='pending') return keep(mePending().filter(x=>x.orderKind!=='activity'));
+  if(st==='refund') return keep([...meGear(),...meActivity()].filter(meIsRefund));
+  return keep(meGear().filter(o=>o.status===st));
+}
+function meBadgeCount(entry){
+  const ids=meBadgeIds(entry); if(!ids.length) return 0;
+  const seen=meBadgeMap()[entry];
+  if(!Array.isArray(seen)) return ids.length;          // 从没点开 → 全部算「待查看」
+  const old=new Set(seen.map(String));
+  return ids.filter(x=>!old.has(String(x))).length;     // 看过 → 只亮新增
+}
+function meBadgeMarkSeen(entry){
+  if(!entry) return false;
+  const m=meBadgeMap(), now=meBadgeIds(entry).map(String), was=m[entry];
+  if(Array.isArray(was)&&was.length===now.length&&was.every((x,i)=>x===now[i])) return false;
+  m[entry]=now; meBadgeSave(m); return true;
+}
+function meBadgeSeenAllOrders(){ ['pending','paid','shipped','completed','refund'].forEach(s=>meBadgeMarkSeen('o:'+s)); }
+
 /* ── 主页面绘制 ───────────────────────────────────────────────────────── */
 function meUpTip(){
   const w=meWallet(); const tiers=meTiers();
@@ -236,10 +274,10 @@ function mePaintHome(){
 function renderMeQuad(){
   const box=document.getElementById('meQuad'); if(!box)return;
   const cells=[
-    ['我的订单', meActivity().length + (ME.campOrders||[]).length, 'myregs', 'regs'],
-    ['会员权益', meBenefits().length, 'member', 'gift'],
-    ['收货地址', ME.addr.length, 'address', 'pin'],
-    ['优惠券', ME.vch.length, 'coupons', 'coupon']
+    ['我的订单', meBadgeCount('q:myregs'), 'myregs', 'regs'],
+    ['会员权益', meBadgeCount('q:member'), 'member', 'gift'],
+    ['收货地址', meBadgeCount('q:address'), 'address', 'pin'],
+    ['优惠券', meBadgeCount('q:coupons'), 'coupons', 'coupon']
   ];
   box.innerHTML=cells.map(([t,n,go,ic])=>
     `<button class="wme-quad__c" type="button" onclick="pushMe('${go}')">
@@ -249,15 +287,16 @@ function renderMeQuad(){
 }
 function renderMeOrders(){
   const box=document.getElementById('meOrders'); if(!box)return;
-  const c=meOrderCounts();
-  const order=[['待付款',c.pending,'pending','wait'],['待发货',c.paid,'paid','send'],
-               ['待收货',c.shipped,'shipped','truck'],['待评价',c.completed,'completed','star'],
-               ['退款',c.refund,'refund','refund']];
-  box.innerHTML=order.map(([t,n,st,ic])=>
-    `<button class="wme-order" type="button" onclick="pushMe('orders','${st}')">
+  const order=[['待付款','pending','wait'],['待发货','paid','send'],
+               ['待收货','shipped','truck'],['待评价','completed','star'],
+               ['退款','refund','refund']];
+  box.innerHTML=order.map(([t,st,ic])=>{
+    const n=meBadgeCount('o:'+st);
+    return `<button class="wme-order" type="button" onclick="pushMe('orders','${st}')">
        <span class="wme-order__ic">${meIcon(ic)}${n?`<i class="wme-order__n">${n>99?'99':n}</i>`:''}</span>
        <span class="wme-order__t">${esc(t)}</span>
-     </button>`).join('');
+     </button>`;
+  }).join('');
 }
 
 /* ── 覆盖 wv('wme') 触发的加载器 ──────────────────────────────────────── */
@@ -290,13 +329,31 @@ function meEnsureStack(){
   }
   return s;
 }
+/* 点开某个入口 → 记下该入口当前内容水位 → 角标熄灭（数字是「未查看提示」语义）。
+   「商城订单」点的是单个状态 tab（待发货/退款…），只熄那一个；从「查看全部」进则全熄。 */
+function meBadgeSeenForEntry(k,param){
+  let changed=false;
+  if(k==='orders'){ if(param&&param!=='all') changed=meBadgeMarkSeen('o:'+param); else changed=(meBadgeSeenAllOrders(),true); }
+  else if(k==='myregs'||k==='member'||k==='address'||k==='coupons') changed=meBadgeMarkSeen('q:'+k);
+  if(changed){ try{ renderMeQuad(); renderMeOrders(); }catch(e){} }
+  return changed;
+}
 function pushMe(k,param){
   /* 打开「我的报名」即视为已读该用户的俱乐部通知：角标（铃铛 / 我的 tab / 我的报名红点）随之清除。 */
-  if(k==='myregs'){ if(meMarkNoticesRead()){ try{ paintNoticeHint(); renderMeQuad(); }catch(e){} } }
+  if(k==='myregs'){ if(meMarkNoticesRead()){ try{ paintNoticeHint(); }catch(e){} } }
+  meBadgeSeenForEntry(k,param);
   meEnsureStack(); meStack.push({k,param}); window.__meCurSub={k,param:param}; renderMeSub();
 }
 function popMe(){ if(meStack.length)meStack.pop(); const t=meStack[meStack.length-1]; window.__meCurSub=t||null; renderMeSub(); }
-function meSetTab(st){ if(meStack.length){ meStack[meStack.length-1].param=st; renderMeSub(); } }
+function meSetTab(st){
+  if(!meStack.length)return;
+  const top=meStack[meStack.length-1]; top.param=st;
+  if(top.k==='orders'){
+    if(st==='all') meBadgeSeenAllOrders(); else meBadgeMarkSeen('o:'+st);
+    try{ renderMeOrders(); renderMeQuad(); }catch(e){}
+  }
+  renderMeSub();
+}
 function renderMeSub(){
   const s=meEnsureStack();
   if(!meStack.length){ s.hidden=true; const sh=document.querySelector('.web-shell'); if(sh)sh.classList.remove('me-sub-open'); return; }
@@ -591,9 +648,12 @@ function meOrderCard(o){
       (o.shipping_consignee?`<div class="me-card2__meta">${esc(o.shipping_consignee)} ${esc(o.shipping_phone||'')} · ${esc(o.shipping_address||'')}</div>`:'')+
       `<div class="me-card2__amt">实付 <b>${money(o.total||0)}</b></div>`+
       (o.carrier||o.tracking_no?`<div class="me-card2__meta">${esc(o.carrier||'')} ${esc(o.tracking_no||'')}</div>`:'');
-    if(o.status==='shipped') acts+=`<button class="me-btn me-btn--primary" onclick="confirmGearReceipt(${o.id})">确认收货</button>`;
-    if(o.status!=='refunded') acts+=`<button class="me-btn" onclick='requestGearAfterSales(${JSON.stringify(o).replace(/'/g,"&#39;")})'>申请售后</button>`;
-    const cases=(o.afterSalesCases||[]).map(a=>`<div class="me-case">${meBadge(meAsType(a.case_type),'info')}${meBadge(meAsSt(a.status),meStTone(a.status))}${a.return_tracking_no?`<span class="me-case__t">退货 ${esc(a.return_tracking_no)}</span>`:''}${a.status==='awaiting_return'?`<button class="me-btn me-btn--sm" onclick="submitReturn('${esc(a.id)}')">填退货物流</button>`:''}</div>`).join('');
+    if(o.status==='shipped') acts+=`<button class="me-btn me-btn--primary" onclick="event.stopPropagation();confirmGearReceipt(${o.id})">确认收货</button>`;
+    /* 旧写法把 JSON.stringify(o) 塞进 onclick 属性，订单对象里的双引号会截断内联脚本
+       （实测 "Unexpected end of input" → stopPropagation 失效 → 点按钮穿透开了详情）。
+       改为只传 id，包装函数从 ME.oc 取对象。 */
+    if(o.status!=='refunded') acts+=`<button class="me-btn" onclick="event.stopPropagation();meOrdGearAfterSales(${Number(o.id)})">申请售后</button>`;
+    const cases=(o.afterSalesCases||[]).map(a=>`<div class="me-case">${meBadge(meAsType(a.case_type),'info')}${meBadge(meAsSt(a.status),meStTone(a.status))}${a.return_tracking_no?`<span class="me-case__t">退货 ${esc(a.return_tracking_no)}</span>`:''}${a.status==='awaiting_return'?`<button class="me-btn me-btn--sm" onclick="event.stopPropagation();submitReturn('${esc(a.id)}')">填退货物流</button>`:''}</div>`).join('');
     inner+=cases;
   } else {
     inner=`<div class="me-card2__meta">${esc(o.activity_title||'活动报名')}</div>`+
@@ -602,7 +662,7 @@ function meOrderCard(o){
       meTrip(o);
     if(o.status==='paid' && ['none','rejected'].includes(o.refund_status||'none')){
       const rq=o.refundQuote;
-      acts = rq&&rq.eligible?`<button class="me-btn me-btn--danger" onclick="requestActivityRefund(${o.id},${rq.cashRefundAmount||0},${rq.cashRefundPercent||0})">申请退款</button>`:`<span class="me-note">当前不可退款${rq&&rq.reason?' · '+esc(rq.reason):''}</span>`;
+      acts = rq&&rq.eligible?`<button class="me-btn me-btn--danger" onclick="event.stopPropagation();requestActivityRefund(${o.id},${rq.cashRefundAmount||0},${rq.cashRefundPercent||0})">申请退款</button>`:`<span class="me-note">当前不可退款${rq&&rq.reason?' · '+esc(rq.reason):''}</span>`;
     }
   }
   /* 标题用**真实主体**（商品名 / 活动名），不是「装备订单」这种类别词 ——
@@ -610,10 +670,10 @@ function meOrderCard(o){
   const head=kind==='gear'
     ? ((o.items&&o.items[0]&&o.items[0].product_name)||'装备订单')
     : (o.activity_title||'活动报名');
-  return `<div class="me-card2">
+  return `<div class="me-card2" role="button" tabindex="0" aria-label="查看订单详情" onclick="meOrdDetail('${kind}',${Number(o.id)})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();meOrdDetail('${kind}',${Number(o.id)})}">
     <div class="me-card2__hd"><b>${esc(head)}</b>${meBadge(meOrderSt(o.status,kind),meOrderTone(o.status,kind))}</div>
     ${inner}
-    <div class="me-card2__ref">退款：${esc((typeof refundStateText==='function')?refundStateText(o):'')}</div>
+    <div class="me-card2__ref">退款：${esc((typeof refundStateText==='function')?refundStateText(o):'')} · 点此查看订单详情 ›</div>
     ${acts?`<div class="me-card2__ops">${acts}</div>`:''}
   </div>`;
 }
@@ -628,7 +688,7 @@ function meCheckinBlock(o){
     const signed = p.checkinStatus==='checked_in';
     return `<div class="me-ck" data-pid="${p.id}">
       <img class="me-ck__qr" src="/api/public/participants/${p.id}/checkin-qr?user_id=${USER}&club_id=${CLUB}" alt="签到码"
-           onclick="meZoomQr(${p.id},'${esc(p.name||'')}')"/>
+           onclick="event.stopPropagation();meZoomQr(${p.id},'${esc(p.name||'')}')"/>
       <div class="me-ck__info">
         <div class="me-ck__name">${esc(p.name||'')}</div>
         <div class="me-ck__st ${signed?'on':''}">${signed?'已签到':'未签到'}</div>
@@ -685,13 +745,13 @@ function meActivityOrdersHtml(){
     let act='';
     if(o.status==='paid' && ['none','rejected'].includes(o.refund_status||'none')){
       const rq=o.refundQuote;
-      act = rq&&rq.eligible?`<button class="me-btn me-btn--danger" onclick="requestActivityRefund(${o.id},${rq.cashRefundAmount||0},${rq.cashRefundPercent||0})">申请退款</button>`:`<span class="me-note">当前不可退款${rq&&rq.reason?' · '+esc(rq.reason):''}</span>`;
+      act = rq&&rq.eligible?`<button class="me-btn me-btn--danger" onclick="event.stopPropagation();requestActivityRefund(${o.id},${rq.cashRefundAmount||0},${rq.cashRefundPercent||0})">申请退款</button>`:`<span class="me-note">当前不可退款${rq&&rq.reason?' · '+esc(rq.reason):''}</span>`;
     }
     const pax=ps.map(p=>`<div class="me-pax"><b>${esc(p.name)}</b>${p.status==='refunded'?meBadge('已退出','off'):''}<span>${esc(p.phone||'')}</span></div>`).join('');
     /* #877 与营地订单卡同口径：包左滑容器 + 常驻删除按钮（用户反馈「左滑没有删除选项」的残留部分） */
     return `<div class="me-camp-wrap">
       <div class="me-camp-del" onclick="event.stopPropagation();meActivityOrderDelete(${Number(o.id)})">删除</div>
-      <div class="me-card2 me-camp">
+      <div class="me-card2 me-camp" role="button" tabindex="0" aria-label="查看订单详情" onclick="meOrdDetail('activity',${Number(o.id)})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();meOrdDetail('activity',${Number(o.id)})}">
       <div class="me-card2__hd"><b>${esc(o.activity_title||'活动')}</b>${meBadge(meOrderSt(o.status,'activity'),meOrderTone(o.status,'activity'))}</div>
       <div class="me-card2__meta">${esc(o.occurrence_label||o.start_at||'团期待定')} · ${o.participantCount||ps.length} 人</div>
       <div class="me-card2__amt">实付 <b>${money(o.amount||0)}</b></div>
@@ -701,7 +761,7 @@ function meActivityOrdersHtml(){
       ${pax?`<div class="me-paxs">${pax}</div>`:''}
       <div class="me-card2__ref">退款：${esc((typeof refundStateText==='function')?refundStateText(o):'')}</div>
       ${act?`<div class="me-card2__ops">${act}</div>`:''}
-      <div class="me-camp__more"><span></span><button type="button" class="me-camp__delbtn" aria-label="删除订单" onclick="event.stopPropagation();meActivityOrderDelete(${Number(o.id)})">删除</button></div>
+      <div class="me-camp__more"><span>查看订单详情 ›</span><button type="button" class="me-camp__delbtn" aria-label="删除订单" onclick="event.stopPropagation();meActivityOrderDelete(${Number(o.id)})">删除</button></div>
     </div></div>`;
   }).join('');
 }
@@ -978,6 +1038,110 @@ window.meCampCancelOrder=async function(oid){
     ME.campOrders=(ME.campOrders||[]).filter(x=>String(x.id)!==String(oid));
     try{ renderMeSub(); }catch(e){}
   }catch(e){ if(window.toast) toast((e&&e.message)||e); }
+};
+
+/* ── 活动订单 / 商城订单详情（2026-11-17 用户反馈「订单点不开看详情」）─────
+   此前只有营地订单卡能点开详情，活动订单卡和商城订单卡整张没有 onclick，
+   顾客只能看到列表里那几行、点哪都没反应。这里补一个与营地详情同款的全屏抽屉：
+   - 数据直接取 ME.oc（order-center 一次拉全：参加人 / 出行指引 / 商品 / 物流 / 售后
+     都已在缓存里），不新增后端接口；
+   - 活动订单详情展示：订单号、报名与出行时间、状态、金额、退款、参加人逐人
+     （姓名/手机/签到/资料/保险状态）、出行指引、本单优惠与赠品；
+   - 商城订单详情展示：订单号、下单时间、状态、商品逐件、收货与物流、金额、
+     退款/售后单；操作按钮沿用列表里已有的全局函数，不在详情里重复造写逻辑。 */
+function meOrdKv(k,v){ return (v!==''&&v!=null&&v!==undefined)?'<div class="me-campd__kv"><span>'+esc(k)+'</span><b>'+esc(v)+'</b></div>':''; }
+function meOrdAmt(k,v,cls){ return '<div class="me-campd__amt'+(cls?' '+cls:'')+'"><span>'+esc(k)+'</span><b>'+money(v)+'</b></div>'; }
+function meActivityOrderDetailHtml(o){
+  const ps=o.participants||[];
+  const kvs=[
+    meOrdKv('报名单号','#'+o.id),
+    meOrdKv('活动',o.activity_title),
+    meOrdKv('团期',o.occurrence_label||o.start_at),
+    meOrdKv('报名时间',String(o.created_at||'').replace('T',' ').slice(0,16)),
+    meOrdKv('参加人数',(o.participantCount||ps.length)+' 人'),
+    meOrdKv('资料完整',(o.completeCount!=null?o.completeCount+' / '+(o.originalParticipantCount||ps.length)+' 人':'')),
+    meOrdKv('退款状态',(typeof refundStateText==='function')?refundStateText(o):'')
+  ].join('');
+  const pax=ps.map(p=>{
+    const tags=[];
+    if(p.status==='refunded')tags.push(meBadge('已退出','off'));
+    if(p.checkinStatus==='checked_in')tags.push(meBadge('已签到','ok'));
+    if(p.form_status==='complete')tags.push(meBadge('资料已全','ok'));
+    else tags.push(meBadge('资料待补','warn'));
+    if(p.insurance_status&&['paid','active','submitted'].includes(p.insurance_status))tags.push(meBadge('保险已办','ok'));
+    return '<div class="me-campd__it"><div class="me-campd__itbody">'
+      +'<b>'+esc(p.name||'参加人')+' <span style="font-weight:400;color:var(--w-muted)">'+esc(p.phone||'')+'</span></b>'
+      +'<span>'+tags.join(' ')+'</span></div></div>';
+  }).join('');
+  const rq=o.refundQuote;
+  let ops='';
+  if(o.status==='paid'&&['none','rejected'].includes(o.refund_status||'none')){
+    ops=rq&&rq.eligible
+      ? '<button class="me-campd__btn is-primary" type="button" onclick="this.disabled=true;meOrdCloseDetail();requestActivityRefund('+Number(o.id)+','+(rq.cashRefundAmount||0)+','+(rq.cashRefundPercent||0)+')">申请退款</button>'
+      : '<div class="me-note">当前不可退款'+(rq&&rq.reason?' · '+esc(rq.reason):'')+'</div>';
+  }
+  return '<div class="me-campd__st">'+meBadge(meOrderSt(o.status,'activity'),meOrderTone(o.status,'activity'))+'</div>'
+    +'<div class="me-campd__kvs">'+kvs+'</div>'
+    +'<div class="me-campd__sec"><h4>费用</h4>'
+      +meOrdAmt('实付金额',o.amount||0,'is-total')
+      +meCampaignGiftBlock(o)+'</div>'
+    +meTrip(o)
+    +(pax?'<div class="me-campd__sec"><h4>参加人明细</h4>'+pax+'</div>':'')
+    +(ops?'<div class="me-campd__ops">'+ops+'</div>':'');
+}
+function meGearOrderDetailHtml(o){
+  const its=o.items||[];
+  const kvs=[
+    meOrdKv('订单号','#'+o.id),
+    meOrdKv('下单时间',String(o.created_at||'').replace('T',' ').slice(0,16)),
+    meOrdKv('订单来源',o.source_club||''),
+    meOrdKv('收货人',o.shipping_consignee),
+    meOrdKv('收货电话',o.shipping_phone),
+    meOrdKv('收货地址',o.shipping_address),
+    meOrdKv('物流',[o.carrier,o.tracking_no].filter(Boolean).join(' ')),
+    meOrdKv('退款状态',(typeof refundStateText==='function')?refundStateText(o):'')
+  ].join('');
+  const itemHtml=its.map(i=>'<div class="me-campd__it"><div class="me-campd__itbody">'
+    +'<b>'+esc(i.product_name||'商品')+'</b>'
+    +(i.sku?'<span>'+esc(i.sku)+'</span>':'')
+    +'<span>×'+Number(i.quantity||0)+'</span>'
+    +'<em>'+money(Number(i.price||0)*Number(i.quantity||0))+'</em></div></div>').join('');
+  const cases=(o.afterSalesCases||[]).map(a=>'<div class="me-campd__it"><div class="me-campd__itbody">'
+    +'<b>'+meBadge(meAsType(a.case_type),'info')+' '+meBadge(meAsSt(a.status),meStTone(a.status))+'</b>'
+    +(a.reason?'<span>'+esc(a.reason)+'</span>':'')
+    +(a.return_tracking_no?'<span>退货物流 '+esc(a.return_tracking_no)+'</span>':'')
+    +'</div></div>').join('');
+  let ops='';
+  if(o.status==='shipped')ops+='<button class="me-campd__btn is-primary" type="button" onclick="this.disabled=true;meOrdCloseDetail();confirmGearReceipt('+Number(o.id)+')">确认收货</button>';
+  /* 不把 JSON.stringify(o) 塞进双引号 onclick（对象里的双引号会截断属性 → Unexpected end of input）。
+     只传 id，由包装函数从 ME.oc 取对象再交给已有的 requestGearAfterSales。 */
+  if(o.status!=='refunded')ops+='<button class="me-campd__btn" type="button" onclick="meOrdCloseDetail();meOrdGearAfterSales('+Number(o.id)+')">申请售后</button>';
+  return '<div class="me-campd__st">'+meBadge(meOrderSt(o.status,'gear'),meOrderTone(o.status,'gear'))+'</div>'
+    +'<div class="me-campd__kvs">'+kvs+'</div>'
+    +(itemHtml?'<div class="me-campd__sec"><h4>商品明细</h4>'+itemHtml+'</div>':'')
+    +'<div class="me-campd__sec"><h4>费用</h4>'+meOrdAmt('实付金额',o.total||o.cash_paid||0,'is-total')+'</div>'
+    +(cases?'<div class="me-campd__sec"><h4>退款 / 售后单</h4>'+cases+'</div>':'')
+    +(ops?'<div class="me-campd__ops">'+ops+'</div>':'');
+}
+window.meOrdDetail=function(kind,oid){
+  const list=kind==='gear'?meGear():meActivity();
+  const o=list.find(x=>String(x.id)===String(oid));
+  if(!o){ if(window.toast)toast('订单不存在'); return; }
+  const html=kind==='gear'?meGearOrderDetailHtml(o):meActivityOrderDetailHtml(o);
+  const old=document.getElementById('meOrdDetail'); if(old)old.remove();
+  const el=document.createElement('div');
+  el.id='meOrdDetail'; el.className='me-campd';
+  el.innerHTML='<div class="me-campd__mask" onclick="meOrdCloseDetail()"></div>'
+    +'<div class="me-campd__panel"><header class="me-campd__hd"><b>'+(kind==='gear'?'商城订单详情':'活动订单详情')+'</b>'
+    +'<button class="me-campd__x" type="button" onclick="meOrdCloseDetail()" aria-label="关闭">×</button></header>'
+    +'<div class="me-campd__body">'+html+'</div></div>';
+  (document.querySelector('.web-shell')||document.body).appendChild(el);
+};
+window.meOrdCloseDetail=function(){ const el=document.getElementById('meOrdDetail'); if(el)el.remove(); };
+window.meOrdGearAfterSales=function(oid){
+  const o=meGear().find(x=>String(x.id)===String(oid));
+  if(!o){ if(window.toast)toast('订单不存在'); return; }
+  if(typeof requestGearAfterSales==='function') requestGearAfterSales(o);
 };
 SUB_ME.myregs=function(param){
   const tab = param==='camp' ? 'camp' : 'activity';

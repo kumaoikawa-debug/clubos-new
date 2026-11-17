@@ -3101,16 +3101,8 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
   font-family:inherit;line-height:1.6}
 .me-camp__delbtn:active{background:#fdecec}
 
-/* ══ 2026-11-17 活动详情信息分层 ══ */
-/* 关键数据卡：只放真实结构化字段（价/地点/日期/规模），4 格均分，窄屏 2×2 */
-.web-shell #publicDetail .w-dfacts{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
-  margin:10px 12px 0;background:var(--w-line,#e3e8e6);border:1px solid var(--w-line,#e3e8e6);
-  border-radius:14px;overflow:hidden}
-.w-dfacts__i{background:#fff;padding:11px 6px;text-align:center;min-width:0}
-.w-dfacts__i b{display:block;font-size:15px;font-weight:750;color:var(--w-brand,#156243);
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
-.w-dfacts__i span{display:block;margin-top:2px;font-size:10.5px;color:var(--w-muted,#7a8a82)}
-@media (max-width:360px){.web-shell #publicDetail .w-dfacts{grid-template-columns:repeat(2,1fr)}}
+/* ══ 2026-11-17 活动详情长文折叠 ══ */
+/* 关键数据卡（地点/出发/规模四格）已按用户反馈撤销：头图 meta 已有地点/日期/价格，不再重复摆固定网格。 */
 /* 长文折叠：只包一层容器，AI 正文原样在内，不改大模型排版。
    -webkit-line-clamp 不用（内部是 iframe/多 section），改用 max-height 裁切 + 渐隐蒙层。 */
 .web-shell #publicDetail .w-editorial-wrap{position:relative}
