@@ -266,3 +266,23 @@ body.admin-workspace {
   .admin-workspace .btn,.admin-workspace .view>.panel-title .btn{min-height:42px}
   .admin-workspace .stat-tile,.admin-workspace .metric{padding:14px}
 }
+
+/* ===== 订单信息页：统计卡紧凑化（2026-11-18）=====
+   原 5 张大卡（padding22/字号30/带 hint）叠加通用筛选条，占近半屏。
+   压成一行紧凑指标：缩小内边距字号、去 hint（细节移入 title），省下工作区高度。 */
+.admin-workspace .g4.oi-summary-compact,
+#orderInfoSummary.oi-summary-compact{gap:8px;margin-top:12px;margin-bottom:12px}
+#orderInfoSummary.oi-summary-compact > .stat-tile{
+  padding:9px 12px;min-height:auto;border-radius:10px;
+  display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;
+}
+#orderInfoSummary.oi-summary-compact > .stat-tile .k{font-size:12px;margin:0}
+#orderInfoSummary.oi-summary-compact > .stat-tile .v{font-size:19px;margin:0;letter-spacing:0}
+
+/* ===== 会员列表筛选栏（2026-11-18）===== */
+.member-filter{margin:12px 0 10px}
+.member-filter .member-filter__row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.member-filter .member-filter__row input{min-height:34px;padding:6px 9px;border:1px solid var(--line,#e3e3e8);border-radius:8px;background:#fff;font-size:13px;color:inherit;box-sizing:border-box}
+.member-filter .member-filter__row .ux-table-search{flex:1;min-width:160px}
+.member-filter .member-filter__row .ux-table-search input{width:100%;border:0;background:transparent;min-height:auto;padding:0}
+@media(max-width:640px){.member-filter .member-filter__row input[type=date]{flex:1 1 44%;min-width:0}}

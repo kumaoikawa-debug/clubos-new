@@ -1,4 +1,13 @@
 let CLUB=1;let currentActivity=null;
+
+/* 外链必须带 sharecode：WorkBuddy 网关对缺 sharecode 的请求返回 403「链接不完整」，
+   这正是「后台复制活动链接发微信打不开」的根因。沿用当前后台 URL 的 sharecode，
+   保证分享链接/二维码/文案在微信里与浏览器里都能打开。 */
+function shareUrl(path){
+  const sc=new URLSearchParams(location.search).get('sharecode')||'TMMVIUMR36';
+  const u=new URL(path,location.origin);u.searchParams.set('sharecode',sc);return u.toString();
+}
+
 navInit();window.go=v=>{document.querySelector(`.nav button[data-view="${v}"]`)?.click()};
 window.onView=async v=>{if(v==='activities')await loadActivities();if(v==='actcats')await loadActCats();if(v==='content'||v==='content-channel'||v==='content-recap'||v==='content-list')await loadContent();if(v==='regs'||v==='regs-list'||v==='regs-refund')await loadRegs();if(v==='execution')await loadExecution();if(v==='members'||v==='members-list'||v==='members-tiers'||v==='members-benefits'||v==='members-mall')await loadMembers();if(v==='mall'||v==='mall-overview'||v==='mall-products'||v==='mall-orders'||v==='mall-aftersales'||v==='mall-settle')await loadMall();if(v==='analytics')await loadClubBI();if(v==='order-info')await orderInfoLoad();if(v==='points')await loadPointsPolicy();if(v==='info')await loadInfoCenter();if(v==='camp')await loadCamp();if(v==='settings')await setTab(SETTINGS_TAB);if(v==='staffperms')await loadStaffPerms()}
 /* 侧栏「设置中枢」入口：跳到独立的能力总览页 settings-hub.html，
@@ -333,7 +342,7 @@ function activitySourceLine(a){
   if(extras-linkPhotos>0)bits.push('其中单独上传 '+(extras-linkPhotos)+' 张');
   return '<div class="sub" style="margin-top:6px">'+(lk?'本场按链接生成：':'本场按上传资料生成：')+bits.join(' · ')+'</div>';
 }
-async function openActivity(id){try{LEADER_CTX='activity';if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','智能详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="act-head"><div class="act-head__id"><h2>${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期 · ${a.status==='draft'?'<span class="tag orange">草稿</span>':'<span class="tag">已发布</span>'}</div></div><div class="act-head__ops">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:''}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="/web?club_id=${CLUB}&activity=${id}&v=${_cverId(a)}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button><button class="btn ghost" onclick="republishActivity(${id})" title="把当前这一版重新发布一次：C 端拿到的永远是最新版，这一步同时刷新 C 端版本戳，已打开的顾客页面会出现「有新版」提示">重新发布 / 同步 C 端</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="act-meta">${activitySourceLine(a)}${_syncNoticeHtml(a)}</div><div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面<br><span style="font-size:11px;opacity:.75">可点右侧自动选</span>'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button><button class="btn ghost" onclick="autoCover(${a.id})" title="从这份资料抽出的照片里挑一张做封面（优先沿用详情首图）">智能从素材选一张</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
+async function openActivity(id){try{LEADER_CTX='activity';if(LEADER_FORM){dropLeaderDraft();LEADER_FORM=null}_actOpenId=Number(id);syncActRail();let a=await api(`/api/club/${CLUB}/activities/${id}`);currentActivity=a;let conflicts=a.activityMaster?.blocking_conflicts||[];const pane=$('#activityDetail');if(!pane)return;pane.innerHTML=`${detailNavHtml([['sec-cover','封面'],['sec-detail','智能详情'],['sec-ops','行程与清单'],['sec-leaders','带队领队'],['sec-rules','报名与政策'],['sec-occ','团期价格']])}<div class="act-head"><div class="act-head__id"><h2>${esc(a.title)}</h2><div class="sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)} · ${a.occurrences?.length||0} 个团期 · ${a.status==='draft'?'<span class="tag orange">草稿</span>':'<span class="tag">已发布</span>'}</div></div><div class="act-head__ops">${a.status==='draft'?`<button class="btn" onclick="publishActivity(${id})">发布活动</button>`:''}<button class="btn ghost" onclick="goContentForActivity(${id})">去做宣发内容</button><a class="btn ghost" href="${shareUrl(`/web?club_id=${CLUB}&activity=${id}&v=${_cverId(a)}`)}" target="_blank" style="text-decoration:none">打开C端</a>${a.status==='published'?`<button class="btn secondary" onclick="shareActivity(${id})">分享活动</button><button class="btn ghost" onclick="republishActivity(${id})" title="把当前这一版重新发布一次：C 端拿到的永远是最新版，这一步同时刷新 C 端版本戳，已打开的顾客页面会出现「有新版」提示">重新发布 / 同步 C 端</button>`:''}${a.detailVersion?.canRegenerate?`<button class="btn secondary" onclick="openRegenerateModal(${id})">重新生成 / 换一版</button>`:''}<button class="btn ghost" onclick="editActivity(${id})">编辑基本信息</button><button class="btn ghost" onclick="deleteActivity(${id})">删除活动</button></div></div>${conflicts.length?`<div class="notice warn">发现真实冲突：${conflicts.map(esc).join('；')}</div>`:''}<div class="act-meta">${activitySourceLine(a)}${_syncNoticeHtml(a)}</div><div class="card section" id="sec-cover"><div class="panel-title"><div><h3>活动封面</h3></div></div><div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><div style="width:160px;height:90px;border-radius:12px;background:#edf3f1;background-size:cover;background-position:center;display:flex;align-items:center;justify-content:center;color:#6b8a7b;font-size:12px;text-align:center;${a.cover?`background-image:url('/api/club/${CLUB}/activities/${a.id}/cover')`:''}">${a.cover?'':'未设封面<br><span style="font-size:11px;opacity:.75">可点右侧自动选</span>'}</div><div style="display:flex;flex-direction:column;gap:8px"><input id="coverFile" type="file" accept="image/*"><button class="btn secondary" onclick="uploadCover(${a.id})">上传 / 替换封面</button><button class="btn ghost" onclick="autoCover(${a.id})" title="从这份资料抽出的照片里挑一张做封面（优先沿用详情首图）">智能从素材选一张</button></div></div></div><div id="sec-detail">${renderPromo(a.detail,a.activityMaster,{hideButton:true})}</div><div id="sec-ops">${renderInfoStack(a.activityMaster,{gear:a.gearRecommendations,manage:true,skip:infoStackSkip(a.detail,a.activityMaster)})}</div>${renderLeaderCard(a,id)}<div id="sec-rules">${pointsPolicyCard(a)}${refundPolicyCard(a)}${participantPolicyCard(a)}</div><div class="card section" id="sec-occ"><div class="panel-title"><h3>团期 / 价格 / 名额</h3><button class="btn secondary" onclick="quickAddOccurrence(${id})">＋ 添加团期</button></div>${(a.occurrences||[]).map(o=>{const oc=_occRange(o),lbl=String(o.label||'').trim();const multi=!!(oc&&oc.multi);const title=lbl||(oc?(multi?oc.st.md+' ～ '+oc.en.md:oc.st.md):'团期');const sub=lbl?(oc?oc.full+' · ':'')+(multi?'多日行程 · ':'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity:(oc?(multi?oc.st.wd+' '+oc.st.t+' 出发 · '+oc.en.wd+' '+oc.en.t+' 返程 · ':oc.st.wd+' '+oc.st.t+' · '):'')+money(o.price)+' · 已售 '+o.sold+'/'+o.capacity;const tag=multi&&!/～|~/.test(lbl)?' <span class="tag">多日</span>':'';/* 团期行此前只有文字、没有任何操作入口：老板改不了时间/价格/名额（用户截图实证）。
    现在每行都给出「改时间 / 价格」与「删除」；并把两种容易被当成 bug 的状态直接标出来：
    ¥0 不是出错而是「价格待定」（成本表来源的活动在俱乐部定价前会归零），
    已停止报名的团期也要一眼可见，否则老板会以为 C 端还能报。 */
@@ -596,7 +605,7 @@ async function shareActivity(id){
   let a=currentActivity;
   if(!a||Number(a.id)!==Number(id)){try{a=await api(`/api/club/${CLUB}/activities/${id}`)}catch(e){showAlert({title:'读取活动失败',message:e.message});return}}
   if(a.status!=='published'){showAlert({title:'活动尚未发布',message:'发布后顾客才能打开这条链接。先点「发布活动」再分享。'});return}
-  const url=location.origin+`/web?club_id=${CLUB}&activity=${id}`;
+  const url=shareUrl(`/web?club_id=${CLUB}&activity=${id}`);
   const cap=`【${a.title}】${a.event_date||''} ${a.location||''}${a.price?(' '+money(a.price)):''}\n报名看详情：${url}`;
   const ov=uxDialog({title:'分享活动',desc:'扫码或复制链接，发到微信 / 朋友圈。',body:`
     <div class="ux-share">
@@ -1096,6 +1105,29 @@ async function showParticipants(regId){
 }
 
 
+/* ===== 会员列表筛选（注册时间 / 手机号 / 用户名）=====
+   数据来自 /api/club/{CLUB}/members，created_at 即成为会员/注册时间（club_members 表自带）。
+   缓存全量列表 _memberAll，筛选只做前端过滤，避免重复请求。 */
+let _memberAll=[];
+function memberCnName(x){return x.name||x.user_name||''}
+function renderMemberRows(){
+  const body=$('#memberRows');if(!body)return;
+  const from=($('#memberFrom')?.value)||'',to=($('#memberTo')?.value)||'';
+  const phone=($('#memberPhone')?.value||'').trim().toLowerCase();
+  const kw=($('#memberKw')?.value||'').trim().toLowerCase();
+  const list=_memberAll.filter(x=>{
+    const d=String(x.created_at||'').slice(0,10);
+    if(from&&d&&d<from)return false;
+    if(to&&d&&d>to)return false;
+    if(phone&&!String(x.phone||'').toLowerCase().includes(phone))return false;
+    if(kw){const hay=(memberCnName(x)+' '+String(x.phone||'')+' '+String(x.level||'')).toLowerCase();if(!hay.includes(kw))return false}
+    return true;
+  });
+  body.innerHTML=list.map(x=>`<tr class="member-row" onclick="openMember(${x.user_id})"><td>${esc(memberCnName(x))}</td><td><strong>${esc(x.level)}</strong></td><td>${x.activity_count||0}</td><td>${money(x.lifetime_activity_spend||0)}</td><td>${x.club_points_balance}</td><td>${x.gear_points}</td><td>${esc(x.phone||'')}</td><td>${esc(String(x.created_at||'').slice(0,10))}</td><td><span class="sub">查看详情 ›</span></td></tr>`).join('')||'<tr><td colspan="9" class="empty">当前筛选没有会员</td></tr>';
+  const cnt=$('#memberFilterCount');if(cnt)cnt.textContent=`共 ${list.length} / ${_memberAll.length} 位`;
+}
+function applyMemberFilter(){renderMemberRows()}
+function clearMemberFilter(){['#memberFrom','#memberTo','#memberPhone','#memberKw'].forEach(id=>{const el=$(id);if(el)el.value=''});renderMemberRows()}
 async function loadMembers(){skel('#tierList',3);
   try{
   let [a,tiers,benefits,reds,gd,pe,orders,rules,mall,mallReds,tierGifts,inviteReward,buyGifts,grantLog]=await Promise.all([
@@ -1113,7 +1145,7 @@ async function loadMembers(){skel('#tierList',3);
     api(`/api/club/${CLUB}/campaign-grant-log`).catch(()=>[])
   ]);
   _inviteReward=inviteReward||{settings:{enabled:0},pool:[],records:[],stats:{}};
-  $('#memberRows').innerHTML=a.map(x=>`<tr class="member-row" onclick="openMember(${x.user_id})"><td>${esc(x.name)}</td><td><strong>${esc(x.level)}</strong></td><td>${x.activity_count||0}</td><td>${money(x.lifetime_activity_spend||0)}</td><td>${x.club_points_balance}</td><td>${x.gear_points}</td><td>${esc(x.phone||'')}</td><td><span class="sub">查看详情 ›</span></td></tr>`).join('')||'<tr><td colspan="8" class="empty">暂无会员</td></tr>';
+  _memberAll=a||[]; renderMemberRows();
   _tiers=tiers;_gearDiscount=gd||null;
   _tierRewards=tierGifts||[];
   _clubBenefits=(benefits||[]).filter(x=>x.owner_type==='CLUB'&&x.benefit_type==='activity_coupon'&&String(x.status||'active')==='active');
@@ -1957,7 +1989,7 @@ function biTrend(d){
 async function loadClubBI(){
  /* #830 统计周期改直接点选（占位容器在 index.html） */
  const bw=$('#clubBIWindowWrap');
- if(bw&&!bw.__wired){bw.__wired=true;bw.innerHTML=uxChoiceHtml({id:'clubBIWindow',name:'clubBIWindow',value:'30',options:[{value:'7',label:'近7天'},{value:'30',label:'近30天'},{value:'90',label:'近90天'},{value:'365',label:'近365天'}],onchange:'loadClubBI()'});}
+ if(bw&&!bw.__wired){bw.__wired=true;bw.innerHTML=uxChoiceHtml({id:'clubBIWindow',name:'clubBIWindow',value:'30',options:[{value:'7',label:'近7天'},{value:'30',label:'近30天'},{value:'90',label:'近90天'},{value:'365',label:'近365天'}],onchange:'loadClubBI()',max:0});}
  const w=Number($('#clubBIWindow')?.value||30);
  $('#analyticsMetrics').innerHTML='<div class="card">正在读取真实经营数据…</div>';
  try{
@@ -1976,7 +2008,7 @@ async function loadClubBI(){
   $('#clubBIActivityFinance').innerHTML=biLine('本期报名实收',money(a.paidCashInWindow))+biLine('本期实际现金退款',money(a.confirmedRefundCashInWindow))+biLine('本期现金净流入',money(a.netCashFlowInWindow))+biLine('本期订单截至当前净实收',money(a.bookingCohortNetCash),'含本期订单后来发生的退款')+biLine('俱乐部承担折扣',money(a.clubFundedDiscount))+biLine('平台承担补贴',money(a.platformFundedSubsidy))+biLine('全额退款订单',a.fullRefundOrders+' 笔')+biLine('部分退款订单',a.partialRefundOrders+' 笔');
   $('#clubBIMembers').innerHTML=biLine('本期独立付费用户',a.payingUsers)+biLine('重复付费用户',a.repeatPayingUsers)+biLine('新会员',m.newMembersInWindow)+biLine('会员活动积分余额',m.clubPointsBalance)+biLine('本期积分发放',m.clubPointsIssuedInWindow)+biLine('本期积分减少',m.clubPointsDebitedInWindow)+'<div class="sub" style="margin-top:14px">会员等级结构</div>'+Object.entries(m.tierCounts).map(([k,v])=>biLine(k,v+' 人')).join('');
   $('#clubBICommerceAI').innerHTML=biLine('商城归因销售额',money(g.attributedGMV))+biLine('商城订单已付现金',money(g.attributedCashPaid))+biLine('本期商城现金退款',money(g.cashRefundedInWindow))+biLine('本期新增佣金',money(g.commissionEarnedInWindow))+biLine('本期佣金退款冲回',money(g.commissionReversedInWindow))+biLine('本期实际结算',money(g.settlementPaidInWindow))+biLine('本期智能奖励',g.aiRewardCreditsInWindow+' Credits')+biLine('本期 智能调用成功',ai.successfulCalls+' 次');
-  $('#clubBIActivities').innerHTML=d.activities.length?`<div style="overflow-x:auto"><table class="table"><thead><tr><th>活动</th><th>报名订单</th><th>付费用户</th><th>报名实收</th><th>已确认退款</th><th>订单净实收</th><th>俱乐部折扣</th><th>平台补贴</th></tr></thead><tbody>${d.activities.map(x=>`<tr><td>${esc(x.title)}</td><td>${x.orders}</td><td>${x.paidBuyers}</td><td>${money(x.paidCash)}</td><td>${money(x.confirmedRefundCash)}</td><td><strong>${money(x.netCash)}</strong></td><td>${money(x.clubDiscount)}</td><td>${money(x.platformSubsidy)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">所选周期暂无成功付费报名。</div>';
+  $('#clubBIActivities').innerHTML=d.activities.length?`<div style="overflow-x:auto"><table class="table" data-ux-skip="1"><thead><tr><th>活动</th><th>报名订单</th><th>付费用户</th><th>报名实收</th><th>已确认退款</th><th>订单净实收</th><th>俱乐部折扣</th><th>平台补贴</th></tr></thead><tbody>${d.activities.map(x=>`<tr><td>${esc(x.title)}</td><td>${x.orders}</td><td>${x.paidBuyers}</td><td>${money(x.paidCash)}</td><td>${money(x.confirmedRefundCash)}</td><td><strong>${money(x.netCash)}</strong></td><td>${money(x.clubDiscount)}</td><td>${money(x.platformSubsidy)}</td></tr>`).join('')}</tbody></table></div>`:'<div class="empty">所选周期暂无成功付费报名。</div>';
   $('#clubBIDefinitions').innerHTML=Object.entries(d.definitions).map(([k,v])=>`<div style="padding:4px 0">${esc(v)}</div>`).join('');
  }catch(e){ $('#analyticsMetrics').innerHTML=`<div class="notice warn">经营数据读取失败：${esc(e.message)}</div>`; }
 }
@@ -3271,7 +3303,7 @@ async function loadMpInfo(){
   </div>
   <div id="mpInfoFormBox"></div>`;
   const cv=document.getElementById('mpQrCanvas');
-  if(cv&&window.ClubOSQR){try{ClubOSQR.draw(cv,location.origin+'/web?club_id='+CLUB)}catch(e){}}
+  if(cv&&window.ClubOSQR){try{ClubOSQR.draw(cv,shareUrl('/web?club_id='+CLUB))}catch(e){}}
 }
 async function mpClearAvatar(){
   try{await api(`/api/club/${CLUB}/miniprogram`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({avatarClear:true})});toast('已恢复为俱乐部 Logo 自动同步');loadMpInfo()}
@@ -4272,7 +4304,9 @@ Object.assign(window,{
   loadInfoCenter,infoSearchInput,
   /* 员工权限管理（2026-11-16）：这四个函数被 index.html/模板里的 inline onclick
      引用，IIFE 内定义不会自动挂 window —— 不导出则「编辑/停用/删除/加载」点了没反应。 */
-  loadStaffPerms,clubStaffForm,clubStaffStatus,clubStaffDel
+  loadStaffPerms,clubStaffForm,clubStaffStatus,clubStaffDel,
+  /* 会员筛选（2026-11-18）：index.html 的 oninput/onchange/onclick 直接引用，必须显式导出。 */
+  applyMemberFilter,clearMemberFilter
 });
 
 /* ===== P2-7（2026-11-14）俱乐部营销页信息架构 =====

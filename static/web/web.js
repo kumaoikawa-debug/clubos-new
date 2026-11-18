@@ -1,3 +1,9 @@
+/* 分享给好友的商品/活动链接必须带 sharecode（网关缺参返回 403「链接不完整」）。
+   顾客从分享链接进来，当前 URL 已带 sharecode，沿用即可。 */
+function shareUrl(path){
+  const sc=new URLSearchParams(location.search).get('sharecode');
+  const u=new URL(path,location.origin);if(sc)u.searchParams.set('sharecode',sc);return u.toString();
+}
 let CLUB=Number(new URLSearchParams(location.search).get('club_id')||1),USER=1,PAYER_NAME='林野',PAYER_PHONE='13800000001';let currentAct=null,currentOcc=null,activityVouchers=[],bookingParticipants=[];let ACT_ALL=[],ACT_CAT='all',ACT_REGION='all',ACT_CITY='all',ACT_CITY_LOCATED='',ACT_Q='',MALL_ALL=[],MALL_CAT='全部',MALL_SORT='rec';
 /* ══════════════════════════════════════════════════════════════════════════
    C 端视觉层（配合 static/web/web.css）
@@ -1168,7 +1174,7 @@ function pdSheetConfirm(){
    所以链接里带 #pd=<id>，loadMall 拉完列表后会认这个哈希。 */
 function pdCopyLink(){
   if(!P_CUR)return;
-  const u=location.origin+location.pathname+'?club_id='+CLUB+'#pd='+P_CUR.id;
+  const u=shareUrl(location.pathname+'?club_id='+CLUB+'#pd='+P_CUR.id);
   const ok=()=>toast('商品链接已复制，粘贴给好友即可打开');
   if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(u).then(ok).catch(()=>pdCopyFallback(u,ok));
   else pdCopyFallback(u,ok);

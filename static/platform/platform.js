@@ -1231,7 +1231,97 @@ function gotoWarehousePick(){
   toast('在下方任务列表点「完成拣货」，然后回订单履约继续打包');
 }
 
-async function loadFinance(){try{skel('#supplierFinanceList',4);let [ss,sum,orders,products]=await Promise.all([api('/api/platform/finance/supplier-summary'),api('/api/platform/profit/summary'),api('/api/platform/profit/orders?limit=50'),api('/api/platform/profit/products')]);let payable=ss.reduce((a,x)=>a+Number(x.outstanding||0),0),overdue=ss.reduce((a,x)=>a+Number(x.overdue||0),0);$('#financeMetrics').innerHTML=[['供应商应付',money(payable)],['逾期应付',money(overdue)],['贡献利润',money(sum.contributionProfit)],['贡献毛利率',`${Number(sum.contributionMarginPct||0).toFixed(1)}%`]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');$('#supplierFinanceList').innerHTML=ss.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.supplierName)}</div> · 应付 ${money(x.outstanding)}${x.overdue>0?` <span class="tag orange">逾期 ${money(x.overdue)}</span>`:''}<div class="list-row__sub">已付 ${money(x.paidAmount)} · 已冲贷项 ${money(x.creditsApplied)} · 未用贷项 ${money(x.availableCredit)} · 采购价差 ${money(x.purchasePriceVariance)}</div><button class="btn ghost" style="margin-top:7px" onclick="paySupplier(${x.supplierId},${x.outstanding})">登记付款</button></div></div>`).join('')||'<div class="empty">暂无供应商应付</div>';$('#orderProfitList').innerHTML=orders.map(x=>{const src=x.costSource||'none';const badge=src==='BOM'?'<span class="tag green">BOM自动</span>':src==='manual'?'<span class="tag">手动覆盖</span>':'<span class="tag muted">无成本</span>';const other=Number(x.otherCost||0);const bomTotal=Number(x.shippingCost||0)+Number(x.packagingCost||0)+other;const btns=src==='manual'?`<button class="btn ghost" style="margin-top:6px" onclick="setOrderCosts(${x.orderId},${x.shippingCost||0},${x.packagingCost||0})">覆盖成本</button> <button class="btn ghost" style="margin-top:6px" onclick="resetOrderCost(${x.orderId})">恢复BOM</button>`:`<button class="btn ghost" style="margin-top:6px" onclick="setOrderCosts(${x.orderId},${x.shippingCost||0},${x.packagingCost||0})">${src==='BOM'?'覆盖成本':'录入物流成本'}</button>`;return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">订单 #${x.orderId} ${badge}</div> · 净销售 ${money(x.netSales)} · <b>${money(x.contributionProfit)}</b> <div class="list-row__sub">COGS ${money(x.cogs)} · 佣金 ${money(x.clubCommission)} · 积分/福利 ${money(Number(x.platformPointSubsidy)+Number(x.platformBenefitSubsidy))} · 运营成本 <b>${money(bomTotal)}</b> · 物流 ${money(x.shippingCost)} · 包材 ${money(x.packagingCost)}${other>0?` · 其他 ${money(other)}`:''}</div>${btns}<div class="list-row__end"><span class="tag ${x.contributionProfit<0?'orange':''}">${Number(x.contributionMarginPct||0).toFixed(1)}%</span></div></div></div>`}).join('')||'<div class="empty">暂无商城订单</div>';$('#productProfitList').innerHTML=`<table class="table"><thead><tr><th>商品</th><th>净销量</th><th>净销售</th><th>COGS</th><th>毛利</th><th>毛利率</th><th>BOM成本</th><th>贡献利润</th><th>贡献毛利率</th></tr></thead><tbody>${products.map(x=>`<tr><td>${esc(x.name)}<div class="sub">${esc(x.sku)}</div></td><td>${x.netUnits}</td><td>${money(x.netSales)}</td><td>${money(x.cogs)}</td><td><strong>${money(x.grossProfit)}</strong></td><td>${Number(x.grossMarginPct||0).toFixed(1)}%</td><td>${money(x.bomCost||0)}</td><td><strong>${money(x.contributionProfit||0)}</strong></td><td>${Number(x.contributionMarginPct||0).toFixed(1)}%</td></tr>`).join('')}</tbody></table><div class="sub" style="margin-top:8px">BOM成本＝物流+包材+其他运营成本，按订单内商品净销售额占比分摊；COGS 仍为商品成本快照。</div>`}catch(e){loaderError('#supplierFinanceList',e,'loadFinance 加载失败')}}
+/* ===== 商品利润：数据缓存 + 筛选（日期/品类/品牌） =====
+   订单真实利润按 createdAt 过滤；商品毛利按品类/品牌过滤（映射来自 /api/platform/products）。
+   成本标签跟随启用的 BOM 清单名称（costLabel），避免「清单叫物流成本、这里却写运营成本」。 */
+let _finOrders=[],_finProducts=[],_finCatOpts=[],_finBrandOpts=[],_finCostLabel='运营成本';
+let _finFilter={from:'',to:'',cat:'',brand:''};
+function _finDateOf(x){const d=String(x.createdAt||'');return d.slice(0,10);}
+function _finBomName(orders){for(const o of orders){if(o.costSource==='BOM'&&o.costLabel)return o.costLabel;}return null;}
+function buildFinanceFilter(){
+  const catSel=$('#finCat'),brandSel=$('#finBrand');
+  if(catSel)catSel.innerHTML='<option value="">全部品类</option>'+_finCatOpts.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+  if(brandSel)brandSel.innerHTML='<option value="">全部品牌</option>'+_finBrandOpts.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join('');
+}
+function applyFinanceFilter(){
+  const f=_finFilter;
+  f.from=($('#finDateFrom')?.value)||''; f.to=($('#finDateTo')?.value)||'';
+  f.cat=($('#finCat')?.value)||''; f.brand=($('#finBrand')?.value)||'';
+  renderOrderProfit(); renderProductProfit();
+  const n=$('#finFilterCount'); if(n){const c=filteredOrders().length;n.textContent=`订单 ${c}/${_finOrders.length} · 商品 ${filteredProducts().length}/${_finProducts.length}`;}
+}
+function clearFinanceFilter(){
+  _finFilter={from:'',to:'',cat:'',brand:''};
+  ['#finDateFrom','#finDateTo'].forEach(id=>{if($(id))$(id).value='';});
+  if($('#finCat'))$('#finCat').value=''; if($('#finBrand'))$('#finBrand').value='';
+  applyFinanceFilter();
+}
+function filteredOrders(){
+  const f=_finFilter;
+  return _finOrders.filter(x=>{
+    const d=_finDateOf(x);
+    if(f.from&&d&&d<f.from)return false;
+    if(f.to&&d&&d>f.to)return false;
+    return true;
+  });
+}
+function filteredProducts(){
+  const f=_finFilter;
+  if(!f.cat&&!f.brand)return _finProducts;
+  return _finProducts.filter(x=>{
+    const m=_finProdMeta[x.productId]||{};
+    if(f.cat&&(m.category||'')!==f.cat)return false;
+    if(f.brand&&(m.brand||'')!==f.brand)return false;
+    return true;
+  });
+}
+let _finProdMeta={};
+function renderOrderProfit(){
+  const box=$('#orderProfitList'); if(!box)return;
+  const label=_finCostLabel;
+  box.innerHTML=filteredOrders().map(x=>{
+    const src=x.costSource||'none';
+    const badge=src==='BOM'?'<span class="tag green">BOM自动</span>':src==='manual'?'<span class="tag">手动覆盖</span>':'<span class="tag muted">无成本</span>';
+    const other=Number(x.otherCost||0);
+    const bomTotal=Number(x.shippingCost||0)+Number(x.packagingCost||0)+other;
+    const cLabel=(src==='BOM'&&x.costLabel)?x.costLabel:(src==='manual'?'手动成本':'运营成本');
+    const btns=src==='manual'?`<button class="btn ghost" style="margin-top:6px" onclick="setOrderCosts(${x.orderId},${x.shippingCost||0},${x.packagingCost||0})">覆盖成本</button> <button class="btn ghost" style="margin-top:6px" onclick="resetOrderCost(${x.orderId})">恢复BOM</button>`:`<button class="btn ghost" style="margin-top:6px" onclick="setOrderCosts(${x.orderId},${x.shippingCost||0},${x.packagingCost||0})">${src==='BOM'?'覆盖成本':'录入物流成本'}</button>`;
+    const date=_finDateOf(x);
+    return `<div class="list-row"><div class="list-row__main"><div class="list-row__title">订单 #${x.orderId} ${badge}</div>${date?`<div class="list-row__sub">${date}</div>`:''} · 净销售 ${money(x.netSales)} · <b>${money(x.contributionProfit)}</b> <div class="list-row__sub">COGS ${money(x.cogs)} · 佣金 ${money(x.clubCommission)} · 积分/福利 ${money(Number(x.platformPointSubsidy)+Number(x.platformBenefitSubsidy))} · ${esc(cLabel)} <b>${money(bomTotal)}</b> · 物流 ${money(x.shippingCost)} · 包材 ${money(x.packagingCost)}${other>0?` · 其他 ${money(other)}`:''}</div>${btns}<div class="list-row__end"><span class="tag ${x.contributionProfit<0?'orange':''}">${Number(x.contributionMarginPct||0).toFixed(1)}%</span></div></div></div>`;
+  }).join('')||'<div class="empty">当前筛选条件下暂无订单</div>';
+}
+function renderProductProfit(){
+  const box=$('#productProfitList'); if(!box)return;
+  const rows=filteredProducts();
+  const label=_finCostLabel;
+  box.innerHTML=`<table class="table"><thead><tr><th>商品</th><th>品类</th><th>品牌</th><th>净销量</th><th>净销售</th><th>COGS</th><th>毛利</th><th>毛利率</th><th>${esc(label)}</th><th>贡献利润</th><th>贡献毛利率</th></tr></thead><tbody>${rows.map(x=>{
+    const m=_finProdMeta[x.productId]||{};
+    return `<tr><td>${esc(x.name)}<div class="sub">${esc(x.sku)}</div></td><td>${esc(m.category||'—')}</td><td>${esc(m.brand||'—')}</td><td>${x.netUnits}</td><td>${money(x.netSales)}</td><td>${money(x.cogs)}</td><td><strong>${money(x.grossProfit)}</strong></td><td>${Number(x.grossMarginPct||0).toFixed(1)}%</td><td>${money(x.bomCost||0)}</td><td><strong>${money(x.contributionProfit||0)}</strong></td><td>${Number(x.contributionMarginPct||0).toFixed(1)}%</td></tr>`;
+  }).join('')}</tbody></table><div class="sub" style="margin-top:8px">${esc(label)}＝物流+包材+其他运营成本，按订单内商品净销售额占比分摊；COGS 仍为商品成本快照。可用上方筛选按日期/品类/品牌缩小范围。</div>`;
+}
+async function loadFinance(){try{
+  skel('#supplierFinanceList',4);
+  let [ss,sum,orders,products,allProducts]=await Promise.all([
+    api('/api/platform/finance/supplier-summary'),api('/api/platform/profit/summary'),
+    api('/api/platform/profit/orders?limit=200'),api('/api/platform/profit/products'),
+    api('/api/platform/products')
+  ]);
+  _finOrders=orders||[]; _finProducts=products||[];
+  // 商品 id → 品类/品牌 映射，供筛选与表格展示
+  _finProdMeta={}; _finCatOpts=[]; _finBrandOpts=[];
+  (allProducts||[]).forEach(p=>{
+    const cat=p.category_name||p.category||'',brand=p.brand_name||'';
+    _finProdMeta[p.id]={category:cat,brand:brand};
+    if(cat&&!_finCatOpts.includes(cat))_finCatOpts.push(cat);
+    if(brand&&!_finBrandOpts.includes(brand))_finBrandOpts.push(brand);
+  });
+  _finCatOpts.sort();_finBrandOpts.sort();
+  const bn=_finBomName(_finOrders); _finCostLabel=bn||'运营成本';
+  let payable=ss.reduce((a,x)=>a+Number(x.outstanding||0),0),overdue=ss.reduce((a,x)=>a+Number(x.overdue||0),0);
+  $('#financeMetrics').innerHTML=[['供应商应付',money(payable)],['逾期应付',money(overdue)],['贡献利润',money(sum.contributionProfit)],['贡献毛利率',`${Number(sum.contributionMarginPct||0).toFixed(1)}%`]].map(x=>`<div class="stat-tile"><div class="k">${x[0]}</div><div class="v">${x[1]}</div></div>`).join('');
+  $('#supplierFinanceList').innerHTML=ss.map(x=>`<div class="list-row"><div class="list-row__main"><div class="list-row__title">${esc(x.supplierName)}</div> · 应付 ${money(x.outstanding)}${x.overdue>0?` <span class="tag orange">逾期 ${money(x.overdue)}</span>`:''}<div class="list-row__sub">已付 ${money(x.paidAmount)} · 已冲贷项 ${money(x.creditsApplied)} · 未用贷项 ${money(x.availableCredit)} · 采购价差 ${money(x.purchasePriceVariance)}</div><button class="btn ghost" style="margin-top:7px" onclick="paySupplier(${x.supplierId},${x.outstanding})">登记付款</button></div></div>`).join('')||'<div class="empty">暂无供应商应付</div>';
+  buildFinanceFilter(); applyFinanceFilter();
+}catch(e){loaderError('#supplierFinanceList',e,'loadFinance 加载失败')}}
 async function paySupplier(supplierId,outstanding){if(Number(outstanding)<=0){showAlert({title:'没有应付余额',message:'当前没有应付余额。'});return}const v=await showForm({title:'登记供应商付款',submitText:'登记付款',fields:[{name:'amt',label:'本次付款金额',type:'number',value:Number(Number(outstanding).toFixed(2)),min:0.01,required:true},{name:'ref',label:'银行/支付凭证号',required:true}]});if(!v)return;await api('/api/platform/finance/supplier-payments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({supplierId,amount:Number(v.amt||0),paymentRef:v.ref,paymentMethod:'bank',note:'平台供应商付款'})});toast('供应商付款已登记');loadFinance()}
 async function setOrderCosts(orderId,shipping,packaging){const v=await showForm({title:'设置订单运营成本',submitText:'保存',fields:[{name:'s',label:'物流成本',type:'number',value:Number(shipping||0),min:0},{name:'p',label:'包材成本',type:'number',value:Number(packaging||0),min:0}]});if(!v)return;await api(`/api/platform/orders/${orderId}/operating-costs`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({shippingCost:Number(v.s||0),packagingCost:Number(v.p||0)})});toast('订单运营成本已更新');loadFinance()}
 async function resetOrderCost(orderId){const ok=await showConfirm({title:'恢复 BOM 自动核算',message:'将清除本单的手动成本覆盖，改回按启用的成本清单自动核算。'});if(!ok)return;await api('/api/platform/orders/'+orderId+'/cost-reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});toast('已恢复 BOM 自动核算');loadFinance()}

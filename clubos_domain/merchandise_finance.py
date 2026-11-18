@@ -457,10 +457,15 @@ class MerchandiseFinanceEngine:
         override = int(o.get("cost_bom_override") or 0)
         total_qty = sum(int(x.get("netCostQty") or 0) for x in items)
         bom = None
+        # 成本标签：跟随启用的成本清单名称，避免「清单叫物流成本、利润里却写运营成本」对不上。
+        # 手动覆盖标「手动成本」，无成本标「运营成本」。
+        cost_label = "手动成本" if override == 1 else "运营成本"
         if override == 0:
             tpl = self.active_bom_template(c)
             if tpl:
                 bom = self.compute_order_bom(c, o, net_sales=net_sales, cogs=cogs, total_qty=total_qty, template=tpl)
+                if bom:
+                    cost_label = tpl.get("name") or "运营成本"
         if bom:
             shipping = bom["shipping"]
             packaging = bom["packaging"]
@@ -492,6 +497,8 @@ class MerchandiseFinanceEngine:
             "packagingCost": packaging,
             "otherCost": round(other_cost, 2),
             "costSource": cost_source,
+            "createdAt": o.get("created_at"),
+            "costLabel": cost_label,
             "bomLines": bom["lines"] if bom else [],
             "contributionProfit": contribution,
             "contributionMarginPct": round((contribution / net_sales * 100), 2) if net_sales else 0.0,

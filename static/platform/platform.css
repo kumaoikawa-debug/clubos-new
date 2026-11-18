@@ -1086,3 +1086,13 @@
 .plat-staff-item{display:flex;flex-direction:column;gap:3px;font-size:12px;padding:6px 8px;border-radius:6px;background:var(--soft,#f6f7f9)}
 .plat-staff-item span{color:var(--muted,#6b7280);line-height:1.5}
 @media(max-width:600px){.plat-staff-tree{grid-template-columns:1fr}}
+
+/* 商品利润筛选栏：日期 / 品类 / 品牌（2026-11-18） */
+.fin-filter .fin-filter__row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.fin-filter .fin-filter__row .field{display:flex;flex-direction:column;gap:4px;min-width:140px;flex:0 1 auto}
+.fin-filter .fin-filter__row .field label{font-size:12px;color:var(--muted,#6b7280)}
+.fin-filter .fin-filter__row .field input,
+.fin-filter .fin-filter__row .field select{padding:6px 8px;border:1px solid var(--line,#e3e3e8);border-radius:8px;background:#fff;font-size:13px;color:inherit;min-height:34px;box-sizing:border-box}
+.fin-filter .fin-filter__row .fin-filter__act{justify-content:flex-end}
+.fin-filter .fin-filter__row .fin-filter__act button{white-space:nowrap}
+@media(max-width:600px){.fin-filter .fin-filter__row .field{flex:1 1 45%;min-width:120px}}

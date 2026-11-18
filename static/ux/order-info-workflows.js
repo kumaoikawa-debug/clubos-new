@@ -39,13 +39,13 @@
       const d=await api(`/api/club/${CLUB}/operation-orders?${qs}`);
       const s=d.summary||{};
       const sum=document.getElementById('orderInfoSummary');
-      if(sum)sum.innerHTML=[
+      if(sum){sum.classList.add('oi-summary-compact');sum.innerHTML=[
         ['订单数',s.count||0,`当前${kind==='activity'?'活动':'营地'}筛选结果`],
         ['订单金额',moneyText(s.amount),'含未支付/已退款订单原金额'],
         ['已支付金额',moneyText(s.paidAmount),'按当前账面金额统计'],
         ['待补资料',s.incompleteCount||0,'活动订单参加人维度'],
         ['退款处理中',s.refundPendingCount||0,'需到退款审核处理']
-      ].map(([k,v,h])=>`<div class="stat-tile"><div class="k">${escHtml(k)}</div><div class="v">${escHtml(v)}</div><div class="hint">${escHtml(h)}</div></div>`).join('');
+      ].map(([k,v,h])=>`<div class="stat-tile" title="${escHtml(h)}"><div class="k">${escHtml(k)}</div><div class="v">${escHtml(v)}</div></div>`).join('');}
       if(rowsEl)rowsEl.innerHTML=(d.items||[]).map(x=>{
         const list=kind==='activity'?STATUS_ACTIVITY:STATUS_CAMP;
         const warn=x.needsAttention?' <span class="tag orange">待处理</span>':'';
