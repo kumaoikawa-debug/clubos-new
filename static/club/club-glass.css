@@ -234,3 +234,35 @@ body.admin-workspace{background:linear-gradient(125deg,#d4ebdd 0%,#c7e6da 26%,#d
   .mkt-capmap__grid{grid-template-columns:repeat(auto-fill,minmax(112px,1fr))}
   .mkt-capmap{padding:11px 12px}
 }
+
+/* ===== 退款审核：筛选 chips + 可点行 + 详情弹层（2026-11-18） ===== */
+.rf-filters{display:flex;flex-wrap:wrap;gap:8px 20px;padding:0 0 13px}
+.rf-fgroup{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.rf-fgroup__k{font-size:11px;color:#708074;white-space:nowrap;margin-right:2px}
+.rf-chip{appearance:none;border:1px solid #dce5dc;background:#fafcf9;border-radius:999px;padding:5px 12px;font-size:12px;color:#3c614a;cursor:pointer;line-height:1.4;display:inline-flex;align-items:center;gap:5px;transition:.15s;font-weight:600}
+.rf-chip:hover{border-color:#9ec5a7;background:#f1f7ef}
+.rf-chip.is-on{background:#274c36;border-color:#274c36;color:#fff}
+.rf-chip .rf-n{font-size:10.5px;font-weight:600;opacity:.72}
+.rf-row{cursor:pointer;transition:border-color .15s,box-shadow .15s}
+.rf-row:hover{border-color:#9ec5a7;box-shadow:0 2px 10px rgba(39,76,54,.08)}
+.rf-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rf-more{margin-left:auto;font-size:11.5px;color:#52755f;white-space:nowrap;font-weight:600}
+.rf-dl{display:grid;grid-template-columns:1fr 1fr;gap:0 22px}
+.rf-dl__row{display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px dashed #e2ebe2;font-size:12.5px;min-width:0}
+.rf-dl__k{color:#708074;white-space:nowrap;flex:0 0 auto}
+.rf-dl__v{color:#274c36;font-weight:600;text-align:right;overflow-wrap:anywhere;min-width:0}
+.rf-sec{margin:14px 0 6px;font-size:12px;font-weight:700;color:#274c36;letter-spacing:.02em}
+.rf-tl{margin-top:4px}
+.rf-tl__step{position:relative;padding:0 0 13px 18px;font-size:12px;color:#3c614a;line-height:1.5}
+.rf-tl__step::before{content:'';position:absolute;left:4px;top:4px;width:7px;height:7px;border-radius:50%;background:#274c36}
+.rf-tl__step::after{content:'';position:absolute;left:7px;top:14px;bottom:2px;width:1px;background:#dce5dc}
+.rf-tl__step:last-child{padding-bottom:2px}
+.rf-tl__step:last-child::after{display:none}
+.rf-tl__step.is-pending::before{background:#fff;border:1.5px solid #b9c9b9}
+.rf-tl__step.is-pending{color:#829286}
+.rf-tl__t{color:#708074;font-size:11px}
+.rf-snap{background:#f6faf5;border:1px solid #e2ebe2;border-radius:10px;padding:10px 12px;font-size:11.5px;color:#3c614a;line-height:1.7;overflow-wrap:anywhere;white-space:pre-wrap;max-height:180px;overflow-y:auto}
+@media(max-width:650px){
+  .rf-dl{grid-template-columns:1fr}
+  .rf-more{display:none}
+}

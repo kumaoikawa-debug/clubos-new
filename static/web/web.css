@@ -2470,8 +2470,17 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
 /* 活动页已删掉占满一屏的主题卡，分类区成了首屏第一块 ——
    与顶栏之间留一口气（顶栏是 fixed，内容要靠 padding 让开），分类区之后
    再接瀑布流，间距比原来的「区块头」小一档，免得中间空出一片。 */
-.web-shell .w-sec--cats{padding-top:16px}
-.web-shell .w-sec--cats + .w-waterfall{padding-top:8px}
+.web-shell .w-sec--cats{padding-top:12px}
+.web-shell .w-sec--cats + .w-waterfall{padding-top:14px}
+/* 2026-11-18：活动页搜索框 + 城市按钮整体缩小一档，搜索行与类别留白收紧到 14px。
+   仅作用活动页（.is-act），不动商城的 .w-field--shop。 */
+.web-shell.is-act .w-searchrow{margin-bottom:14px}
+.web-shell.is-act .w-searchrow .w-field--acts{padding:8px 12px}
+.web-shell.is-act .w-searchrow .w-field input{font-size:12.5px}
+.web-shell.is-act .w-citybar__btn{padding:8px 10px;font-size:12.5px}
+.web-shell.is-act .w-citybar__pin{font-size:11px;margin-right:4px}
+.web-shell.is-act .w-citybar__txt{max-width:96px}
+.web-shell.is-act .w-citybar__car{margin-left:5px}
 /* 规格表里的「缺货」小标：整行已有 line-through，小标必须去掉删除线，
    否则「缺货」两个字会被划穿、读成「这个规格不存在」。 */
 .web-shell .w-pd__sizetab .w-pd__soldout{
@@ -2738,6 +2747,23 @@ textarea.w-co__inp{min-height:64px;resize:vertical;line-height:1.6}
   line-height:16px;text-align:center;border:2px solid #fff;box-sizing:content-box;
 }
 .web-top__msg .web-top__dot[hidden]{display:none}
+
+/* ── 2026-11-18 顶栏去重（与小程序同步）────────────────────────────────
+   活动 / 装备 / 我的三页内部都有自己的搜索框，顶栏再放一个放大镜就是重复；
+   改为：隐藏顶栏搜索，把消息铃铛挪到左侧（避开小程序胶囊的「…」）。
+   首页 hero 没有自己的搜索框，顶栏放大镜保留，铃铛仍在右侧。
+   flex order 把铃铛排到标题之前；标题 strong 仍 flex:1 居中。 */
+.web-shell.is-act .web-top__btn,
+.web-shell.is-mall .web-top__btn,
+.web-shell.is-me  .web-top__btn{display:none}
+.web-shell.is-act .web-top__msg,
+.web-shell.is-mall .web-top__msg,
+.web-shell.is-me  .web-top__msg{order:-1}
+/* 我的页：不显示购物车，只留一个消息提示 */
+.web-shell.is-me .web-top__cart{display:none!important}
+/* 首页：顶栏不放搜索与消息提示，只留居中的俱乐部名（与小程序首页一致） */
+.web-shell.is-home .web-top__btn,
+.web-shell.is-home .web-top__msg{display:none!important}
 /* 底部导航「我的」的红点：位置避开 .w-navdot（那颗是选中指示点，落在正下方） */
 .web-shell .web-nav button .w-navbadge{
   position:absolute;top:6px;right:calc(50% - 16px);width:7px;height:7px;border-radius:99px;

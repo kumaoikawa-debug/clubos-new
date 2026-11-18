@@ -468,6 +468,11 @@ function hardenPromoHtml(html){
 }
 function promoHtmlDoc(html){
   var body=hardenPromoHtml(html);
+  /* 图片纯展示（2026-11-18）：往期照片只做场景示意，不配图注/照片解说。
+     生成端已禁止 figcaption，这里在前端再兜一道——历史详情 / 漏网稿里残留的
+     figcaption 与图注类名节点一并剥掉，图片本身与其它正文照常保留。 */
+  body=body.replace(/<figcaption\b[^>]*>[\s\S]*?<\/figcaption\s*>/gi,'');
+  body=body.replace(/<(p|div|span|small)\b[^>]*\bclass=["'][^"']*(figcaption|ed-cap-pill|ed-caption|rc-cap|ch-wx-caption)[^"']*["'][^>]*>[\s\S]*?<\/\1\s*>/gi,'');
   /* hardenPromoHtml 会把外链 / javascript: 的 src 剥成空，留下无 src 的 <img> → 当作裂图整标签删 */
   body=body.replace(/<img\b[^>]*>/gi,function(tag){return /\bsrc=["']/i.test(tag)?tag:'';});
   /* 模型声明了 --bg 却常忘给 body 上底色（2026-10-18 深色画册实测）→ 确定性补：
@@ -761,7 +766,12 @@ function renderPromo(detail,master={},opts={}){
   // 头图兜底：block 自己没写 ref（或 ref 解析不到 url）时，用媒体清单里第一张真实存在的照片。
   // 头图必须是照片打底，而不是一块纯色——live 模式下模型常常只给 hero 文案、不给 mediaRefs。
   const fallbackPhoto=Object.keys(mm).find(r=>mm[r]&&mm[r].url)||'';
-  for(const b of detail?.blocks||[]){const refs=b.mediaRefs||[];
+  for(const rawB of detail?.blocks||[]){
+    /* 图片纯展示（2026-11-18）：往期照片只做场景示意，不配图注/说明文字。
+       渲染层兜底抹掉 caption（浅拷贝，不改原始数据），这样即使历史详情里还留着旧的
+       「参与者向上击打悬挂黑球，背景立有某旗帜」这类照片解说，C 端也不会再显示。 */
+    const b=(rawB&&typeof rawB==='object')?Object.assign({},rawB,{caption:'',captionText:''}):rawB;
+    const refs=b.mediaRefs||[];
     if(b.type==='hero'){
       const heroRef=resolvedRefs(refs,mm)[0]||fallbackPhoto;
       const url=heroRef&&mm[heroRef]?mm[heroRef].url:'';

@@ -650,15 +650,27 @@ def t_gp_024():
     """OBS-04 前端护栏：俱乐部端渲染只读装备退款行且缓存版本已 bump。"""
     js = (ROOT / 'static' / 'club' / 'club.js').read_text(encoding='utf-8')
     html = (ROOT / 'static' / 'club' / 'index.html').read_text(encoding='utf-8')
-    assert 'function gearRefundRow' in js and "managed_by==='platform'" in js, '缺少装备退款只读分支'
-    assert '本端仅可查看' in js, '缺少只读提示'
-    assert 'approveRefund(' not in js.split('function gearRefundRow')[1].split('\nfunction ')[0], '只读行出现了审核按钮'
+    # 只读分支有两种实现：旧独立函数 gearRefundRow(r)；2026-11-18 退款审核改造后
+    # 合并进 refundRowHtml(r) 的 `if(gear||platform){ return 只读行 }` 早返回分支。
+    # 护栏意图不变：定位到装备退款的只读渲染分支，断言其中无任何审核按钮。
+    assert "managed_by==='platform'" in js, '缺少装备退款只读分支（平台统管判定）'
+    assert ('function gearRefundRow' in js) or ('function refundRowHtml' in js), '缺少退款行渲染函数'
+    if 'function gearRefundRow' in js:
+        _readonly_seg = js.split('function gearRefundRow')[1].split('\nfunction ')[0]
+    else:
+        _fn = js.split('function refundRowHtml')[1].split('\nfunction ')[0]
+        _mark = "if(r.kind==='gear'||r.managed_by==='platform'){"
+        assert _mark in _fn, 'refundRowHtml 缺少 gear/platform 只读早返回分支'
+        _readonly_seg = _fn.split(_mark)[1].split('\n  return `')[0]
+    assert '本端只读' in _readonly_seg or '本端仅可查看' in _readonly_seg, '只读行缺少只读提示'
+    for _act in ('approveRefund(', 'rejectRefund(', 'retryRefundProvider('):
+        assert _act not in _readonly_seg, '只读行出现了审核按钮：' + _act
     # 缓存版本护栏：不钉死具体值（每次改动都会 bump），只要求存在且 >= 20261108a
     import re as _re
     _m = _re.search(r'/static/club/club\.js\?v=([0-9]{8}[a-z]+)', html)
     assert _m and _m.group(1) >= '20261108a', 'club.js 缓存版本未 bump，浏览器会吃旧代码'
-    assert '装备退款由总平台统管，本端仅可查看进度' in html, '退款审核页副标题未同步只读语义'
-    return 'club.js 只读行 + 页面副标题 + index.html?v=20261108a 已生效（node --check 通过）'
+    assert '本端仅可查看进度' in html, '退款审核页副标题未同步只读语义'
+    return 'club.js 只读行 + 页面副标题 + index.html?v 已 bump（兼容 gearRefundRow / refundRowHtml 两种实现）'
 
 
 # ---------------------------------------------------------------- main

@@ -1061,10 +1061,11 @@ async function loadRegs(){
     api(`/api/club/${CLUB}/refunds`)
   ]);
   _regData={acts,regs,occs,refunds};
-  window.__regsActs=acts; window.__regsRegs=regs; window.__regsOccs=occs;
+  window.__regsActs=acts; window.__regsRegs=regs; window.__regsOccs=occs; window.__regsRefunds=refunds;
   const s=$('#regSearch'); if(s&&!s.__wired){s.__wired=true;s.oninput=()=>renderRegRows()}
+  const rfs=$('#refundSearch'); if(rfs&&!rfs.__wired){rfs.__wired=true;rfs.oninput=()=>{_refundF.q=rfs.value;renderRefundReview()}}
   renderRegRows();
-  renderRefundReview(refunds);
+  renderRefundReview();
   }catch(e){loaderError('#regRows',e,'报名与执行加载失败')}
 }
 function regPcount(x){return Number(x.active_participants||x.participant_count||1)}
@@ -1089,17 +1090,119 @@ function renderRegRows(){
     return `<div class="list-row" style="cursor:pointer" onclick="openActivityRegs(${a.id})"><div class="list-row__main"><div class="list-row__title">${esc(a.title)}</div><div class="list-row__sub">${esc(a.event_date||'')} · ${esc(a.location||'')} · ${money(a.price)}</div><div class="list-row__sub"><b>${os.length} 个档期</b> · 报名 ${rs.length} 笔 / ${parts} 人参加 · 实收 ${money(regCash(rs))}${pInfo?` · 资料待补 ${pInfo}`:''}${ins?` · 保险 ${ins}`:''}${rf?` · 待审退款 ${rf}`:''}</div></div><div class="list-row__end"><span class="tag ${a.status==='draft'?'orange':''}">${esc(enumCn(a.status))}</span>${execChip}<span class="sub">按档期 ›</span></div></div>`;
   }).join('')||`<div class="empty">${q?'没有匹配的活动':'还没有活动，智能发一场。'}</div>`;
 }
-function renderRefundReview(refunds){
+/* ===== 退款审核：筛选 + 详情页（2026-11-18）=====
+   用户要求：列表可按状态 / 类型筛选，点任意一条可打开退款详情（金额、积分分摊、审批留痕）。
+   全量数据缓存在 window.__regsRefunds；筛选纯前端；写操作沿用 workflows-club.js 的
+   approveRefund / rejectRefund / retryRefundProvider（完成后 loadRegs() 自动重渲染）。 */
+let _refundF={status:'all',kind:'all',q:''};
+function refundStCn(s){return {requested:'待审核',processing:'退款中',succeeded:'已退款',rejected:'已拒绝'}[s]||enumCn(s,'—')}
+function refundRowHtml(r){
+  const stop='event.stopPropagation();';
+  const acts=r.status==='requested'?`<button class="btn secondary" onclick="${stop}approveRefund('${r.id}')">同意退款</button><button class="btn ghost" onclick="${stop}rejectRefund('${r.id}')">拒绝</button>`
+    :r.status==='processing'?`<button class="btn secondary" onclick="${stop}retryRefundProvider('${r.id}')">重试退款到账</button>`:'';
+  const open=`class="notice rf-row" style="margin-bottom:10px" onclick="openRefundDetail('${r.id}')"`;
+  const more='<span class="rf-more">详情 ›</span>';
+  if(r.kind==='gear'||r.managed_by==='platform'){
+    return `<div ${open}><div class="panel-title"><div><strong>${esc(r.activity_title||'装备订单')}</strong> · 付款人 ${esc(r.user_name||'')}<div class="sub">${esc(r.created_at||'')} · ${r.refund_scope==='after_sales'?'售后部分退款':'整单退款'} · 原现金 ${money(r.paid_cash||r.original_cash_amount||0)} · 本次退 ${money(r.cash_amount||0)}${r.gear_titles?` · 商品 ${esc(r.gear_titles)}`:''}</div></div><span class="tag ${r.status==='requested'?'orange':''}">${esc(refundStCn(r.status))}</span></div><div class="rf-actions" style="margin-top:8px"><span class="sub">装备退款由总平台审核处理，本端只读 · 原因：${esc(r.reason||'')}${r.after_sales_case_id?` · 售后单 ${esc(r.after_sales_case_id)}`:''}</span>${more}</div></div>`;
+  }
+  return `<div ${open}><div class="panel-title"><div><strong>${esc(r.activity_title)}</strong> · ${r.refund_scope==='participant'?`参加人 ${esc(r.participant_name||'')}`:`付款人 ${esc(r.user_name)}`}<div class="sub">${esc(r.occurrence_label||r.start_at||'')} · ${r.refund_scope==='participant'?'单人退款':'整单退款'} · 原现金 ${money(r.original_cash_amount||r.paid_cash)} · 本次退 ${money(r.cash_amount)}${r.refund_percent!=null?`（${Number(r.refund_percent)}%）`:''}${Number(r.retained_cash_amount||0)>0?` · 取消费 ${money(r.retained_cash_amount)}`:''}</div></div><span class="tag ${r.status==='requested'?'orange':''}">${esc(refundStCn(r.status))}</span></div><div class="sub">规则：${esc(r.policy_label||'—')} · 原因：${esc(r.reason||'')}${r.refund_scope==='participant'?` · 分摊活动积分 ${r.allocated_club_points||0} / 装备积分 ${r.allocated_gear_points||0}`:''}</div>${r.status==='processing'?`<div class="sub" style="margin-top:8px">已审核通过，等待支付渠道退款。</div>`:''}${r.status==='rejected'&&r.decision_note?`<div class="sub" style="margin-top:8px">审核说明：${esc(r.decision_note)}</div>`:''}<div class="rf-actions" style="margin-top:10px">${acts}${more}</div></div>`;
+}
+function renderRefundFilters(all){
+  const box=$('#refundFilters'); if(!box)return;
+  const N=k=>all.filter(r=>r.status===k).length;
+  const gearN=all.filter(r=>r.kind==='gear'||r.managed_by==='platform').length;
+  const chip=(f,v,label,n)=>`<button type="button" class="rf-chip ${_refundF[f]===v?'is-on':''}" onclick="setRefundFilter('${f}','${v}')">${esc(label)}${n!=null?`<span class="rf-n">${n}</span>`:''}</button>`;
+  box.innerHTML=`<div class="rf-fgroup"><span class="rf-fgroup__k">状态</span>`
+    +chip('status','all','全部',all.length)+chip('status','requested','待审核',N('requested'))
+    +chip('status','processing','退款中',N('processing'))+chip('status','succeeded','已退款',N('succeeded'))
+    +chip('status','rejected','已拒绝',N('rejected'))
+    +`</div><div class="rf-fgroup"><span class="rf-fgroup__k">类型</span>`
+    +chip('kind','all','全部',null)+chip('kind','activity','活动退款',all.length-gearN)
+    +chip('kind','gear','装备退款 · 只读',gearN)+`</div>`;
+}
+window.setRefundFilter=function(f,v){_refundF[f]=v;renderRefundReview()};
+function renderRefundReview(){
   const box=$('#refundReviewList'); if(!box)return;
-  const list=Array.isArray(refunds)?refunds:[];
-  box.innerHTML=list.map(r=>(r.kind==='gear'||r.managed_by==='platform')?gearRefundRow(r):`<div class="notice" style="margin-bottom:10px"><div class="panel-title"><div><strong>${esc(r.activity_title)}</strong> · ${r.refund_scope==='participant'?`参加人 ${esc(r.participant_name||'')}`:`付款人 ${esc(r.user_name)}`}<div class="sub">${esc(r.occurrence_label||r.start_at||'')} · ${r.refund_scope==='participant'?'单人退款':'整单退款'} · 原现金 ${money(r.original_cash_amount||r.paid_cash)} · 本次退 ${money(r.cash_amount)}${r.refund_percent!=null?`（${Number(r.refund_percent)}%）`:''}${Number(r.retained_cash_amount||0)>0?` · 取消费 ${money(r.retained_cash_amount)}`:''}</div></div><span class="tag ${r.status==='requested'?'orange':''}">${esc(enumCn(r.status,'待处理'))}</span></div><div class="sub">规则：${esc(r.policy_label||'—')} · 原因：${esc(r.reason||'')}${r.refund_scope==='participant'?` · 分摊活动积分 ${r.allocated_club_points||0} / 装备积分 ${r.allocated_gear_points||0}`:''}</div>${r.status==='requested'?`<div style="display:flex;gap:8px;margin-top:10px"><button class="btn secondary" onclick="approveRefund('${r.id}')">同意退款</button><button class="btn ghost" onclick="rejectRefund('${r.id}')">拒绝</button></div>`:''}${r.status==='processing'?`<div class="sub" style="margin-top:8px">已审核通过，等待支付渠道退款。</div><div style="display:flex;gap:8px;margin-top:8px"><button class="btn secondary" onclick="retryRefundProvider('${r.id}')">重试退款到账</button></div>`:''}${r.status==='rejected'&&r.decision_note?`<div class="sub" style="margin-top:8px">审核说明：${esc(r.decision_note)}</div>`:''}</div>`).join('')||'<div class="empty">暂无退款申请</div>'
+  const all=Array.isArray(window.__regsRefunds)?window.__regsRefunds:[];
+  renderRefundFilters(all);
+  const q=(_refundF.q||'').trim().toLowerCase();
+  const list=all.filter(r=>{
+    if(_refundF.kind==='activity'&&r.kind!=='activity')return false;
+    if(_refundF.kind==='gear'&&!(r.kind==='gear'||r.managed_by==='platform'))return false;
+    if(_refundF.status!=='all'&&r.status!==_refundF.status)return false;
+    if(q){const hay=[r.id,r.activity_title,r.participant_name,r.participant_phone,r.user_name,r.phone,r.reason,r.occurrence_label,r.gear_titles].filter(Boolean).join(' ').toLowerCase();if(!hay.includes(q))return false}
+    return true;
+  });
+  const cnt=$('#refundCount'); if(cnt)cnt.textContent=`${list.length} / ${all.length} 条退款`;
+  box.innerHTML=list.map(refundRowHtml).join('')||`<div class="empty">${all.length?'没有匹配的退款记录，换一下筛选条件':'暂无退款申请'}</div>`;
 }
-
-function gearRefundRow(r){
-  const scope=r.refund_scope==='after_sales'?'售后部分退款':'整单退款';
-  const goods=r.gear_titles?` · 商品 ${esc(r.gear_titles)}`:'';
-  return `<div class="notice" style="margin-bottom:10px"><div class="panel-title"><div><strong>${esc(r.activity_title||'装备订单')}</strong> · 付款人 ${esc(r.user_name||'')}<div class="sub">${esc(r.created_at||'')} · ${scope} · 原现金 ${money(r.paid_cash||r.original_cash_amount||0)} · 本次退 ${money(r.cash_amount||0)}${goods}</div></div><span class="tag ${r.status==='requested'?'orange':''}">${esc(enumCn(r.status,'待处理'))}</span></div><div class="sub">装备退款由总平台审核处理，本端仅可查看（只读） · 原因：${esc(r.reason||'')}${r.after_sales_case_id?` · 售后单 ${esc(r.after_sales_case_id)}`:''}</div></div>`;
+function openRefundDetail(id){
+  const r=(Array.isArray(window.__regsRefunds)?window.__regsRefunds:[]).find(x=>String(x.id)===String(id));
+  if(!r){toast('退款记录不存在或已刷新，请重试');return}
+  const isGear=r.kind==='gear'||r.managed_by==='platform';
+  const line=(k,v)=>`<div class="rf-dl__row"><span class="rf-dl__k">${k}</span><span class="rf-dl__v">${v||'—'}</span></div>`;
+  const T=t=>String(t||'').slice(0,16).replace('T',' ');
+  /* 时间线：提交 → 审核 → 到账 →（装备）商户账本同步 */
+  const tl=[];
+  tl.push(`<div class="rf-tl__step"><b>提交申请</b> · ${T(r.created_at)}<div class="rf-tl__t">发起：${esc(r.requested_by||'用户申请')}${r.reason?` · 原因：${esc(r.reason)}`:''}</div></div>`);
+  if(r.status==='rejected')tl.push(`<div class="rf-tl__step"><b>审核拒绝</b> · ${T(r.approved_at)}${r.approved_by?` · ${esc(r.approved_by)}`:''}${r.decision_note?`<div class="rf-tl__t">${esc(r.decision_note)}</div>`:''}</div>`);
+  else if(r.approved_at)tl.push(`<div class="rf-tl__step"><b>审核通过</b> · ${T(r.approved_at)}${r.approved_by?` · ${esc(r.approved_by)}`:''}</div>`);
+  else tl.push(`<div class="rf-tl__step is-pending"><b>审核</b> · 等待俱乐部处理</div>`);
+  if(r.status==='succeeded')tl.push(`<div class="rf-tl__step"><b>退款到账</b> · ${T(r.refunded_at)}${r.provider_refund_no?`<div class="rf-tl__t">渠道单号 ${esc(r.provider_refund_no)}${r.provider?` · 渠道 ${esc(r.provider)}`:''}</div>`:''}</div>`);
+  else if(r.status==='processing')tl.push(`<div class="rf-tl__step is-pending"><b>退款到账</b> · 等待支付渠道处理</div>`);
+  if(isGear&&(r.commerce_refund_status||'not_required')!=='not_required')tl.push(`<div class="rf-tl__step ${r.commerce_refund_status==='synced'?'':'is-pending'}"><b>商户账本同步</b> · ${esc(r.commerce_refund_status==='synced'?'已同步':(r.commerce_refund_status||'—'))}${r.commerce_refund_error?`<div class="rf-tl__t">${esc(r.commerce_refund_error)}</div>`:''}</div>`);
+  /* 规则快照：结构化 JSON 就逐项展示，否则原文 */
+  let snap='';
+  try{const pj=JSON.parse(r.policy_snapshot_json||'');if(pj&&typeof pj==='object'&&!Array.isArray(pj))snap=Object.entries(pj).map(([k,v])=>`${k}：${typeof v==='object'?JSON.stringify(v):v}`).join('\n');}catch(e){}
+  if(!snap)snap=String(r.policy_snapshot_json||'');
+  const snapHtml=r.policy_snapshot_json?`<div class="rf-sec">退款规则快照</div><div class="rf-snap">${esc((r.policy_label?r.policy_label+'\n':'')+(snap||''))}</div>`:'';
+  const infoHtml=`<div class="rf-sec">基础信息</div><div class="rf-dl">`
+    +line('退款单号',esc(r.id))
+    +line('类型',isGear?'装备退款（总平台审核）':'活动退款（本俱乐部审核）')
+    +line('退款范围',r.refund_scope==='participant'?'单人退款':(r.refund_scope==='after_sales'?'售后部分退款':'整单退款'))
+    +(isGear?line('装备订单号','#'+(r.gear_order_id||'—'))+line('订单状态',esc(r.gear_order_status||'—'))
+      :line('活动',esc(r.activity_title))+line('团期',esc(r.occurrence_label||r.start_at||'—')))
+    +line('付款人',`${esc(r.user_name||'—')}${r.phone?' · '+esc(r.phone):''}`)
+    +(r.refund_scope==='participant'?line('参加人',`${esc(r.participant_name||'—')}${r.participant_phone?' · '+esc(r.participant_phone):''}`):'')
+    +line('申请原因',esc(r.reason||'—'))
+    +(r.decision_note?line('审核说明',esc(r.decision_note)):'')
+    +(r.after_sales_case_id?line('关联售后单',esc(r.after_sales_case_id)):'')
+    +`</div>`;
+  const amtHtml=`<div class="rf-sec">金额</div><div class="rf-dl">`
+    +(isGear?line('订单总额',money(r.order_total||0))+line('原现金',money(r.paid_cash||0))
+      :line('原现金',money(r.original_cash_amount||r.paid_cash||0))
+        +(r.refund_percent!=null?line('退款比例',Number(r.refund_percent)+'%'):'')
+        +(Number(r.retained_cash_amount||0)>0?line('取消费',money(r.retained_cash_amount)):''))
+    +line('本次退款',money(r.cash_amount||0))
+    +`</div>`;
+  const ptsHtml=!isGear?`<div class="rf-sec">积分与优惠分摊</div><div class="rf-dl">`
+    +line('活动积分',String(r.allocated_club_points||0))
+    +line('装备积分',String(r.allocated_gear_points||0))
+    +(Number(r.allocated_club_point_discount||0)>0?line('积分抵扣金额',money(r.allocated_club_point_discount)):'')
+    +(Number(r.allocated_platform_point_subsidy||0)>0?line('平台积分补贴',money(r.allocated_platform_point_subsidy)):'')
+    +(Number(r.allocated_club_benefit_discount||0)>0?line('会员卡抵扣',money(r.allocated_club_benefit_discount)):'')
+    +(Number(r.allocated_platform_benefit_subsidy||0)>0?line('平台权益补贴',money(r.allocated_platform_benefit_subsidy)):'')
+    +line('原单积分收益',String(r.allocated_club_points_earned||0))
+    +`</div>`:'';
+  const acts=[];
+  if(!isGear&&r.can_review){
+    if(r.status==='requested')acts.push(`<button class="btn secondary" onclick="closeRefundDetail();approveRefund('${r.id}')">同意退款</button>`,`<button class="btn ghost" onclick="closeRefundDetail();rejectRefund('${r.id}')">拒绝</button>`);
+    if(r.status==='processing')acts.push(`<button class="btn secondary" onclick="closeRefundDetail();retryRefundProvider('${r.id}')">重试退款到账</button>`);
+  }
+  if(!isGear&&r.registration_id)acts.push(`<button class="btn ghost" onclick="openOrderInfo('activity',${Number(r.registration_id)})">查看订单详情</button>`);
+  const el=document.createElement('div');el.className='modal show';el.id='refundDetailModal';
+  el.innerHTML=`<div class="modal-box" style="max-width:660px"><div class="modal-head"><div><div class="eyebrow">REFUND DETAIL</div><h2 style="margin:4px 0">${isGear?'装备退款详情':'活动退款详情'}</h2></div><button class="x" onclick="closeRefundDetail()">×</button></div>`
+    +`<div style="display:flex;align-items:center;gap:8px;margin-bottom:2px"><span class="tag ${r.status==='requested'?'orange':''}">${esc(refundStCn(r.status))}</span><span class="sub">${isGear?'由总平台统一审核，本端只读':'按本活动退款规则审核'}</span></div>`
+    +infoHtml+amtHtml+ptsHtml+snapHtml
+    +`<div class="rf-sec">处理留痕</div><div class="rf-tl">${tl.join('')}</div>`
+    +(acts.length?`<div class="rf-actions" style="margin-top:14px">${acts.join('')}</div>`:'')
+    +`</div>`;
+  el.onclick=e=>{if(e.target===el)closeRefundDetail()};
+  const old=document.getElementById('refundDetailModal'); if(old)old.remove();
+  document.body.appendChild(el);
 }
+function closeRefundDetail(){const el=document.getElementById('refundDetailModal');if(el)el.remove()}
+window.openRefundDetail=openRefundDetail; window.closeRefundDetail=closeRefundDetail;
 async function showParticipants(regId){
   try{let d=await api(`/api/club/${CLUB}/registrations/${regId}/participants`);let el=document.createElement('div');el.className='modal show';el.innerHTML=`<div class="modal-box"><div class="modal-head"><div><div class="eyebrow">PARTICIPANTS</div><h2 style="margin:4px 0">参加人名单</h2></div><button class="x">×</button></div><div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap"><button class="btn secondary" onclick="openOrderInfo('activity',${regId})">查看订单详情</button>${(d.participants||[]).some(p=>p.status!=='refunded'&&p.form_status!=='complete')?`<span class="tag orange">有参加人资料待补，可直接代客补全</span>`:''}</div>${(d.participants||[]).map(p=>`<div class="notice" style="margin-bottom:10px;${p.status==='refunded'?'opacity:.6':''}"><strong>${esc(p.name)}</strong> · ${esc(p.phone||'')} <span class="tag">${p.status==='refunded'?'已退出':`资料${p.form_status==='complete'?'完整':'待补'}`}</span><div class="sub">证件 ${esc(p.id_type||'—')} ${esc(p.id_number||'—')} · 紧急联系人 ${esc(p.emergency_contact_name||'—')} ${esc(p.emergency_contact_phone||'')}</div>${p.notes?`<div class="sub">用户备注：${esc(p.notes)}</div>`:''}<div class="sub">保险：${esc(p.insurance_status||'pending')} ${esc(p.insurance_provider||'')} ${esc(p.insurance_policy_no||'')} · 退款 ${esc(p.refund_status||'none')}</div>${p.status!=='refunded'?`<div style="display:flex;gap:8px;margin-top:7px;flex-wrap:wrap"><button class="btn secondary" onclick="adminEditParticipant(${regId},${p.id})">补全/修正资料</button><button class="btn ghost" onclick="adminReplaceParticipant(${regId},${p.id})">变更参加人</button><button class="btn ghost" onclick="clubInsurance(${p.id},${regId})">更新保险</button></div>`:''}</div>`).join('')||'<div class="empty">暂无参加人</div>'}</div>`;el.querySelector('.x').onclick=()=>el.remove();el.onclick=e=>{if(e.target===el)el.remove()};document.body.appendChild(el)}catch(e){showAlert({title:'操作失败',message:e.message})}
 }

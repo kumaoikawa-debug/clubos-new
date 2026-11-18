@@ -125,7 +125,8 @@ function bindHero(hero){
   sync();
 }
 function heroSlide(x,i){
-  const cov=x.cover||'',d=wDate(x.event_date);
+  /* 2026-11-18 用户要求：首页大图不显示日期，只保留地点 / 名额 / 价格。 */
+  const cov=x.cover||'',d='';
   /* 需求 1（2026-11-06）：整张 slide 任意位置点击都能进详情（不只点「即刻探索」）。
      根元素挂 onclick；CTA 按钮用 event.stopPropagation 自行触发并阻止冒泡，
      避免「点按钮 → 按钮触发一次 + 冒泡到 slide 又触发一次」重复 openAct。 */
@@ -299,7 +300,8 @@ function renderActivityRegions(){
   /* 城市下拉按钮（2026-11-17）：文案/激活态跟随当前城市，定位副标题跟随定位结果。
      面板开合由 #actCityBtn 的点击事件单独负责，这里只同步展示，不强行收起。 */
   const bar=$('#actCityBarLabel');
-  if(bar)bar.textContent=ACT_CITY==='all'?'全部城市':actCityLabel(ACT_CITY);
+  /* 2026-11-18：未筛选时按钮文案精简为「城市」（原「全部城市」太长，与搜索框同排显挤） */
+  if(bar)bar.textContent=ACT_CITY==='all'?'城市':actCityLabel(ACT_CITY);
   const barBtn=$('#actCityBtn');
   if(barBtn)barBtn.classList.toggle('is-on',ACT_CITY!=='all');
   const locTip=$('#actCityLocated');
@@ -1702,6 +1704,10 @@ function wviewShow(id,tab){
   const shell=document.querySelector('.web-shell');
   shell?.classList.toggle('is-home',id==='whome');
   shell?.classList.toggle('is-mall',id==='wmall');
+  shell?.classList.toggle('is-act',id==='wactivities');
+  shell?.classList.toggle('is-me',id==='wme');
+  /* 2026-11-18：内页顶栏不再重复放搜索框（页面内已有自己的搜索框），
+     消息铃铛移到左侧、避开小程序胶囊的「…」；我的页连购物车一起收掉，只留消息。 */
   /* 主视觉轮播只在装备页跑：别的页面看不到它，定时器还在滑只是白烧电。 */
   if(id==='wmall')heroPlay();else heroStop();
   if(id!=='whome')shell?.classList.remove('is-scrolled');
@@ -1874,12 +1880,13 @@ function leaderCard(x){
 function leadersHtml(a){
   const list=a.leaders||[];
   if(!list.length)return '';
-  const head=`<div class="w-block__head"><div><b>带队领队</b>`
-    +`<div class="w-block__hint">这场活动由本俱乐部领队带队，出发前会在订单里给出集合与联络方式。点开领队可看简介和 TA 带的近期活动，也能直接咨询或打分。</div></div></div>`;
+  const head=`<div class="w-block__head"><div><b>带队领队</b></div></div>`;
   if(list.length===1){
     const lid=Number(list[0].leaderId||0);
+    /* 2026-11-18：单人版上方已有「本场带队领队」眉标，卡片里也有姓名/头衔，
+       再顶一个「带队领队」标题是重复信息，这里不再渲染 head。 */
     return `<section class="w-block w-lead w-lead--solo">`
-      +`<div class="w-lead__tag"><i></i>本场带队领队</div>`+head
+      +`<div class="w-lead__tag"><i></i>本场带队领队</div>`
       +`<div class="w-lead__solo">${leaderCard(list[0])}</div>`
       +(lid?`<button type="button" class="w-lead__sologo" onclick="openLeaderSheet(${lid})">看 TA 的简介与近期活动 <i>›</i></button>`:'')
       +`</section>`;
@@ -2473,8 +2480,8 @@ function bookingHtml(a){
   /* 人数改成 −／＋ 步进器：手机上的 number 输入框那两个 4px 的小箭头几乎点不中，
      而「几人」是报名时唯一必改的数字。 */
   const participantArea=`<div class="w-block"><div class="w-block__head">
-      <div><b>参加人</b><div class="w-block__hint">付款人和参加人可以不同；每位参加人占 1 个名额。</div></div>
-      <div class="w-stepper" id="paxStep" role="group" aria-label="参加人数">
+      <div><b>参与人数</b></div>
+      <div class="w-stepper" id="paxStep" role="group" aria-label="参与人数">
         <button type="button" data-step="-1" aria-label="减少一位参加人"${cur<=1?' disabled':''}>−</button>
         <output aria-live="polite">${cur}</output>
         <button type="button" data-step="1" aria-label="增加一位参加人"${cur>=maxPax?' disabled':''}>+</button>
@@ -2542,7 +2549,7 @@ function setParticipantCount(v){
   paintPaxSummary(); refreshQuote();
 }
 function removeParticipant(i){
-  if(bookingParticipants.length<=1){toast('至少保留 1 位参加人');return}
+  if(bookingParticipants.length<=1){toast('至少保留 1 位参与人');return}
   bookingParticipants.splice(i,1);
   setParticipantCount(bookingParticipants.length);
 }
@@ -2564,7 +2571,7 @@ function participantField(i,key,val){bookingParticipants[i][key]=val;
 function paintPaxSummary(){
   const el=document.getElementById('paxSummary');if(!el)return;
   const n=bookingParticipants.length;
-  el.innerHTML='<div class="w-pax-summary__line">已选 <b>'+n+'</b> 位参加人 · 点击「立即报名」后填写每位参加人的姓名与证件资料</div>';
+  el.innerHTML='<div class="w-pax-summary__line">已选 <b>'+n+'</b> 位参与人</div>';
 }
 function renderParticipantForms(){
   const box=$('#paxForms');if(!box)return;
@@ -2572,8 +2579,8 @@ function renderParticipantForms(){
      只是视觉分组 + 顺序调整，data-key 全部不变，校验与定位逻辑零改动。 */
   const sec=(t,soft)=>`<div class="w-pax__sec${soft?' is-soft':''}">${t}</div>`;
   box.innerHTML=bookingParticipants.map((p,i)=>`<div class="w-pax">
-    <div class="w-pax__hd"><span class="w-pax__idx">${WI.pax}</span><b>参加人 ${i+1}</b>${i===0?'<span class="w-pax__tag">可与付款人相同</span>':''}
-      ${bookingParticipants.length>1?`<button class="w-pax__del" type="button" data-del="${i}" aria-label="移除参加人 ${i+1}">移除</button>`:''}</div>
+    <div class="w-pax__hd"><span class="w-pax__idx">${WI.pax}</span><b>参与人 ${i+1}</b>${i===0?'<span class="w-pax__tag">可与付款人相同</span>':''}
+      ${bookingParticipants.length>1?`<button class="w-pax__del" type="button" data-del="${i}" aria-label="移除参与人 ${i+1}">移除</button>`:''}</div>
     <div class="w-pax__grid">
       ${sec('身份信息 · 投保与实名所需')}
       ${paxField(i,'name','姓名',p.name,{req:1,ph:'与证件一致'})}

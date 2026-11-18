@@ -30,7 +30,9 @@ const day=x=>window.wDay?wDay(x.event_date):'';
    标题用 h1 而不是 h2 —— 旧实现写的 <h2> 不匹配 CSS 的 .w-hero h1，
    30px 大标题从来没生效过（首页标题一直是被浏览器默认字号的 h2 顶着）。 */
 function homeSlide(x,i){
-  const cov=x.cover||'',sub=[day(x),x.location||''].filter(Boolean).join(' · ');
+  /* 2026-11-18 用户要求：首页大图不显示日期，只保留活动地点。
+     （homeBannerSlide 的 subtitle 是后台运营文案，照常保留） */
+  const cov=x.cover||'',sub=x.location||'';
   /* 需求 1（2026-11-06）：整张 hero 任意位置点按都能进活动详情，不再只认「即刻探索」。
      根元素挂 onclick；CTA 自己 stopPropagation 触发，避免「按钮一次 + 冒泡到 slide 又一次」
      重复 openAct。hero 轨道是横向轮播容器，nav-history 的 inHScroller 守卫会放行横滑、
