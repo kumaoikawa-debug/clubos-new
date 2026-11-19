@@ -1,0 +1,158 @@
+/* ============================================================================
+ * apple-design.css — ClubOS Apple 风格设计层（v1 · 2026-11-19）
+ *
+ * 目标：在不改任何 HTML 结构 / JS / 后端 API 的前提下，把四端视觉升级到
+ *       Apple HIG 的语言：中性留白背景、克制品牌绿、连续圆角、柔和分层阴影、
+ *       更轻的字重、精细分隔线、更大的呼吸空间。
+ *
+ * 约束（务必遵守）：
+ *   • 纯叠加层：四端 index.html 中它都是「最后一条」CSS，靠加载顺序 + 同特异性胜出。
+ *   • 不动状态类（.active/.flash/:hover/:focus-visible）—— 只调几何/材质/字重，
+ *     不碰这些状态的语义颜色，避免可访问性与交互反馈回退。
+ *   • 保留 ClubOS 深绿品牌色作为强调色，只是降低饱和、收敛使用面积。
+ *   • 户外母题（山峦剪影 / 橙渐变 blob）在 glass 层里，这里把它中和成中性灰绿，
+ *     让背景「安静」下来，卡片成为主角。
+ *
+ * 依赖：无（不引外部框架/字体，使用系统 -apple-system / SF Pro 栈）。
+ * ==========================================================================*/
+
+:root{
+  /* Apple 语义色板（保留品牌绿作为 accent） */
+  --ap-bg:#f5f5f7;
+  --ap-bg2:#ebebef;
+  --ap-surface:#ffffff;
+  --ap-ink:#1d1d1f;
+  --ap-ink2:#6e6e73;
+  --ap-ink3:#8e8e93;
+  --ap-separator:rgba(60,60,67,.10);
+  --ap-green:#1f6f4a;
+  --ap-green-strong:#155737;
+  --ap-green-soft:#e8f3ec;
+  /* Apple 连续圆角感：卡片大圆角、控件中等圆角 */
+  --ap-r-card:18px;
+  --ap-r-card-sm:14px;
+  --ap-r-ctl:10px;
+  /* Apple 分层阴影：低对比、大扩散、两层叠加 */
+  --ap-shadow:0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.06);
+  --ap-shadow-pop:0 2px 6px rgba(0,0,0,.05),0 16px 40px rgba(0,0,0,.10);
+  --ap-font:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+
+/* ── 1. 全局排版：系统字体栈 + 更轻的字重 + 更合理的行高 ───────────────── */
+html{ -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; text-rendering:optimizeLegibility; }
+body{ font-family:var(--ap-font); }
+body.admin-workspace{ font-family:var(--ap-font); color:var(--ap-ink); font-size:14px; line-height:1.6; -webkit-font-smoothing:antialiased; }
+
+/* 标题降字重：原来 850/880 太重，Apple 大标题用 600~700 + 负字距 */
+.title,.topbar .title{ font-weight:680; letter-spacing:-.025em; color:var(--ap-ink); }
+.view>h2,.panel-title h2{ font-weight:660; letter-spacing:-.018em; color:var(--ap-ink); }
+.metric .v,.stat-tile .v{ font-weight:640; letter-spacing:-.03em; color:var(--ap-ink); }
+.eyebrow,.ed-kicker{ font-weight:620; letter-spacing:1.4px; }
+.brand{ font-weight:680; letter-spacing:-.02em; }
+
+/* ── 2. 背景：米黄→橙渐变 / 山峦剪影 → 中性浅灰（卡片成为主角） ────────── */
+body.admin-workspace{ background:var(--ap-bg); }
+.club-bg,.plat-bg{ background:var(--ap-bg) !important; }
+/* blob 收敛成极淡灰绿环境光，去掉刺眼的橙色与高饱和绿 */
+.club-bg .blob,.plat-bg .blob{ opacity:.16 !important; filter:blur(60px) saturate(.5) !important; }
+.club-bg .b3,.plat-bg .b3,.club-bg .b5,.plat-bg .b5{ background:radial-gradient(circle at 50% 50%,#9fb7a8,transparent 62%) !important; }
+.club-bg .b1,.plat-bg .b1,.club-bg .b2,.plat-bg .b2,.club-bg .b4,.plat-bg .b4,.club-bg .b6,.plat-bg .b6{ background:radial-gradient(circle at 50% 50%,#b9c9be,transparent 62%) !important; }
+/* 户外母题降到几乎不可见的线稿质感 */
+.club-bg .topo,.club-bg .ridge,.club-bg .trail,
+.plat-bg .topo,.plat-bg .ridge,.plat-bg .trail{ opacity:.10 !important; }
+.club-bg .topo path,.plat-bg .topo path{ stroke:#7f9c8b; }
+.club-bg .ridge path,.plat-bg .ridge path{ fill:#c4d3c9; }
+
+/* ── 3. 卡片 / 面板 / 统计块：Apple 白卡 + 连续圆角 + 柔和阴影 ─────────── */
+.admin-workspace .card,
+.admin-workspace .stat-tile,
+.admin-workspace .g4 > .stat-tile,
+.card,.panel{
+  background:var(--ap-surface);
+  border:1px solid var(--ap-separator);
+  border-radius:var(--ap-r-card);
+  box-shadow:var(--ap-shadow);
+}
+.admin-workspace .card:hover,
+.admin-workspace .g4 > .stat-tile:hover{ box-shadow:var(--ap-shadow-pop); }
+/* 玻璃层曾给卡片加白色半透明描边与内高光，这里收敛成 Apple 的细分隔线 */
+.admin-workspace .card,
+.admin-workspace .g4 > .stat-tile,
+.admin-workspace .stat-tile{
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+  border-color:var(--ap-separator) !important;
+}
+/* 统计卡左侧渐变竖条 → 去掉（Apple 不用彩色竖条强调） */
+.admin-workspace .stat-tile::before,
+.admin-workspace .metric::before{ display:none !important; }
+
+/* ── 4. 侧栏：从半透明玻璃 → 干净的近白 + 细分隔线 ────────────────────── */
+.admin-workspace .sidebar{ background:rgba(252,252,253,.92) !important; border-right:1px solid var(--ap-separator) !important; -webkit-backdrop-filter:blur(20px) saturate(1.2) !important; backdrop-filter:blur(20px) saturate(1.2) !important; }
+.admin-workspace .nav button.active{ border-radius:var(--ap-r-ctl); }
+.admin-workspace .nav-group-label{ letter-spacing:1.2px; font-weight:620; }
+
+/* ── 5. 顶栏 / 搜索 / 药丸：更轻、更透气 ───────────────────────────────── */
+.admin-workspace .topbar{ background:transparent !important; -webkit-backdrop-filter:none !important; backdrop-filter:none !important; }
+.topbar{ border-bottom:1px solid var(--ap-separator); }
+.workspace-search{ border:1px solid var(--ap-separator); border-radius:var(--ap-r-ctl); background:var(--ap-surface); }
+.topbar .pill,.workspace-tools .pill{ border-radius:999px; }
+.eyebrow{ color:var(--ap-ink3); }
+
+/* ── 6. 按钮：Apple 圆角矩形 + 轻阴影，弱化"厚重视觉" ─────────────────── */
+.btn{ border-radius:var(--ap-r-ctl); font-weight:620; letter-spacing:0; }
+.btn:not(:disabled){ box-shadow:0 1px 2px rgba(0,0,0,.06); }
+.btn:not(:disabled):hover{ box-shadow:0 2px 8px rgba(0,0,0,.10); }
+.btn:disabled{ opacity:.45; }
+
+/* ── 7. 表格 / 标签 / 空态：精细分隔，减少噪点 ─────────────────────────── */
+.table th,.table td{ border-bottom:1px solid var(--ap-separator); }
+.table th{ background:transparent; color:var(--ap-ink2); font-weight:620; letter-spacing:.02em; }
+.table tr:hover td{ background:rgba(0,0,0,.018); }
+.tag{ font-weight:620; }
+.empty{ color:var(--ap-ink3); }
+
+/* ── 8. 输入框 / 选择器：统一圆角与描边 ────────────────────────────────── */
+.field input,.field select,.field textarea,
+.ux-field input,.ux-field select,.ux-field textarea,
+select,input[type=text],input[type=search],input[type=date],input[type=number]{
+  border-radius:var(--ap-r-ctl);
+  border-color:var(--ap-separator);
+  color:var(--ap-ink);
+}
+.field input:focus,.field select:focus,.field textarea:focus,
+.ux-field input:focus,.ux-field select:focus,.ux-field textarea:focus{
+  border-color:var(--ap-green);
+  box-shadow:0 0 0 3px rgba(31,111,74,.14);
+}
+
+/* ── 9. 弹层：Apple 大圆角 + 柔和浮起 ─────────────────────────────────── */
+.ux-dialog,.modal-box{ border-radius:22px; box-shadow:0 24px 80px rgba(0,0,0,.18),0 2px 8px rgba(0,0,0,.06); border:1px solid var(--ap-separator); }
+.ux-dialog-head h2{ font-weight:680; letter-spacing:-.02em; color:var(--ap-ink); }
+
+/* ── 10. C 端：只精修材质，不动深色沉浸 hero / 底栏胶囊 ────────────────── */
+.web-shell .web-card{
+  border-radius:20px;
+  border:1px solid var(--ap-separator);
+  box-shadow:var(--ap-shadow);
+}
+.web-shell .web-card h2{ font-weight:680; letter-spacing:-.024em; }
+.web-shell .web-nav button{ font-weight:600; letter-spacing:.01em; }
+/* 我的页白卡内的图标底：中性灰绿，去掉偏黄 */
+.web-shell .w-me__cell>span,.web-shell .w-me__rowic{ background:var(--ap-green-soft) !important; }
+
+/* ── 11. 领队端：把内联 style 的卡片/胶囊收敛到 Apple 圆角与阴影 ─────── */
+.leader-card{ border-radius:14px; box-shadow:var(--ap-shadow); border-color:var(--ap-separator); }
+.occ-chip{ border-radius:12px; }
+.exec-step span{ border-radius:999px; }
+.leader-head{ background:rgba(245,245,247,.88) !important; -webkit-backdrop-filter:blur(20px) saturate(1.4) !important; backdrop-filter:blur(20px) saturate(1.4) !important; }
+body{ background:var(--ap-bg); }
+
+/* ── 12. 全站滚动条：Apple 细滚动条 ───────────────────────────────────── */
+*::-webkit-scrollbar{ width:9px; height:9px; }
+*::-webkit-scrollbar-thumb{ background:rgba(0,0,0,.18); border-radius:999px; border:2px solid transparent; background-clip:padding-box; }
+*::-webkit-scrollbar-thumb:hover{ background:rgba(0,0,0,.3); background-clip:padding-box; }
+*::-webkit-scrollbar-track{ background:transparent; }
+
+/* ── 13. 尊重减弱动效 ─────────────────────────────────────────────────── */
+@media (prefers-reduced-motion:reduce){ html{ scroll-behavior:auto; } }
