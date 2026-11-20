@@ -1,0 +1,145 @@
+/* ============================================================================
+ * camp-apple.css — 营地页 Apple 风专项设计层（v1 · 2026-11-20）
+ *
+ * 背景：apple-design.css 只覆盖了四端通用层与 C 端 .web-card，营地页是独立
+ *       cp- 设计系统（camp.css，#cpRoot/.cp-page + body 下浮层），几乎没吃到。
+ *       本层把营地页收敛到与四端一致的 Apple 语言：中性浅灰背景、白卡细分隔、
+ *       连续圆角、柔和中性阴影、系统字体栈、更轻字重、品牌绿唯一强调。
+ *
+ * 约束（务必遵守）：
+ *   • 纯叠加：C 端 index.html 中它排在 apple-design.css 之后，最后加载。
+ *   • 只改材质/几何/字重/色板；不碰 position/display/z-index/isolation/pointer-events，
+ *     也不碰 camp.css #821/#834 的层级与不透明修复。
+ *   • 状态语义色（.active/.on/.open/.done/:disabled）全部保留，只调默认态。
+ *   • 保留会员条深色与底部购物条深色胶囊——它们是营地的品牌锚点，不是脏渐变。
+ *   • 全部用 cp- 前缀，不污染其它三端与 C 端活动/商城视图。
+ * ==========================================================================*/
+
+/* ── 1. 局部变量重定义：一处改色板，camp.css 里所有 var(--cp-*) 自动跟随 ── */
+.cp-page,
+.cp-sheet,.cp-detail,.cp-lv,.cp-intro{
+  --cp-ink:#1d1d1f;
+  --cp-ink2:#6e6e73;
+  --cp-muted:#8e8e93;
+  --cp-line:rgba(60,60,67,.10);
+  --cp-green:#1f6f4a;
+  --cp-green-d:#155737;
+  --cp-price:#c8362a;          /* 原 #e0412a 高饱和红 → 沉稳砖红，保留促销语义 */
+  --cp-black:#1d1d1f;
+  --cp-bg:#f5f5f7;             /* Apple 中性浅灰，去掉淡绿底 */
+  --cp-card:#ffffff;
+  font-family:var(--ap-font,-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text","PingFang SC",sans-serif);
+  -webkit-font-smoothing:antialiased;
+}
+/* 二级列表页 / 介绍页底色跟随中性灰（camp.css #834 用了 !important 钉死，这里对等覆盖） */
+.cp-lv,.cp-intro{ background:var(--ap-bg,#f5f5f7) !important; }
+/* 浮层内也用 border-box，避免加细边框后尺寸溢出 */
+.cp-intro,.cp-intro *{ box-sizing:border-box; }
+
+/* ── 2. 标题与数字：更轻字重 + 负字距（Apple 大标题语言）────────────────── */
+.cp-info__name,.cp-sec__title,.cp-zone span,.cp-dates__big,.cp-card__title,
+.cp-prod__t,.cp-pl__t,.cp-sheet__title,.cp-dt__top>span,.cp-dt__head h2,
+.cp-dt__block h3,.cp-dt__sec h4,.cp-lv__title,.cp-ok h2,.cp-pay__h,
+.cp-member__txt b,.cp-cal__mh,.cp-sum__total,.cp-footnote{
+  font-weight:660;
+  letter-spacing:-.018em;
+}
+.cp-hero__tag,.cp-sec__hint,.cp-chip,.cp-hero__sel{ letter-spacing:.01em; }
+
+/* 价格：降字重保语义，突出但不刺眼 */
+.cp-price,.cp-gcard__p,.cp-sum__total b,.cp-dt__price,.cp-ok__amt,.cp-order__sum b{
+  font-weight:680;
+  letter-spacing:-.025em;
+}
+
+/* ── 3. 白卡：细分隔线 + 连续圆角 + 中性双层阴影 ───────────────────────── */
+.cp-info,.cp-grid,.cp-dates,.cp-card,.cp-gcard,.cp-prod,.cp-pl,.cp-empty,
+.cp-ok__card,.cp-plan,.cp-vchip,.cp-cchip{
+  background:var(--cp-card,#fff);
+  border:1px solid rgba(60,60,67,.07);
+  box-shadow:var(--ap-shadow,0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.06));
+  border-radius:18px;
+}
+.cp-card,.cp-prod{ border-radius:16px; }
+.cp-gcard,.cp-pl,.cp-ok__card,.cp-empty{ border-radius:14px; }
+/* 大卡 hover 抬升只对非disabled生效 */
+.cp-card:not(.is-off):hover,.cp-prod:hover,.cp-pl:hover{ box-shadow:var(--ap-shadow-pop,0 2px 6px rgba(0,0,0,.05),0 16px 40px rgba(0,0,0,.10)); }
+
+/* ── 4. 会员条：深绿渐变 → 克制的深墨（保留深色锚点，去掉高饱和）────────── */
+.cp-member{
+  background:linear-gradient(105deg,#2f3331,#1d1d1f);
+  border:1px solid rgba(60,60,67,.10);
+  border-radius:18px;
+  box-shadow:0 2px 6px rgba(0,0,0,.05),0 12px 28px rgba(0,0,0,.12);
+}
+.cp-member__ico{ background:rgba(255,255,255,.14); border-radius:11px; }
+
+/* ── 5. 图标底 / 标签：中性化，品牌绿只留在 stroke 与选中态 ─────────────── */
+.cp-grid__ico{ background:#f2f2f7; border-radius:14px; }
+/* 选中态交还 camp.css 的品牌绿规则（特异性更高，自动胜出） */
+.cp-ibtn,.cp-lv__back,.cp-lv__cart,.cp-dt__top button{
+  background:#f5f5f7;
+  border-color:var(--cp-line);
+}
+.cp-chip{ background:#f2f2f7; color:#6e6e73; }
+.cp-chip.green{ background:#e8f3ec; color:var(--cp-green-d); }
+.cp-card__badge,.cp-prod__off,.cp-pl__off{ background:rgba(29,29,31,.66); border-radius:8px; }
+
+/* 图片占位底：淡绿 → 中性灰，降低山峦/帐篷插画饱和度（不删占位） */
+.cp-card__media,.cp-prod__media,.cp-pl__media,.cp-ck__img,.cp-dt__gallery,.cp-lv__hero,.cp-gcard__media{ background:#eef0f2; }
+.cp-hero__fallback,.cp-card__ph,.cp-gcard__ph,.cp-dt__ph{ filter:saturate(.55); }
+.cp-hero__shade{ background:linear-gradient(180deg,rgba(6,24,15,.20) 0%,rgba(6,24,15,0) 38%,rgba(6,24,15,.26) 100%); }
+
+/* ── 6. 主按钮：品牌绿实心（Apple 单一强调色），禁用态中性灰 ─────────────── */
+.cp-book,.cp-submit,.cp-dt__buy,.cp-intro__bar button{
+  background:var(--cp-green,#1f6f4a);
+  border-radius:12px;
+  font-weight:620;
+  letter-spacing:0;
+}
+.cp-book:disabled,.cp-submit:disabled,.cp-dt__buy:disabled{ background:#c7c7cc; }
+.cp-dt__add,.cp-prod__add,.cp-pl__add{
+  background:var(--cp-green,#1f6f4a);
+  color:#fff;                  /* 原 .cp-dt__add 是浅绿底深绿字，改实心后必须转白字保对比度 */
+  box-shadow:0 2px 8px rgba(31,111,74,.20);
+}
+.cp-dt__add:disabled,.cp-prod__add:disabled,.cp-pl__add:disabled{ background:#c7c7cc; color:#fff; box-shadow:none; }
+.cp-quick button,.cp-cal__nav button{ background:#f5f5f7; border-color:var(--cp-line); border-radius:10px; }
+
+/* ── 7. 分隔线：统一到中性细线（保留 grouped 8px 分段宽度）───────────────── */
+.cp-dt__top,.cp-dt__block,.cp-ck__item,.cp-ck__switch,.cp-dt__pol,
+.cp-ok__card>div,.cp-order__sum,.cp-order__foot,.cp-intro__rule{
+  border-color:var(--cp-line);
+}
+.cp-dt__head,.cp-dt__block{ border-bottom-color:#efeff1; }
+.cp-ok__card>div{ border-bottom-color:var(--cp-line); }
+.cp-order__ops button,.cp-order__delbtn{ border-color:var(--cp-line); border-radius:10px; }
+
+/* ── 8. 日历：选中态保留品牌绿，区间/提示降饱和 ─────────────────────────── */
+.cp-cal__tip{ background:#eef4f0; color:var(--cp-green-d); border-radius:12px; }
+.cp-cal__cell.between{ background:#eaf3ee; }
+.cp-cal__cell.edge{ background:var(--cp-green,#1f6f4a); }
+.cp-cal__cell.full .cp-cal__d,.cp-cal__cell.full .cp-cal__lab{ color:var(--cp-price); }
+.cp-dates__nights{ background:#e8f3ec; color:var(--cp-green-d); }
+
+/* ── 9. 表单输入：中性细边 + Apple 圆角 + 聚焦光环 ───────────────────────── */
+.cp-f input,.cp-f select,.cp-ck__coupon input,.cp-hero__sel{
+  background:#fff;
+  border:1px solid var(--cp-line);
+  border-radius:10px;
+}
+.cp-f input:focus,.cp-f select:focus,.cp-ck__coupon input:focus{
+  border-color:var(--cp-green,#1f6f4a);
+  box-shadow:0 0 0 3px rgba(31,111,74,.14);
+}
+
+/* ── 10. 详情/抽屉：白底细分隔，抽屉圆角再顺一点 ─────────────────────────── */
+.cp-sheet,.cp-detail{ border-radius:24px 24px 0 0; }
+.cp-detail{ border-radius:0; }
+.cp-sheet__x{ background:#f2f2f7; color:#6e6e73; border-radius:50%; }
+.cp-sheet__bar{ background:rgba(60,60,67,.18); }
+.cp-sum{ background:#f5f5f7; border-radius:14px; }
+.cp-sum__total{ border-top-color:var(--cp-line); }
+
+/* 尊重减弱动效 */
+@media (prefers-reduced-motion:reduce){ .cp-lv,.cp-intro{ animation:none; } }

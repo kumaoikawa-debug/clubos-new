@@ -1,0 +1,119 @@
+/* ============================================================================
+ * subpage-apple.css — ClubOS 二级页面 Apple 风补齐层（v1 · 2026-11-20）
+ *
+ * 背景：apple-design.css（发布35）是「通用薄层」，只覆盖裸选择器 .btn/.card/
+ *       .ux-dialog 等。但 platform/club 端的 admin-workspace.css 用
+ *       `.admin-workspace .btn`（0,2,0）把裸选择器（0,1,0）压回了旧值：
+ *       弹窗 14px+绿阴影、按钮 8px+旧绿——这就是「二级页面未覆盖」的实质。
+ *       另有一批二级页专有组件（商品/优惠券编辑器 sheet、采购/仓库/AI 表单、
+ *       券面设计器、C 端详情/结算/积分商城等）从未进入任何 Apple 层。
+ *
+ * 目标：不改 HTML 结构 / JS / 后端 API，只按「组件真实角色」把材质、几何、
+ *       字重、分隔线收敛到 Apple HIG。纯叠加，四端最后一条加载，回退删一行引用。
+ *
+ * 三条纪律（务必遵守）：
+ *   1. 透明布局壳（.pim/.w-pd/.act-pane…）本身是承载白卡的画布，视觉由内部
+ *      __子元素 承担 —— 绝不给根容器刷白底/圆角，否则双层白卡、盖住时间线、
+ *      全屏容器露四角。只收敛字重、内部白卡、分隔线。
+ *   2. 文字 label（.rf-sec/.po-decide__lb）与行内胶囊（.exec-step span/
+ *      .occ-chip）本就不是卡片 —— 只收敛字重/颜色/中性描边，不加背景圆角。
+ *   3. 全屏 fixed / sticky 吸顶 / overflow 裁切 / 图片 hero 敏感容器
+ *      （.me-stack/.me-subnav/.w-iq__panel/.w-detailhero 等）不动背景与圆角。
+ *   4. 不动状态语义色（.is-on/.active/.danger/.is-out），品牌绿仅降饱和收敛面积。
+ *
+ * 依赖：apple-design.css（提供 --ap-* token）。本层在它之后加载。
+ * ==========================================================================*/
+
+/* ── A. 修正 admin-workspace 高特异性对通用 Apple 层的压制 ─────────────── */
+/* platform / club 两端 body.admin-workspace，admin-workspace.css 用 .admin-workspace
+   前缀把发布35的裸 .btn/.ux-dialog 压回旧绿。这里用同等特异性 + 靠后加载补回。*/
+.admin-workspace .btn{
+  border-radius:var(--ap-r-ctl,10px);
+  font-weight:620;
+  letter-spacing:0;
+}
+.admin-workspace .btn:not(:disabled){ box-shadow:0 1px 2px rgba(0,0,0,.06); }
+.admin-workspace .btn:not(:disabled):hover{ box-shadow:0 2px 8px rgba(0,0,0,.10); }
+.admin-workspace .btn:disabled{ opacity:.45; }
+.admin-workspace .ux-dialog,
+.admin-workspace .modal-box{
+  border-radius:22px;
+  box-shadow:0 24px 80px rgba(0,0,0,.18),0 2px 8px rgba(0,0,0,.06);
+  border:1px solid var(--ap-separator,rgba(60,60,67,.10));
+}
+.admin-workspace .ux-dialog-head h2{
+  font-weight:680; letter-spacing:-.02em; color:var(--ap-ink,#1d1d1f);
+}
+.admin-workspace .ux-dialog-foot{
+  border-radius:0 0 22px 22px;
+  background:var(--ap-surface,#fff);
+  border-top:1px solid var(--ap-separator,rgba(60,60,67,.10));
+}
+
+/* ── B. 抽屉 sheet 主体：绿灰底 + 直角 + 重绿阴影 → 中性白 + 顶圆角 ────── */
+/* 商品编辑器 / 优惠券编辑器：整屏高频，旧视觉最扎眼。底部贴屏沿只圆上方。*/
+.plat-pe__sheet,.plat-cpe__sheet{
+  background:var(--ap-surface,#fff) !important;
+  border-radius:var(--ap-r-card,18px) var(--ap-r-card,18px) 0 0 !important;
+  box-shadow:0 2px 6px rgba(0,0,0,.05),0 -16px 40px rgba(0,0,0,.10) !important;
+  border:1px solid var(--ap-separator,rgba(60,60,67,.10)) !important;
+  border-bottom:0 !important;
+}
+
+/* ── C. 已是白卡的二级页组件：统一圆角 token + 中性阴影（不动状态色） ──── */
+.plat-pick{ border-radius:var(--ap-r-card,18px); box-shadow:0 2px 6px rgba(0,0,0,.05),0 12px 32px rgba(0,0,0,.08); }
+.pm-card{ border-radius:var(--ap-r-card,18px); box-shadow:var(--ap-shadow,0 1px 2px rgba(0,0,0,.04),0 8px 24px rgba(0,0,0,.06)); }
+.w-sheet__panel{
+  border-radius:22px 22px 0 0;
+  box-shadow:0 2px 6px rgba(0,0,0,.05),0 -16px 46px rgba(0,0,0,.12);
+}
+.leader-card{ background:var(--ap-surface,#fff); border-color:var(--ap-separator,rgba(60,60,67,.10)); }
+.ch-panel,.scan-box{ border-color:var(--ap-separator,rgba(60,60,67,.10)); }
+
+/* ── D. 文字 label / 行内胶囊：只收敛字重与墨色，不加背景圆角 ──────────── */
+.rf-sec,.po-decide__lb{ font-weight:620; color:var(--ap-ink,#1d1d1f); }
+.po-decide__lb{ color:var(--ap-ink2,#6e6e73); }
+.ux-cpn-designer__tpl b,.plat-mx__chip b,.wh-detail__meta-row b{ font-weight:640; }
+.exec-step span,.occ-chip{ border-color:var(--ap-separator,rgba(60,60,67,.10)); }
+
+/* ── E. 透明布局壳：根保持透明，内部真实白卡/行/分隔 Apple 化 ──────────── */
+/* 平台 · 图片管理器：深色封面块统一圆角，不碰其黑底（裁切画布需要深色） */
+.pim-cover{ border-radius:var(--ap-r-card-sm,14px); }
+/* 平台 · 仓库详情 meta 行 / 仓库列表行：已是半透明白卡 → token 圆角 + 中性描边 */
+.wh-detail__meta-row{
+  border-radius:var(--ap-r-ctl,10px);
+  background:var(--ap-surface,#fff);
+  border:1px solid var(--ap-separator,rgba(60,60,67,.10));
+}
+.plat-whlist__row{ border-radius:var(--ap-r-card-sm,14px); border-color:var(--ap-separator,rgba(60,60,67,.10)); }
+/* 平台 · 规格矩阵 chip / 时间线：chip 已是白卡收敛圆角；时间线绝对定位线不碰背景 */
+.plat-mx__chip{ border-radius:var(--ap-r-ctl,10px); border-color:var(--ap-separator,rgba(60,60,67,.10)); }
+/* 平台 · 采购单详情表格：只做精细分隔线，不改 table 圆角（无效且伤布局） */
+.po-detail__tbl th,.po-detail__tbl td{ border-bottom:1px solid var(--ap-separator,rgba(60,60,67,.10)); }
+/* 平台 · 费率编辑 / CSV 导入 / AI 表单：内部 input/textarea 收敛到 token 圆角 */
+.plat-rate-edit input,.plat-csvimp textarea,.plat-csvimp input,.plat-ai-form input,.plat-ai-form select{
+  border-radius:var(--ap-r-ctl,10px);
+  border-color:var(--ap-separator,rgba(60,60,67,.10));
+  color:var(--ap-ink,#1d1d1f);
+}
+
+/* 俱乐部 · 退款定义列表 / 咨询详情：内部行已是白底，收敛圆角与分隔线 */
+.rf-dl__row{ border-bottom-color:var(--ap-separator,rgba(60,60,67,.10)); }
+.info-detail__msg{ border-radius:var(--ap-r-ctl,10px); background:var(--ap-bg,#f5f5f7); }
+.info-detail__kv{ color:var(--ap-ink2,#6e6e73); }
+/* 俱乐部 · 员工权限列表：已有顶部分隔线，保持透明只收敛字重 */
+.club-staff-perms__g,.club-staff-perms__t{ font-weight:600; }
+
+/* C 端 · 商品详情 / 确认订单 / 购物车：内部白卡已是 #fff，统一到 token 圆角 */
+.w-pd__main,.w-pd__sec,.w-pd__rec{ border-radius:var(--ap-r-card,18px); }
+.w-pd__sec,.w-pd__rec{ margin-left:10px; margin-right:10px; }
+.w-co__card{ border-radius:var(--ap-r-card-sm,14px); }
+.w-cart__row{ border-radius:var(--ap-r-card-sm,14px); }
+/* C 端 · 积分商城卡 / 我的页子树：白卡圆角 token（根栈保持透明） */
+.me-subnav{ font-weight:600; }
+.w-detailhero{ border-radius:var(--ap-r-card,18px); }
+
+/* ── F. 全站滚动条 / 减弱动效：与 apple-design.css 对齐 ─────────────────── */
+@media (prefers-reduced-motion:reduce){
+  .plat-pe__sheet,.plat-cpe__sheet,.w-sheet__panel{ transition:none !important; }
+}
