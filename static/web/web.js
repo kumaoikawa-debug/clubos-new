@@ -572,25 +572,24 @@ function renderMall(){
 }
 /* 商品卡必须带 .web-card 类：experience-consumer.js 是按 `#publicProducts .web-card` 数商品张数的，
    卡片换类名它就会判定「0 件在售」并把整个容器换成空态文案。外观由 .w-product 覆盖。
-   版式对齐参考稿：方图 → 名称（两行）→「分类」小字 → 价格；右下角一个加购圆钮。
+   版式对齐参考稿：方图 → 名称（两行）→「分类」小字 → 价格；产品图上不放购物标。
    ★ 2026-10-18 起卡片**不再印库存数字**：顾客关心的是「能不能买」，不是仓库里剩几件；
      真的售罄时靠角标「缺货」+ 加购钮消失表达，不需要把数量写在卡上。 */
 function productCard(x){
   const displayOnly=x.displayOnly===true,out=displayOnly||Number(x.stock||0)<=0,cat=x.category||'装备',unavailable=displayOnly?'暂不可购买':'暂时缺货';
-  /* 无封面时不要留一块白底空方图：品牌渐变 + 商品首字 + 小袋图标（BUG-CUX-005）。
+  /* 无封面时不要留白底空方图：品牌渐变 + 商品首字；不叠购物袋图标，
+     产品图上不放任何购物标（加购统一在商品详情页完成）。
      媒体区从 1:1 收到 4:3，名称与价格提前进入首屏；有真实图时完全不受影响。 */
   const cover=x.coverUrl||x.image_url;
   const mediaInner=cover
     ? prodImgHtml(cover,x.catalogView,'',x.name)
-    : ('<span class="w-product__mono">'+esc(String(x.name||'装')[0]||'装')+'</span>'+WI.bag);
+    : '<span class="w-product__mono">'+esc(String(x.name||'装')[0]||'装')+'</span>';
   /* 参考图的卡片没有按钮，整张卡就是入口。去掉按钮后必须补 aria-label ——
      读屏用户看不到图，只剩名字和价格能说明这是一件什么商品。
      键盘通路（Enter/空格）由 bindWebEvents 的 keydown 委托补齐（on 属性只绑 click）。 */
   return `<div class="web-card w-product${out?' is-out':''}" role="button" tabindex="0"
     aria-label="${esc(x.name)}，${money(x.price)}${out?'，'+unavailable:''}" onclick="openProduct(${x.id})">
-    <div class="w-product__media${cover?'':' is-fallback'}">${mediaInner}${out?'<span class="w-product__flag">'+(displayOnly?'商品展示':'缺货')+'</span>':''}
-      ${out?'':`<button class="w-product__add" type="button" aria-label="把${esc(x.name)}加入购物车" onclick="event.stopPropagation();quickAdd(${x.id})"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14l-1.2 12H6.2z"/><path d="M8.6 8V6.4a3.4 3.4 0 0 1 6.8 0V8"/><path d="M12 12.9v4.2M9.9 15h4.2"/></svg></button>`}
-    </div>
+    <div class="w-product__media${cover?'':' is-fallback'}">${mediaInner}${out?'<span class="w-product__flag">'+(displayOnly?'商品展示':'缺货')+'</span>':''}</div>
     <div class="w-product__inner">
       <div class="w-product__name">${esc(x.name)}</div>
       <div class="w-product__meta">${x.brand_name?esc(x.brand_name)+' · ':''}${esc(cat)}${out?' · '+unavailable:''}</div>

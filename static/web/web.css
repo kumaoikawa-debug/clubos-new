@@ -382,9 +382,8 @@
   background:linear-gradient(160deg,#f3f4f1,#e7eae5);
   display:grid;place-items:center;transition:transform .35s,filter .35s;
 }
-.w-product__media svg{width:44px;height:44px;stroke:#b5bfb7;fill:none;stroke-width:1.25;stroke-linecap:round;stroke-linejoin:round}
-/* 无封面商品（BUG-CUX-005）：品牌渐变 + 山脊 + 商品首字，替代「白底 + 一个小袋」的
-   大片空白；媒体区从 1:1 收到 4:3，名称与价格提前进入首屏。有真实图时不受影响。 */
+/* 无封面商品（BUG-CUX-005）：品牌渐变 + 山脊 + 商品首字；产品图上不放购物标。
+   媒体区从 1:1 收到 4:3，名称与价格提前进入首屏。有真实图时不受影响。 */
 .w-product__media.is-fallback{
   aspect-ratio:4/3;
   background:linear-gradient(155deg,#eef5ef 0%,#d3e5d8 52%,#a9c8b3 100%);
@@ -398,10 +397,6 @@
   position:relative;z-index:1;font-size:40px;font-weight:700;line-height:1;
   color:rgba(26,58,40,.42);letter-spacing:-.04em;
 }
-.w-product__media.is-fallback svg{
-  position:absolute;right:10px;bottom:9px;z-index:1;
-  width:20px;height:20px;stroke:rgba(26,58,40,.45);
-}
 .w-product__media img{width:100%;height:100%;object-fit:cover;display:block}
 /* PEAKTRACE 合成图头图裁切（shared.js prodImgHtml）的容器限定规则统一放文件末尾
    （w-cropimg 段）—— 各容器散落的裸 svg 规则是占位袋图标的（44px/26px 描边），
@@ -412,15 +407,7 @@
   position:absolute;left:9px;top:9px;padding:3px 8px;border-radius:999px;
   background:rgba(255,255,255,.94);color:var(--w-ink);font-size:10px;font-weight:700;
 }
-/* 快速加购：参考稿卡片上没这颗按钮，但它让「逛 → 加购 → 结算」少两次跳转；
-   做成右下角白底圆钮，只在图片区占一个角，不破坏版式。 */
-.w-product__add{
-  position:absolute;right:8px;bottom:8px;z-index:2;width:30px;height:30px;border:0;border-radius:50%;
-  display:grid;place-items:center;background:rgba(255,255,255,.95);color:var(--w-ink);
-  box-shadow:0 3px 10px rgba(18,23,20,.16);cursor:pointer;-webkit-tap-highlight-color:transparent;
-}
-.w-product__add:active{transform:scale(.94)}
-.w-product__add svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+/* 商品图右下角不设加购角标：整张卡是入口，加购在商品详情页完成 */
 .w-product__inner{display:flex;flex-direction:column;flex:1}
 .w-product__name{
   margin:10px 0 0;font-size:13px;font-weight:600;line-height:1.45;color:var(--w-ink);
