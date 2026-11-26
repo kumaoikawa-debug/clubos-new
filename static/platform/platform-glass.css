@@ -83,6 +83,10 @@ body.admin-workspace{background:linear-gradient(125deg,#d4ebdd 0%,#c7e6da 26%,#d
 
 /* 侧栏文字 / 品牌 / 通知在玻璃上保持可读 */
 .admin-workspace .sidebar .brand{color:var(--brand-deep,#16302a)}
+/* V2 官方字标（2026-11-26）：侧栏窄，图片按宽度收缩；字标在上、角色说明在下（竖排避免小字被挤成竖行）。 */
+.admin-workspace .sidebar .brand{flex-direction:column;align-items:flex-start;gap:5px}
+.admin-workspace .sidebar .brand .brand-logo-img{display:block;width:100%;max-width:184px;height:auto;image-rendering:auto;filter:none}
+.admin-workspace .sidebar .brand .brand-copy small{color:#6a7a6c;white-space:nowrap}
 .admin-workspace .sidebar .notice{color:#3f5249}
 .admin-workspace .sidebar .nav button{color:#2a3d35}
 .admin-workspace .sidebar .nav button.active{background:rgba(36,87,67,.92);color:#fff}
