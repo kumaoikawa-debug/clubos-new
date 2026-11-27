@@ -717,11 +717,44 @@ function stripFeeRetell(html, master){
     return out;
   }catch(_e){return html;}
 }
+/* ★ 孤立说明闸门 · promoHtml 版（2026-11-26 用户截图实锤）：
+   一句短句独占一块、上下夹发丝线的 .pull-quote / blockquote，以及居中单列的
+   「2026年12月 · 15至20席 / 费用明细见下方费用说明」提示行，观感上都像没排版的补丁。
+   前端直接剥掉；生成侧也已在 ai_engine.py 契约里禁止再产出。两者兼容历史活动数据。 */
+function stripLoneNotes(html){
+  try{
+    if(!html||typeof html!=='string')return html;
+    const doc=new DOMParser().parseFromString('<div id="sfw">'+html+'</div>','text/html');
+    const wrap=doc.getElementById('sfw');if(!wrap)return html;
+    const lone=s=>{
+      const v=String(s||'').replace(/\s/g,'');
+      return !!v&&v.length<=32&&(v.match(/[。！？!?]/g)||[]).length<=1;
+    };
+    let changed=false;
+    Array.prototype.slice.call(wrap.querySelectorAll('.pull-quote, blockquote')).forEach(function(el){
+      if(lone(el.textContent)){el.remove();changed=true;}
+    });
+    Array.prototype.slice.call(wrap.querySelectorAll('p.muted, p[style*="text-align:center"], p[style*="text-align: center"]')).forEach(function(el){
+      const t=String(el.textContent||'');
+      if(t.replace(/\s/g,'').length<=80&&/(\d{4}年\s*\d{1,2}月|席位|人数|费用明细|见下方|费用说明)/.test(t)){
+        el.remove();changed=true;
+      }
+    });
+    if(changed){
+      Array.prototype.slice.call(wrap.children).forEach(function(el){
+        if(/^(STYLE|HR)$/.test(el.tagName||''))return;
+        if(el.querySelector('img'))return;
+        if(!String(el.textContent||'').replace(/\s/g,'')){el.remove();}
+      });
+    }
+    return changed?wrap.innerHTML:html;
+  }catch(_e){return html;}
+}
 function renderPromo(detail,master={},opts={}){
   const mm=mediaMap(master);
   /* 阶段二（2026-10-14）：模型直出 HTML 优先；缺失 / 不达标时回退下方 blocks */
   if(detail&&detail.promoHtml&&typeof detail.promoHtml==='string'&&detail.promoHtml.trim()){
-    const _stripped=stripFeeRetell(detail.promoHtml,master);
+    const _stripped=stripLoneNotes(stripFeeRetell(detail.promoHtml,master));
     if(_stripped&&String(_stripped).replace(/<[^>]*>/g,'').trim())return mountPromoHtml(_stripped,mm);
     /* 费用复述块剥光 → 掉到下方 blocks 渲染（费用一定有结构化区兜底，宣传区空着没关系） */
   }
@@ -780,7 +813,8 @@ function renderPromo(detail,master={},opts={}){
       const bg=url?` style="background-image:url('${esc(url)}')"`:'';
       h+=`<section class="ed-hero${url?' has-photo':''}"${bg}><div class="ed-hero-copy"><div class="ed-kicker">${esc(b.kicker||master.location||'OUTDOOR EXPERIENCE')}</div><h1>${esc(b.headline||master.title||'活动')}</h1><p>${esc(b.subtitle||'')}</p></div></section>`;
     }    else if(b.type==='lead')h+=`<section class="ed-lead">${edParas(b.text||b.body||'')}</section>`;
-    else if(b.type==='statement')h+=`<section class="ed-statement"><span>${esc(b.text||'')}</span></section>`;
+    /* 2026-11-26：一句话独占一屏的 statement 不再上屏；观点句应由大模型并入相邻叙述段。 */
+    else if(b.type==='statement'){}
     /* facts 的 value 必须是标量。真模型可能给对象/数组（2026-10-03：esc(x.value||x)
        遇到对象会把它 String() 成 JSON 印在页面上）。这里只渲染标量，
        对象/数组用 feeValueHtml 展开，绝不把 JSON 文本漏给顾客。 */
@@ -1022,7 +1056,8 @@ function renderPromo(detail,master={},opts={}){
         +`<div class="info-list">${notes.map((n,i)=>`<div class="info-note"><span class="info-note__i">${i+1}</span><div class="info-note__b">${n.t?`<b>${esc(n.t)}</b>`:''}<p>${esc(n.d)}</p></div></div>`).join('')}</div>`
         +`</section>`;
     }
-    else if(b.type==='quote')h+=`<section class="ed-quote">“${esc(b.text||'')}”</section>`;
+    /* 2026-11-26：同上，不渲染孤立 quote 块。 */
+    else if(b.type==='quote'){}
     else if(b.type==='divider')h+='<div class="ed-divider"></div>';
     // cta 块不再渲染（2026-09-28 用户反馈）：详情页中部出现「立即报名」大块很突兀，
     // 页面底部本就有常驻报名入口。AI 若仍输出 cta 块，直接跳过不画。
@@ -1106,109 +1141,97 @@ window.gearImgFallback=function(el){
    随 renderPacking 重构删除：现在按装备聚合、一件装备全局只出现一次，不再需要补丁行。 */
 function renderPacking(master,opts){
   opts=opts||{};
-  const list=master.checklist||[];
-  /* chips 不再是哑的纯文本：哪几项商城真能配到，就要在清单里直接标出来——
-     顾客先扫一眼清单（✓ 的=能一键配齐），再往下看分区。 */
   const g=opts.gear;
-  const okTexts=new Set(((g&&g.items)||[])
-    .filter(it=>(it.matches||[]).length||(it.substitutes||[]).length)
+  const items=(g&&g.items)||[];
+  const GROUPS=[{k:'required',t:'必带装备',en:'REQUIRED'},
+                {k:'suggested',t:'建议装备',en:'SUGGESTED'},
+                {k:'public',t:'公共装备',en:'PUBLIC'}];
+  const byText={};
+  items.forEach(it=>{const t=String((it&&it.text)||'').trim();if(t)byText[t]=it;});
+  /* 分组口径：后端 gearRecommendations.groups 优先（AI 按活动方案语义分的）；
+     老活动 / 老后端没下发时按 item.group 与清单关键词保守兜底。 */
+  const grp={required:[],suggested:[],public:[]};
+  const gsrc=g&&g.groups;
+  if(gsrc&&GROUPS.some(x=>Array.isArray(gsrc[x.k]))){
+    GROUPS.forEach(x=>(gsrc[x.k]||[]).forEach(t=>{const v=String(t||'').trim();if(v&&grp[x.k].indexOf(v)<0)grp[x.k].push(v);}));
+  }else{
+    const PUBLIC_RE=/公共|公用|共用|俱乐部提供|主办方提供|统一配备|营地提供|现场提供|团队装备|集体装备/;
+    const SUGGEST_RE=/建议|可选|自愿|按喜好|依个人|个人喜好|推荐携带|自行决定/;
+    const guessGroup=t=>PUBLIC_RE.test(t)?'public':(SUGGEST_RE.test(t)?'suggested':'required');
+    items.forEach(it=>{
+      const t=String((it&&it.text)||'').trim();if(!t)return;
+      const k=(it.group==='suggested'||it.group==='public')?it.group:guessGroup(t);
+      if(grp[k].indexOf(t)<0)grp[k].push(t);
+    });
+    (master&&master.checklist||[]).forEach(x=>{
+      const t=String(x||'').trim();
+      if(t&&!byText[t]&&!GROUPS.some(y=>grp[y.k].indexOf(t)>=0))grp[guessGroup(t)].push(t);
+    });
+  }
+  const allTexts=GROUPS.reduce((a,x)=>a.concat(grp[x.k]),[]);
+  const needCount=grp.required.length+grp.suggested.length;
+  const okTexts=new Set(items.filter(it=>(it.matches||[]).length||(it.substitutes||[]).length)
     .map(it=>String(it.text||'').trim()));
-  const chips='<div class="info-chips pack-chips">'+(list.map(x=>{
-    const ok=okTexts.has(String(x).trim());
-    return '<div'+(ok?' class="ok" title="商城有可搭配装备"':'')+'>'+esc(x)+'</div>';
-  }).join('')||'<div>出发前由俱乐部通知</div>')+'</div>';
-  if(!g||!g.available)return chips;                       // 商城没有在售装备：不编造推荐，保持原样
-  const items=g.items||[],extras=g.extras||[];
-  if(!items.length&&!extras.length)return chips;
+  const chip=t=>'<div'+(okTexts.has(t)?' class="ok" title="商城有同功能装备"':'')+'>'+esc(t)+'</div>';
+  const groupHtml=GROUPS.filter(x=>grp[x.k].length).map(x=>
+    '<div class="pack-sec"><div class="pack-sec__head"><b>'+x.t+'</b>'
+    +'<span class="pack-sec__hint">'+x.en+' · '+grp[x.k].length+' 项'
+    +(x.k==='public'?' · 俱乐部统一提供':'')+'</span></div>'
+    +'<div class="info-chips pack-chips">'+grp[x.k].map(chip).join('')+'</div></div>').join('');
+  if(!g||!g.available||needCount===0)return groupHtml||'<div class="info-chips pack-chips"><div>出发前由俱乐部通知</div></div>';
+  /* 装备优惠推荐（2026-11-26 用户要求）：只用「必带 + 建议」对应的商城装备，
+     同一功能只推一款（商城有 10 款帽子也只推 1 款）；公共装备不推、extras 兜底不推。 */
   const o={canBuy:!!opts.canBuy&&typeof window.buy==='function',manage:!!opts.manage};
-  /* ★ 2026-10-09 用户反馈重构（「一个装备只推荐出现一次，商城有的和没有的要分开」）：
-     以前是「一个清单项一个槽位、槽位里挂商品」，同一件商品跨多个清单项时，第二处只能留一行
-     「同一件装备·已在上方列出」——清单被拉长一倍，还看不出哪些是商城真能买到的、哪些得自己准备。
-     现在按**装备**聚合，整份清单只分两个区：
-       ① 商城可以配齐：每件商品全局只出现一次，卡上写清它满足了哪几项清单要求；
-       ② 这些请自己准备：清单里商城配不到的项，只列文字，不挂商品卡。 */
-  const goods=[],byKey={};
-  const keyOf=p=>{const id=Number((p&&p.id)||0);return id?('id:'+id):('n:'+String((p&&p.name)||''))};
-  const addGood=(p,need,isSub)=>{
-    if(!p)return;
-    const k=keyOf(p);let row=byKey[k];
-    if(!row){row={p,needs:[],sub:!!isSub};byKey[k]=row;goods.push(row)}
-    else if(row.sub&&!isSub)row.sub=false;   // 既是精确匹配又被当平替：按精确匹配呈现（实线卡）
-    const t=String(need||'').trim();
-    if(!t)return;
-    // 每个清单要求单独记是不是「平替」：同一件商品可能既顶了甲的缺，又是乙的正牌货
-    const hit=row.needs.find(n=>n.t===t);
-    if(!hit)row.needs.push({t,sub:!!isSub});
-    else if(hit.sub&&!isSub)hit.sub=false;
-  };
-  /* 顾客视角只认「真能买到的」；运营视角（manage）连无匹配的清单项一起过一遍，好定位补货缺口。 */
-  const visible=items.filter(it=>(it.matches||[]).length||(it.substitutes||[]).length);
-  (o.manage?items:visible).forEach(it=>{
-    const need=String(it.text||'').trim();
-    const ms=it.matches||[],subs=it.substitutes||[];
-    if(ms.length||subs.length){ms.forEach(p=>addGood(p,need,false));subs.forEach(p=>addGood(p,need,true));}
+  const cand=[];
+  GROUPS.filter(x=>x.k!=='public').forEach(x=>grp[x.k].forEach((t,ti)=>{
+    const it=byText[t]||{};
+    const nt=it.tags||[];
+    const first=(it.matches||[])[0];
+    const func=nt[0]||(first&&first.tags&&first.tags[0])||'other';
+    const add=(p,sub)=>{
+      if(!p)return;
+      const pt=p.tags||[];
+      const score=pt.filter(z=>nt.indexOf(z)>=0).length*2+(Number(p.stock)>0?1:0);
+      cand.push({p:p,need:t,sub:!!sub,func:func,score:score,pri:x.k==='required'?0:1,order:ti});
+    };
+    (it.matches||[]).forEach(p=>add(p,false));
+    (it.substitutes||[]).forEach(p=>add(p,true));
+  }));
+  /* 精确匹配优先于平替；同一功能、同一件商品都只出现一次
+     （否则登山杖会既当「鞋的平替」又当「杖的正牌」列两遍，仍是同品类多款）。 */
+  cand.sort((a,b)=>(a.sub?1:0)-(b.sub?1:0)||a.pri-b.pri||b.score-a.score||a.order-b.order||Number(b.p.id||0)-Number(a.p.id||0));
+  const seenFunc={},seenPid={},picked=[];
+  cand.forEach(c=>{
+    const pid=Number(c.p.id||0)||('n:'+String(c.p.name||''));
+    if(seenPid[pid]||seenFunc[c.func])return;
+    seenPid[pid]=1;seenFunc[c.func]=1;picked.push(c);
   });
-  // 「本次活动推荐装备」并进第一区：全局去重，已经出现过的商品不再列第二次
-  extras.forEach(p=>addGood(p,'',false));
-  /* 需要自备的 = 清单里有、商城配不到的项（以清单本身为准，而不是以引擎识别到的项为准，
-     否则「商城认不出品类」的那些会被悄悄吞掉，顾客以为全都买得到）。 */
-  const miss=[];
-  (list||[]).forEach(x=>{
-    const t=String(x||'').trim();
-    if(t&&!okTexts.has(t)&&miss.indexOf(t)<0)miss.push(t);
-  });
-  /* 卡上写清它满足了哪几项清单要求；平替的那一项单独标出来——
-     顾客得知道「这不是清单里那件，是商城目前最接近的同类」。
-     chip 文本只留清单项名（2026-10-23 用户反馈：旧版把「平替 · 」前缀直接焊进文字，
-     登山杖卡挂着「平替 · 防水防滑徒步鞋」像挂错了标签）；「替」改成小徽标，
-     含义由 tooltip 说清，不再占文字位。 */
-  const needTags=r=>r.needs.length
-    ? '<div class="pack-needs">'+r.needs.slice(0,4).map(n=>'<span'+(n.sub?' class="pack-needs__sub" title="商城没有清单里那件，这是最接近的同类"':'')+'>'+(n.sub?'<i>替</i>':'')+esc(n.t)+'</span>').join('')
-      +(r.needs.length>4?'<span class="pack-needs__more">+'+(r.needs.length-4)+'</span>':'')+'</div>'
-    : '';
-  /* 「商城可配」口径 = 精确匹配 + 平替（2026-10-23 用户反馈：分区头写「4 件」、
-     总览写「商城可配 6 项」，两个数对不上像 bug）。件数与项数是两回事——
-     一件装备常覆盖多项清单，所以分区头补一句「覆盖清单 X 项」把两个数焊死。 */
-  const cov=g.coverage||{};
-  const md=g.memberDiscount||null;
-  const subCount=Number(cov.substituted||0);
-  const cover=Number(cov.matched||0)+subCount;
-  const ownHtml=goods.length
-    ? '<div class="pack-sec pack-sec--own"><div class="pack-sec__head"><b>商城可以配齐</b>'
-      +'<span class="pack-sec__count">'+goods.length+' 件</span>'
-      +'<span class="pack-sec__hint">'+(cover>goods.length?('覆盖清单 '+cover+' 项 · '):'')+'点开看规格与会员价</span></div>'
-      +'<div class="pack-goods'+(goods.length===1?' pack-goods--1':'')+'">'
-      +goods.map(r=>'<div class="pack-good">'+gearRow(r.p,o,r.sub)+needTags(r)+'</div>').join('')
+  const gearHtml=picked.length
+    ? '<div class="pack-sec pack-sec--own"><div class="pack-sec__head"><b>装备优惠推荐</b>'
+      +'<span class="pack-sec__count">'+picked.length+' 件</span>'
+      +'<span class="pack-sec__hint">按必带与建议装备匹配 · 同功能只推一款 · 点开看规格与会员价</span></div>'
+      +'<div class="pack-goods'+(picked.length===1?' pack-goods--1':'')+'">'
+      +picked.map(c=>'<div class="pack-good">'+gearRow(c.p,o,c.sub)
+        +'<div class="pack-needs"><span>'+esc(c.need)+'</span></div></div>').join('')
       +'</div></div>'
     : '';
-  /* 「这些请自己准备」：2026-10-23 用户反馈「emoji 平铺观感差」。
-     从「米色大面板里嵌白色小卡」（卡叠卡、两道框）改成一组暖色胶囊 pills——
-     外层重面板和内层白卡都去掉，每项只剩自己一道浅边，轻一个量级。 */
-  const missHtml=miss.length
-    ? '<div class="pack-sec pack-sec--miss"><div class="pack-sec__head"><b>这些请自己准备</b>'
-      +'<span class="pack-sec__count">商城暂无</span>'
-      +'<span class="pack-sec__hint">'+(o.manage?'可在商城上架补全':'按自己的习惯带去就好')+'</span></div>'
-      +'<div class="pack-own">'+miss.map(t=>'<span class="pack-own__item"><i class="pack-own__ico">'+esc(packEmoji(t))+'</i><span class="pack-own__txt">'+esc(t)+'</span></span>').join('')+'</div></div>'
-    : '';
-  const head='<div class="gear-head"><span class="eyebrow">按清单搭配</span><span class="gear-summary">清单 '
-    +Number(cov.needs||0)+' 项 · 商城可配 '+cover+' 项'
-    +(subCount?' · 平替 '+subCount+' 项':'')
-    +(md?' · <b>会员价</b>':'')
-    +'</span></div>';
-  /* 运营视角额外给一句「哪些品类商城没有」——这是给老板补货看的；
-     顾客分区里只有「请自己准备」，不需要出现「缺货」这种字眼。 */
+  /* 运营视角补一句商城缺哪些品类（给老板补货看，顾客区不出现「缺货」字眼）。 */
   let missLine='';
   if(o.manage){
     const cats=[];
     items.forEach(it=>{
+      const k=it.group||'required';if(k==='public')return;
       if((it.tags||[]).length&&!(it.matches||[]).length&&!(it.substitutes||[]).length){
-        const l=(it.tagLabels||[])[0];
-        if(l&&cats.indexOf(l)<0)cats.push(l);
+        const l=(it.tagLabels||[])[0];if(l&&cats.indexOf(l)<0)cats.push(l);
       }
     });
     missLine=cats.length?'<div class="gear-missing">以下品类商城暂无，也未找到相近装备：'+esc(cats.join('、'))+'（可在商城上架补全）</div>':'';
   }
-  return head+chips+ownHtml+missHtml+missLine;
+  const cov=g.coverage||{},md=g.memberDiscount||null;
+  const head='<div class="gear-head"><span class="eyebrow">出行装备</span><span class="gear-summary">清单 '
+    +needCount+' 项 · 商城可配 '+(Number(cov.matched||0)+Number(cov.substituted||0))+' 项'
+    +(md?' · <b>会员价</b>':'')+'</span></div>';
+  return head+groupHtml+gearHtml+missLine;
 }
 /* 费用说明的键名中文化。fees 是 AI 生成时落库的自由对象，键名常是 newCustomer /
    member / note 这类英文标识符 —— 直接渲染出来，顾客看到的是「newCustomer 498元/人」。

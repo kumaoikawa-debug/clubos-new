@@ -286,3 +286,11 @@ body.admin-workspace {
 .member-filter .member-filter__row .ux-table-search{flex:1;min-width:160px}
 .member-filter .member-filter__row .ux-table-search input{width:100%;border:0;background:transparent;min-height:auto;padding:0}
 @media(max-width:640px){.member-filter .member-filter__row input[type=date]{flex:1 1 44%;min-width:0}}
+
+/* ===== 侧栏左上「本俱乐部」品牌（2026-11-26）=====
+   默认显示俱乐部名称首字方块+名称；在「俱乐部设置」上传 logo 后自动换成 logo 图。
+   只作用于 .admin-workspace（俱乐部端），总平台 V2 字标与 C 端不受影响。 */
+.admin-workspace .brand-club-logo{width:36px;height:36px;flex:0 0 36px;border-radius:11px;object-fit:cover;background:var(--brand,#2b6b4f);box-shadow:var(--shadow-rest)}
+.admin-workspace .brand-club-logo:not(.has-logo){display:grid;place-items:center;color:#fff;font-weight:800;font-size:16px;line-height:1}
+.admin-workspace .brand-club-logo.has-logo{display:block}
+.admin-workspace .brand #brandClubName{display:block;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.15}

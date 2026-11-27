@@ -130,8 +130,9 @@ _WRITING_CONTRACT = """文案与排版契约（2026-10-07 第二版，用户反�
 
 ★ 小节标题（headline）：8~22 字，写**判断句或信息句**，不是词组堆叠。数字和专名是好朋友。
 ★ eyebrow 字段可选，只在确实需要场景锚点时才用，且不要连续两节都用。
-★ 全页穿插 1~2 个 statement（整页大字观点句，≤18 字）与至多 1 个 quote；金句必须从本次活动的
-  真实体验里长出来（地名 / 海拔 / 动作 / 时刻），不许放之四海皆准。
+★ 观点句并入叙述，不单独成块（2026-11-26 用户实测）：禁止输出独立的 statement / quote 块
+  （一句短句独占一屏、上下夹线这类排版观感差）；确实有金句时，把它作为相邻 narrative 段落的
+  最后一句，不从真实体验（地名 / 海拔 / 动作 / 时刻）里凭空造通用鸡汤。
 ★ lead 是开场引言：2~3 句，第一句给画面、最后一句给出发的理由。不要写成「本次活动旨在…」。
 
 - 禁令 K｜数字卡不许编造（2026-10-29 用户反馈：详情里出现「D2全天 / 7+ / 6 / ≥90分钟」这类凭空
@@ -747,6 +748,49 @@ def _merge_checklist(items)->list[str]:
         if any(c in o or o in c for o in out): continue
         out.append(c)
     return out
+
+
+# ── 出行清单三组（2026-11-26 用户要求）────────────────────────────
+# 必带装备：方案里明确「必须携带 / 需自备」，缺了无法正常参加；
+# 建议装备：主办方建议、个人按喜好决定带不带；
+# 公共装备：方案写明由俱乐部统一提供 / 现场共用，方案没提就留空。
+# 老活动只有扁平 checklist，这里按关键词做**保守兜底**：只有明确写出公共/建议
+# 才改组，其余一律当必带 —— 宁可少分组，绝不能把必带误划成「看个人喜好」。
+_CK_PUBLIC_RE = re.compile(r'公共|公用|共用|俱乐部提供|主办方提供|统一配备|营地提供|现场提供|团队装备|集体装备')
+_CK_SUGGEST_RE = re.compile(r'建议|可选|自愿|按喜好|依个人|个人喜好|推荐携带|自行决定')
+
+
+def normalize_checklist_groups(master:dict[str,Any]|None, *, explicit_only:bool=False)->dict[str,list[str]]|None:
+    """把活动清单归一成 required / suggested / public 三组。
+
+    explicit_only=True 时，只接受模型显式写出的 activity_master.checklistGroups，
+    没有就返回 None（不把兜底结果固化进库）。app.py 下发时走默认参数，老活动也能分组。
+    """
+    m = master if isinstance(master,dict) else {}
+    def dedup(v:Any)->list[str]:
+        seq = [v] if isinstance(v,str) else (list(v) if isinstance(v,(list,tuple)) else [])
+        out:list[str]=[]
+        for x in seq:
+            t=_clean(x)
+            if t and t not in out: out.append(t)
+        return out
+    raw = m.get('checklistGroups')
+    grouped = {'required':[],'suggested':[],'public':[]}
+    explicit = isinstance(raw,dict)
+    if explicit:
+        for k in grouped: grouped[k]=dedup(raw.get(k))
+        # 同一项只出现在一组：必带优先，从建议/公共里剔除
+        seen=set(grouped['required'])
+        for k in ('suggested','public'):
+            grouped[k]=[x for x in grouped[k] if not (x in seen or seen.add(x))]
+        if not any(grouped.values()): explicit=False
+    if not explicit:
+        if explicit_only: return None
+        for t in dedup(m.get('checklist')):
+            if _CK_PUBLIC_RE.search(t): grouped['public'].append(t)
+            elif _CK_SUGGEST_RE.search(t): grouped['suggested'].append(t)
+            else: grouped['required'].append(t)
+    return grouped
 
 
 def _parse_itinerary(raw:str)->list[dict[str,str]]:
@@ -1389,12 +1433,9 @@ def _mock_activity(source:dict[str,Any]):
     remaining=imgs[1:]
     if remaining[:4]: blocks.append({'type':'gallery','mediaRefs':remaining[:4]})
 
-    # 大数字统计卡：把距离/人数/费用做成视觉冲击，而不是塞进 facts 条（2026-10-08 新组件）。
-    _nc=[]
-    if distance: _nc.append({'value':distance,'label':'单日里程'})
-    if cap_extracted: _nc.append({'value':str(cap_val)+' 人','label':'成行人数'})
-    if price_text: _nc.append({'value':price_text,'label':'费用起'})
-    if len(_nc)>=2: blocks.append({'type':'numbercards','items':_nc[:3]})
+    # 数字卡（2026-11-26）：离线生成器不再固定塞一组数字卡。numbercards 只在资料里确有
+    # 可公开硬指标、且本场题材适合突出时才由 live 模型自行决定；离线兜底一律不放，
+    # 避免所有活动都是同一组四宫格大字。
     # 整版大图：照片足够时铺一张跨页式的"呼吸大瞬间"（2026-10-08 新组件）。
     if len(imgs)>=7 and remaining[6:7]: blocks.append({'type':'bigimage','mediaRefs':remaining[6:7]})
 
@@ -1438,6 +1479,7 @@ def _mock_activity(source:dict[str,Any]):
         'itinerary':st.get('itinerary') or [],
         'fees':st.get('fees') or {},
         'checklist':checklist,
+        'checklistGroups':normalize_checklist_groups({'checklist':checklist}),
         'services':services,
         'internalData':{},'uncertainties':[],'blocking_conflicts':[],
         'media':media_catalog(source),
@@ -1573,7 +1615,8 @@ _LAYOUT_CONTRACT = """
 1. **用图密度下限**：可用照片共 N 张时，整篇详情**至少引用 min(N, max(8, round(N*0.6))) 张不同的照片**
    （每张 ref 全篇只出现一次，「用图数」＝被引用的不同 ref 数量）。照片多却只用几张＝偷懒，必须铺开。
 2. **视觉块占比下限**：blocks 中至少 1/3 必须是带图或强视觉组件 —— bigimage / imagetext / gallery /
-   media / numbercards / cards 加起来不少于 block 总数的 1/3。禁止从头到尾都是「标题 + 正文 + 图」的同一种节奏。
+   media / cards 加起来不少于 block 总数的 1/3（numbercards 是**可选**组件，不计入这条下限，
+   不得为了凑视觉块而硬放数字卡）。禁止从头到尾都是「标题 + 正文 + 图」的同一种节奏。
 3. **首屏视觉锚点**：开篇 lead / 第一个 narrative 之后，尽早安排一个 bigimage（整版铺满大图）或 imagetext，
    让顾客第一屏就看到画面，不要一上来三屏纯文字。
 4. **gallery 不少于 2 组**：至少做 2 个 gallery 区块，每组 3~6 张**同主题**实拍，分别挂在不同的行程 / 体验 /
@@ -1584,6 +1627,10 @@ _LAYOUT_CONTRACT = """
    ★ **严禁编造占位统计卡**（2026-10-29 用户反馈：详情里出现过「D2全天 / 7+ / 6 / ≥90分钟」这类
    凭空捏造的数字卡）：若资料里没有任何可公开的硬指标，就**整组省略 numbercards**，
    宁可少一个视觉组件，也不要放一组没有出处的占位数字——那比没有更损害顾客信任。
+   ★★ **不得套固定数字模板（2026-11-26 用户实测：多场活动全是「3/20/2200/5」四宫格大字）**：
+   numbercards **不是每场活动的必备段落**，用不用、用几张、放在哪里、什么字体字号，
+   一律由本场资料与题材决定；禁止所有活动都在封面下面摆一组同样形态的四宫格数字。
+   没有真实硬指标就整组省略；有 1~2 个真指标就只做 1~2 张，不要为了对称凑成 4 张。
 6. **主题维度覆盖**：资料里出现的维度（目的地风貌 / 行程 / 住宿 / 体验活动 / 后勤须知 / 报名方式）都要有对应
    区块，不要只写行程和费用两块就结束。
 7. **节奏交替**：禁止连续超过 3 个纯文字 block 不配图；图文穿插，每 2~3 个文字块就插一个视觉块或 gallery。
@@ -1680,9 +1727,16 @@ _PROMOHTML_BASE = """
   字体只用系统字体栈；不要 @import、不要 CSS `url()` 引外图；图片一律写 `<img src="{media:ref}">`；
   底色必须写在 `--bg` 变量上（前端会把它提升为页面底色），不要只给 body 上色。
 - **节奏要像杂志不像模板（2026-11-03 用户反馈「要多学习一些排版方式，简约户外风」）**：
-  相邻区块的**形态**必须变化——满幅图章节头、大数字页（80~120px 宋体数字+留白）、
-  双图并排对照、发丝线参数行（label：value 逐行 1px 分隔）、引言块（竖线+大字引文），
-  全篇至少交替出现其中 **3 种**；禁止连续三节都是「标题+段落+单图」同一个模子。
+  相邻区块的**形态**必须变化——满幅图章节头、双图并排对照、发丝线参数行（label：value 逐行 1px 分隔）、
+  引言块（竖线+大字引文）、小节标题+短段、留白分隔，**全篇至少交替出现其中 3 种**；
+  禁止连续三节都是「标题+段落+单图」同一个模子。
+  ★ **大数字页不是必选项（2026-11-26）**：只有在资料里确有可公开、且值得单独突出的硬指标时才可做，
+  同一场最多一处；禁止每场活动都在封面下方固定放一组四宫格数字，也不要为了版式对称硬凑数字。
+  版式组合由本场题材与素材自由决定，不套任何固定模板。
+  ★ **禁止孤立说明块（2026-11-26 用户截图实锤）**：不要用 `.pull-quote` / `blockquote` 把一句短句
+  单独放大居中、上下夹发丝线；观点句要并入相邻 `<p>` 的末尾，让它在上下文里成立。
+  也不要用 `p.muted` + `text-align:center` 单独摆「2026年12月 · 15至20席」「费用明细见下方费用说明」
+  这类提示——日期/席位在头图下方已有，费用在下方结构化费用区完整呈现，这里不再重复。
 - **费用只说一遍（2026-11-03 用户实测：promoHtml 里又开一个「费用与服务」章节，
   与页面下方「费用说明 PRICE」结构化区重复出现）**：promoHtml **禁止**出现
   「费用包含 / 费用不含 / 费用与服务 / 费用说明」类章节、**禁止**罗列费用清单、
@@ -1714,7 +1768,7 @@ _DETAIL_STYLES: dict[str, dict[str, str]] = {
 - **照片**：满幅出血（width:100%，贴齐两边，零圆角），单图高 380~620px；图片纯展示、不配图注。
 - **形状归零**：零圆角、零卡片、零边框、零阴影；只用 1px 发丝线 rgba(255,255,255,.08~.12) 分隔。
 - **节奏**：区块 padding 上下 72~96px；图片与下一区块之间不留超过 40px 的纯黑空隙。
-- **数字**：宋体 56~96px，单位 14px 跟在数字基线之后。
+- **数字（可选，非必需）**：只有资料里确有值得突出的硬指标时才出现，且同一场最多一处；真要做用宋体 56~96px，单位 14px 跟在数字基线之后。禁止每场都做四宫格。
 - **禁止**：浅色底、彩色渐变、色块卡片、三列小图墙。
 """,
     },
@@ -1729,7 +1783,7 @@ _DETAIL_STYLES: dict[str, dict[str, str]] = {
   一张图单独成行，图与图之间 40~56px。
 - **分隔**：只用留白与 1px 暖灰线 rgba(35,33,28,.12)，不用色块、不用卡片、不用阴影。
 - **节奏**：区块间距 56~72px，整篇像一本纸质小志，读起来轻。
-- **数字**：宋体 40~52px、accent 色，单位 13px 跟随。
+- **数字（可选，非必需）**：只有资料里确有值得突出的硬指标时才出现，且同一场最多一处；真要做用宋体 40~52px、accent 色，单位 13px 跟随。禁止每场都做四宫格。
 - **禁止**：纯黑底、深色块、超大字号压图、三列小图墙。
 """,
     },
@@ -1743,7 +1797,7 @@ _DETAIL_STYLES: dict[str, dict[str, str]] = {
 - **眉标**：全大写英文 + 中文双行，如 `01 / ARRIVAL` 与下一行 `抵达`，字距 8px、11~12px、--muted。
 - **照片**：满幅宽、固定比例（16:9 或 2.39:1，高 300~420px），像电影剧照；图片纯展示不配图注。
 - **字幕块**：允许 1~2 处，居中、24~30px、字距 4px，上下各留 64~80px，当作转场。
-- **数字**：无衬线 72~96px、字重 300、accent 色。
+- **数字（可选，非必需）**：只有资料里确有值得突出的硬指标时才出现，且同一场最多一处；真要做用无衬线 72~96px、字重 300、accent 色。禁止每场都做四宫格。
 - **禁止**：宋体大标题、卡片、彩色块、圆角、多列小图。
 """,
     },
@@ -1759,7 +1813,7 @@ _DETAIL_STYLES: dict[str, dict[str, str]] = {
 - **照片**：可单图满幅，也可**双图并排**（grid 1fr 1fr、间距 8px、各高 300~380px）；禁止三列；
   图片纯展示不配图注。
 - **引文**：左侧 4px accent 竖条 + 宋体 26~28px 一句。
-- **数字**：衬线 52~64px、accent 色，单位 13px。
+- **数字（可选，非必需）**：只有资料里确有值得突出的硬指标时才出现，且同一场最多一处；真要做用衬线 52~64px、accent 色，单位 13px。禁止每场都做四宫格。
 - **禁止**：除 accent 之外的第二块彩色、阴影、圆角卡片、纯黑底。
 """,
     },
@@ -1775,7 +1829,7 @@ _DETAIL_STYLES: dict[str, dict[str, str]] = {
 - **允许一处柔和浅色块**：`#F6E9DC` 承载「写给第一次参加的你」，圆角 10px、无边框无阴影；
   全篇只此一处色块，其余不卡片。
 - **节奏**：区块间距 48~64px，短句为主（每段 ≤2 句）。
-- **数字**：无衬线 44~56px、accent 色。
+- **数字（可选，非必需）**：只有资料里确有值得突出的硬指标时才出现，且同一场最多一处；真要做用无衬线 44~56px、accent 色。禁止每场都做四宫格。
 - **禁止**：纯黑底、冷灰调、宋体大标题、多列小图墙。
 """,
     },
@@ -2335,6 +2389,12 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
 - checklist 必须是「具体装备品类」字符串数组（如 冲锋衣、抓绒外套、登山杖、头灯、防晒帽、保温杯、雨衣、充电宝、急救包），
   根据本次活动的地点海拔、季节、天数与难度推导；不要输出「高原适应准备」「防晒防寒装备」这类抽象分类——
   它们无法对应到商城在售装备。证件、个人药品这类非装备个人物品放在最后，最多两三项。
+- checklistGroups 必须把同一份 checklist 按方案语义分进三组（2026-11-26 用户要求）：
+  · required（必带装备）：方案明确写「必须携带 / 需自备 / 必备」，缺了无法正常参加；
+  · suggested（建议装备）：主办方建议、个人可按自己喜好决定带不带的装备；
+  · public（公共装备）：方案写明由俱乐部/主办方统一提供或现场共用的装备；方案没提就留空数组。
+  三组之和要覆盖 checklist 每一项，同一项只出现在一组；严禁新增 checklist 之外的装备，
+  也不要把整份清单全塞进 required 偷懒——方案里确实写了「建议自带 / 统一提供」的必须分出去。
 - 若资料含逐日行程，detail.blocks 必须包含一个 timeline block（items=[{{"time":"...","text":"..."}}]，与 itinerary 同形状）。
 - 方案里的 [Slide N] / [Page N] 只是解析用的页码骨架，绝不能出现在任何 C 端字段里。
 
@@ -2361,7 +2421,7 @@ B. 像内容主编一样生成 C 端招募详情的动态 block 方案。
 {{
   "activity_master":{{
     "title":"","date":"","location":"","price":0,"capacity":0,
-    "publicFacts":{{}},"itinerary":[],"fees":{{}},"checklist":[],"services":[],
+    "publicFacts":{{}},"itinerary":[],"fees":{{}},"checklist":[],"checklistGroups":{{"required":[],"suggested":[],"public":[]}},"services":[],
     "internalData":{{}},"uncertainties":[],"blocking_conflicts":[],"media":[]
   }},
   "detail":{{
@@ -2401,6 +2461,14 @@ hero=首屏（C 端会被封面取代，仅后台预览用）；lead=短引言�
         catalog=media_catalog(source,master)
         if catalog or not isinstance(master.get('media'),list):master['media']=catalog
         data['activity_master']=master
+        # 出行清单三组（2026-11-26）：只采信模型显式写出的分组；没写就留给 app 下发时
+        # 按关键词兜底，避免把兜底口径固化进库。写了则以分组为准回写扁平 checklist，
+        # 保证「三组之和 == checklist」，商城匹配不会漏项或重复。
+        _ck_groups=normalize_checklist_groups(master,explicit_only=True)
+        if _ck_groups is not None:
+            master['checklistGroups']=_ck_groups
+            _ck_flat=_ck_groups['required']+_ck_groups['suggested']+_ck_groups['public']
+            if _ck_flat: master['checklist']=_ck_flat
         _lift_detail_payload(data)
         if isinstance(data.get('detail'),dict):
             # 提示词已要求只用照片，这里再兜一层：模型若引用了品牌 logo / 空白图 / 地图截图，直接剔除
@@ -2606,6 +2674,8 @@ def normalize_channel_blocks(data:dict[str,Any])->dict[str,Any]:
         add('cta',closing.get('cta') or closing.get('action'))
     else:
         add('cta',closing or data.get('cta'))
+    # 2026-11-26：离线兜底也不再产出孤立 statement / quote 块（用户实测观感差）。
+    out=[b for b in out if b.get('type') not in ('statement','quote')]
     if out:
         data['blocks']=out
         # 顶层摘要：前端标题下方的导语，缺了就从前几段里挑一句

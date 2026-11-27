@@ -1937,19 +1937,64 @@ async function subscribePlan(code){
 /* 顶栏品牌名：唯一真源是 clubs.name（平台端与俱乐部设置改的是同一列）。
    历史实现把名字写死在 index.html 里、只在启动时覆盖一次 —— 改完名字当场看不到变化，
    用户会判定「后台没同步」（2026-10-23 用户反馈）。现在：保存即刷新 + 本地缓存兜底。 */
+/* 侧栏左上品牌：默认显示俱乐部名称（申请时填的名字），在「俱乐部设置」上传 logo 后
+   自动换成该 logo。名字/logo 都来自 clubs 表：public_club 下发 logoUrl（公开代理地址），
+   /api/club/{id}/settings 下发登录态 logoUrl；两条都归一到同一个 refreshClubBrand()。
+   DOMContentLoaded 时 clubos-ux.js 注入 brand 骨架后会主动调一次本函数，故这里幂等。 */
+let clubBrandName='',clubBrandLogo='';
+function fallbackClubMark(name){
+  const sp=document.createElement('span');sp.id='brandClubMark';sp.className='brand-symbol brand-club-logo';
+  sp.setAttribute('aria-hidden','true');sp.textContent=(name||'俱').slice(0,1);return sp;
+}
+function refreshClubBrand(){
+  const mark=document.getElementById('brandClubMark');if(!mark)return;
+  const name=(clubBrandName||'').trim();
+  if(clubBrandLogo){
+    let img=mark;
+    if(mark.tagName!=='IMG'){
+      img=document.createElement('img');img.id='brandClubMark';img.className='brand-symbol brand-club-logo has-logo';
+      img.alt=name||'俱乐部 Logo';
+      img.onerror=function(){// 坏图回退到名字首字，不留破图
+        if(this.parentNode)this.parentNode.replaceChild(fallbackClubMark(name),this);
+        clubBrandLogo='';renderClubBrandName(name);};
+      if(mark.parentNode)mark.parentNode.replaceChild(img,mark);
+    }
+    img.className='brand-symbol brand-club-logo has-logo';
+    if(img.getAttribute('src')!==clubBrandLogo)img.src=clubBrandLogo;
+  }else{
+    if(mark.tagName==='IMG'){if(mark.parentNode)mark.parentNode.replaceChild(fallbackClubMark(name),mark)}
+    else{mark.textContent=(name||'俱').slice(0,1);mark.className='brand-symbol brand-club-logo'}
+  }
+  renderClubBrandName(name);
+}
+function renderClubBrandName(name){
+  const el=document.getElementById('brandClubName');
+  if(el)el.textContent=name||'俱乐部经营';
+}
+window.refreshClubBrand=refreshClubBrand;
 function applyClubName(name,opt){
   const n=String(name||'').trim();if(!n)return;
+  clubBrandName=n;
   const el=document.getElementById('clubTopName')||document.querySelector('.topbar .title');
   if(el)el.textContent=n;
   document.title=n+' · ClubOS 俱乐部经营';
   if(!opt||opt.cache!==false){try{localStorage.setItem('clubos_club_name_'+CLUB,n)}catch(e){}}
+  refreshClubBrand();
 }
 window.applyClubName=applyClubName;
+/* 侧栏 logo 统一入口：url 为空 = 回退名字首字。存 localStorage 让刷新时先显示上次图。 */
+function applyClubLogo(url,opt){
+  clubBrandLogo=String(url||'').trim();
+  if(!opt||opt.cache!==false){try{if(clubBrandLogo)localStorage.setItem('clubos_club_logo_'+CLUB,clubBrandLogo);else localStorage.removeItem('clubos_club_logo_'+CLUB)}catch(e){}}
+  refreshClubBrand();
+}
+window.applyClubLogo=applyClubLogo;
 async function startClub(){
   if(clubosCookie('clubos_csrf')){const me=await api('/api/auth/me');if(me.role!=='club')throw new Error('请使用俱乐部账号登录');CLUB=Number(me.clubId);}
-  // 先拿上次缓存的品牌名渲染，刷新时不会先闪一眼占位名
+  // 先拿上次缓存的品牌名/logo 渲染，刷新时不会先闪一眼占位名
   try{const cached=localStorage.getItem('clubos_club_name_'+CLUB);if(cached)applyClubName(cached,{cache:false})}catch(e){}
-  try{const club=await api('/api/public/clubs/'+CLUB,{cache:'no-store'});if(club?.name)applyClubName(club.name)}catch(e){}
+  try{const cachedLogo=localStorage.getItem('clubos_club_logo_'+CLUB);if(cachedLogo)applyClubLogo(cachedLogo,{cache:false})}catch(e){}
+  try{const club=await api('/api/public/clubs/'+CLUB,{cache:'no-store'});if(club?.name)applyClubName(club.name);applyClubLogo(club?.logoUrl||'')}catch(e){}
   /* 领队咨询提示（2026-10-28）：进后台先拉一次，侧栏角标立刻可见；之后 60 秒一次，
      页面从后台切回前台时再补一次 —— 手机上切走再回来不会漏掉新问题的提醒。 */
   pollLeaderInquiries();
@@ -3743,7 +3788,8 @@ async function loadSettings(){
   catch(e){loaderError('#settingsBody',e,'设置读取失败');return}
   clubLogoUrl=s.logoUrl||'';
   window.__clubSettings=s;   // 保存时需要对比 mapKey 是否被清空（修复 s 越界引用）
-  applyClubName(s.name);   // 进设置页也校一次：顶栏永远等于后端当前名字
+  applyClubName(s.name);   // 进设置页也校一次：顶栏与侧栏永远等于后端当前名字
+  applyClubLogo(clubLogoUrl);   // 侧栏左上品牌同步：设置页读到的一定是最新 logo
   box.innerHTML=`
   <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px 18px">
     <label style="display:block"><span class="sub">俱乐部名称 *</span><input id="setName" maxlength="40" style="width:100%;margin-top:4px" value="${esc(s.name||'')}" placeholder="例如：远拓户外"></label>
@@ -3797,7 +3843,8 @@ async function uploadClubLogo(input){
     // 否则「上传成功了但预览/海报还是旧图」（2026-10-09 用户反馈）。
     if (clubLogoUrl) clubLogoUrl+=(clubLogoUrl.indexOf('?')<0?'?':'&')+'t='+Date.now();
     const prev=$('#setLogoPrev');if(prev)prev.innerHTML=clubLogoImgHtml();
-    toast('Logo 已更新');
+    applyClubLogo(clubLogoUrl);   // 侧栏左上品牌当场换成新 logo（不等刷新）
+    toast('Logo 已更新，侧栏标识已同步');
     const wrap=input.closest('div[style*="margin-top"]')?.parentElement; // 移除按钮按需出现
     if(wrap&&!wrap.querySelector('[onclick="removeClubLogo()"]')){
       const b=document.createElement('button');b.className='btn ghost';b.type='button';b.textContent='移除';
@@ -3813,7 +3860,8 @@ async function removeClubLogo(){
   clubLogoUrl='';
   const prev=$('#setLogoPrev');if(prev)prev.innerHTML=clubLogoImgHtml();
   const btn=document.querySelector('#settingsBody [onclick="removeClubLogo()"]');if(btn)btn.remove();
-  toast('已移除 Logo');
+  applyClubLogo('');   // 侧栏左上品牌当场回退到俱乐部名称首字
+  toast('已移除 Logo，侧栏标识已同步');
 }
 
 

@@ -19,7 +19,7 @@ from cost_guard import redact_cost_text
 from link_source import fetch_link, LinkError
 from ai_engine import (generate_activity, generate_channel, regenerate_detail, detail_outline,
                        _fact_digest, pick_cover_media, generate_recap, pick_detail_style,
-                       _DETAIL_STYLES)
+                       _DETAIL_STYLES, normalize_checklist_groups)
 from image_gen import generate_hero, save_hero_image, build_hero_prompt
 from longpic import generate_longpic, build_fact_pack
 from image_caption import caption_media, caption_lines, persist_captions
@@ -662,7 +662,26 @@ def _gear_plan_for(c,master:dict,club_id:int,user_id:int|None=None,public_view:b
     套餐名（Pro / Enterprise）是后台运营概念，public_view=True 时一律不露出。
     """
     prods=rows(c.execute('SELECT id,name,price,stock,category,image_url,description FROM products WHERE status="active" ORDER BY id'))
-    plan=gear_recommend.plan(prods,master).as_dict()
+    # 出行清单三组（2026-11-26 用户要求）：必带 / 建议进商城匹配池；公共装备由俱乐部
+    # 统一提供，不参与「商城可配」分母。老活动没有 checklistGroups 时按关键词保守兜底。
+    _groups=normalize_checklist_groups(master) or {'required':[],'suggested':[],'public':[]}
+    _plan_master=dict(master or {})
+    _plan_master['checklist']=_groups['required']+_groups['suggested']
+    plan=gear_recommend.plan(prods,_plan_master).as_dict()
+    _gmap={}
+    for _gk in ('required','suggested','public'):
+        for _t in _groups[_gk]: _gmap[_t]=_gk
+    for _it in plan.get('items') or []:
+        _it['group']=_gmap.get(str(_it.get('text') or '').strip(),'required')
+    _seen={str(_it.get('text') or '') for _it in (plan.get('items') or [])}
+    for _t in _groups['public']:
+        if _t in _seen: continue
+        plan['items'].append({'text':_t,'tags':[],'tagLabels':[],'matched':False,
+                              'matches':[],'substitutes':[],'subNote':'俱乐部统一提供',
+                              'group':'public'})
+        _seen.add(_t)
+    plan['groups']={_gk:list(_groups[_gk]) for _gk in ('required','suggested','public')}
+    plan['groupMode']='ai' if isinstance((master or {}).get('checklistGroups'),dict) else 'fallback'
     eligible=False
     if user_id:
         try:

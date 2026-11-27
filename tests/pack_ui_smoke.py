@@ -1,19 +1,20 @@
-"""回归测试：出行清单两区 UI + 费用说明极性（2026-10-23 用户截图反馈三件事）。
+"""回归测试：费用极性 + 出行清单三组 + 装备优惠推荐（2026-11-27 更新口径）。
 
 背景（用户截图实锤）：
   ① 费用区「notIncluded」键裸奔成英文，且整行被打成 ✓ 绿 chip —— 负向键含 "includ"，
      极性判据先匹配了正向，顾客把「个人消费」读成「已包含」；
-  ② 装备卡只有 emoji 没有商城真实产品图与介绍；总览「商城可配 6 项」与分区「4 件」
-     两个数对不上；登山杖卡挂着「平替 · 防水防滑徒步鞋」像挂错标签；
-  ③ 「这些请自己准备」是 emoji 方块平铺，观感差。
+  ② 装备卡只有 emoji 没有商城真实产品图与介绍；总览「商城可配 X 项」与推荐卡片数
+     必须对得上，同一件商品/同一功能不能重复出现；
+  ③ 旧「这些请自己准备 / 商城可以配齐」两区已按用户要求改成
+     「必带装备 / 建议装备 / 公共装备」三组 +「装备优惠推荐」。
 
 锁住的不变量：
   1. fees 负向键（notIncluded/excluded/不含…）→ 「不包含」+ is-no（✗），不被误判成 ✓；
   2. 装备卡必须上商城真实产品图（imageUrl）与商城介绍（description），
      无图退 emoji 方块、裂图兜底函数有 parentNode 守卫；
-  3. 「N 件装备」与「商城可配 X 项」口径可对（件=去重商品数，项=覆盖的清单数）；
-  4. 平替 chip 文本只留清单项名，「替」是小徽标不焊进文字；
-  5. 自备区是 soft pills（span 胶囊），不再是 div 网格卡叠卡。
+  3. 「清单 N 项 · 商城可配 X 项」的 X 与 coverage 同源，推荐件数与卡片/图片数一致；
+  4. 三组清单按后端 groups 优先；公共为空整组隐藏、有则显示且不进装备优惠推荐；
+  5. 同一商品、同一功能只推一款（精确匹配优先于平替），套餐名不泄漏给顾客。
 
 node 侧真实执行 shared.js 的 feeListHtml/gearRow/renderPacking（只读不写）；
 python 侧用推荐引擎算真实匹配（不 import app、不建库、不碰业务库）。
@@ -138,22 +139,43 @@ t('裂图后换成品类 emoji 方块', has(box.innerHTML,'gear-emoji')&&has(box
 let threw=false;try{window.gearImgFallback({parentNode:null,getAttribute:function(){return '🥾'}})}catch(e){threw=true}
 t('图片已移出 DOM 时不抛错', !threw);
 
-/* ③④ renderPacking 全量：口径对齐 + 平替徽标 + 自备 pills */
+/* ③④ renderPacking 全量：三组清单 + 装备优惠推荐（2026-11-27 新口径） */
 let html=renderPacking(P.master,{gear:P.plan,canBuy:true,manage:false});
-t('总览：清单 13 项 · 商城可配 7 项（6 精确 + 1 平替）', has(html,'清单 13 项 · 商城可配 7 项'));
-t('总览带平替数、不露套餐名', has(html,'平替 1 项')&&has(html,'<b>会员价</b>')&&!has(html,'Enterprise'));
-t('分区头：4 件装备', has(html,'商城可以配齐')&&has(html,'>4 件<'));
-t('分区头注明覆盖清单 7 项（两个数对上）', has(html,'覆盖清单 7 项'));
-t('四件商品全部上真实产品图', (html.match(/<img src="\/static\/uploads\/products\//g)||[]).length===4,
-   (html.match(/<img src="\/static\/uploads\/products\//g)||[]).length+' 张');
-t('登山杖卡：既是精确匹配就不打平替徽标', !has(html,'gear-badge')&&!has(html,'gear-row--sub'));
-t('平替 chip：小徽标「替」不焊文字', has(html,'<i>替</i>')&&!has(html,'平替 · '));
-t('平替 chip 挂 tooltip 说明', has(html,'商城没有清单里那件，这是最接近的同类'));
-t('精确匹配 chip 保留清单项名', has(html,'>登山杖</span>'));
-t('自备区是 span 胶囊 pills', has(html,'<span class="pack-own__item">')&&!has(html,'<div class="pack-own__item">'));
-t('自备 6 项（防晒帽/充电宝/防晒霜/护唇膏/护手霜/身份证）',
-   (html.match(/pack-own__item/g)||[]).length===6,(html.match(/pack-own__item/g)||[]).length+' 项');
-t('自备项带品类图标', has(html,'pack-own__ico'));
+const covN=Number(P.plan.coverage.matched||0)+Number(P.plan.coverage.substituted||0);
+t('总览口径：清单 13 项 · 商城可配 '+covN+' 项', has(html,'清单 13 项 · 商城可配 '+covN+' 项')&&covN===7);
+t('总览不露套餐名且显示会员价', has(html,'<b>会员价</b>')&&!has(html,'Enterprise'));
+t('旧「商城可以配齐」文案已下线', !has(html,'商城可以配齐'));
+t('装备优惠推荐区存在', has(html,'装备优惠推荐')&&has(html,'同功能只推一款'));
+const goods=(html.match(/<div class="pack-good">/g)||[]).length;
+const imgs=(html.match(/<img src="\/static\/uploads\/products\//g)||[]).length;
+t('推荐件数与商品图张数一致', goods>0&&goods===imgs, goods+' goods / '+imgs+' imgs');
+t('推荐件数写在分区头且与卡片一致', has(html,'<span class="pack-sec__count">'+goods+' 件</span>'));
+t('每件推荐都有真实商品图', goods>0&&!has(html,'gear-img--none'));
+const ids=(html.match(/openProductFromPacking\(\d+\)/g)||[]).map(x=>x.match(/\d+/)[0]);
+t('同一商品不重复推荐', ids.length===new Set(ids).size, ids.join(','));
+t('登山杖精确匹配不打平替徽标', !has(html,'gear-badge')&&!has(html,'gear-row--sub'));
+t('平替文案不焊进商品名', !has(html,'平替 · '));
+t('覆盖清单数不小于推荐件数', covN>=goods);
+const chipsPart=(html.split('class="info-chips pack-chips">')[1]||'').split('</div></div><div class="pack-sec pack-sec--own">')[0];
+const chipTexts=(chipsPart.match(/<div[^>]*>([^<]+)<\/div>/g)||[]).map(x=>x.replace(/<div[^>]*>/,'').replace(/<\/div>/,''));
+t('必带清单 13 项全部落到 chips', chipTexts.length===13, chipTexts.length+' 项');
+t('清单项不重复渲染', ['防水防滑徒步鞋','登山杖','身份证'].every(x=>chipTexts.filter(y=>y===x).length===1), chipTexts.join('/'));
+t('公共装备为空时整组隐藏', !has(html,'公共装备'));
+t('旧自备区标题已下线', !has(html,'这些请自己准备'));
+
+/* 三组分组：后端 groups 优先；公共有则显示，但不进装备优惠推荐 */
+let pubPlan=JSON.parse(JSON.stringify(P.plan));
+const withMatch=(pubPlan.items||[]).find(x=>(x.matches||[]).length);
+pubPlan.groups={required:['防水防滑徒步鞋','登山杖'],suggested:['防晒帽'],public:['俱乐部公共绳']};
+pubPlan.items=(pubPlan.items||[]).concat([{text:'俱乐部公共绳',group:'public',tags:['public'],
+  matches:withMatch?withMatch.matches.slice(0,1):[],substitutes:[]}]);
+let h2=renderPacking(P.master,{gear:pubPlan,canBuy:true,manage:false});
+t('三组标题都在（必带/建议/公共）', has(h2,'必带装备')&&has(h2,'建议装备')&&has(h2,'公共装备'));
+t('公共装备标注俱乐部统一提供', has(h2,'公共装备')&&has(h2,'俱乐部统一提供'));
+t('分组项数按 groups 口径渲染', has(h2,'REQUIRED · 2 项')&&has(h2,'SUGGESTED · 1 项')&&has(h2,'PUBLIC · 1 项'));
+const rec=h2.split('装备优惠推荐')[1]||'';
+t('公共装备不进装备优惠推荐', !has(rec,'俱乐部公共绳'));
+t('推荐仍只用必带/建议', has(rec,'防水防滑徒步鞋')||has(rec,'登山杖')||has(rec,'防晒帽'));
 
 console.log('NODE_RESULT '+(fails?'FAIL':'OK'));
 process.exit(fails?1:0);
@@ -177,7 +199,9 @@ css = io.open(SHARED_CSS, encoding='utf-8').read()
 ck('CSS：产品图方块 .gear-img', '.gear-img{' in css and '.gear-img img{' in css)
 ck('CSS：介绍两行截断', '-webkit-line-clamp:2' in css)
 ck('CSS：平替小徽标 .pack-needs__sub i', '.pack-needs__sub i{' in css)
-ck('CSS：自备区 flex 胶囊（不再是 grid 卡）',
+ck('CSS：三组清单与推荐区骨架',
+   '.pack-sec{' in css and '.pack-sec__hint{' in css and '.info-chips{' in css and '.pack-goods{' in css)
+ck('CSS：自备区 flex 胶囊（旧样式保留兼容）',
    '.pack-own{display:flex' in css and '.pack-own__item{display:inline-flex' in css)
 
 htmls = {}

@@ -34,7 +34,12 @@ const clubSubmenus={analytics:['order-info']};
   /* 折叠分组：点分组头展开/收起（CSS 默认展开，即使本行没跑也不影响可见性）。 */
   nav.querySelectorAll('.nav-group__head').forEach(h=>h.onclick=()=>h.closest('.nav-group').classList.toggle('is-collapsed'));
   const sidebar=document.querySelector('.sidebar');if(sidebar){const brand=sidebar.querySelector('.brand');if(brand){/* V2 品牌资产（2026-11-26）：总平台侧栏换成官方 CLUBOS 字标；俱乐部端保持原箭头，互不干扰。 */
-    brand.innerHTML=page==='platform'?'<img class="brand-logo-img" src="/static/ux/clubos-logo-v2.svg?v=20261126a" alt="ClubOS"><span class="brand-copy"><small>'+roleName()+' · 独立工作空间</small></span>':'<span class="brand-symbol" aria-hidden="true">↗</span><span class="brand-copy">ClubOS NEW<small>'+roleName()+' · 独立工作空间</small></span>'}const foot=document.createElement('div');foot.className='sidebar-foot';foot.innerHTML='<strong>CLUBOS / WORKSPACE</strong>'+ (page==='platform'?'基础设施 · 不参与俱乐部日常经营':'您的活动、客户和会员独立经营');sidebar.appendChild(foot)}
+    /* V2 品牌资产（2026-11-26）：总平台侧栏换成官方 CLUBOS 字标。俱乐部端改为
+       展示「本俱乐部」品牌 —— 默认名字、设置 logo 后自动换成 logo，由 club.js 的
+       refreshClubBrand() 在 DOMContentLoaded（本注入之后）与设置变更时填充；
+       这里只留可更新的骨架与兜底文案，避免共用文件直接依赖俱乐部数据。 */
+    brand.innerHTML=page==='platform'?'<img class="brand-logo-img" src="/static/ux/clubos-logo-v2.svg?v=20261126a" alt="ClubOS"><span class="brand-copy"><small>'+roleName()+' · 独立工作空间</small></span>':'<span class="brand-symbol" id="brandClubMark" aria-hidden="true">↗</span><span class="brand-copy"><span id="brandClubName">俱乐部经营</span><small>'+roleName()+' · 独立工作空间</small></span>';
+    if(page==='club'){try{window.refreshClubBrand&&window.refreshClubBrand()}catch(e){}}}const foot=document.createElement('div');foot.className='sidebar-foot';foot.innerHTML='<strong>CLUBOS / WORKSPACE</strong>'+ (page==='platform'?'基础设施 · 不参与俱乐部日常经营':'您的活动、客户和会员独立经营');sidebar.appendChild(foot)}
   const workspace=document.createElement('div');workspace.className='workspace-bar';workspace.innerHTML='<div class="workspace-crumb"><button type="button" class="ux-mobile-toggle" aria-label="打开导航" aria-expanded="false">'+navIcon('menu')+'</button><span>'+roleName()+'</span><span aria-hidden="true">/</span><strong id="uxCurrentView">'+activeLabel+'</strong></div><div class="workspace-tools"><label class="workspace-search" title="搜索左侧模块，快捷键 /">⌕ <input id="uxNavSearch" type="search" placeholder="搜索功能入口" aria-label="搜索功能入口"><kbd>/</kbd></label><button type="button" class="btn ghost ux-logout" id="uxLogout" hidden>退出登录</button></div>';
   bar.parentNode.insertBefore(workspace,bar);
   /* 俱乐部端顶栏只剩 AI Credits 徽章（标题/副标题早已隐藏）：把徽章挪进面包屑
@@ -162,6 +167,35 @@ window.uxForm=function({title,subtitle='',fields=[],hint='',submitText='确认',
     inp=sel;f._el=inp;box.appendChild(inp);
   }
   else if(f.type==='textarea'){inp=document.createElement('textarea')}
+  /* 2026-11-26：图片路径字段 = 可手填 /static/uploads/... 路径，也可一键本地上传。
+     上传走俱乐部已有的 /biz-section/image（落 uploads/{club}/biz，返回公开可用的 url），
+     不会把 base64 塞进数据库；uxForm 的取值仍由内部 text input 的 name 承接。 */
+  else if(f.type==='imagepath'){
+    inp=document.createElement('div');
+    inp.style.cssText='display:flex;gap:8px;align-items:center';
+    inp.innerHTML='<input type="text" autocomplete="off"><button type="button" class="btn ghost">本地上传</button><input type="file" accept="image/*" style="display:none">';
+    const text=inp.querySelector('input[type=text]'),file=inp.querySelector('input[type=file]'),btn=inp.querySelector('button');
+    btn.style.cssText='flex:0 0 auto';
+    text.id=id;text.name=f.name;
+    if(f.value!==undefined&&f.value!==null)text.value=f.value;
+    if(f.placeholder)text.placeholder=f.placeholder;
+    if(f.required)text.required=true;
+    btn.addEventListener('click',()=>file.click());
+    file.addEventListener('change',async()=>{
+      const picked=file.files&&file.files[0];if(!picked)return;
+      const fd=new FormData();fd.append('file',picked);
+      btn.disabled=true;btn.textContent='上传中…';
+      try{
+        const r=await api(`/api/club/${CLUB}/biz-section/image`,{method:'POST',body:fd})||{};
+        text.value=String(r.url||r.preview||'');
+        toast('图片已上传');
+      }catch(err){toast((err&&err.message)||'图片上传失败')}
+      btn.disabled=false;btn.textContent='本地上传';file.value='';
+    });
+    inp._collect=()=>text.value;
+    inp._focus=text;
+    f._el=inp;box.appendChild(inp);
+  }
   else if(f.type==='datetime'){
     /* 日期/时间点选（原生 date+time，可点击选择）＋ 常用时间胶囊 ＋ 实时自然语言预览。
        取值返回「YYYY-MM-DD HH:mm」，与后端团期 start_at 接受的文本格式一致。 */
@@ -178,7 +212,7 @@ window.uxForm=function({title,subtitle='',fields=[],hint='',submitText='确认',
     fmt();inp._collect=()=>{const d=dEl.value,t=tEl.value;return (d&&t)?(d+' '+t):''};inp._focus=dEl;f._el=inp;box.appendChild(inp);
   }
   else{inp=document.createElement('input');inp.type=f.type||'text';if(f.min!==undefined)inp.min=f.min;if(f.max!==undefined)inp.max=f.max;if(f.step!==undefined)inp.step=f.step}
-  if(f.type!=='datetime'&&f.type!=='select'&&f.type!=='dropdown'){
+  if(f.type!=='datetime'&&f.type!=='select'&&f.type!=='dropdown'&&f.type!=='imagepath'){
     inp.id=id;inp.name=f.name;if(f.value!==undefined&&f.value!==null)inp.value=f.value;if(f.placeholder)inp.placeholder=f.placeholder;if(f.required)inp.required=true;if(f.maxLength)inp.maxLength=f.maxLength;if(f.readonly)inp.readOnly=true;box.appendChild(inp);
   }
   if(f.help||f.helpFn){const small=document.createElement('small');small.textContent=f.help||'';f._helpEl=small;box.appendChild(small)}grid.appendChild(box)});

@@ -576,6 +576,7 @@ window.addMallItem=async()=>uxTask(async()=>{
       {name:'itemType',label:'兑换类型',type:'select',full:true,required:true,value:'coupon',options:[{value:'coupon',label:'优惠券（兑换即发到顾客券包）'},{value:'activity',label:'活动（生成核销码）'},{value:'service',label:'一次服务（生成核销码）'},{value:'goods',label:'实物（生成核销码）'}]},
       {name:'refId',label:'关联优惠券（仅优惠券类型）',type:'select',full:true,options:coupons.length?coupons.map(b=>({value:b.id,label:b.title})):[]},
       {name:'title',label:'商品名称',required:true,full:true,value:'露营灯兑换'},
+      {name:'imageUrl',label:'商品图片',type:'imagepath',full:true,placeholder:'/static/uploads/xxx.jpg 或点右侧本地上传',help:'三端统一 1:1；上传后 H5 与小程序兑换卡直接显示这张图，留空则显示品牌券面。'},
       {name:'pointsCost',label:'兑换所需积分（由老板自定义）',type:'number',min:1,step:1,value:1000,required:true,help:'例：50 元优惠券可定 1000 积分。这个积分价只作用于本条商城商品，不会写回券本身；随时可改。'},
       {name:'stock',label:'库存（留空 = 不限）',type:'number',min:0,step:1,value:20},
       {name:'description',label:'兑换说明',full:true,value:'凭核销码到店领取'}
@@ -583,6 +584,7 @@ window.addMallItem=async()=>uxTask(async()=>{
   if(!d)return;
   const type=String(d.itemType||'goods');
   await post('/api/club/'+CLUB+'/points-mall',{itemType:type,title:d.title,
+    imageUrl:d.imageUrl||null,
     refId:type==='coupon'?Number(d.refId||0):null,
     pointsCost:Number(d.pointsCost),stock:d.stock===''?null:Number(d.stock),description:d.description});
   toast('兑换商品已上架');loadMembers()});
@@ -592,6 +594,7 @@ window.editMallItem=async id=>{
   if(!r){showAlert({title:'读取失败',message:'请重新打开「客户会员」再试'});return}
   const d=await uxForm({title:'编辑兑换商品 · '+(r.title||''),fields:[
     {name:'title',label:'商品名称',required:true,full:true,value:r.title||''},
+    {name:'imageUrl',label:'商品图片',type:'imagepath',full:true,value:r.image_url||'',placeholder:'/static/uploads/xxx.jpg 或点右侧本地上传',help:'留空则前端回退到品牌券面。'},
     {name:'pointsCost',label:'所需活动积分',type:'number',min:1,step:1,value:r.points_cost||1,required:true},
     {name:'stock',label:'库存（留空 = 不限）',type:'number',min:0,step:1,value:r.stock==null?'':r.stock},
     {name:'status',label:'状态',type:'select',full:true,value:r.status||'active',options:[{value:'active',label:'上架中'},{value:'inactive',label:'已下架'}]},
@@ -600,7 +603,7 @@ window.editMallItem=async id=>{
   if(!d)return;
   await uxFlow('editMallItem',async()=>{
     await api(`/api/club/${CLUB}/points-mall/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({title:d.title,pointsCost:Number(d.pointsCost),stock:d.stock===''?null:Number(d.stock),status:d.status,description:d.description})});
+      body:JSON.stringify({title:d.title,imageUrl:d.imageUrl||null,pointsCost:Number(d.pointsCost),stock:d.stock===''?null:Number(d.stock),status:d.status,description:d.description})});
     toast('兑换商品已更新');await loadMembers();
   });
 };
